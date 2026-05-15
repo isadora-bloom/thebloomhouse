@@ -131,6 +131,13 @@ export interface FormHint {
    *  in addition to direct utm_* columns. */
   referrerColumn?: string
 
+  /** Optional column carrying the website tracking-pixel visitor_id.
+   *  When present it is written into the interaction's extracted_identity
+   *  as the cross-link external identifier, so a form submission and a
+   *  site-visitors pixel row that share a visitor_id can be stitched to
+   *  the same couple by downstream identity resolution. */
+  visitorIdColumn?: string
+
   /** Columns that should be excluded from the readable interaction body
    *  (purely numeric helpers, calculated subtotals, etc.). */
   ignoreColumns?: string[]
@@ -245,16 +252,85 @@ export const GOOGLE_FORMS_HINT: FormHint = {
   notesColumn: 'Anything else you would like to share?',
 }
 
+/**
+ * Snake_case calculator-export hint.
+ *
+ * A venue running its own pricing calculator on its website typically
+ * stores submissions in a `calculator_submissions` table and exports it
+ * directly. That export uses snake_case database column names, not the
+ * Title-Case labels the Rixey-calculator-form export uses. Columns:
+ *   id, created_at, season, guests, nights, upgrades, discounts,
+ *   estimate, per_payment, next_steps, wedding_date, p1_name, p1_email,
+ *   p1_phone, p2_name, p2_phone, notes, source, medium, campaign,
+ *   referrer, visitor_id.
+ *
+ * UTM rides on the bare source / medium / campaign columns + the
+ * referrer URL - extractUtmFromRow's bare-alias pass handles both.
+ */
+export const CALCULATOR_SUBMISSIONS_HINT: FormHint = {
+  provider: 'calculator_submissions',
+  label: 'Pricing calculator table export (calculator_submissions)',
+  description:
+    'For a venue\'s own pricing-calculator submissions table exported directly to CSV. '
+    + 'Snake_case columns: p1_name / p1_email / wedding_date / estimate / source / referrer / '
+    + 'visitor_id, etc. First-party data, so submissions land confidence_flag=imported_high.',
+  dateColumn: 'created_at',
+  referenceColumn: 'id',
+  contactNameColumn: 'p1_name',
+  contactEmailColumn: 'p1_email',
+  contactPhoneColumn: 'p1_phone',
+  partnerNameColumn: 'p2_name',
+  partnerPhoneColumn: 'p2_phone',
+  weddingDateColumn: 'wedding_date',
+  guestCountColumn: 'guests',
+  notesColumn: 'notes',
+  packageColumns: ['season'],
+  upgradeColumns: ['upgrades', 'nights'],
+  discountColumns: ['discounts'],
+  calculatedTotalColumn: 'estimate',
+  preTaxTotalColumn: 'estimate',
+  intentColumn: 'next_steps',
+  referrerColumn: 'referrer',
+  visitorIdColumn: 'visitor_id',
+  ignoreColumns: ['id', 'visitor_id', 'per_payment'],
+}
+
+/**
+ * Generic contact-form table export hint (contact_submissions).
+ * Columns: id, created_at, name, email, message, source, medium,
+ * campaign, referrer, visitor_id. A contact form has no event detail,
+ * so only identity + the message + UTM are mapped; the message becomes
+ * the interaction body + wedding notes.
+ */
+export const CONTACT_SUBMISSIONS_HINT: FormHint = {
+  provider: 'contact_submissions',
+  label: 'Contact form table export (contact_submissions)',
+  description:
+    'For a venue\'s own contact-form submissions table exported to CSV. Columns: '
+    + 'name / email / message / source / referrer / visitor_id. No event detail; the '
+    + 'message text becomes the inquiry body. First-party, so confidence_flag=imported_high.',
+  dateColumn: 'created_at',
+  referenceColumn: 'id',
+  contactNameColumn: 'name',
+  contactEmailColumn: 'email',
+  notesColumn: 'message',
+  referrerColumn: 'referrer',
+  visitorIdColumn: 'visitor_id',
+  ignoreColumns: ['id', 'visitor_id'],
+}
+
 export const CUSTOM_HINT: FormHint = {
   provider: 'custom',
   label: 'Custom (provide column mapping)',
   description:
     'For any form not covered by the pre-built hints. Supply a columnMapping JSON like { "contactEmailColumn": '
-    + '"Your CSV Header" } — the keys are FormHint fields, values are the literal CSV header names.',
+    + '"Your CSV Header" } - the keys are FormHint fields, values are the literal CSV header names.',
 }
 
 export const FORM_HINTS: ReadonlyArray<FormHint> = [
   RIXEY_CALCULATOR_HINT,
+  CALCULATOR_SUBMISSIONS_HINT,
+  CONTACT_SUBMISSIONS_HINT,
   TYPEFORM_HINT,
   JOTFORM_HINT,
   GOOGLE_FORMS_HINT,
@@ -424,6 +500,20 @@ function extractUtmFromRow(args: {
   // Path 1: scan headers for case-insensitive utm_<key> matches.
   // Walk every header so "Utm_Source", "UTM Source", "utm_source"
   // all land. Match against the canonical lowercase key set.
+  //
+  // Bare-column alias: a first-party form-submission export (e.g. the
+  // calculator_submissions table) often stores attribution in columns
+  // literally named "source" / "medium" / "campaign" / "term" /
+  // "content" with no utm_ prefix. For a web-form export those bare
+  // columns ARE the UTM data, so a bare "source" header maps to
+  // utm_source. The utm_-prefixed form still wins when both exist.
+  const BARE_UTM_ALIAS: Record<string, keyof UtmFields> = {
+    source: 'utm_source',
+    medium: 'utm_medium',
+    campaign: 'utm_campaign',
+    term: 'utm_term',
+    content: 'utm_content',
+  }
   for (let i = 0; i < hdr.raw.length; i++) {
     const headerNorm = hdr.raw[i].trim().toLowerCase().replace(/\s+/g, '_')
     for (const key of UTM_KEYS) {
@@ -431,6 +521,16 @@ function extractUtmFromRow(args: {
         const v = (row[i] ?? '').trim()
         if (v && v !== '...') out[key] = v
       }
+    }
+  }
+  // Second pass for bare aliases - only fills keys the utm_-prefixed
+  // pass left empty, so an explicit utm_source column always wins.
+  for (let i = 0; i < hdr.raw.length; i++) {
+    const headerNorm = hdr.raw[i].trim().toLowerCase().replace(/\s+/g, '_')
+    const aliased = BARE_UTM_ALIAS[headerNorm]
+    if (aliased && !out[aliased]) {
+      const v = (row[i] ?? '').trim()
+      if (v && v !== '...') out[aliased] = v
     }
   }
 
@@ -593,6 +693,9 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
   // Direct utm_<key> headers are detected scan-style in
   // extractUtmFromRow and don't need an upfront resolve.
   const idxReferrer      = findColumn(hdr, hint.referrerColumn)
+  // Optional website tracking-pixel visitor_id column. Carried into
+  // extracted_identity as the cross-link external identifier.
+  const idxVisitorId     = findColumn(hdr, hint.visitorIdColumn)
 
   if (idxContactEmail < 0 && idxContactName < 0) {
     return {
@@ -626,6 +729,7 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
     const totalRaw     = get(idxTotal)
     const intentRaw    = get(idxIntent)
     const refRaw       = get(idxRef)
+    const visitorId    = get(idxVisitorId)
 
     // Skip rows with no identity at all.
     if (!contactName && !contactEmail && !partnerName && !partnerEmail) {
@@ -716,10 +820,18 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       // Pattern 3: merge the body-extracted notes signal alongside.
       extracted_identity: {
         provider: hint.provider,
-        is_first_party: hint.provider === 'rixey_calculator',
+        is_first_party:
+          hint.provider === 'rixey_calculator' ||
+          hint.provider === 'calculator_submissions' ||
+          hint.provider === 'contact_submissions',
         // hear_source feeds Priority-2 directly. 'website' is the
         // structural answer for calculator submissions.
         hear_source: 'website',
+        // visitor_id is the website-pixel cross-link key. When a form
+        // submission and a site-visitors pixel row carry the same
+        // visitor_id, downstream identity resolution can stitch the
+        // browsing history to this couple.
+        ...(visitorId ? { visitor_id: visitorId } : {}),
         ...(notesBodyExtract ? { body_extract_from_notes: notesBodyExtract } : {}),
       },
       // T5-Rixey-BBB: form submissions are touchpoint class. The
