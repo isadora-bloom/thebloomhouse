@@ -76,6 +76,7 @@ import {
   type SourceAdapter,
 } from './sources'
 import { applyTierRouting } from './route-by-tier'
+import { decayStaleCouples } from './decay'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -736,75 +737,22 @@ async function stageAgentInfer(state: RunState): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function stageDecaySweep(state: RunState): Promise<void> {
-  // Doctrine §3: flip resolved / channel_scoped couples to 'ghost' when
-  // last_progression_at is older than the per-couple decay_window_days
-  // AND no recent couple_progression_events exist. Booked never decays
-  // (lifecycle CHECK excludes booked from the candidate set). Migration
-  // 348 backfilled last_progression_at and added the supporting index;
-  // the progression-event writer in src/lib/services/identity/progression.ts
-  // keeps it fresh.
+  // Doctrine §3 decay. The flip logic lives in
+  // src/lib/services/identity/decay.ts so the daily heat_decay cron
+  // shares exactly the same rule. This stage is the per-venue wrapper
+  // that emits tracer_run_events telemetry.
   await emitEvent(state, 'decay_sweep', 'started')
-  const { data: candidates, error: candErr } = await state.supabase
-    .from('couples')
-    .select('id, last_progression_at, decay_window_days')
-    .eq('venue_id', state.venueId)
-    .in('lifecycle_state', ['resolved', 'channel_scoped'])
-    .not('last_progression_at', 'is', null)
-    .limit(5000)
-  if (candErr) {
-    await emitEvent(state, 'decay_sweep', 'failed', 0, 0, { error: candErr.message })
-    throw new Error(`decay_sweep candidates: ${candErr.message}`)
+  try {
+    const r = await decayStaleCouples(state.supabase, state.venueId)
+    await emitEvent(state, 'decay_sweep', 'succeeded', r.examined, r.ghosted, {
+      examined: r.examined,
+      ghosted: r.ghosted,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    await emitEvent(state, 'decay_sweep', 'failed', 0, 0, { error: message })
+    throw new Error(`decay_sweep: ${message}`)
   }
-
-  const rows = (candidates ?? []) as Array<{
-    id: string
-    last_progression_at: string
-    decay_window_days: number
-  }>
-  const now = Date.now()
-  const toGhost: string[] = []
-
-  for (const r of rows) {
-    const ageMs = now - Date.parse(r.last_progression_at)
-    const windowMs = (r.decay_window_days ?? 180) * 86_400_000
-    if (ageMs <= windowMs) continue
-
-    // Second guard: doctrine requires NOT EXISTS recent progression
-    // event. couples.last_progression_at IS the latest event; in steady
-    // state these match. We re-check to handle race conditions where a
-    // progression event landed during this sweep.
-    const sinceIso = new Date(now - windowMs).toISOString()
-    const { count } = await state.supabase
-      .from('couple_progression_events')
-      .select('couple_id', { count: 'exact', head: true })
-      .eq('couple_id', r.id)
-      .gt('occurred_at', sinceIso)
-    if ((count ?? 0) > 0) continue
-
-    toGhost.push(r.id)
-  }
-
-  let flipped = 0
-  if (toGhost.length > 0) {
-    const { error: updErr, count } = await state.supabase
-      .from('couples')
-      .update({ lifecycle_state: 'ghost' }, { count: 'exact' })
-      .in('id', toGhost)
-      .in('lifecycle_state', ['resolved', 'channel_scoped'])
-    if (updErr) {
-      await emitEvent(state, 'decay_sweep', 'failed', rows.length, 0, {
-        error: updErr.message,
-        examined: rows.length,
-      })
-      throw new Error(`decay_sweep update: ${updErr.message}`)
-    }
-    flipped = count ?? toGhost.length
-  }
-
-  await emitEvent(state, 'decay_sweep', 'succeeded', rows.length, flipped, {
-    examined: rows.length,
-    ghosted: flipped,
-  })
 }
 
 // ---------------------------------------------------------------------------

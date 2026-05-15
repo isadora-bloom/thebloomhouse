@@ -11,6 +11,25 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-15 (Inbound classifier — whole-body identifier extraction)
+
+Bumped `inbound-intent.v3` → `inbound-intent.v4`
+(`src/lib/services/intel/inbound-intent-classifier.ts`).
+
+The `extracted_facts` section now opens with an explicit directive to
+read the ENTIRE email body before answering, because identifying data
+(names, phone numbers, email addresses) is routinely buried below the
+opening sentence — in signature blocks 10-30 lines down, inside quoted
+replies and forwarded sections, mid-paragraph, in "Sent from my
+iPhone" trailers, and in platform-relay intake footers. The `names`,
+`phone` and `email` field instructions were each strengthened to say
+"anywhere in the body" and to call out signatures / quoted text /
+forwarded headers as in-scope. Conservatism is unchanged for the
+recorded VALUE (still only extract what the body actually states); the
+change makes the model EXHAUSTIVE about where it looks. Driven by the
+12-month Gmail backfill — historical threads stack quoted replies, so
+the real identity often sits deep in the message.
+
 ## 2026-05-12 (Folder-AI deletion + reclass endpoint rewrite)
 
 `src/lib/services/inbox/folder-ai-classifier.ts` deleted. The

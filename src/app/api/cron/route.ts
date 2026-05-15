@@ -31,7 +31,11 @@ import { findBacktraceCandidates } from '@/lib/services/attribution/source-backt
 import { reclusterVenue } from '@/lib/services/identity/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/identity/candidate-resolver'
 import { runBacktrackAllVenues } from '@/lib/services/identity/backtrack'
-import { runIdentityFirstTracerAllVenues } from '@/lib/services/identity/tracer-runner'
+import {
+  runIdentityFirstTracerAllVenues,
+  drainPendingTracerRun,
+} from '@/lib/services/identity/tracer-runner'
+import { runDecaySweepAllVenues } from '@/lib/services/identity/decay'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/ingestion/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/ingestion/openphone'
 import { runCalendlyUriBackfill } from '@/lib/services/ingestion/calendly'
@@ -485,8 +489,22 @@ async function runJob(job: JobName): Promise<unknown> {
     case 'email_poll':
       return pollEmailsAllVenues()
 
-    case 'heat_decay':
-      return applyDecayAllVenues()
+    case 'heat_decay': {
+      // Legacy heat decay PLUS the Identity-First couple decay sweep
+      // (IDENTITY-FIRST-ARCHITECTURE.md §3 — "Decay sweep is a cron
+      // job, daily"). Piggybacked here rather than registered as its
+      // own cron entry: vercel.json is at the Pro 40-cron cap.
+      const heat = await applyDecayAllVenues()
+      let identityDecay: unknown = null
+      try {
+        identityDecay = await runDecaySweepAllVenues(createServiceClient())
+      } catch (err) {
+        identityDecay = {
+          error: err instanceof Error ? err.message : String(err),
+        }
+      }
+      return { heat, identity_decay: identityDecay }
+    }
 
     case 'trends_refresh':
       return fetchAllVenueTrends()
@@ -975,7 +993,19 @@ async function runJob(job: JobName): Promise<unknown> {
       // 280s. Standalone route at /api/cron/identity-judge-sweep calls
       // into the same shared runIdentityJudgeSweep service.
       const { runIdentityJudgeSweep } = await import('@/lib/services/identity/judge-sweep')
-      return runIdentityJudgeSweep()
+      const judge = await runIdentityJudgeSweep()
+      // Piggyback: drain one pending Identity-First Backwards Tracer
+      // run (migration 350 queue). Auto-triggered by importers; no
+      // separate cron entry because vercel.json is at the 40-cron cap.
+      let tracerDrain: unknown = null
+      try {
+        tracerDrain = await drainPendingTracerRun()
+      } catch (err) {
+        tracerDrain = {
+          error: err instanceof Error ? err.message : String(err),
+        }
+      }
+      return { judge, tracer_drain: tracerDrain }
     }
 
     case 'couple_intel_sweep': {

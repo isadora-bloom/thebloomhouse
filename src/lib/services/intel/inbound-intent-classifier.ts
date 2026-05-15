@@ -23,7 +23,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { logEvent } from '@/lib/observability/logger'
 
-export const INBOUND_INTENT_PROMPT_VERSION = 'inbound-intent.v3'
+export const INBOUND_INTENT_PROMPT_VERSION = 'inbound-intent.v4'
 
 export type IntentClass =
   | 'new_inquiry'
@@ -378,14 +378,34 @@ way it was. Don't quote PII verbatim; describe the signal.
 
 == extracted_facts ==
 
-Surface structured facts the BODY carries. Be conservative — only fill
-a field when the body states it explicitly. Empty list / null for
-anything you'd have to guess.
+READ THE ENTIRE BODY BEFORE YOU ANSWER — top to bottom, every line.
+Identifying data is frequently NOT in the opening sentence. Names,
+phone numbers and email addresses are routinely buried:
+  - in an email signature 10-30 lines down ("Best, Sarah Jones |
+    cell 555-867-5309 | sarah.j.personal@gmail.com")
+  - inside a quoted reply or a forwarded section BELOW the new text
+    ("On Tue, Tom Reyes <tom@...> wrote:")
+  - mid-paragraph, not at the start ("...my fiance Tom and I...",
+    "you can reach me directly at ...")
+  - in a "Sent from my iPhone" trailer, a contact card, or a vCard
+  - in the platform-relay intake block (Knot/WeddingWire forms list
+    the couple's name, phone and email in a structured footer)
+Scan ALL of it. Do not stop at the first paragraph. A name, phone or
+email that appears only in a signature or a quoted reply still counts
+and MUST be extracted.
+
+Then surface the structured facts the body carries. Be conservative on
+the VALUE you record — only fill a field when the body actually states
+it, never guess — but be EXHAUSTIVE about where you look for it.
+Empty list / null only when the fact is genuinely absent from the
+whole body.
 
   names
-    All proper names mentioned in the body. Include the sender's own
+    EVERY proper name anywhere in the body — opening, mid-paragraph,
+    signature, quoted reply, forwarded header. Include the sender's own
     name if stated ("Hi, I'm Sarah"), partners ("my fiance Tom"),
-    family members ("our daughter Kajlie"), vendors ("Sammy's florist").
+    family members ("our daughter Kajlie"), vendors ("Sammy's florist"),
+    and any name in a signature block or a "<name> wrote:" quote line.
     First-name-only is fine. Deduplicate within the list. Empty array
     when no names appear. Do NOT include the venue name, the venue's
     own staff, or generic role words ("the bride", "my partner").
@@ -401,15 +421,19 @@ anything you'd have to guess.
     "between 80 and 100" → 90). null when not stated.
 
   phone
-    Phone number found IN THE BODY (not the From: header). Strip
-    formatting — output digits only ("(555) 123-4567" → "5551234567").
-    Include country code if stated. null when no phone in body.
+    Phone number found ANYWHERE in the body (not the From: header) —
+    including the signature block, a "call/text me at" line, a contact
+    card, or a quoted/forwarded section. Strip formatting — output
+    digits only ("(555) 123-4567" → "5551234567"). Include country code
+    if stated. null only when no phone appears anywhere in the body.
 
   email
-    Email address found IN THE BODY (not the From: header). Useful
-    when the sender writes "my email is ..." or signs off with a
-    different address than the From: header. null when no body
-    email found.
+    Email address found ANYWHERE in the body (not the From: header) —
+    the sender writing "my email is ...", a signature address, an
+    address inside a quoted "<name> <addr> wrote:" line, or a relay
+    intake footer. This matters most when the sender signs off with a
+    different address than the From: header. null only when no email
+    appears anywhere in the body.
 
   source_mentioned
     The acquisition source the sender names ("found you on Instagram",

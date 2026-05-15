@@ -49,6 +49,7 @@ import {
   heatColor,
   heatLabel,
 } from '@/lib/services/identity/heat-score'
+import { ReconstructionStatusBanner } from '@/components/identity/ReconstructionStatusBanner'
 
 type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
 
@@ -221,6 +222,8 @@ export default function CouplesListPage() {
           Review pending matches
         </a>
       </div>
+
+      <ReconstructionStatusBanner />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {PILL_FILTERS.map((f) => (

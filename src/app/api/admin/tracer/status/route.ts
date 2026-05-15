@@ -203,5 +203,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       totals: r.totals,
     }))
 
-  return NextResponse.json({ runs })
+  // Queue marker (migration 350). When set, a Tracer run is pending —
+  // the progress banner on /intel/couples uses this to show
+  // "Reconstruction queued" before the first run event lands.
+  const { data: venueRow } = await supabase
+    .from('venues')
+    .select('identity_tracer_requested_at')
+    .eq('id', scope.venueId)
+    .maybeSingle()
+  const tracerRequestedAt =
+    (venueRow as { identity_tracer_requested_at: string | null } | null)
+      ?.identity_tracer_requested_at ?? null
+
+  return NextResponse.json({ runs, tracer_requested_at: tracerRequestedAt })
 }
