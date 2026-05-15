@@ -147,8 +147,9 @@ export default function CrmImportPage() {
         // breakdowns explain exactly what didn't make it and why.
         setSuccess(
           (data.message ?? `Imported ${data.weddings_inserted} of ${data.total_rows}.`) +
-          ` (${data.weddings_inserted} weddings · ${data.interactions_inserted} interactions · ` +
-          `${data.tours_inserted} tours · ${data.lost_deals_inserted} lost deals)`
+          ` (${data.weddings_inserted} new · ${data.weddings_matched_existing ?? 0} matched existing · ` +
+          `${data.interactions_inserted} interactions · ${data.tours_inserted} tours · ` +
+          `${data.lost_deals_inserted} lost deals)`
         )
         setSkippedRows(Array.isArray(data.skipped_invalid) ? data.skipped_invalid : [])
         setWriteErrors(Array.isArray(data.write_errors) ? data.write_errors : [])

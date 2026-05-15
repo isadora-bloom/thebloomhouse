@@ -182,23 +182,39 @@ function summariseWriteErrors(errors: string[]): WriteErrorSummary {
   return { unique, schema_hint }
 }
 
-function buildImportMessage(
-  total: number,
-  imported: number,
-  skippedInvalid: number,
-  write: WriteErrorSummary,
-): string {
+function buildImportMessage(args: {
+  total: number
+  inserted: number
+  matched: number
+  upgraded: number
+  skippedInvalid: number
+  write: WriteErrorSummary
+}): string {
+  const { total, inserted, matched, upgraded, skippedInvalid, write } = args
   if (total === 0) return 'The file had no data rows to import.'
-  if (imported === total && skippedInvalid === 0 && write.unique.length === 0) {
-    return `Imported all ${total} rows.`
+  const handled = inserted + matched
+  const failedAtWrite = write.unique.reduce((s, e) => s + e.count, 0)
+
+  const parts: string[] = []
+  if (handled === total && skippedInvalid === 0 && failedAtWrite === 0) {
+    parts.push(`Imported all ${total} rows.`)
+  } else {
+    parts.push(`Processed ${handled} of ${total}.`)
   }
-  const parts: string[] = [`Imported ${imported} of ${total}.`]
+  // "matched" means the row resolved to a couple already in Bloom
+  // (e.g. an inquiry the email backfill created). Spelling that out
+  // stops a correctly-deduped import from looking like it did nothing.
+  if (matched > 0) {
+    parts.push(
+      `${inserted} new, ${matched} matched to couples already in Bloom` +
+      (upgraded > 0 ? ` — ${upgraded} marked booked` : '') + '.',
+    )
+  }
   if (skippedInvalid > 0) {
     parts.push(
       `${skippedInvalid} row${skippedInvalid === 1 ? '' : 's'} skipped — the data did not validate (details below).`,
     )
   }
-  const failedAtWrite = write.unique.reduce((s, e) => s + e.count, 0)
   if (failedAtWrite > 0) {
     parts.push(`${failedAtWrite} could not be saved.`)
     parts.push(write.schema_hint ?? `Reason: ${write.unique[0]!.message}`)
@@ -354,12 +370,16 @@ export async function POST(request: NextRequest) {
   }
 
   const writeErrors = summariseWriteErrors(commitResult.errors)
-  const message = buildImportMessage(
-    parsed.rows.length,
-    commitResult.weddingsInserted,
-    skippedInvalid.length,
-    writeErrors,
-  )
+  const matched = commitResult.weddingsMatchedExisting ?? 0
+  const upgraded = commitResult.weddingsStatusUpgraded ?? 0
+  const message = buildImportMessage({
+    total: parsed.rows.length,
+    inserted: commitResult.weddingsInserted,
+    matched,
+    upgraded,
+    skippedInvalid: skippedInvalid.length,
+    write: writeErrors,
+  })
 
   // Always 200 — a partial import is a success, not an HTTP error. The
   // `ok` flag + `message` tell the coordinator the real state.
@@ -372,6 +392,8 @@ export async function POST(request: NextRequest) {
     message,
     total_rows: parsed.rows.length,
     weddings_inserted: commitResult.weddingsInserted,
+    weddings_matched_existing: matched,
+    weddings_status_upgraded: upgraded,
     interactions_inserted: commitResult.interactionsInserted,
     tours_inserted: commitResult.toursInserted,
     lost_deals_inserted: commitResult.lostDealsInserted,

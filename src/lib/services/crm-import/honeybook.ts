@@ -495,43 +495,47 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
     return (data[i] ?? '').trim() || null
   }
 
+  // ---------------------------------------------------------------------
+  // Pass 1 — read every CSV row into a per-PERSON record.
+  //
+  // A HoneyBook "Booked projects" export is ONE ROW PER PERSON: the two
+  // partners of a wedding are separate rows that share the same Project
+  // Name (and the same Project Date / Booked Date / Total). The classic
+  // "Projects" export is one row per project. Either way, grouping by
+  // Project Name in pass 2 yields one couple per wedding.
+  // ---------------------------------------------------------------------
+  interface PersonRow {
+    csvRow: number
+    projectName: string | null
+    first: string | null
+    last: string | null
+    email: string | null
+    phone: string | null
+    rawRow: Record<string, unknown>
+    projDate: string | null
+    booking: string | null
+    inquiry: string | null
+    status: NormalisedLeadRow['status']
+    statusRaw: string | null
+    totalRaw: string | null
+    paidRaw: string | null
+    depositRaw: string | null
+    taxRaw: string | null
+    gratuityRaw: string | null
+    refundedRaw: string | null
+    guestRaw: string | null
+    packageRaw: string | null
+    sourceRaw: string | null
+    tags: string | null
+    notes: string | null
+  }
+
+  const people: PersonRow[] = []
   for (let r = 1; r < csvRows.length; r++) {
     const data = csvRows[r]
-
     const projectName = get(data, 'project_name')
-    // client_name may be a single "Full Name" column, OR the export
-    // may carry separate First Name / Last Name columns — compose
-    // those when there's no single column.
-    const clientName  =
-      get(data, 'client_name') ??
-      ([get(data, 'first_name'), get(data, 'last_name')]
-        .filter(Boolean)
-        .join(' ')
-        .trim() || null)
     const clientEmail = get(data, 'client_email')
-    const clientPhone = get(data, 'client_phone')
     const projDate    = get(data, 'project_date')
-    const bookingRaw  = get(data, 'booking_date')
-    // Status. An export with no Status column but a Booked Date IS a
-    // booking — a "Booked projects" report has no status column and
-    // every row is booked. Without this, 100+ booked couples would
-    // import as 'inquiry' and never reach the Weddings tab.
-    const status      =
-      mapStatus(get(data, 'project_status')) ??
-      (bookingRaw ? 'booked' : null)
-    const totalRaw    = get(data, 'total')
-    const paidRaw     = get(data, 'paid')
-    const depositRaw  = get(data, 'deposit')
-    const taxRaw      = get(data, 'tax')
-    const gratuityRaw = get(data, 'gratuity')
-    const refundedRaw = get(data, 'refunded')
-    const guestRaw    = get(data, 'guest_count')
-    const packageRaw  = get(data, 'package')
-    const sourceRaw   = get(data, 'source')
-    const inquiry     = get(data, 'inquiry_date')
-    const booking     = bookingRaw
-    const tags        = get(data, 'tags')
-    const notes       = get(data, 'notes')
 
     if (!projDate && !clientEmail && !projectName) {
       warnings.push(`row ${r}: skipped — no project date, email, or name`)
@@ -541,45 +545,144 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
       warnings.push(`row ${r}: missing Client Email — row imported without contact`)
     }
 
-    // Identity: prefer Client Name (explicit, single string) for partner1;
-    // fall back to parsing Project Name. Always run project-name parsing
-    // so we can pick up partner2.
-    const fromProject = parseProjectName(projectName)
-    let p1 = { first: fromProject.partner1_first, last: fromProject.partner1_last }
-    if (clientName) {
-      const cn = splitFullName(clientName)
-      // Only override if Client Name actually has tokens.
-      if (cn.first || cn.last) p1 = cn
+    // Person name: explicit First/Last columns, else split a single
+    // Client Name / Full Name column.
+    let first = get(data, 'first_name')
+    let last  = get(data, 'last_name')
+    if (!first && !last) {
+      const single = get(data, 'client_name')
+      if (single) {
+        const cn = splitFullName(single)
+        first = cn.first
+        last = cn.last
+      }
     }
 
-    if (status == null && get(data, 'project_status')) {
+    const bookingRaw = get(data, 'booking_date')
+    const statusRaw  = get(data, 'project_status')
+    people.push({
+      csvRow: r,
+      projectName,
+      first,
+      last,
+      email: clientEmail,
+      phone: get(data, 'client_phone'),
+      rawRow: Object.fromEntries(
+        headerRow.map((h, i) => [h || `col_${i}`, (data[i] ?? '').trim()]),
+      ),
+      projDate,
+      booking: bookingRaw,
+      inquiry: get(data, 'inquiry_date'),
+      // No Status column but a Booked Date present ⇒ booked. Without
+      // this a "Booked projects" report imports every couple as
+      // 'inquiry' and they never reach the Weddings tab.
+      status: mapStatus(statusRaw) ?? (bookingRaw ? 'booked' : null),
+      statusRaw,
+      totalRaw: get(data, 'total'),
+      paidRaw: get(data, 'paid'),
+      depositRaw: get(data, 'deposit'),
+      taxRaw: get(data, 'tax'),
+      gratuityRaw: get(data, 'gratuity'),
+      refundedRaw: get(data, 'refunded'),
+      guestRaw: get(data, 'guest_count'),
+      packageRaw: get(data, 'package'),
+      sourceRaw: get(data, 'source'),
+      tags: get(data, 'tags'),
+      notes: get(data, 'notes'),
+    })
+  }
+
+  // ---------------------------------------------------------------------
+  // Pass 2 — group people by Project Name into couples, emit one
+  // NormalisedLeadRow per wedding.
+  // ---------------------------------------------------------------------
+  const groups = new Map<string, PersonRow[]>()
+  let noNameSeq = 0
+  for (const p of people) {
+    const key = p.projectName
+      ? p.projectName.trim().toLowerCase()
+      : `__no_project_${noNameSeq++}`
+    const arr = groups.get(key) ?? []
+    arr.push(p)
+    groups.set(key, arr)
+  }
+
+  const normName = (s: string | null | undefined): string =>
+    (s ?? '').trim().toLowerCase()
+
+  for (const members of groups.values()) {
+    // Representative value for a wedding-level field — the first
+    // non-empty across the group's people (they should all agree).
+    const pickRaw = (k: keyof PersonRow): string | null => {
+      for (const m of members) {
+        const v = m[k]
+        if (typeof v === 'string' && v.trim()) return v
+      }
+      return null
+    }
+    const projectName = members.find((m) => m.projectName)?.projectName ?? null
+    const fromProject = parseProjectName(projectName)
+
+    // Assign the (up to) two partner slots. Match each person to a
+    // partner first-name parsed out of the Project Name ("Suzi and
+    // Jody's Wedding" ⇒ Suzi, Jody) so a 3-4 person group (couple +
+    // parents) still picks the real couple. Falls back to the first
+    // two rows when the names don't line up.
+    let partner1: PersonRow | null = null
+    let partner2: PersonRow | null = null
+    const extras: PersonRow[] = []
+    if (members.length === 1) {
+      partner1 = members[0]!
+    } else {
+      const remaining = [...members]
+      const claim = (expected: string): PersonRow | null => {
+        if (!expected) return null
+        const i = remaining.findIndex((m) => normName(m.first) === expected)
+        return i >= 0 ? remaining.splice(i, 1)[0]! : null
+      }
+      partner1 = claim(normName(fromProject.partner1_first))
+      partner2 = claim(normName(fromProject.partner2_first))
+      if (!partner1 && remaining.length) partner1 = remaining.shift()!
+      if (!partner2 && remaining.length) partner2 = remaining.shift()!
+      extras.push(...remaining)
+    }
+    if (!partner1) continue
+    if (extras.length > 0) {
+      const extraNames = extras
+        .map((e) => [e.first, e.last].filter(Boolean).join(' ') || `row ${e.csvRow}`)
+        .join(', ')
       warnings.push(
-        `row ${r}: unknown HoneyBook status '${get(data, 'project_status')}' — defaulting to 'inquiry'`,
+        `"${projectName ?? '(no project name)'}": ${extras.length} extra ` +
+        `${extras.length === 1 ? 'person' : 'people'} (${extraNames}) not imported as ` +
+        `partners — couple read as ${[partner1.first, partner2?.first].filter(Boolean).join(' & ') || partner1.first}`,
       )
     }
 
-    // Tags + notes — concatenate, prefix tags so coordinators can see them
-    // even though we don't have a tags column.
+    const projDate = pickRaw('projDate')
+    const booking  = pickRaw('booking')
+    const inquiry  = pickRaw('inquiry')
+    const sourceRaw = pickRaw('sourceRaw')
+    const status = members.find((m) => m.status)?.status ?? null
+    if (status == null && members.some((m) => m.statusRaw)) {
+      warnings.push(
+        `"${projectName ?? '(no project name)'}": unknown HoneyBook status — defaulting to 'inquiry'`,
+      )
+    }
+
+    // Tags + notes — concatenate across the group.
     const noteParts: string[] = []
-    if (tags)  noteParts.push(`Tags: ${tags}`)
-    if (notes) noteParts.push(notes)
+    for (const m of members) {
+      if (m.tags) noteParts.push(`Tags: ${m.tags}`)
+      if (m.notes) noteParts.push(m.notes)
+    }
     const combinedNotes = noteParts.length > 0 ? noteParts.join('\n\n') : null
 
-    // T5-Rixey-TT adapter-as-facts refactor: do NOT canonicalise the
-    // free-text Source into weddings.source. Instead, recognise the
-    // value (when possible) and tee it into a synthetic per-row
-    // interaction's extracted_identity.hear_source so the lead-source-
-    // derivation Priority-2 picks it up. The raw value is also kept
-    // in source_detail.
+    // Lead-source provenance interaction (one per wedding).
     const recognisedHearSource = recogniseHearSource(sourceRaw)
-
     const adapterInteractions: NormalisedInteractionRow[] = []
     if (sourceRaw || recognisedHearSource) {
-      // Anchor the synthetic interaction at the inquiry timestamp so
-      // ORDER BY timestamp picks it up as one of the earliest rows
-      // tied to the wedding (the derivation chain queries earliest-
-      // first).
-      const occurredAt = parseDateIso(inquiry) ?? parseDateIso(projDate) ?? new Date().toISOString()
+      const occurredAt =
+        parseDateIso(inquiry) ?? parseDateIso(projDate) ?? new Date().toISOString()
       adapterInteractions.push({
         occurred_at: occurredAt,
         direction: 'inbound',
@@ -591,24 +694,12 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
           hear_source_raw: sourceRaw,
           hear_source: recognisedHearSource,
         },
-        // T5-Rixey-BBB: when the HoneyBook "Source" cell maps to a
-        // recognised acquisition channel, this synthetic interaction
-        // IS the source signal — the coordinator typed "The Knot" so
-        // we credit The Knot. When unrecognised, default to 'crm'
-        // class (HoneyBook is the CRM holding the record).
         // signal-class-justified: per-row override based on Q7-equivalent recognition
         signal_class: recognisedHearSource ? 'source' : 'crm',
-        // Wave 28 (mig 294): this row is a synthetic provenance marker
-        // (body starts with "provider:honeybook"), not a real couple-
-        // facing email. Keep it off /agent/inbox; it appears on the
-        // lead-detail timeline via the surface-agnostic thread loader.
         surface: 'crm_attribution',
       })
     }
 
-    // Lost-deals stub when the row landed in 'lost' status with no further
-    // detail. commitNormalisedRows wires this in if status === 'lost' OR
-    // lost_at is present.
     const lostAtIso =
       status === 'lost'
         ? (parseDateIso(booking) ?? parseDateIso(projDate) ?? new Date().toISOString())
@@ -626,30 +717,28 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
 
     rows.push({
       source_id: projectName,
-      partner1_first_name: p1.first,
-      partner1_last_name: p1.last,
-      partner1_email: clientEmail,
-      partner1_phone: clientPhone,
-      partner2_first_name: fromProject.partner2_first,
-      partner2_last_name: fromProject.partner2_last,
+      partner1_first_name: partner1.first ?? fromProject.partner1_first,
+      partner1_last_name: partner1.last ?? fromProject.partner1_last,
+      partner1_email: partner1.email,
+      partner1_phone: partner1.phone,
+      // partner2 from the second person-row when the export splits a
+      // couple across rows; else the second name parsed from the
+      // Project Name.
+      partner2_first_name: partner2?.first ?? fromProject.partner2_first,
+      partner2_last_name: partner2?.last ?? fromProject.partner2_last,
+      partner2_email: partner2?.email ?? null,
+      partner2_phone: partner2?.phone ?? null,
       wedding_date: parseDateYmd(projDate),
-      guest_count_estimate: parseGuestCount(guestRaw),
-      booking_value: parseMoneyToCents(totalRaw),
-      amount_paid: parseMoneyToCents(paidRaw),
-      deposit_amount: parseMoneyToCents(depositRaw),
-      tax_amount: parseMoneyToCents(taxRaw),
-      gratuity_amount: parseMoneyToCents(gratuityRaw),
-      refunded_amount: parseMoneyToCents(refundedRaw),
-      package_name: packageRaw,
-      // Full source row, header-keyed — preserves every HoneyBook
-      // column including ones with no alias / no typed field.
-      raw_row: Object.fromEntries(
-        headerRow.map((h, i) => [h || `col_${i}`, (data[i] ?? '').trim()]),
-      ),
+      guest_count_estimate: parseGuestCount(pickRaw('guestRaw')),
+      booking_value: parseMoneyToCents(pickRaw('totalRaw')),
+      amount_paid: parseMoneyToCents(pickRaw('paidRaw')),
+      deposit_amount: parseMoneyToCents(pickRaw('depositRaw')),
+      tax_amount: parseMoneyToCents(pickRaw('taxRaw')),
+      gratuity_amount: parseMoneyToCents(pickRaw('gratuityRaw')),
+      refunded_amount: parseMoneyToCents(pickRaw('refundedRaw')),
+      package_name: pickRaw('packageRaw'),
+      raw_row: partner1.rawRow,
       status: status ?? 'inquiry',
-      // T5-Rixey-TT: HoneyBook is a CRM (factual provenance lives in
-      // crm_source='honeybook'). Lead-source derivation decides the real
-      // first-touch from Q7 / email-domain / UTM in priority order.
       source: null,
       source_detail: sourceRaw,
       inquiry_date: parseDateIso(inquiry),

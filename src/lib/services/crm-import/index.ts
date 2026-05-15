@@ -292,6 +292,15 @@ export interface PreviewResult {
 export interface CommitResult {
   ok: boolean
   weddingsInserted: number
+  /** Rows that resolved to a wedding that already existed (e.g. an
+   *  inquiry the email backfill created) and were attached/updated
+   *  rather than inserted. weddingsInserted counts only NEW rows, so
+   *  without this an import that correctly de-duped looked like it
+   *  imported nothing. */
+  weddingsMatchedExisting?: number
+  /** Of the matched-existing weddings, how many had their status
+   *  upgraded (e.g. inquiry -> booked) by this import. */
+  weddingsStatusUpgraded?: number
   interactionsInserted: number
   /** 2026-05-13: count of interactions skipped by the crm_import_rows
    *  dedup layer (migration 335). Equals the number of rows in this
@@ -604,8 +613,8 @@ export async function commitNormalisedRows(args: {
 
       let weddingId: string
       if (resolvedWeddingId) {
-        // Attach to the existing wedding. Backfill any null fields the
-        // import row carries (booking_value, wedding_date, notes).
+        // Attach to the existing wedding. Backfill the fields the
+        // import row carries.
         weddingId = resolvedWeddingId
         const backfill: Record<string, unknown> = {}
         if (row.booking_value != null) backfill.booking_value = row.booking_value
@@ -619,18 +628,61 @@ export async function commitNormalisedRows(args: {
         if (row.gratuity_amount != null) backfill.gratuity_amount = row.gratuity_amount
         if (row.refunded_amount != null) backfill.refunded_amount = row.refunded_amount
         if (row.package_name) backfill.package_name = row.package_name
+
+        // Read the existing wedding's status + notes in one round trip.
+        const { data: cur } = await supabase
+          .from('weddings').select('status, notes').eq('id', weddingId).maybeSingle()
+        const existingStatus = (cur?.status as string | null) ?? null
+
+        // STATUS UPGRADE. The import row is the venue's own CRM truth.
+        // When it carries a more-progressed status than the wedding
+        // currently has (e.g. a booked HoneyBook row matched the
+        // inquiry-wedding the email backfill created), upgrade it —
+        // otherwise 100+ booked couples silently stay 'inquiry' and
+        // never reach the Weddings tab. Upgrade-only: never downgrade
+        // a further-along wedding.
+        const STATUS_RANK: Record<string, number> = {
+          lost: -1, cancelled: -1,
+          inquiry: 0, tour_scheduled: 1, tour_completed: 2,
+          proposal_sent: 3, booked: 4, completed: 5,
+        }
+        let statusUpgraded = false
+        if (row.status) {
+          const importRank = STATUS_RANK[row.status] ?? 0
+          const currentRank = existingStatus != null ? (STATUS_RANK[existingStatus] ?? 0) : -99
+          if (importRank > currentRank) {
+            backfill.status = row.status
+            statusUpgraded = true
+          }
+        }
+
         // Fold the import row's notes into existing notes (don't overwrite).
         if (row.notes && row.notes.trim()) {
-          const { data: cur } = await supabase
-            .from('weddings').select('notes').eq('id', weddingId).maybeSingle()
           const existing = (cur?.notes as string | null) ?? null
           backfill.notes = existing ? `${existing}\n\n[crm_import:${crmSource}]\n${row.notes}` : row.notes
         }
         if (Object.keys(backfill).length > 0) {
           await supabase.from('weddings').update(backfill).eq('id', weddingId)
         }
+        // A status upgrade to a booked/completed state should reflect
+        // on the couples graph too — re-mirror so /intel/couples and
+        // the Weddings tab agree. Idempotent upsert.
+        if (statusUpgraded && (row.status === 'booked' || row.status === 'completed')) {
+          try {
+            const { mirrorCoupleFromWedding } = await import(
+              '@/lib/services/identity/mirror-couple'
+            )
+            await mirrorCoupleFromWedding({ venueId, weddingId, supabase })
+          } catch { /* mirror is best-effort */ }
+        }
         insertedWeddingId = weddingId
-        // Don't bump weddingsInserted — we attached to an existing one.
+        // weddingsInserted counts NEW rows only; this attached to an
+        // existing wedding. Track it separately so the import doesn't
+        // report "0 imported" when it correctly de-duped 113 rows.
+        result.weddingsMatchedExisting = (result.weddingsMatchedExisting ?? 0) + 1
+        if (statusUpgraded) {
+          result.weddingsStatusUpgraded = (result.weddingsStatusUpgraded ?? 0) + 1
+        }
         // Wave 4 Phase 4c: still record the touched wedding so the
         // import-router enqueues a reconstruction (the import added new
         // signals to an existing couple's record).
