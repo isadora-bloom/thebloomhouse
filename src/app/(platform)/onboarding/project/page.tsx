@@ -686,7 +686,13 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
                     {busy ? 'Running…' : 'Run voice DNA from the Gmail history import'}
                   </button>
                 )}
-                {!stepDone && isCurrent && status === 'in_progress' && s.actionKey !== 'voice_dna_extract' && (
+                {/* Mark-done shows for any incomplete step of a project
+                    that is not finished — NOT only the current day, and
+                    NOT only while in_progress. A coordinator who paused
+                    the project, or who already did Day-1 work (Gmail,
+                    CSV import) before the project advanced, must still
+                    be able to tick those boxes. */}
+                {!stepDone && status !== 'completed' && s.actionKey !== 'voice_dna_extract' && (
                   <button
                     onClick={() => onCompleteStep(s)}
                     disabled={busy}
