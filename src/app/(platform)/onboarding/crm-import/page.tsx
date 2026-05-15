@@ -387,6 +387,29 @@ export default function CrmImportPage() {
                 setCsv(text)
                 setPreview(null)
                 setProposedMapping(null)
+                // Auto-route by header signature. Without this an
+                // operator can upload a Knot storefront file under the
+                // wrong adapter and mint a junk wedding per row.
+                const firstLine = (text.split(/\r?\n/).find((l) => l.trim()) ?? '')
+                  .toLowerCase()
+                let detected: string | null = null
+                if (firstLine.includes('action taken')) detected = 'storefront_activity'
+                else if (
+                  firstLine.includes('visitor_id') &&
+                  (firstLine.includes('first_seen_at') || firstLine.includes('pageview_count'))
+                ) detected = 'site_visitors'
+                else if (firstLine.includes('project name')) detected = 'honeybook'
+                if (detected && detected !== selectedAdapter) {
+                  resetForAdapterChange(detected)
+                  setCsv(text)
+                  setWarnings([
+                    `Detected a ${detected === 'storefront_activity'
+                      ? 'storefront-activity export'
+                      : detected === 'site_visitors'
+                        ? 'website-visitor export'
+                        : 'HoneyBook export'} — switched the provider to match.`,
+                  ])
+                }
               }}
               onError={(m) => setErrors([m])}
             />

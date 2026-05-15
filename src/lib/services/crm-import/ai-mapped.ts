@@ -495,6 +495,41 @@ async function parseAiMapped(config: AdapterConfig): Promise<AiMappedParseResult
   const header = csvRows[0].map((h) => h.trim())
   const dataRows = csvRows.slice(1)
 
+  // Guard: refuse files that are NOT lead lists. A storefront-activity
+  // export (The Knot / WeddingWire funnel) or a website-visitor pixel
+  // file has one row per page-view / save — force-mapping its visitor-
+  // name column to partner names mints a junk wedding per row. (This is
+  // exactly what happened to Rixey on 2026-05-15: a 2,763-row Knot file
+  // ran through here and created ~1,000 fake "Liam H. & Liam H."
+  // weddings.) Refuse here and point at the dedicated adapter.
+  const lower = header.map((h) => h.toLowerCase().replace(/[_\s]+/g, ' ').trim())
+  if (lower.includes('action taken')) {
+    return {
+      ok: false,
+      rows: [],
+      warnings,
+      errors: [
+        'This looks like a storefront-activity export (it has an "Action Taken" column). ' +
+        'Importing it as leads would create a fake wedding for every storefront view. ' +
+        'Pick the "Storefront activity" provider instead.',
+      ],
+    }
+  }
+  if (
+    lower.includes('visitor id') &&
+    (lower.includes('first seen at') || lower.includes('pageview count'))
+  ) {
+    return {
+      ok: false,
+      rows: [],
+      warnings,
+      errors: [
+        'This looks like a website-visitor / pixel export. ' +
+        'Pick the "Website visitors" provider instead.',
+      ],
+    }
+  }
+
   // A confirmed mapping (coordinator reviewed the AI proposal, possibly
   // corrected it, and re-submitted) skips the AI call entirely. Standard
   // columnMapping is also accepted for callers that already have one.
