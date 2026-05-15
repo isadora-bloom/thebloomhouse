@@ -60,8 +60,8 @@ interface BudgetItem {
   id: string
   wedding_id: string
   category: string
-  estimated: number
-  actual: number | null
+  budgeted: number | null
+  paid: number | null
 }
 
 interface ChecklistItem {
@@ -262,8 +262,8 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
   const completedChecklist = wedding.checklist_items.filter((c) => c.completed).length
   const totalChecklist = wedding.checklist_items.length
 
-  const budgetEstimated = wedding.budget.reduce((sum, b) => sum + b.estimated, 0)
-  const budgetActual = wedding.budget.reduce((sum, b) => sum + (b.actual ?? 0), 0)
+  const budgetEstimated = wedding.budget.reduce((sum, b) => sum + (b.budgeted ?? 0), 0)
+  const budgetActual = wedding.budget.reduce((sum, b) => sum + (b.paid ?? 0), 0)
 
   const upcomingTimeline = wedding.timeline
     .filter((t) => !t.completed && t.due_date)
@@ -995,7 +995,7 @@ export default function WeddingsPage() {
           venues:venue_id ( name ),
           people (*),
           timeline (*),
-          budget (*),
+          budget:budget_items (*),
           checklist_items (*)
         `)
 
