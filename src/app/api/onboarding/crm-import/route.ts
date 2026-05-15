@@ -28,6 +28,13 @@ import {
   type TourSchedulerProvider,
 } from '@/lib/services/crm-import'
 
+// A full CRM/Calendly backfill commits per-row (resolveIdentity +
+// mintWedding + per-interaction dedup + reconstruction enqueue), so a
+// few hundred rows can run well past the platform's default function
+// budget. Pin the ceiling to 300s so a large first import finishes
+// instead of dropping the connection mid-write.
+export const maxDuration = 300
+
 const VALID_PROVIDERS: ReadonlySet<TourSchedulerProvider> = new Set([
   'calendly', 'acuity', 'square_appointments', 'generic_ical', 'custom',
 ])
