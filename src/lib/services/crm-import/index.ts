@@ -309,6 +309,11 @@ export interface CommitResult {
    *  rows already known". Absent on batches with no external_id rows. */
   interactionsSkippedDedup?: number
   toursInserted: number
+  /** Tours skipped because a tour for the same wedding at the same
+   *  scheduled_at already existed — re-import / timed-out-retry dedup.
+   *  The tours table has no external_id, so this is keyed on
+   *  (wedding_id, scheduled_at). Absent when no tour was a duplicate. */
+  toursSkippedDedup?: number
   lostDealsInserted: number
   errors: string[]
   /** Wave 4 Phase 4c: list of wedding ids that this commit touched
@@ -1053,7 +1058,42 @@ export async function commitNormalisedRows(args: {
 
       // tours
       if (row.tours?.length) {
-        const tourPayloads = row.tours.map((t) => ({
+        // Re-import dedup. Unlike interactions (deduped via
+        // crm_import_rows on external_id), the tours table has no
+        // external_id column — so a coordinator who re-runs the same
+        // Calendly export, or whose first import timed out mid-write,
+        // would otherwise get duplicate tour rows on every couple.
+        // Natural key: a tour at the same wedding at the same exact
+        // scheduled_at IS the same tour. Skip those already present.
+        let existingTourTimes = new Set<number>()
+        {
+          const { data: existingTours } = await supabase
+            .from('tours')
+            .select('scheduled_at')
+            .eq('wedding_id', weddingId)
+          existingTourTimes = new Set(
+            (existingTours ?? [])
+              .map((t) => {
+                const ts = (t as { scheduled_at: string | null }).scheduled_at
+                return ts ? new Date(ts).getTime() : NaN
+              })
+              .filter((n) => !Number.isNaN(n)),
+          )
+        }
+        const freshTours = row.tours.filter((t) => {
+          if (!t.scheduled_at) return true
+          const ms = new Date(t.scheduled_at).getTime()
+          if (Number.isNaN(ms)) return true
+          if (existingTourTimes.has(ms)) return false
+          // Guard against two rows in THIS batch sharing a timestamp.
+          existingTourTimes.add(ms)
+          return true
+        })
+        const toursSkipped = row.tours.length - freshTours.length
+        if (toursSkipped > 0) {
+          result.toursSkippedDedup = (result.toursSkippedDedup ?? 0) + toursSkipped
+        }
+        const tourPayloads = freshTours.map((t) => ({
           venue_id: venueId,
           wedding_id: weddingId,
           scheduled_at: t.scheduled_at,
@@ -1068,7 +1108,9 @@ export async function commitNormalisedRows(args: {
           // signal-class-justified: tours are structurally always touchpoint
           signal_class: 'touchpoint' as const,
         }))
-        const { error: tourErr } = await supabase.from('tours').insert(tourPayloads)
+        const { error: tourErr } = tourPayloads.length === 0
+          ? { error: null }
+          : await supabase.from('tours').insert(tourPayloads)
         if (tourErr) {
           // #88 rollback: tours failed → wipe wedding + cascade clean
           // any interactions / people we already wrote for this row.
