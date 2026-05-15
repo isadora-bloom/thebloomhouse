@@ -51,6 +51,11 @@ interface RequestBody {
   csv?: string
   json?: string
   columnMapping?: Record<string, string>
+  /** AI-mapped adapter: the coordinator-confirmed (and possibly
+   *  corrected) column mapping, re-submitted after reviewing the AI
+   *  proposal. When present, the AI-mapped adapter skips the LLM call
+   *  and builds rows deterministically. */
+  confirmedMapping?: Record<string, string>
   preview?: boolean
   /** T5-Rixey-II: provider hint for the tour-scheduler adapter
    *  ('calendly' | 'acuity' | 'square_appointments' | 'generic_ical' |
@@ -281,11 +286,36 @@ export async function POST(request: NextRequest) {
     csvText: body.csv,
     jsonText: body.json,
     columnMapping: body.columnMapping,
+    // AI-mapped adapter: confirmed mapping + venue id ride on the config.
+    // Adapters that don't know these keys ignore them harmlessly.
+    ...(body.confirmedMapping ? { confirmedMapping: body.confirmedMapping } : {}),
+    venueId: auth.venueId,
     // T5-Rixey-II: only the tour-scheduler adapter consumes `provider`;
     // others ignore it. We coerce to the canonical union (silently dropping
     // invalid hints — the adapter falls back to its default in that case).
     provider: coerceProvider(body.provider),
-  })
+  } as Parameters<typeof adapter.parse>[0])
+
+  // AI-mapped adapter (and any future adapter) may return a proposed
+  // column mapping that the coordinator must confirm BEFORE anything
+  // commits. When proposalOnly is set, short-circuit and hand the
+  // proposal to the UI - no validation, no commit. The UI re-submits
+  // with confirmedMapping once the coordinator reviews it.
+  const proposal = (parsed as { proposedMapping?: unknown; proposalOnly?: boolean })
+  if (proposal.proposalOnly) {
+    return NextResponse.json({
+      ok: parsed.ok,
+      adapter: adapter.name,
+      proposal_only: true,
+      proposed_mapping: proposal.proposedMapping ?? null,
+      // Preview rows built off the proposed mapping (may be empty when
+      // the AI mapped nothing).
+      rows: parsed.rows,
+      total: parsed.rows.length,
+      errors: parsed.errors,
+      warnings: parsed.warnings,
+    }, { status: 200 })
+  }
 
   if (!parsed.ok) {
     return NextResponse.json({
@@ -326,13 +356,34 @@ export async function POST(request: NextRequest) {
   })
 
   const supabase = createServiceClient()
+
+  // Some adapters (storefront-activity, site-visitors) carry payload on
+  // the ParseResult that is NOT a NormalisedLeadRow - storefront funnel
+  // signals, anonymous website visitors, orphan pageviews. Those land in
+  // tangential_signals, not weddings, so they ride out-of-band on the
+  // parse result and must be threaded into commit(). They are also why
+  // commit() must run even when validRows is empty (a pure
+  // storefront-activity import has zero lead rows by design).
+  const outOfBand: Record<string, unknown> = {}
+  for (const key of [
+    'storefrontSignals',
+    'storefrontProvider',
+    'anonymousVisitors',
+    'orphanPageviews',
+  ]) {
+    const v = (parsed as unknown as Record<string, unknown>)[key]
+    if (v !== undefined) outOfBand[key] = v
+  }
+  const hasOutOfBand = Object.keys(outOfBand).length > 0
+
   const commitResult =
-    validRows.length > 0
+    validRows.length > 0 || hasOutOfBand
       ? await adapter.commit({
           supabase,
           venueId: auth.venueId,
           rows: validRows,
-        })
+          ...outOfBand,
+        } as Parameters<typeof adapter.commit>[0])
       : {
           ok: true,
           weddingsInserted: 0,

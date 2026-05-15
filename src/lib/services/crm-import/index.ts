@@ -352,7 +352,22 @@ export interface AdapterConfig {
  *  writes to the DB. The recurring-CSV dedup ledger
  *  (crm_import_rows.source) does carry 'knot' as a distinct value so
  *  per-row identity is correctly partitioned at the dedup layer. */
-export type AdapterName = CrmSource | 'tour_scheduler' | 'knot'
+export type AdapterName =
+  | CrmSource
+  | 'tour_scheduler'
+  | 'knot'
+  // Universal fall-through importer. Commits with crm_source='generic_csv'.
+  // See ai-mapped.ts - sends unrecognised headers to the LLM for a
+  // proposed column mapping the coordinator confirms before commit.
+  | 'ai_mapped'
+  // Wedding-marketplace storefront-activity export (Knot / WeddingWire
+  // funnel events). Writes low-confidence tangential_signals, not
+  // weddings. See storefront-activity.ts.
+  | 'storefront_activity'
+  // First-party website pixel / visitor analytics export. Writes
+  // tangential_signals + attribution-grade visitor history. See
+  // site-visitors.ts.
+  | 'site_visitors'
 
 export interface CrmAdapter {
   /** Stable identifier exposed to the UI provider-picker. */
@@ -377,18 +392,24 @@ import { honeybookAdapter } from './honeybook'
 import { dubsadoAdapter } from './dubsado'
 import { aislePlannerAdapter } from './aisleplanner'
 import { genericCsvAdapter } from './generic-csv'
+import { aiMappedAdapter } from './ai-mapped'
 import { webFormAdapter } from './web-form'
 import { tourSchedulerAdapter } from './tour-scheduler'
 import { knotAdapter } from './knot'
+import { storefrontActivityAdapter } from './storefront-activity'
+import { siteVisitorsAdapter } from './site-visitors'
 
 export const ADAPTERS: ReadonlyArray<CrmAdapter> = [
   genericCsvAdapter,
+  aiMappedAdapter,
   honeybookAdapter,
   dubsadoAdapter,
   aislePlannerAdapter,
   webFormAdapter,
   tourSchedulerAdapter,
   knotAdapter,
+  storefrontActivityAdapter,
+  siteVisitorsAdapter,
 ]
 
 export function findAdapter(name: string): CrmAdapter | null {
