@@ -524,7 +524,18 @@ export async function POST(request: NextRequest) {
     contentHash = null
   }
 
-  if (contentHash) {
+  // Dedup probe is for TEXT notes only — it stops an accidental
+  // identical re-submit from burning a second LLM round-trip.
+  //
+  // It is deliberately SKIPPED for file attachments (CSV / image
+  // uploads). A coordinator re-uploading a file is doing something
+  // deliberate — almost always because the first attempt failed to
+  // import — and the content-hash probe was trapping them: a HoneyBook
+  // CSV whose import landed zero rows still matched the hash and got
+  // bounced as "duplicate_upload" for 24 hours. The downstream
+  // importers (CRM resolver, platform-signals) are idempotent, so
+  // re-running a file import is always safe.
+  if (contentHash && !attachment) {
     const dedupCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
     const { data: dup } = await supabase
       .from('brain_dump_entries')
