@@ -601,7 +601,24 @@ export function detectCsvShape(headers: readonly string[]): ShapeDetection {
  * and embedded quotes ("") — enough for the shape-detection + small-sample
  * preview paths. Not a replacement for a streaming parser on huge files.
  */
+/**
+ * Detect the column delimiter. A real CSV export is comma-separated;
+ * data copied out of a spreadsheet (Excel / Google Sheets) is
+ * TAB-separated. Without this, tab-pasted data parsed as one giant
+ * single-column header and every importer reported "missing required
+ * columns". Pick whichever delimiter appears more on the first
+ * non-empty line.
+ */
+function detectDelimiter(text: string): ',' | '\t' {
+  const firstLine =
+    text.split(/\r?\n/).find((l) => l.trim().length > 0) ?? ''
+  const tabs = (firstLine.match(/\t/g) ?? []).length
+  const commas = (firstLine.match(/,/g) ?? []).length
+  return tabs > commas ? '\t' : ','
+}
+
 export function parseCsvRows(text: string): string[][] {
+  const delim = detectDelimiter(text)
   const rows: string[][] = []
   let i = 0
   let field = ''
@@ -615,7 +632,7 @@ export function parseCsvRows(text: string): string[][] {
       field += c; i++; continue
     }
     if (c === '"') { inQuotes = true; i++; continue }
-    if (c === ',') { row.push(field); field = ''; i++; continue }
+    if (c === delim) { row.push(field); field = ''; i++; continue }
     if (c === '\r') { i++; continue }
     if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; continue }
     field += c; i++

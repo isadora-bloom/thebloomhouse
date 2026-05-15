@@ -128,15 +128,21 @@ interface ColumnSpec {
   required?: boolean
 }
 
+// Header variants cover both the classic HoneyBook "Projects" export
+// AND the "Booked projects" report shape (First Name / Last Name /
+// Email / Total Booked Value / Project Creation Date / Project
+// Source / Booked Date — one row per person).
 const COLUMNS: ColumnSpec[] = [
   { key: 'project_name',  variants: [/^project\s*name$/i, /^name$/i],                    required: true },
   { key: 'project_type',  variants: [/^project\s*type$/i, /^type$/i] },
   { key: 'project_date',  variants: [/^project\s*date$/i, /^event\s*date$/i, /^wedding\s*date$/i, /^date$/i], required: true },
   { key: 'project_status',variants: [/^project\s*status$/i, /^status$/i, /^lead\s*status$/i] },
-  { key: 'client_name',   variants: [/^client\s*name$/i, /^primary\s*client(\s*name)?$/i] },
+  { key: 'client_name',   variants: [/^client\s*name$/i, /^primary\s*client(\s*name)?$/i, /^full\s*name$/i] },
+  { key: 'first_name',    variants: [/^first\s*name$/i, /^client\s*first\s*name$/i] },
+  { key: 'last_name',     variants: [/^last\s*name$/i, /^client\s*last\s*name$/i, /^surname$/i] },
   { key: 'client_email',  variants: [/^client\s*email$/i, /^email$/i, /^primary\s*email$/i],     required: true },
   { key: 'client_phone',  variants: [/^client\s*phone$/i, /^phone$/i, /^primary\s*phone$/i] },
-  { key: 'total',         variants: [/^total$/i, /^total\s*project\s*cost$/i, /^project\s*value$/i, /^total\s*invoiced$/i, /^contract\s*(value|amount|total)$/i] },
+  { key: 'total',         variants: [/^total$/i, /^total\s*project\s*cost$/i, /^project\s*value$/i, /^total\s*invoiced$/i, /^total\s*booked\s*value$/i, /^booked\s*value$/i, /^contract\s*(value|amount|total)$/i] },
   { key: 'paid',          variants: [/^paid$/i, /^total\s*paid$/i, /^amount\s*paid$/i] },
   { key: 'deposit',       variants: [/^deposit$/i, /^deposit\s*amount$/i, /^retainer$/i, /^retainer\s*amount$/i] },
   { key: 'tax',           variants: [/^tax$/i, /^tax\s*amount$/i, /^sales\s*tax$/i] },
@@ -145,8 +151,8 @@ const COLUMNS: ColumnSpec[] = [
   { key: 'balance',       variants: [/^balance$/i, /^outstanding(\s*balance)?$/i] },
   { key: 'guest_count',   variants: [/^guest\s*count$/i, /^guests$/i, /^head\s*count$/i, /^headcount$/i, /^(no\.?|number)\s*of\s*guests$/i, /^pax$/i, /^attendance$/i] },
   { key: 'package',       variants: [/^package(\s*name)?$/i, /^tier$/i, /^collection$/i, /^package\s*tier$/i] },
-  { key: 'source',        variants: [/^source$/i, /^lead\s*source$/i, /^how\s*did\s*you\s*hear/i] },
-  { key: 'inquiry_date',  variants: [/^inquiry\s*date$/i, /^created\s*date$/i, /^created$/i, /^date\s*created$/i] },
+  { key: 'source',        variants: [/^source$/i, /^lead\s*source$/i, /^project\s*source$/i, /^how\s*did\s*you\s*hear/i] },
+  { key: 'inquiry_date',  variants: [/^inquiry\s*date$/i, /^created\s*date$/i, /^created$/i, /^date\s*created$/i, /^project\s*creation\s*date$/i, /^creation\s*date$/i] },
   { key: 'booking_date',  variants: [/^booking\s*date$/i, /^booked\s*date$/i, /^date\s*booked$/i, /^booked\s*on$/i, /^contract\s*signed\s*date$/i] },
   { key: 'tags',          variants: [/^tags$/i] },
   { key: 'notes',         variants: [/^notes$/i, /^internal\s*notes$/i, /^description$/i] },
@@ -493,11 +499,26 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
     const data = csvRows[r]
 
     const projectName = get(data, 'project_name')
-    const clientName  = get(data, 'client_name')
+    // client_name may be a single "Full Name" column, OR the export
+    // may carry separate First Name / Last Name columns — compose
+    // those when there's no single column.
+    const clientName  =
+      get(data, 'client_name') ??
+      ([get(data, 'first_name'), get(data, 'last_name')]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || null)
     const clientEmail = get(data, 'client_email')
     const clientPhone = get(data, 'client_phone')
     const projDate    = get(data, 'project_date')
-    const status      = mapStatus(get(data, 'project_status'))
+    const bookingRaw  = get(data, 'booking_date')
+    // Status. An export with no Status column but a Booked Date IS a
+    // booking — a "Booked projects" report has no status column and
+    // every row is booked. Without this, 100+ booked couples would
+    // import as 'inquiry' and never reach the Weddings tab.
+    const status      =
+      mapStatus(get(data, 'project_status')) ??
+      (bookingRaw ? 'booked' : null)
     const totalRaw    = get(data, 'total')
     const paidRaw     = get(data, 'paid')
     const depositRaw  = get(data, 'deposit')
@@ -508,7 +529,7 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
     const packageRaw  = get(data, 'package')
     const sourceRaw   = get(data, 'source')
     const inquiry     = get(data, 'inquiry_date')
-    const booking     = get(data, 'booking_date')
+    const booking     = bookingRaw
     const tags        = get(data, 'tags')
     const notes       = get(data, 'notes')
 

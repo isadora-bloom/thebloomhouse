@@ -658,7 +658,11 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
                     confirmation step until the T2-A follow-up
                     automation auto-detects completion (OAuth connected,
                     backfill finished, etc.). */}
-                {s.linkHref && !stepDone && isCurrent && (
+                {/* Surface link shows for any incomplete step, not
+                    only the current day's — a coordinator may need to
+                    jump to a work surface (e.g. CRM import) before the
+                    project formally advances to that day. */}
+                {s.linkHref && !stepDone && (
                   <a
                     href={s.linkHref}
                     target="_blank"

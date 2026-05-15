@@ -279,14 +279,54 @@ export default function CrmImportPage() {
         )}
 
         <div className="space-y-2">
-          <label className="text-xs font-medium text-sage-700">CSV content</label>
-          <textarea
-            rows={8}
-            value={csv}
-            onChange={(e) => { setCsv(e.target.value); setPreview(null) }}
-            placeholder="Paste the CSV export (with a header row)."
-            className="w-full px-3 py-2 text-xs font-mono border border-sage-200 rounded"
-          />
+          <label className="text-xs font-medium text-sage-700">CSV file</label>
+          {/* File upload is the recommended path — uploading the actual
+              export keeps the original comma-delimited format. Pasting
+              from a spreadsheet view yields tab-separated text; the
+              parser now detects that too, but the file is cleaner. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 rounded border border-sage-300 bg-white hover:bg-sage-50 text-xs font-medium text-sage-700 px-3 py-2 cursor-pointer">
+              <Upload className="w-3.5 h-3.5" />
+              Choose CSV file
+              <input
+                type="file"
+                accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  clearMessages()
+                  try {
+                    const text = await file.text()
+                    setCsv(text)
+                    setPreview(null)
+                  } catch {
+                    setErrors(['Could not read that file. Try a .csv export.'])
+                  }
+                  // Allow re-selecting the same file after a failed run.
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            {csv.trim() && (
+              <span className="text-[11px] text-sage-500">
+                {csv.split(/\r?\n/).filter((l) => l.trim()).length} line(s) loaded
+              </span>
+            )}
+          </div>
+
+          <details className="text-xs">
+            <summary className="cursor-pointer text-sage-500 hover:text-sage-700">
+              or paste the CSV text instead
+            </summary>
+            <textarea
+              rows={8}
+              value={csv}
+              onChange={(e) => { setCsv(e.target.value); setPreview(null) }}
+              placeholder="Paste the CSV export (with a header row). Uploading the file above is recommended."
+              className="mt-2 w-full px-3 py-2 text-xs font-mono border border-sage-200 rounded"
+            />
+          </details>
         </div>
 
         <div className="flex items-center justify-end gap-2">
