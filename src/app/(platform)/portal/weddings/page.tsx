@@ -536,7 +536,6 @@ interface BookingForm {
   source: string
   estimatedValue: string
   notes: string
-  sendInvite: boolean
 }
 
 const emptyForm: BookingForm = {
@@ -553,7 +552,6 @@ const emptyForm: BookingForm = {
   source: 'website',
   estimatedValue: '',
   notes: '',
-  sendInvite: true,
 }
 
 function NewBookingModal({
@@ -640,31 +638,11 @@ function NewBookingModal({
         try { body = await mintRes.json() } catch { /* noop */ }
         throw new Error(body?.error || `mint-wedding failed (${mintRes.status})`)
       }
-      const mintJson = (await mintRes.json()) as {
-        weddingId: string
-        eventCode: string | null
-      }
-      const finalCode = mintJson.eventCode ?? code
-
-      // Couple-invite is unchanged — same /api/portal/invite-couple
-      // endpoint as before. Now stamped through the server flow so
-      // couple_invited_at is set inside the endpoint.
-      if (form.sendInvite && form.partner1Email.trim()) {
-        await fetch('/api/portal/invite-couple', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            weddingId: mintJson.weddingId,
-            venueId,
-            email: form.partner1Email.trim(),
-            partnerEmail: form.partner2Email.trim() || null,
-            eventCode: finalCode,
-            coupleName: form.partner2FirstName.trim()
-              ? `${form.partner1FirstName.trim()} & ${form.partner2FirstName.trim()}`
-              : form.partner1FirstName.trim(),
-          }),
-        })
-      }
+      // Booking created. The portal is provisioned on our side and is
+      // ready to log into immediately — but the couple is NOT emailed
+      // here. The invitation is always a deliberate act: the
+      // coordinator presses "Email portal invite" on the wedding card
+      // when they're ready to hand the couple their side.
 
       // Track booking_closed in consultant_metrics
       fetch('/api/tracking', {
@@ -908,23 +886,13 @@ function NewBookingModal({
             />
           </div>
 
-          {/* Send Invite checkbox */}
-          <label className="flex items-start gap-3 cursor-pointer group">
-            <input
-              type="checkbox"
-              checked={form.sendInvite}
-              onChange={(e) => set('sendInvite', e.target.checked)}
-              className="mt-0.5 w-4 h-4 rounded border-sage-300 text-sage-600 focus:ring-sage-500"
-            />
-            <div>
-              <span className="text-sm font-medium text-sage-900 group-hover:text-sage-700 transition-colors">
-                Send invitation email to the couple
-              </span>
-              <p className="text-xs text-sage-500 mt-0.5">
-                They will receive a link to set up their wedding portal account.
-              </p>
-            </div>
-          </label>
+          {/* Post-create note — invitations are sent from the wedding
+              card, never automatically. */}
+          <div className="rounded-lg border border-sage-200 bg-sage-50 px-3 py-2 text-xs text-sage-600">
+            The couple&apos;s portal is set up on your side as soon as you
+            create this booking. When you&apos;re ready to give the couple
+            access, open their card and press <strong>Email portal invite</strong>.
+          </div>
 
           {/* Error */}
           {error && (
