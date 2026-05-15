@@ -35,9 +35,12 @@ import {
   Sparkles,
   Inbox,
   HelpCircle,
+  Scissors,
 } from 'lucide-react'
 import { JourneyRibbon } from '@/components/identity/JourneyRibbon'
 import { JourneyActionChip } from '@/components/identity/JourneyActionChip'
+import { UnmergeModal } from '@/components/identity/UnmergeModal'
+import { ResurrectionBanner } from '@/components/identity/ResurrectionBanner'
 
 type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
 
@@ -78,7 +81,7 @@ interface CandidateMatch {
   confidence_tier: string
   matcher_reason: string | null
   resolution: string | null
-  occurred_at: string
+  created_at: string
 }
 
 interface Fragment {
@@ -118,6 +121,10 @@ export default function CoupleDetailPage() {
   const [profile, setProfile] = useState<IdentityProfile | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showUnmerge, setShowUnmerge] = useState(false)
+  // Most recent resurrection event with no later resurrection_rejected.
+  const [resurrectedAt, setResurrectedAt] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     if (!coupleId) return
@@ -154,11 +161,11 @@ export default function CoupleDetailPage() {
         supabase
           .from('candidate_matches')
           .select(
-            'id, primary_record_id, primary_record_type, secondary_record_id, secondary_record_type, confidence_tier, matcher_reason, resolution, occurred_at',
+            'id, primary_record_id, primary_record_type, secondary_record_id, secondary_record_type, confidence_tier, matcher_reason, resolution, created_at',
           )
           .or(`primary_record_id.eq.${coupleId},secondary_record_id.eq.${coupleId}`)
           .is('resolution', null)
-          .order('occurred_at', { ascending: false })
+          .order('created_at', { ascending: false })
           .limit(50),
         supabase
           .from('couple_identity_profile')
@@ -188,6 +195,34 @@ export default function CoupleDetailPage() {
             out.push(m.secondary_record_id)
           return out
         })
+      // 4. Resurrection banner check: most recent 'resurrection' event
+      //    in the last 14 days, with no later 'resurrection_rejected'.
+      const fourteenDaysAgo = new Date(
+        Date.now() - 14 * 86_400_000,
+      ).toISOString()
+      const { data: mergeEvents } = await supabase
+        .from('couple_merge_events')
+        .select('event_type, occurred_at')
+        .eq('primary_couple_id', coupleId)
+        .in('event_type', ['resurrection', 'resurrection_rejected'])
+        .gte('occurred_at', fourteenDaysAgo)
+        .order('occurred_at', { ascending: false })
+        .limit(5)
+      if (!cancelled) {
+        const events = (mergeEvents ?? []) as Array<{
+          event_type: string
+          occurred_at: string
+        }>
+        // The latest event wins: if the most recent is a resurrection
+        // and nothing rejected it after, show the banner.
+        const latest = events[0]
+        setResurrectedAt(
+          latest && latest.event_type === 'resurrection'
+            ? latest.occurred_at
+            : null,
+        )
+      }
+
       if (referencedIds.length > 0) {
         const [fRes, tRes] = await Promise.all([
           supabase
@@ -227,7 +262,7 @@ export default function CoupleDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [coupleId, supabase])
+  }, [coupleId, supabase, reloadKey])
 
   if (loading) {
     return (
@@ -266,12 +301,36 @@ export default function CoupleDetailPage() {
         <ArrowLeft className="h-4 w-4" /> All couples
       </button>
 
+      {resurrectedAt && (
+        <ResurrectionBanner
+          coupleId={couple.id}
+          resurrectedAt={resurrectedAt}
+          onResolved={() => {
+            setResurrectedAt(null)
+            setReloadKey((k) => k + 1)
+          }}
+        />
+      )}
+
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <h1 className="font-serif text-3xl text-stone-900">
+            {displayName}
+            {partner && <span className="text-stone-500"> &amp; {partner}</span>}
+          </h1>
+        </div>
+        {touchpoints.length > 0 && (
+          <button
+            onClick={() => setShowUnmerge(true)}
+            className="flex items-center gap-1 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm text-stone-700 hover:bg-stone-50"
+          >
+            <Scissors className="h-3.5 w-3.5" /> Split this couple
+          </button>
+        )}
+      </div>
+
       <div className="mb-6">
-        <h1 className="font-serif text-3xl text-stone-900">
-          {displayName}
-          {partner && <span className="text-stone-500"> &amp; {partner}</span>}
-        </h1>
-        <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-stone-600">
+        <div className="flex flex-wrap items-center gap-3 text-sm text-stone-600">
           {couple.primary_contact_email && (
             <span className="flex items-center gap-1">
               <Mail className="h-3 w-3" /> {couple.primary_contact_email}
@@ -446,7 +505,7 @@ export default function CoupleDetailPage() {
                       </span>
                     </div>
                     <span className="text-xs text-stone-500">
-                      {new Date(m.occurred_at).toLocaleDateString()}
+                      {new Date(m.created_at).toLocaleDateString()}
                     </span>
                   </div>
                   {m.matcher_reason && (
@@ -468,11 +527,28 @@ export default function CoupleDetailPage() {
       </p>
 
 
-      {/* Placeholder for Inbox/related action surface */}
       <div className="mt-12 flex items-center gap-2 text-xs text-stone-300">
         <Inbox className="h-3 w-3" />
         <span>Couple ID: {couple.id}</span>
       </div>
+
+      {showUnmerge && (
+        <UnmergeModal
+          coupleId={couple.id}
+          venueId={couple.venue_id}
+          touchpoints={touchpoints.map((t) => ({
+            id: t.id,
+            channel: t.channel,
+            action_type: t.action_type,
+            occurred_at: t.occurred_at,
+          }))}
+          onClose={() => setShowUnmerge(false)}
+          onDone={() => {
+            setShowUnmerge(false)
+            setReloadKey((k) => k + 1)
+          }}
+        />
+      )}
     </div>
   )
 }

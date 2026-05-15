@@ -127,11 +127,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const cascaded = { touchpoints_reparented: 0, fragments_promoted: 0 }
 
   if (resolution === 'confirmed' && coupleId) {
-    // 1. Re-parent orphan touchpoint, if present.
+    // 1. Re-parent orphan touchpoint, if present. confidence_tier
+    //    CHECK only permits high/medium/low — an operator confirm is
+    //    the strongest signal there is, so 'high'.
     if (touchpointId) {
       const { error } = await supabase
         .from('touchpoints')
-        .update({ couple_id: coupleId, confidence_tier: 'operator_confirmed' })
+        .update({ couple_id: coupleId, confidence_tier: 'high' })
         .eq('id', touchpointId)
         .eq('venue_id', m.venue_id)
       if (!error) cascaded.touchpoints_reparented += 1
@@ -170,17 +172,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .update(updatePayload)
     .eq('id', m.id)
 
-  // 4. Audit trail via couple_merge_events when confirming.
-  if (resolution === 'confirmed' && coupleId) {
+  // 4. Audit trail via couple_merge_events. The table keys on
+  //    primary_couple_id / secondary_couple_id and a required
+  //    event_type enum (migration 346) — there is no couple_id
+  //    column. candidate_confirmed / candidate_rejected are the two
+  //    enum values that fit an operator resolution.
+  if (coupleId && (resolution === 'confirmed' || resolution === 'rejected')) {
+    const tierForLog =
+      m.confidence_tier === 'high' ||
+      m.confidence_tier === 'medium' ||
+      m.confidence_tier === 'low'
+        ? m.confidence_tier
+        : null
     await supabase.from('couple_merge_events').insert({
       venue_id: m.venue_id,
-      couple_id: coupleId,
-      reason: `operator_confirm: ${m.confidence_tier} candidate_match id=${m.id}`,
-      occurred_at: new Date().toISOString(),
+      event_type: resolution === 'confirmed' ? 'candidate_confirmed' : 'candidate_rejected',
+      primary_couple_id: coupleId,
+      operator_id: auth.userId ?? null,
+      rule_triggered: `candidate_match:${m.id}`,
+      confidence_tier: tierForLog,
+      reason: body.note
+        ? `operator ${resolution}: ${body.note}`
+        : `operator ${resolution} of ${m.confidence_tier} candidate_match`,
     })
-    // The operator confirming a candidate IS a progression event
-    // (§3 enumeration: 'fragment_match_returned'). The clock bumps so
-    // the resurrected couple doesn't immediately decay.
+  }
+
+  // 5. The operator confirming a candidate IS a progression event
+  //    (§3 enumeration: 'fragment_match_returned'). The clock bumps so
+  //    a resurrected couple doesn't immediately re-decay.
+  if (resolution === 'confirmed' && coupleId) {
     await recordFragmentMatchReturned({
       supabase,
       coupleId,

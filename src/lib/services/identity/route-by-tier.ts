@@ -40,6 +40,7 @@ import {
   insertTouchpoint,
 } from './tracer'
 import { recordProgressionIfEligible } from './progression'
+import { maybeResurrectGhost } from './resurrection'
 
 export type TierRoutingAction =
   | 'attached'
@@ -95,6 +96,15 @@ export async function applyTierRouting(
         coupleId: best.coupleId,
         signal,
         touchpointId: tp.touchpoint_id,
+      })
+      // §9: a high-tier signal landing on a Ghost couple resurrects
+      // them. No-ops when the couple isn't a Ghost or the triggering
+      // identifier is blacklisted against this couple.
+      await maybeResurrectGhost({
+        supabase,
+        venueId,
+        coupleId: best.coupleId,
+        signal,
       })
     }
     return {
