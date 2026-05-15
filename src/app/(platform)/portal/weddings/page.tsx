@@ -90,22 +90,18 @@ interface Wedding {
   comm_pulse_count?: number
 }
 
-// Weddings portal list — the "real weddings" surface. Inquiries live
-// on /agent/leads (email funnel); this page is for couples who've at
-// least booked a tour. Anyone still in 'inquiry' status is excluded
-// from the base query below; the filter chips let a coordinator
-// narrow further (tour/proposal/booked/completed/lost).
-type StatusFilter = 'all' | 'tour_scheduled' | 'proposal_sent' | 'booked' | 'completed' | 'lost'
+// Weddings portal list — the booked-clients surface. This page shows
+// ONLY couples who have actually booked: status 'booked' (contracted,
+// upcoming) and 'completed' (their wedding has happened). Inquiries,
+// tours and proposals are pipeline, not bookings — they live on
+// /agent/leads. The filter chips narrow between booked and completed.
+type StatusFilter = 'all' | 'booked' | 'completed'
 
-// Status values allowed on this surface. 'inquiry' is intentionally
-// absent — if a coordinator wants inquiries, they go to Agent mode.
+// Status values allowed on this surface. Only contracted couples — a
+// scheduled tour or an open proposal is not a booking.
 const WEDDING_STATUSES = [
-  'tour_scheduled',
-  'tour_completed',
-  'proposal_sent',
   'booked',
   'completed',
-  'lost',
 ] as const
 type SortKey = 'date' | 'status' | 'value'
 
@@ -1106,20 +1102,14 @@ export default function WeddingsPage() {
 
   const statusCounts = {
     all: weddings.length,
-    tour_scheduled: weddings.filter((w) => w.status === 'tour_scheduled' || w.status === 'tour_completed').length,
-    proposal_sent: weddings.filter((w) => w.status === 'proposal_sent').length,
     booked: weddings.filter((w) => w.status === 'booked').length,
     completed: weddings.filter((w) => w.status === 'completed').length,
-    lost: weddings.filter((w) => w.status === 'lost').length,
   }
 
   const statuses: { key: StatusFilter; label: string }[] = [
     { key: 'all', label: 'All' },
-    { key: 'tour_scheduled', label: 'Touring' },
-    { key: 'proposal_sent', label: 'Proposal' },
     { key: 'booked', label: 'Booked' },
     { key: 'completed', label: 'Completed' },
-    { key: 'lost', label: 'Lost' },
   ]
 
   const sortOptions: { key: SortKey; label: string }[] = [
@@ -1142,7 +1132,7 @@ export default function WeddingsPage() {
             )}
           </h1>
           <p className="text-sage-600">
-            All weddings managed through your portal — booked, in-planning, and completed. Click any couple to view their portal, or open it as the couple would see it.
+            Your booked couples — contracted and completed weddings. Click any couple to view their portal, or open it as the couple would see it.
           </p>
         </div>
         {scope.level === 'venue' && scope.venueId && (
