@@ -155,6 +155,10 @@ export interface NormalisedLeadRow {
   gratuity_amount?: Cents | number | null
   refunded_amount?: Cents | number | null
   package_name?: string | null
+  /** Full header-keyed source CSV row. Preserved into
+   *  weddings.raw_import_row (migration 355) so any column with no
+   *  typed field is not lost and surfaces on the Data Fields page. */
+  raw_row?: Record<string, unknown> | null
   status?: 'inquiry' | 'tour_scheduled' | 'tour_completed' | 'proposal_sent'
          | 'booked' | 'completed' | 'lost' | 'cancelled' | null
   source?: string | null                  // wedding source channel
@@ -518,6 +522,9 @@ export async function commitNormalisedRows(args: {
         gratuity_amount: row.gratuity_amount ?? null,
         refunded_amount: row.refunded_amount ?? null,
         package_name: row.package_name ?? null,
+        // Full source row preserved (migration 355) — nothing the
+        // venue exported is lost, even columns with no typed field.
+        raw_import_row: row.raw_row ?? null,
         inquiry_date: inquiryDateForRow,
         booked_at: row.booked_at ?? null,
         lost_at: row.lost_at ?? null,

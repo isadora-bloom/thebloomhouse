@@ -235,6 +235,11 @@ async function parseGenericCsv(config: AdapterConfig): Promise<ParseResult> {
       gratuity_amount: coerceMoneyToCents(get('gratuity_amount')),
       refunded_amount: coerceMoneyToCents(get('refunded_amount')),
       package_name: get('package_name'),
+      // Full source row, header-keyed — preserves every CSV column,
+      // including ones the coordinator did not map (weddings.raw_import_row).
+      raw_row: Object.fromEntries(
+        header.map((h, i) => [h || `col_${i}`, (data[i] ?? '').trim()]),
+      ),
       status: status ?? 'inquiry',
       // adapter-source-justified: generic-csv ONLY writes weddings.source
       //   when the coordinator EXPLICITLY mapped a CSV column to the

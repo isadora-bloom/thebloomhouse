@@ -466,6 +466,9 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
   }
 
   const rows: NormalisedLeadRow[] = []
+  // Header row, used to build the full header-keyed raw row so columns
+  // with no HoneyBook alias are preserved (weddings.raw_import_row).
+  const headerRow = (csvRows[0] ?? []).map((h) => (h ?? '').trim())
   const get = (data: string[], key: string): string | null => {
     const i = idx.byKey[key]
     if (i == null || i < 0) return null
@@ -603,6 +606,11 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
       gratuity_amount: parseMoneyToCents(gratuityRaw),
       refunded_amount: parseMoneyToCents(refundedRaw),
       package_name: packageRaw,
+      // Full source row, header-keyed — preserves every HoneyBook
+      // column including ones with no alias / no typed field.
+      raw_row: Object.fromEntries(
+        headerRow.map((h, i) => [h || `col_${i}`, (data[i] ?? '').trim()]),
+      ),
       status: status ?? 'inquiry',
       // T5-Rixey-TT: HoneyBook is a CRM (factual provenance lives in
       // crm_source='honeybook'). Lead-source derivation decides the real
