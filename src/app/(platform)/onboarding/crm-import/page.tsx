@@ -300,6 +300,24 @@ export default function CrmImportPage() {
                     const text = await file.text()
                     setCsv(text)
                     setPreview(null)
+                    // Auto-pick the adapter from the header signature so
+                    // the coordinator doesn't have to know which one to
+                    // choose. A HoneyBook export is unmistakable — it
+                    // leads with "Project Name". Generic CSV needs a
+                    // hand-built mapping; the provider adapters
+                    // auto-detect their columns.
+                    const firstLine = (
+                      text.split(/\r?\n/).find((l) => l.trim()) ?? ''
+                    ).toLowerCase()
+                    if (
+                      firstLine.includes('project name') &&
+                      adapters.some((a) => a.name === 'honeybook' && a.ready)
+                    ) {
+                      setSelectedAdapter('honeybook')
+                      setWarnings([
+                        'Detected a HoneyBook export — switched the adapter to HoneyBook automatically.',
+                      ])
+                    }
                   } catch {
                     setErrors(['Could not read that file. Try a .csv export.'])
                   }
