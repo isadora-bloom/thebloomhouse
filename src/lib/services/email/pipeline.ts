@@ -4119,11 +4119,11 @@ export async function processIncomingEmail(
         correlationId,
         source: 'live:email',
       })
-    } catch (err) {
-      console.warn(
-        '[pipeline] forwards-linker failed (non-fatal):',
-        err instanceof Error ? err.message : err,
-      )
+    } catch {
+      // Linker logs the failure structured via logEvent + writes a
+      // failed-status row to tracer_run_events. Surface there, not in
+      // cron stdout. The legacy email-pipeline path must not break on
+      // a linker hiccup.
     }
   }
 

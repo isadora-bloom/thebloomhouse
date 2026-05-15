@@ -305,9 +305,15 @@ export const MODE_INTEL: ModeConfig = {
     {
       title: 'People & deduplication',
       items: [
-        { label: 'All Clients', href: '/intel/clients', icon: UserCheck },
+        // Identity-First entry points (Phase E). /intel/couples is the
+        // doctrine-canonical operator view. /intel/clients remains for
+        // the legacy weddings-keyed surfaces until Phase D-7 migrates
+        // them. See IDENTITY-FIRST-ARCHITECTURE.md §6.
+        { label: 'Couples', href: '/intel/couples', icon: UserCheck },
+        { label: 'Identity Review', href: '/intel/identity-review', icon: Sparkles },
+        { label: 'All Clients (legacy)', href: '/intel/clients', icon: UserCheck },
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
-        { label: 'Candidate Review', href: '/intel/candidates', icon: Sparkles },
+        { label: 'Candidate Review (legacy)', href: '/intel/candidates', icon: Sparkles },
         { label: 'Re-engagement', href: '/intel/reengagement', icon: Send },
       ],
     },
@@ -605,6 +611,13 @@ export const GEAR_GROUPS: GearGroup[] = [
       { label: 'Identity decisions', href: '/admin/identity/decisions', icon: ListOrdered, requiresRole: 'org_admin' },
       { label: 'Handle merges', href: '/admin/identity/handle-merges', icon: Workflow, requiresRole: 'org_admin' },
       { label: 'Identity backtrack', href: '/admin/identity/backtrack', icon: Sparkles, requiresRole: 'org_admin' },
+      // Identity-First Phase B/C/E surfaces (IDENTITY-FIRST-ARCHITECTURE.md
+      // §4 + §9). Tracer-runs visualises Backwards Tracer + Forwards
+      // Linker activity; Identity telemetry is the cross-venue health
+      // dashboard per §9.
+      { label: 'Tracer runs', href: '/admin/tracer-runs', icon: Activity, requiresRole: 'org_admin' },
+      { label: 'Identity telemetry', href: '/admin/identity-telemetry', icon: Gauge, requiresRole: 'org_admin' },
+      { label: 'Identity divergence', href: '/admin/identity-divergence', icon: AlertTriangle, requiresRole: 'org_admin' },
       { label: 'Disagreements', href: '/admin/disagreements', icon: AlertTriangle, requiresRole: 'org_admin' },
       { label: 'Source parity', href: '/admin/sources-parity', icon: BarChart3, requiresRole: 'org_admin' },
       { label: 'Attribution roles', href: '/admin/attribution/roles', icon: UsersRound, requiresRole: 'org_admin' },

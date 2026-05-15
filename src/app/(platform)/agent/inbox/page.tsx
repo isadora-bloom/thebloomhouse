@@ -18,6 +18,7 @@ import {
 } from '@/components/intel/auto-context-chip'
 import { SoloPill, useBatchPartnerCounts } from '@/components/intel/solo-pill'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
+import { CandidateMatchChip } from '@/components/identity/CandidateMatchChip'
 import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
 import { HyperlinkedBody } from '@/components/agent/HyperlinkedBody'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -411,8 +412,11 @@ function EmailListItem({
           prior touchpoints. On inquiry rows this surfaces "3 prior
           touchpoints" (hot) or "1 prior touchpoint" (warm) with an
           expandable list of each touch. */}
-      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+      <div className="mt-2 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
         <PriorTouchesChip personId={interaction.person_id} />
+        {/* §5 Don't skip #2: candidate matches surface inline on the inbox,
+            not just on the review queue page. */}
+        <CandidateMatchChip weddingId={interaction.wedding_id} />
       </div>
     </button>
   )

@@ -31,18 +31,13 @@ import {
   Mail,
   Phone,
   Calendar,
-  Activity,
   AlertTriangle,
   Sparkles,
   Inbox,
-  Globe,
-  Hash,
-  Pin,
-  Heart,
-  Camera,
-  Users as UsersIcon,
   HelpCircle,
 } from 'lucide-react'
+import { JourneyRibbon } from '@/components/identity/JourneyRibbon'
+import { JourneyActionChip } from '@/components/identity/JourneyActionChip'
 
 type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
 
@@ -58,6 +53,7 @@ interface CoupleDetail {
   lifecycle_state: LifecycleState | null
   wedding_date: string | null
   source_wedding_id: string | null
+  last_progression_at: string | null
   updated_at: string
   created_at: string
 }
@@ -109,46 +105,6 @@ interface IdentityProfile {
   updated_at: string
 }
 
-function channelIcon(channel: string) {
-  const c = channel.toLowerCase()
-  if (c === 'gmail' || c.includes('email'))
-    return <Mail className="h-4 w-4 text-rose-600" />
-  if (c === 'calendly') return <Calendar className="h-4 w-4 text-sky-600" />
-  if (c === 'knot' || c === 'theknot')
-    return <Heart className="h-4 w-4 text-pink-600" />
-  if (c === 'weddingwire') return <Heart className="h-4 w-4 text-amber-600" />
-  if (c === 'instagram') return <Hash className="h-4 w-4 text-violet-600" />
-  if (c === 'pinterest') return <Pin className="h-4 w-4 text-red-600" />
-  if (c === 'website') return <Globe className="h-4 w-4 text-emerald-600" />
-  if (c === 'phone' || c === 'openphone' || c === 'sms')
-    return <Phone className="h-4 w-4 text-emerald-700" />
-  if (c === 'photo' || c === 'tour') return <Camera className="h-4 w-4 text-stone-600" />
-  return <Activity className="h-4 w-4 text-stone-500" />
-}
-
-function tierColor(tier: string) {
-  if (tier === 'highest' || tier === 'high')
-    return 'bg-emerald-50 border-emerald-200 text-emerald-800'
-  if (tier === 'medium_high' || tier === 'medium')
-    return 'bg-amber-50 border-amber-200 text-amber-800'
-  return 'bg-stone-50 border-stone-200 text-stone-700'
-}
-
-function actionLabel(action: string): string {
-  return action.replace(/_/g, ' ')
-}
-
-function groupByDay(events: Array<{ occurred_at: string }>): Map<string, number[]> {
-  const map = new Map<string, number[]>()
-  events.forEach((e, idx) => {
-    const day = (e.occurred_at ?? '').slice(0, 10)
-    const arr = map.get(day) ?? []
-    arr.push(idx)
-    map.set(day, arr)
-  })
-  return map
-}
-
 export default function CoupleDetailPage() {
   const params = useParams()
   const router = useRouter()
@@ -173,7 +129,7 @@ export default function CoupleDetailPage() {
       const { data: c, error: cErr } = await supabase
         .from('couples')
         .select(
-          'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, partner_contact_email, partner_contact_phone, lifecycle_state, wedding_date, source_wedding_id, updated_at, created_at',
+          'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, partner_contact_email, partner_contact_phone, lifecycle_state, wedding_date, source_wedding_id, last_progression_at, updated_at, created_at',
         )
         .eq('id', coupleId)
         .maybeSingle()
@@ -272,8 +228,6 @@ export default function CoupleDetailPage() {
       cancelled = true
     }
   }, [coupleId, supabase])
-
-  const byDay = useMemo(() => groupByDay(touchpoints), [touchpoints])
 
   if (loading) {
     return (
@@ -418,6 +372,16 @@ export default function CoupleDetailPage() {
         </div>
       )}
 
+      <div className="mb-3">
+        <JourneyActionChip
+          input={{
+            lifecycle_state: couple.lifecycle_state,
+            last_progression_at: couple.last_progression_at,
+            wedding_date: couple.wedding_date,
+          }}
+        />
+      </div>
+
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-700">
           Journey ribbon
@@ -430,66 +394,8 @@ export default function CoupleDetailPage() {
         )}
       </div>
 
-      <div className="rounded-lg border border-stone-200 bg-white">
-        {touchpoints.length === 0 ? (
-          <div className="p-8 text-center text-sm text-stone-500">
-            No touchpoints recorded yet. The Tracer or Forwards Linker will
-            populate this view as signals arrive.
-          </div>
-        ) : (
-          <div className="divide-y divide-stone-100">
-            {Array.from(byDay.entries()).map(([day, indices]) => (
-              <div key={day} className="px-4 py-3">
-                <div className="mb-2 text-xs uppercase tracking-wide text-stone-500">
-                  {new Date(day).toLocaleDateString(undefined, {
-                    weekday: 'short',
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric',
-                  })}
-                </div>
-                <ol className="space-y-2 border-l-2 border-stone-200 pl-4">
-                  {indices.map((i) => {
-                    const t = touchpoints[i]!
-                    const time = new Date(t.occurred_at).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })
-                    return (
-                      <li
-                        key={t.id}
-                        className={`relative -ml-4 flex items-start gap-3 rounded-md border bg-white pl-3 pr-3 py-2 ${tierColor(
-                          t.signal_tier,
-                        )}`}
-                      >
-                        <span className="mt-0.5">{channelIcon(t.channel)}</span>
-                        <div className="flex-1">
-                          <div className="text-sm font-medium">
-                            {actionLabel(t.action_type)}
-                            <span className="text-xs text-stone-500">
-                              {' '}
-                              via {t.channel}
-                            </span>
-                          </div>
-                          {t.raw_payload && (
-                            <div className="mt-0.5 line-clamp-1 text-xs text-stone-600">
-                              {String(
-                                (t.raw_payload as Record<string, unknown>).subject ??
-                                  (t.raw_payload as Record<string, unknown>).note ??
-                                  '',
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <span className="shrink-0 text-xs text-stone-500">{time}</span>
-                      </li>
-                    )
-                  })}
-                </ol>
-              </div>
-            ))}
-          </div>
-        )}
+      <div className="rounded-lg border border-stone-200 bg-white p-4">
+        <JourneyRibbon touchpoints={touchpoints} />
       </div>
 
       {candidates.length > 0 && (
@@ -561,21 +467,6 @@ export default function CoupleDetailPage() {
         touchpoints in shadow mode the moment they arrive.
       </p>
 
-      {/* Channel constellation summary at bottom */}
-      {channelSet.size > 1 && (
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-stone-600">
-          <UsersIcon className="h-3 w-3 text-stone-400" />
-          <span className="text-stone-400">Channels:</span>
-          {Array.from(channelSet).map((c) => (
-            <span
-              key={c}
-              className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-white px-2 py-0.5"
-            >
-              {channelIcon(c)} {c}
-            </span>
-          ))}
-        </div>
-      )}
 
       {/* Placeholder for Inbox/related action surface */}
       <div className="mt-12 flex items-center gap-2 text-xs text-stone-300">

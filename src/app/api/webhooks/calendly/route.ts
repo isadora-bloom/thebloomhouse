@@ -393,11 +393,10 @@ export async function POST(request: NextRequest) {
         },
         source: 'live:calendly',
       })
-    } catch (err) {
-      console.warn(
-        '[webhook/calendly] forwards-linker failed (non-fatal):',
-        err instanceof Error ? err.message : err,
-      )
+    } catch {
+      // Linker emits structured logEvent + tracer_run_events failed
+      // row on its own; legacy webhook path must not break on a
+      // linker hiccup.
     }
 
     // Track tour_booked in consultant_metrics

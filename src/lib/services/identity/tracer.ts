@@ -75,6 +75,7 @@ import {
   type NormalizedSignal,
   type SourceAdapter,
 } from './sources'
+import { applyTierRouting } from './route-by-tier'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -402,46 +403,36 @@ export async function loadRecentCouples(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<CoupleForMatch[]> {
-  // Bounded read: 2000 most recent couples for the venue. The matcher
-  // applies cross-channel temporal scoring against observed_at; we
-  // can prune by wedding_date window in a future optimisation. 2000
-  // is fine for v1 (Rixey has ~700 couples).
+  // Bounded read: 2000 most recent couples for the venue. Doctrine
+  // canonical columns (migration 346): primary_contact_name +
+  // primary_contact_email + primary_contact_phone + partner_contact_*.
   const { data } = await supabase
     .from('couples')
     .select(
-      'id, primary_name, primary_email, primary_phone, partner_name, partner_email, partner_phone, wedding_date, source_wedding_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, partner_contact_email, partner_contact_phone',
+      'id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, partner_contact_email, partner_contact_phone, wedding_date, source_wedding_id',
     )
     .eq('venue_id', venueId)
     .order('updated_at', { ascending: false })
     .limit(2000)
-  // Map both column-name variants (legacy primary_name vs
-  // couples.primary_contact_name from mig 346). Doctrine table uses
-  // primary_contact_name; defensive read.
   type Row = {
     id: string
-    primary_name?: string | null
-    primary_contact_name?: string | null
-    primary_email?: string | null
-    primary_contact_email?: string | null
-    primary_phone?: string | null
-    primary_contact_phone?: string | null
-    partner_name?: string | null
-    partner_contact_name?: string | null
-    partner_email?: string | null
-    partner_contact_email?: string | null
-    partner_phone?: string | null
-    partner_contact_phone?: string | null
+    primary_contact_name: string | null
+    primary_contact_email: string | null
+    primary_contact_phone: string | null
+    partner_contact_name: string | null
+    partner_contact_email: string | null
+    partner_contact_phone: string | null
     wedding_date: string | null
     source_wedding_id: string | null
   }
   return ((data ?? []) as Row[]).map((r) => ({
     id: r.id,
-    primary_name: r.primary_contact_name ?? r.primary_name ?? null,
-    primary_email: r.primary_contact_email ?? r.primary_email ?? null,
-    primary_phone: r.primary_contact_phone ?? r.primary_phone ?? null,
-    partner_name: r.partner_contact_name ?? r.partner_name ?? null,
-    partner_email: r.partner_contact_email ?? r.partner_email ?? null,
-    partner_phone: r.partner_contact_phone ?? r.partner_phone ?? null,
+    primary_name: r.primary_contact_name,
+    primary_email: r.primary_contact_email,
+    primary_phone: r.primary_contact_phone,
+    partner_name: r.partner_contact_name,
+    partner_email: r.partner_contact_email,
+    partner_phone: r.partner_contact_phone,
     wedding_date: r.wedding_date,
     source_wedding_id: r.source_wedding_id,
   }))
@@ -492,6 +483,7 @@ async function processSignal(
       context: { primary_touchpoints: [], secondary_touchpoints: [] },
       budget: state.judgeBudget,
       perDayBudget: state.judgePerDayBudget,
+      runId: state.runId,
     })
     if (judgeRes.kind === 'verdict') {
       finalTier =
@@ -507,61 +499,17 @@ async function processSignal(
     }
   }
 
-  if (finalTier === 'high' && bestVerdict) {
-    const r = await insertTouchpoint(
-      state.supabase,
-      state.venueId,
-      bestVerdict.coupleId,
-      signal,
-    )
-    if (r.inserted) inc.touchpoints += 1
-    return inc
-  }
-
-  if (finalTier === 'medium' && bestVerdict) {
-    // Insert as orphan touchpoint (no couple_id) and queue a
-    // candidate match. The operator-review UI in Phase E renders
-    // this for confirm/reject.
-    const tp = await insertTouchpoint(state.supabase, state.venueId, null, signal)
-    if (tp.inserted) inc.touchpoints += 1
-    if (tp.touchpoint_id) {
-      await insertCandidateMatch(
-        state.supabase,
-        state.venueId,
-        bestVerdict.coupleId,
-        'couple',
-        tp.touchpoint_id,
-        'touchpoint',
-        'medium',
-        bestVerdict.verdict.reason + reasonExtra,
-      )
-      inc.candidates += 1
-    }
-    return inc
-  }
-
-  if (finalTier === 'low' && bestVerdict) {
-    const tp = await insertTouchpoint(state.supabase, state.venueId, null, signal)
-    if (tp.inserted) inc.touchpoints += 1
-    if (tp.touchpoint_id) {
-      await insertCandidateMatch(
-        state.supabase,
-        state.venueId,
-        bestVerdict.coupleId,
-        'couple',
-        tp.touchpoint_id,
-        'touchpoint',
-        'low',
-        bestVerdict.verdict.reason + reasonExtra,
-      )
-      inc.candidates += 1
-    }
-    return inc
-  }
-
-  // Below threshold → drop as fragment.
-  const f = await insertFragment(state.supabase, state.venueId, signal)
-  if (f.inserted) inc.fragments += 1
+  const routed = await applyTierRouting({
+    supabase: state.supabase,
+    venueId: state.venueId,
+    signal,
+    best: bestVerdict,
+    finalTier,
+    reasonExtra,
+  })
+  if (routed.touchpoint_inserted) inc.touchpoints += 1
+  if (routed.fragment_inserted) inc.fragments += 1
+  if (routed.candidate_match_queued) inc.candidates += 1
   return inc
 }
 
@@ -788,13 +736,74 @@ async function stageAgentInfer(state: RunState): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function stageDecaySweep(state: RunState): Promise<void> {
+  // Doctrine §3: flip resolved / channel_scoped couples to 'ghost' when
+  // last_progression_at is older than the per-couple decay_window_days
+  // AND no recent couple_progression_events exist. Booked never decays
+  // (lifecycle CHECK excludes booked from the candidate set). Migration
+  // 348 backfilled last_progression_at and added the supporting index;
+  // the progression-event writer in src/lib/services/identity/progression.ts
+  // keeps it fresh.
   await emitEvent(state, 'decay_sweep', 'started')
-  // Phase A leaves last_progression_at NULL — Phase B doesn't backfill
-  // it (that's a Phase D job once progression events have a clear
-  // writer set). Without last_progression_at the decay sweep is a
-  // no-op; we still emit the event so the operator can see it ran.
-  await emitEvent(state, 'decay_sweep', 'succeeded', 0, 0, {
-    note: 'last_progression_at not yet backfilled — sweep is a no-op in Phase B; Phase D will wire the progression-event writer',
+  const { data: candidates, error: candErr } = await state.supabase
+    .from('couples')
+    .select('id, last_progression_at, decay_window_days')
+    .eq('venue_id', state.venueId)
+    .in('lifecycle_state', ['resolved', 'channel_scoped'])
+    .not('last_progression_at', 'is', null)
+    .limit(5000)
+  if (candErr) {
+    await emitEvent(state, 'decay_sweep', 'failed', 0, 0, { error: candErr.message })
+    throw new Error(`decay_sweep candidates: ${candErr.message}`)
+  }
+
+  const rows = (candidates ?? []) as Array<{
+    id: string
+    last_progression_at: string
+    decay_window_days: number
+  }>
+  const now = Date.now()
+  const toGhost: string[] = []
+
+  for (const r of rows) {
+    const ageMs = now - Date.parse(r.last_progression_at)
+    const windowMs = (r.decay_window_days ?? 180) * 86_400_000
+    if (ageMs <= windowMs) continue
+
+    // Second guard: doctrine requires NOT EXISTS recent progression
+    // event. couples.last_progression_at IS the latest event; in steady
+    // state these match. We re-check to handle race conditions where a
+    // progression event landed during this sweep.
+    const sinceIso = new Date(now - windowMs).toISOString()
+    const { count } = await state.supabase
+      .from('couple_progression_events')
+      .select('couple_id', { count: 'exact', head: true })
+      .eq('couple_id', r.id)
+      .gt('occurred_at', sinceIso)
+    if ((count ?? 0) > 0) continue
+
+    toGhost.push(r.id)
+  }
+
+  let flipped = 0
+  if (toGhost.length > 0) {
+    const { error: updErr, count } = await state.supabase
+      .from('couples')
+      .update({ lifecycle_state: 'ghost' }, { count: 'exact' })
+      .in('id', toGhost)
+      .in('lifecycle_state', ['resolved', 'channel_scoped'])
+    if (updErr) {
+      await emitEvent(state, 'decay_sweep', 'failed', rows.length, 0, {
+        error: updErr.message,
+        examined: rows.length,
+      })
+      throw new Error(`decay_sweep update: ${updErr.message}`)
+    }
+    flipped = count ?? toGhost.length
+  }
+
+  await emitEvent(state, 'decay_sweep', 'succeeded', rows.length, flipped, {
+    examined: rows.length,
+    ghosted: flipped,
   })
 }
 

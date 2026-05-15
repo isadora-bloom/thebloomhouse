@@ -36,7 +36,19 @@ import {
   Phone,
   Activity,
   AlertCircle,
+  Flame,
 } from 'lucide-react'
+import {
+  deriveStatusPill,
+  statusPillColor,
+  type StatusPill,
+} from '@/lib/services/identity/status-pill'
+import {
+  computeHeatScore,
+  heatBucket,
+  heatColor,
+  heatLabel,
+} from '@/lib/services/identity/heat-score'
 
 type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
 
@@ -50,37 +62,27 @@ interface CoupleRow {
   lifecycle_state: LifecycleState | null
   wedding_date: string | null
   source_wedding_id: string | null
+  last_progression_at: string | null
   updated_at: string
   created_at: string
   touchpoints_count?: number
   last_touchpoint_at?: string | null
+  status_pill?: StatusPill
+  heat_score?: number
 }
 
-const LIFECYCLE_FILTERS: Array<{ key: LifecycleState | 'all'; label: string }> = [
+// Susan-facing filters per §3. Map a friendly pill name to the
+// derivation. Booked/Past/Agent map straight from lifecycle_state;
+// Active/Cooling/Lost depend on last_progression_at.
+const PILL_FILTERS: Array<{ key: StatusPill | 'all'; label: string }> = [
   { key: 'all', label: 'All' },
-  { key: 'channel_scoped', label: 'Channel-scoped' },
-  { key: 'booked', label: 'Booked' },
-  { key: 'resolved', label: 'Resolved' },
-  { key: 'ghost', label: 'Ghost' },
-  { key: 'agent', label: 'Agent' },
+  { key: 'Active', label: 'Active' },
+  { key: 'Cooling', label: 'Cooling' },
+  { key: 'Lost', label: 'Lost' },
+  { key: 'Booked', label: 'Booked' },
+  { key: 'Past', label: 'Past' },
+  { key: 'Agent', label: 'Agent' },
 ]
-
-function lifecycleBadgeColor(state: LifecycleState | null): string {
-  switch (state) {
-    case 'booked':
-      return 'bg-emerald-100 text-emerald-800 border-emerald-200'
-    case 'resolved':
-      return 'bg-sky-100 text-sky-800 border-sky-200'
-    case 'channel_scoped':
-      return 'bg-amber-50 text-amber-700 border-amber-200'
-    case 'ghost':
-      return 'bg-stone-100 text-stone-500 border-stone-200'
-    case 'agent':
-      return 'bg-violet-100 text-violet-800 border-violet-200'
-    default:
-      return 'bg-stone-100 text-stone-500 border-stone-200'
-  }
-}
 
 export default function CouplesListPage() {
   const router = useRouter()
@@ -89,7 +91,7 @@ export default function CouplesListPage() {
   const [rows, setRows] = useState<CoupleRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<LifecycleState | 'all'>('all')
+  const [filter, setFilter] = useState<StatusPill | 'all'>('all')
   const [query, setQuery] = useState('')
 
   useEffect(() => {
@@ -101,7 +103,7 @@ export default function CouplesListPage() {
       const { data, error: err } = await supabase
         .from('couples')
         .select(
-          'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, lifecycle_state, wedding_date, source_wedding_id, updated_at, created_at',
+          'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, lifecycle_state, wedding_date, source_wedding_id, last_progression_at, updated_at, created_at',
         )
         .eq('venue_id', venueId)
         .order('updated_at', { ascending: false })
@@ -114,25 +116,46 @@ export default function CouplesListPage() {
         return
       }
       const couples = (data ?? []) as CoupleRow[]
-      // Fetch touchpoint counts in one batched query.
+      // Fetch touchpoint counts + signal tiers for the heat score.
       const ids = couples.map((c) => c.id)
       const { data: tp } = await supabase
         .from('touchpoints')
-        .select('couple_id, occurred_at')
+        .select('couple_id, occurred_at, signal_tier')
         .in('couple_id', ids)
         .order('occurred_at', { ascending: false })
-        .limit(5000)
-      const counts = new Map<string, { count: number; latest: string }>()
-      for (const t of (tp ?? []) as Array<{ couple_id: string | null; occurred_at: string }>) {
+        .limit(8000)
+      const perCouple = new Map<
+        string,
+        { count: number; latest: string; tps: Array<{ signal_tier: string; occurred_at: string }> }
+      >()
+      for (const t of (tp ?? []) as Array<{
+        couple_id: string | null
+        occurred_at: string
+        signal_tier: string
+      }>) {
         if (!t.couple_id) continue
-        const c = counts.get(t.couple_id)
-        if (!c) counts.set(t.couple_id, { count: 1, latest: t.occurred_at })
-        else c.count += 1
+        const c = perCouple.get(t.couple_id)
+        if (!c) {
+          perCouple.set(t.couple_id, {
+            count: 1,
+            latest: t.occurred_at,
+            tps: [{ signal_tier: t.signal_tier, occurred_at: t.occurred_at }],
+          })
+        } else {
+          c.count += 1
+          c.tps.push({ signal_tier: t.signal_tier, occurred_at: t.occurred_at })
+        }
       }
       for (const c of couples) {
-        const stat = counts.get(c.id)
+        const stat = perCouple.get(c.id)
         c.touchpoints_count = stat?.count ?? 0
         c.last_touchpoint_at = stat?.latest ?? null
+        c.heat_score = stat ? computeHeatScore(stat.tps) : 0
+        c.status_pill = deriveStatusPill({
+          lifecycle_state: c.lifecycle_state,
+          last_progression_at: c.last_progression_at,
+          created_at: c.created_at,
+        })
       }
       setRows(couples)
       setLoading(false)
@@ -145,7 +168,7 @@ export default function CouplesListPage() {
 
   const filtered = useMemo(() => {
     let out = rows
-    if (filter !== 'all') out = out.filter((r) => r.lifecycle_state === filter)
+    if (filter !== 'all') out = out.filter((r) => r.status_pill === filter)
     if (query.trim()) {
       const q = query.toLowerCase()
       out = out.filter(
@@ -160,16 +183,18 @@ export default function CouplesListPage() {
   }, [rows, filter, query])
 
   const counts = useMemo(() => {
-    const acc: Record<LifecycleState | 'all', number> = {
+    const acc: Record<StatusPill | 'all', number> = {
       all: rows.length,
-      channel_scoped: 0,
-      booked: 0,
-      resolved: 0,
-      ghost: 0,
-      agent: 0,
+      Active: 0,
+      Cooling: 0,
+      Lost: 0,
+      Past: 0,
+      Booked: 0,
+      Agent: 0,
+      New: 0,
     }
     for (const r of rows) {
-      if (r.lifecycle_state) acc[r.lifecycle_state] += 1
+      if (r.status_pill) acc[r.status_pill] += 1
     }
     return acc
   }, [rows])
@@ -198,7 +223,7 @@ export default function CouplesListPage() {
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {LIFECYCLE_FILTERS.map((f) => (
+        {PILL_FILTERS.map((f) => (
           <button
             key={f.key}
             onClick={() => setFilter(f.key)}
@@ -210,7 +235,7 @@ export default function CouplesListPage() {
           >
             {f.label}{' '}
             <span className={filter === f.key ? 'opacity-70' : 'text-stone-400'}>
-              {counts[f.key as LifecycleState | 'all']}
+              {counts[f.key as StatusPill | 'all']}
             </span>
           </button>
         ))}
@@ -237,7 +262,8 @@ export default function CouplesListPage() {
             <tr>
               <th className="px-4 py-3">Couple</th>
               <th className="px-4 py-3">Contact</th>
-              <th className="px-4 py-3">Lifecycle</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Heat</th>
               <th className="px-4 py-3">Wedding date</th>
               <th className="px-4 py-3 text-right">Touchpoints</th>
               <th className="px-4 py-3">Last activity</th>
@@ -254,7 +280,7 @@ export default function CouplesListPage() {
             )}
             {!loading && filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-sm text-stone-500">
+                <td colSpan={8} className="px-4 py-12 text-center text-sm text-stone-500">
                   No couples yet. Connect a channel or wait for the Tracer to
                   finish reconstructing identity from history.
                 </td>
@@ -265,6 +291,9 @@ export default function CouplesListPage() {
                 const name =
                   r.primary_contact_name ?? r.primary_contact_email ?? '(unnamed)'
                 const partner = r.partner_contact_name
+                const pill = r.status_pill ?? 'New'
+                const heat = r.heat_score ?? 0
+                const bucket = heatBucket(heat)
                 return (
                   <tr
                     key={r.id}
@@ -291,11 +320,19 @@ export default function CouplesListPage() {
                     </td>
                     <td className="px-4 py-3">
                       <span
-                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${lifecycleBadgeColor(
-                          r.lifecycle_state,
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${statusPillColor(
+                          pill,
                         )}`}
                       >
-                        {r.lifecycle_state ?? 'unknown'}
+                        {pill}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${heatColor(bucket)}`}
+                        title={`heat score ${Math.round(heat)}`}
+                      >
+                        <Flame className="h-3 w-3" /> {heatLabel(bucket)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-stone-600">

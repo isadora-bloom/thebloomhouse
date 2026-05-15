@@ -41,6 +41,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { invalidateCouplesCache } from '@/lib/services/identity/forwards-linker'
+import { recordFragmentMatchReturned } from '@/lib/services/identity/progression'
 
 interface ResolveBody {
   match_id?: string
@@ -123,28 +124,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (m.primary_record_type === 'touchpoint') touchpointId = m.primary_record_id
   if (m.secondary_record_type === 'touchpoint') touchpointId = m.secondary_record_id
 
-  // Pre-migration-347 carryover: some rows label a touchpoint as
-  // 'fragment'. Fall back: if we identified a fragmentId but no
-  // fragment row exists, look it up in touchpoints instead.
-  if (fragmentId && !touchpointId) {
-    const { data: fragRow } = await supabase
-      .from('fragments')
-      .select('id')
-      .eq('id', fragmentId)
-      .maybeSingle()
-    if (!fragRow) {
-      const { data: tpRow } = await supabase
-        .from('touchpoints')
-        .select('id')
-        .eq('id', fragmentId)
-        .maybeSingle()
-      if (tpRow) {
-        touchpointId = fragmentId
-        fragmentId = null
-      }
-    }
-  }
-
   const cascaded = { touchpoints_reparented: 0, fragments_promoted: 0 }
 
   if (resolution === 'confirmed' && coupleId) {
@@ -198,6 +177,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       couple_id: coupleId,
       reason: `operator_confirm: ${m.confidence_tier} candidate_match id=${m.id}`,
       occurred_at: new Date().toISOString(),
+    })
+    // The operator confirming a candidate IS a progression event
+    // (§3 enumeration: 'fragment_match_returned'). The clock bumps so
+    // the resurrected couple doesn't immediately decay.
+    await recordFragmentMatchReturned({
+      supabase,
+      coupleId,
+      touchpointId: touchpointId,
     })
   }
 

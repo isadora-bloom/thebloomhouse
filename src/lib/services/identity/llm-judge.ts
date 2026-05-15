@@ -58,16 +58,42 @@ async function judgeCallsToday(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<number> {
-  // Judge invocations land on couple_merge_events with reason prefix
-  // 'llm_judge:' so we can count them without a dedicated table.
+  // Each successful judge invocation writes a tracer_run_events row
+  // with stage='llm_judge'. Counting those rows in the last 24h is
+  // the per-day cap source of truth.
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
   const { count } = await supabase
-    .from('couple_merge_events')
+    .from('tracer_run_events')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)
+    .eq('stage', 'llm_judge')
     .gte('occurred_at', since)
-    .like('reason', 'llm_judge:%')
   return count ?? 0
+}
+
+async function recordJudgeInvocation(
+  supabase: SupabaseClient,
+  venueId: string,
+  runId: string,
+  status: 'succeeded' | 'failed',
+  detail: Record<string, unknown>,
+): Promise<void> {
+  // Fire-and-forget. We surface judge load on the tracer-runs dashboard
+  // and the per-day cap reads this. A telemetry write failure must not
+  // bring down the actual judge call result.
+  try {
+    await supabase.from('tracer_run_events').insert({
+      venue_id: venueId,
+      run_id: runId,
+      stage: 'llm_judge',
+      status,
+      rows_seen: 1,
+      rows_written: status === 'succeeded' ? 1 : 0,
+      detail,
+    })
+  } catch {
+    // intentionally swallowed
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +234,9 @@ export interface JudgeArgs {
   budget: JudgeRunBudget
   /** Per-day cap. Defaults to 50 per doctrine. Pass 0 to disable. */
   perDayBudget?: number
+  /** Correlation id threaded into the recorded telemetry row. Tracer
+   *  passes its runId; Linker passes its daily live-run key. */
+  runId?: string
 }
 
 export type JudgeResult =
@@ -241,6 +270,7 @@ export async function judgeCandidate(args: JudgeArgs): Promise<JudgeResult> {
     }
   }
 
+  const runId = args.runId ?? 'judge'
   try {
     const userPrompt = buildUserPrompt(args.primary, args.secondary, args.matcher, args.context)
     const response = await callAIJson<AIResponse>({
@@ -261,6 +291,15 @@ export async function judgeCandidate(args: JudgeArgs): Promise<JudgeResult> {
       response.outcome === 'reject'
         ? response.outcome
         : 'medium'
+    await recordJudgeInvocation(args.supabase, args.venueId, runId, 'succeeded', {
+      prompt_version: LLM_JUDGE_PROMPT_VERSION,
+      outcome,
+      matcher_score: args.matcher.score,
+      matcher_tier: args.matcher.tier,
+      primary_id: args.primary.id,
+      secondary_id: args.secondary.id,
+      reasoning: response.reasoning ?? null,
+    })
     return {
       kind: 'verdict',
       verdict: {
@@ -270,6 +309,12 @@ export async function judgeCandidate(args: JudgeArgs): Promise<JudgeResult> {
       },
     }
   } catch (err) {
+    await recordJudgeInvocation(args.supabase, args.venueId, runId, 'failed', {
+      prompt_version: LLM_JUDGE_PROMPT_VERSION,
+      error: err instanceof Error ? err.message : String(err),
+      primary_id: args.primary.id,
+      secondary_id: args.secondary.id,
+    })
     return {
       kind: 'error',
       error: err instanceof Error ? err.message : String(err),

@@ -41,6 +41,16 @@ export interface PlatformSignalsImportSummary {
    *  hand them to the clusterer + resolver. Empty when no rows were
    *  inserted. Order matches insert order. */
   inserted_signal_ids: string[]
+  /** Phase C: full inserted rows so the Forwards Linker can read the
+   *  extracted_identity payload without a second SELECT round-trip.
+   *  Order matches insert order, length matches inserted_signal_ids. */
+  inserted_signals: Array<{
+    id: string
+    source_platform: string
+    action_class: string
+    signal_date: string | null
+    extracted_identity: Record<string, unknown>
+  }>
 }
 
 interface ImportArgs {
@@ -90,6 +100,7 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
     by_action: {},
     date_parse_rate: { parsed: 0, unparseable: 0 },
     inserted_signal_ids: [],
+    inserted_signals: [],
   }
 
   // Map every row first so we can see the parse rate before writing.
@@ -225,8 +236,18 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
     for (const r of chunk) {
       summary.by_action[r.action_class] = (summary.by_action[r.action_class] ?? 0) + 1
     }
-    for (const row of (data ?? []) as Array<{ id: string }>) {
-      summary.inserted_signal_ids.push(row.id)
+    const insertedIds = (data ?? []) as Array<{ id: string }>
+    for (let k = 0; k < insertedIds.length && k < chunk.length; k++) {
+      const id = insertedIds[k]!.id
+      const original = chunk[k]!
+      summary.inserted_signal_ids.push(id)
+      summary.inserted_signals.push({
+        id,
+        source_platform: original.source_platform,
+        action_class: original.action_class,
+        signal_date: original.signal_date,
+        extracted_identity: original.extracted_identity,
+      })
     }
   }
 

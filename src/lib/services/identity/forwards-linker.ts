@@ -57,7 +57,6 @@
  * and replay.
  */
 
-import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/observability/logger'
 import {
@@ -74,13 +73,13 @@ import {
 import {
   coupleToMatchableRecord,
   findCoupleForLegacyWedding,
-  insertCandidateMatch,
-  insertFragment,
   insertTouchpoint,
   loadRecentCouples,
   signalToMatchableRecord,
   type CoupleForMatch,
 } from './tracer'
+import { applyTierRouting } from './route-by-tier'
+import { recordProgressionIfEligible } from './progression'
 import type { NormalizedSignal } from './sources/types'
 
 // ---------------------------------------------------------------------------
@@ -162,27 +161,12 @@ export function invalidateCouplesCache(venueId: string): void {
 // ---------------------------------------------------------------------------
 
 function liveRunIdFor(venueId: string, source: string, now = new Date()): string {
-  // tracer_run_events.run_id is text (migration 347). We use a
-  // structured human-readable key so the dashboard can group
-  // (live:source:venueShort:date). Pre-347 the column was uuid; the
-  // migration converts existing rows in place.
+  // tracer_run_events.run_id is text (migration 347). Structured key
+  // groups live-linker activity by day in the dashboard.
   const yyyy = now.getUTCFullYear()
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
   const dd = String(now.getUTCDate()).padStart(2, '0')
   return `${source}:${venueId.slice(0, 8)}:${yyyy}-${mm}-${dd}`
-}
-
-// Stub: kept exported so callers that want a uuid-shaped derivation
-// (e.g., for systems that still expect uuid) can use it. Unused now
-// that migration 347 widened run_id to text. Deterministic per-day.
-export function liveRunIdAsUuid(
-  venueId: string,
-  source: string,
-  now = new Date(),
-): string {
-  const key = liveRunIdFor(venueId, source, now)
-  const hash = createHash('sha256').update(key).digest('hex')
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`
 }
 
 async function emitLinkEvent(
@@ -260,6 +244,14 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
         result.touchpoint_id = r.touchpoint_id
         result.duplicate = !r.inserted
         result.reason = `legacy_wedding_id=${signal.legacy_wedding_id}`
+        if (r.inserted) {
+          await recordProgressionIfEligible({
+            supabase,
+            coupleId,
+            signal,
+            touchpointId: r.touchpoint_id,
+          })
+        }
         await emitLinkEvent(supabase, venueId, runId, result, signal)
         return result
       }
@@ -268,9 +260,17 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
     // 2. Score against existing couples.
     const couples = await getCouplesCached(supabase, venueId, args.bypassCache ?? false)
     if (couples.length === 0) {
-      const f = await insertFragment(supabase, venueId, signal)
-      result.action = f.inserted ? 'cold_start' : 'duplicate'
-      result.duplicate = !f.inserted
+      // Cold-start: no anchors yet. Route below-threshold to keep the
+      // signal as a fragment for a future Tracer / Linker re-run.
+      const routed = await applyTierRouting({
+        supabase,
+        venueId,
+        signal,
+        best: null,
+        finalTier: 'below_threshold',
+      })
+      result.action = routed.action === 'duplicate' ? 'duplicate' : 'cold_start'
+      result.duplicate = routed.action === 'duplicate'
       result.reason = 'no couples in venue yet'
       await emitLinkEvent(supabase, venueId, runId, result, signal)
       return result
@@ -306,6 +306,7 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
         context: { primary_touchpoints: [], secondary_touchpoints: [] },
         budget: judgeBudget,
         perDayBudget: 50,
+        runId,
       })
       if (judgeRes.kind === 'verdict') {
         result.judge_outcome = judgeRes.verdict.outcome
@@ -321,47 +322,25 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
       }
     }
 
-    // 3. Route by final tier.
-    if (finalTier === 'high' && best) {
-      const tp = await insertTouchpoint(supabase, venueId, best.coupleId, signal)
-      result.action = tp.inserted ? 'attached' : 'duplicate'
-      result.matched_couple_id = best.coupleId
-      result.touchpoint_id = tp.touchpoint_id
-      result.duplicate = !tp.inserted
-      result.reason = result.reason + reasonExtra
-      await emitLinkEvent(supabase, venueId, runId, result, signal)
-      return result
-    }
-
-    if ((finalTier === 'medium' || finalTier === 'low') && best) {
-      const tp = await insertTouchpoint(supabase, venueId, null, signal)
-      result.touchpoint_id = tp.touchpoint_id
-      result.duplicate = !tp.inserted
-      if (tp.touchpoint_id) {
-        await insertCandidateMatch(
-          supabase,
-          venueId,
-          best.coupleId,
-          'couple',
-          tp.touchpoint_id,
-          'touchpoint',
-          finalTier,
-          best.verdict.reason + reasonExtra,
-        )
-        result.candidate_match_queued = true
-      }
-      result.matched_couple_id = best.coupleId
-      result.action = finalTier === 'medium' ? 'candidate_medium' : 'candidate_low'
+    // 3. Route by final tier via the shared primitive.
+    const routed = await applyTierRouting({
+      supabase,
+      venueId,
+      signal,
+      best,
+      finalTier,
+      reasonExtra,
+    })
+    result.action = routed.action
+    result.matched_couple_id = routed.matched_couple_id
+    result.touchpoint_id = routed.touchpoint_id
+    result.candidate_match_queued = routed.candidate_match_queued
+    result.duplicate = routed.action === 'duplicate'
+    if (best) {
       result.reason = best.verdict.reason + reasonExtra
-      await emitLinkEvent(supabase, venueId, runId, result, signal)
-      return result
+    } else {
+      result.reason = (result.reason || 'no above-threshold match') + reasonExtra
     }
-
-    // 4. Below threshold → fragment.
-    const f = await insertFragment(supabase, venueId, signal)
-    result.action = f.inserted ? 'fragment' : 'duplicate'
-    result.duplicate = !f.inserted
-    result.reason = (result.reason || 'no above-threshold match') + reasonExtra
     await emitLinkEvent(supabase, venueId, runId, result, signal)
     return result
   } catch (err) {

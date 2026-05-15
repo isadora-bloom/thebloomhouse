@@ -149,33 +149,47 @@ END $$;
 -- ===========================================================================
 -- CHECK 3: LLM judge wired (Appendix B stop #3)
 -- ===========================================================================
--- This passes as long as the writer is plumbed. With zero runs yet (fresh
--- environment), it skips. With at least one run that hit the judge band,
--- expect ≥1 row in couple_merge_events whose reason starts with
--- 'llm_judge:'.
+-- Every successful judge invocation writes a tracer_run_events row with
+-- stage='llm_judge' and detail.prompt_version set. The check is real:
+-- if any Tracer run processed at least 100 signals (enough that at
+-- least one candidate-pair should hit the 40-90 band on real data),
+-- and zero llm_judge rows exist, the writer is unplumbed and this is
+-- a stop. With minimal signals, we SKIP.
 -- ---------------------------------------------------------------------------
 
 DO $$
 DECLARE
-  any_runs integer;
+  signals_processed integer;
   judge_rows integer;
+  judge_versions integer;
 BEGIN
-  SELECT COUNT(*) INTO any_runs FROM public.tracer_run_events;
-  IF any_runs = 0 THEN
-    RAISE NOTICE 'CHECK 3 (judge wired): SKIP — no Tracer runs yet';
-    RETURN;
-  END IF;
+  -- Total signals processed across all completed Tracer runs.
+  SELECT COALESCE(SUM((detail->'run_totals'->>'signals_seen')::integer), 0)
+  INTO signals_processed
+  FROM public.tracer_run_events
+  WHERE stage = 'validate'
+    AND status = 'succeeded'
+    AND detail ? 'run_totals';
 
-  -- We don't know whether any run hit the judge band — so the check is
-  -- "if any judge invocations recorded, are they shaped correctly?".
   SELECT COUNT(*) INTO judge_rows
-  FROM public.couple_merge_events
-  WHERE reason LIKE 'llm_judge:%';
+  FROM public.tracer_run_events
+  WHERE stage = 'llm_judge';
 
-  -- This is observational: if judge_rows = 0 either no run hit the
-  -- 40-90 band or the writer isn't wired. Phase E's calibration page
-  -- will surface the count and let the operator press a re-run.
-  RAISE NOTICE 'CHECK 3 (judge wired): OBSERVED — % couple_merge_events rows tagged llm_judge:*', judge_rows;
+  SELECT COUNT(DISTINCT detail->>'prompt_version') INTO judge_versions
+  FROM public.tracer_run_events
+  WHERE stage = 'llm_judge'
+    AND detail ? 'prompt_version';
+
+  IF signals_processed < 100 THEN
+    RAISE NOTICE 'CHECK 3 (judge wired): SKIP — only % signals processed; need >=100 to expect judge band hits',
+      signals_processed;
+  ELSIF judge_rows = 0 THEN
+    RAISE WARNING 'CHECK 3 (judge wired): FAIL — % signals processed with zero stage=llm_judge rows. Writer unplumbed (Appendix B stop #3).',
+      signals_processed;
+  ELSE
+    RAISE NOTICE 'CHECK 3 (judge wired): PASS — % judge invocations across % prompt versions for % signals processed',
+      judge_rows, judge_versions, signals_processed;
+  END IF;
 END $$;
 
 

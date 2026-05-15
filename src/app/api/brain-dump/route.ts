@@ -1711,22 +1711,10 @@ export async function runCsvImport(args: {
       // Phase B clusterer/resolver above already did its work; this
       // is the new-schema parallel write so Phase D read paths have
       // data to read. Doctrine: IDENTITY-FIRST-ARCHITECTURE.md §4.
-      if (result.inserted_signal_ids.length > 0) {
+      if (result.inserted_signals.length > 0) {
         try {
-          const { data: signalRows } = await supabase
-            .from('tangential_signals')
-            .select('id, source_platform, action_class, signal_date, extracted_identity, source_context')
-            .in('id', result.inserted_signal_ids)
           const { linkSignalBatch } = await import('@/lib/services/identity/forwards-linker')
-          type SigRow = {
-            id: string
-            source_platform: string
-            action_class: string
-            signal_date: string | null
-            extracted_identity: Record<string, unknown> | null
-            source_context: string | null
-          }
-          const signals = ((signalRows ?? []) as SigRow[]).map((r) => {
+          const signals = result.inserted_signals.map((r) => {
             const ident = r.extracted_identity ?? {}
             const first = (ident.first_name as string | null) ?? null
             const last = (ident.last_name as string | null) ?? null
