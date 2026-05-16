@@ -109,10 +109,19 @@ export async function mirrorCoupleFromWedding(
         ? [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || null
         : null
 
+    // Name fallback chain. When neither partner has an extracted name
+    // yet (the reconstruction judge / name capture hasn't run, or the
+    // inbound carried no display name), fall back to the contact email
+    // — a readable identifier the coordinator recognises. NEVER fall
+    // back to a wedding UUID: "(Unknown — backfilled from weddings
+    // <uuid>)" is unreadable and was leaking onto the couples list.
     const primaryName =
       fullName(partner1) ??
       fullName(partner2) ??
-      `(Unknown — backfilled from weddings ${weddingId})`
+      partner1?.email ??
+      partner2?.email ??
+      partner1?.phone ??
+      'Unnamed couple'
     const partnerName = partner1 ? fullName(partner2) : null
 
     // status → lifecycle_state derivation. Matches the backfill in
