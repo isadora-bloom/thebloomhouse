@@ -931,6 +931,27 @@ export async function resolvePersonOnly(
   const supabase = options.supabase ?? createServiceClient()
   const sourceLabel = options.sourceLabel ?? null
 
+  // Backstop guard — venue-own email. Same rationale as resolveIdentity
+  // (2026-05-16): never let a venue's own address become a person/couple
+  // identity even when the caller forgot to filter it.
+  if (signals.email) {
+    try {
+      const { venueOwnEmails } = await import('@/lib/services/email/pipeline')
+      const own = await venueOwnEmails(venueId)
+      const norm = normalizeEmail(signals.email)
+      if (norm && own.has(norm)) {
+        console.warn(
+          `[identity/resolvePersonOnly] dropped venue-own email ${norm} from signal ` +
+            `(sourceLabel=${sourceLabel ?? 'unknown'}).`,
+        )
+        signals = { ...signals, email: null }
+      }
+    } catch (err) {
+      console.warn('[identity/resolvePersonOnly] venue-own-email guard failed:',
+        err instanceof Error ? err.message : err)
+    }
+  }
+
   let hit: PersonHit | null = null
   let matchedBy: PersonOnlyResult['matchedBy'] = 'created_new'
 
@@ -1015,6 +1036,45 @@ export async function resolveIdentity(
 ): Promise<ResolvedIdentity> {
   const supabase = options.supabase ?? createServiceClient()
   const sourceLabel = options.sourceLabel ?? null
+
+  // -------------------------------------------------------------------------
+  // Backstop guard — venue-own email (2026-05-16).
+  //
+  // The header comment of this file says "Caller is expected to filter
+  // own-emails out before passing signals through." In practice callers
+  // miss it: a Calendly relay, a calculator forward, or a forwarded
+  // estimate arrives `from` a venue address (grace@/accounts@/hello@
+  // <venue-domain>) and gets minted as a couple. A couple is NEVER at
+  // the venue's own domain.
+  //
+  // This guard is a backstop, not a replacement for caller-side filtering:
+  // if the resolving signal's email is a venue-own address we drop it
+  // (treat it as no-email) so it can never become a couple identity nor
+  // match an existing person by email. The phone / name signals still
+  // run — a forwarded estimate often carries the real prospect's phone /
+  // name, which is the legitimate identity. If nothing usable is left
+  // after dropping the bad email, a wedding may still be minted with a
+  // null identity; the non-couple tombstone cron sweeps those.
+  if (signals.email) {
+    try {
+      const { venueOwnEmails } = await import('@/lib/services/email/pipeline')
+      const own = await venueOwnEmails(venueId)
+      const norm = normalizeEmail(signals.email)
+      if (norm && own.has(norm)) {
+        console.warn(
+          `[identity/resolver] dropped venue-own email ${norm} from signal ` +
+            `(sourceLabel=${sourceLabel ?? 'unknown'}); will not be used as a couple identity.`,
+        )
+        signals = { ...signals, email: null }
+      }
+    } catch (err) {
+      // Best-effort. A venueOwnEmails failure must not break the resolve;
+      // the worst case is the pre-existing behaviour (caller-side filter
+      // is still expected to have run).
+      console.warn('[identity/resolver] venue-own-email guard failed:',
+        err instanceof Error ? err.message : err)
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Step 1: email exact
