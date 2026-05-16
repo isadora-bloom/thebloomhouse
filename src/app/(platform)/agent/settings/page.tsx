@@ -229,6 +229,10 @@ export default function AgentSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  // Historical backfill (12-month inbox + targeted booked-couple search).
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null)
+  const [backfillResume, setBackfillResume] = useState<{ phase: string; cursor: number } | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [emailsSynced7d, setEmailsSynced7d] = useState<number>(0)
 
@@ -599,6 +603,52 @@ export default function AgentSettingsPage() {
       console.error('Email sync failed:', err)
     } finally {
       setSyncing(false)
+    }
+  }
+
+  // ---- Historical backfill ----
+  // Loops POST /api/agent/backfill-booked-couples through both phases:
+  // the 12-month whole-inbox backfill, then the targeted 3-year search
+  // of every booked couple's own email addresses. The endpoint chunks
+  // by time budget and returns nextPhase/nextCursor; we follow them.
+  async function runHistoricalBackfill() {
+    setBackfilling(true)
+    let phase = backfillResume?.phase ?? 'general'
+    let cursor = backfillResume?.cursor ?? 0
+    let totalEmails = 0
+    try {
+      for (let guard = 0; guard < 800; guard++) {
+        const res = await fetch(
+          `/api/agent/backfill-booked-couples?phase=${phase}&cursor=${cursor}`,
+          { method: 'POST' },
+        )
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const d = await res.json()
+        totalEmails += d.emailsProcessed ?? 0
+        setBackfillMsg(
+          d.phase === 'general'
+            ? `12-month inbox backfill — week ${d.weeksDone}/${d.weeksTotal}, ${totalEmails} emails imported`
+            : `Booked-couple deep search — ${d.couplesDone}/${d.couplesTotal} couples, ${totalEmails} emails imported`,
+        )
+        if (d.done) {
+          setBackfillMsg(
+            `Backfill complete — ${totalEmails} historical emails imported. ` +
+            `Source attribution rebuilds within a few minutes.`,
+          )
+          setBackfillResume(null)
+          break
+        }
+        phase = d.nextPhase
+        cursor = d.nextCursor
+        setBackfillResume({ phase, cursor })
+      }
+    } catch (err) {
+      setBackfillMsg(
+        `Backfill paused (${err instanceof Error ? err.message : 'error'}). ` +
+        `Click "Resume backfill" to continue from where it stopped.`,
+      )
+    } finally {
+      setBackfilling(false)
     }
   }
 
@@ -1023,15 +1073,38 @@ export default function AgentSettingsPage() {
           )}
 
           {/* Sync actions */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={triggerSync}
-              disabled={syncing || !gmailConnected}
-              className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
-            >
-              <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing...' : 'Sync All Now'}
-            </button>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={triggerSync}
+                disabled={syncing || backfilling || !gmailConnected}
+                className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+              >
+                <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Syncing...' : 'Sync All Now'}
+              </button>
+              <button
+                onClick={runHistoricalBackfill}
+                disabled={syncing || backfilling || !gmailConnected}
+                className="flex items-center gap-2 bg-sage-700 hover:bg-sage-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+                title="Pulls the last 12 months of your whole inbox, then searches 3 years back for every booked couple by name and email so their first inquiry (and source) is found."
+              >
+                <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
+                {backfilling
+                  ? 'Importing history...'
+                  : backfillResume
+                    ? 'Resume backfill'
+                    : 'Import historical email'}
+              </button>
+            </div>
+            {backfillMsg && (
+              <p className="text-xs text-sage-600">{backfillMsg}</p>
+            )}
+            <p className="text-[11px] text-sage-400">
+              &ldquo;Sync All Now&rdquo; pulls only recent mail. &ldquo;Import historical
+              email&rdquo; backfills 12 months of the inbox plus a 3-year, name-and-email
+              search for every booked couple — leave the tab open while it runs.
+            </p>
           </div>
 
           {/* Sync info */}
