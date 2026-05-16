@@ -486,8 +486,21 @@ type JobName = (typeof VALID_JOBS)[number]
 
 async function runJob(job: JobName): Promise<unknown> {
   switch (job) {
-    case 'email_poll':
-      return pollEmailsAllVenues()
+    case 'email_poll': {
+      // Live delta poll PLUS one chunk of any pending historical Gmail
+      // backfill. Piggybacked here (vercel.json is at the 40-cron Pro
+      // cap) — the backfill is a multi-hour job advanced one ~4-minute
+      // chunk per 5-minute tick. See email/historical-backfill.ts.
+      const poll = await pollEmailsAllVenues()
+      let backfill: unknown = null
+      try {
+        const { drainGmailBackfill } = await import('@/lib/services/email/historical-backfill')
+        backfill = await drainGmailBackfill(createServiceClient())
+      } catch (err) {
+        backfill = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return { poll, historical_backfill: backfill }
+    }
 
     case 'heat_decay': {
       // Legacy heat decay PLUS the Identity-First couple decay sweep

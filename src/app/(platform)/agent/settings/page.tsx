@@ -229,10 +229,12 @@ export default function AgentSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  // Historical backfill (12-month inbox + targeted booked-couple search).
-  const [backfilling, setBackfilling] = useState(false)
+  // Historical backfill — a server-side background job (advanced by the
+  // email_poll cron). The UI just enqueues it and polls its state.
+  const [backfillState, setBackfillState] = useState<{
+    status: string | null; phase: string | null; cursor: number; emails: number
+  } | null>(null)
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null)
-  const [backfillResume, setBackfillResume] = useState<{ phase: string; cursor: number } | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [emailsSynced7d, setEmailsSynced7d] = useState<number>(0)
 
@@ -607,48 +609,68 @@ export default function AgentSettingsPage() {
   }
 
   // ---- Historical backfill ----
-  // Loops POST /api/agent/backfill-booked-couples through both phases:
-  // the 12-month whole-inbox backfill, then the targeted 3-year search
-  // of every booked couple's own email addresses. The endpoint chunks
-  // by time budget and returns nextPhase/nextCursor; we follow them.
-  async function runHistoricalBackfill() {
-    setBackfilling(true)
-    let phase = backfillResume?.phase ?? 'general'
-    let cursor = backfillResume?.cursor ?? 0
-    let totalEmails = 0
+  // A server-side background job: this just enqueues it and polls its
+  // state. The email_poll cron advances it one chunk per 5 minutes, so
+  // it survives closing the tab / the laptop sleeping / a wifi blip.
+  const describeBackfill = useCallback((s: {
+    status: string | null; phase: string | null; cursor: number; emails: number
+  } | null): string | null => {
+    if (!s || !s.status) return null
+    if (s.status === 'complete') {
+      return `Historical backfill complete — ${s.emails.toLocaleString()} emails imported. ` +
+        `Source attribution rebuilds within a few minutes.`
+    }
+    if (s.status === 'error') {
+      return `Historical backfill hit an error and will retry automatically on the next cron tick. ` +
+        `${s.emails.toLocaleString()} emails imported so far.`
+    }
+    const where = s.phase === 'booked'
+      ? `searching booked couples (couple ${s.cursor})`
+      : `12-month inbox, week ${s.cursor}/52`
+    return `Historical backfill running in the background — ${where}, ` +
+      `${s.emails.toLocaleString()} emails imported. Safe to close this page.`
+  }, [])
+
+  const refreshBackfillStatus = useCallback(async () => {
     try {
-      for (let guard = 0; guard < 800; guard++) {
-        const res = await fetch(
-          `/api/agent/backfill-booked-couples?phase=${phase}&cursor=${cursor}`,
-          { method: 'POST' },
-        )
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const d = await res.json()
-        totalEmails += d.emailsProcessed ?? 0
-        setBackfillMsg(
-          d.phase === 'general'
-            ? `12-month inbox backfill — week ${d.weeksDone}/${d.weeksTotal}, ${totalEmails} emails imported`
-            : `Booked-couple deep search — ${d.couplesDone}/${d.couplesTotal} couples, ${totalEmails} emails imported`,
-        )
-        if (d.done) {
-          setBackfillMsg(
-            `Backfill complete — ${totalEmails} historical emails imported. ` +
-            `Source attribution rebuilds within a few minutes.`,
-          )
-          setBackfillResume(null)
-          break
-        }
-        phase = d.nextPhase
-        cursor = d.nextCursor
-        setBackfillResume({ phase, cursor })
+      const res = await fetch('/api/agent/backfill-booked-couples')
+      if (!res.ok) return
+      const s = await res.json()
+      const next = {
+        status: s.status as string | null,
+        phase: s.phase as string | null,
+        cursor: (s.cursor as number) ?? 0,
+        emails: (s.emails as number) ?? 0,
       }
-    } catch (err) {
+      setBackfillState(next)
+      setBackfillMsg(describeBackfill(next))
+    } catch {
+      /* transient — next poll retries */
+    }
+  }, [describeBackfill])
+
+  // Poll while a job is in flight so progress updates without a reload.
+  useEffect(() => {
+    refreshBackfillStatus()
+    const id = setInterval(refreshBackfillStatus, 20_000)
+    return () => clearInterval(id)
+  }, [refreshBackfillStatus])
+
+  const backfillActive =
+    backfillState?.status === 'pending' || backfillState?.status === 'running'
+
+  async function runHistoricalBackfill() {
+    setBackfillMsg('Queuing historical backfill...')
+    try {
+      const res = await fetch('/api/agent/backfill-booked-couples', { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await refreshBackfillStatus()
       setBackfillMsg(
-        `Backfill paused (${err instanceof Error ? err.message : 'error'}). ` +
-        `Click "Resume backfill" to continue from where it stopped.`,
+        'Historical backfill queued. It runs in the background (a chunk every ' +
+        '5 minutes) — you can close this page; it will keep going.',
       )
-    } finally {
-      setBackfilling(false)
+    } catch (err) {
+      setBackfillMsg(`Could not queue backfill: ${err instanceof Error ? err.message : 'error'}`)
     }
   }
 
@@ -1077,7 +1099,7 @@ export default function AgentSettingsPage() {
             <div className="flex items-center gap-3 flex-wrap">
               <button
                 onClick={triggerSync}
-                disabled={syncing || backfilling || !gmailConnected}
+                disabled={syncing || backfillActive || !gmailConnected}
                 className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
               >
                 <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
@@ -1085,16 +1107,12 @@ export default function AgentSettingsPage() {
               </button>
               <button
                 onClick={runHistoricalBackfill}
-                disabled={syncing || backfilling || !gmailConnected}
+                disabled={syncing || backfillActive || !gmailConnected}
                 className="flex items-center gap-2 bg-sage-700 hover:bg-sage-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
-                title="Pulls the last 12 months of your whole inbox, then searches 3 years back for every booked couple by name and email so their first inquiry (and source) is found."
+                title="Pulls the last 12 months of your whole inbox, then searches 3 years back for every booked couple by name and email so their first inquiry (and source) is found. Runs in the background."
               >
-                <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
-                {backfilling
-                  ? 'Importing history...'
-                  : backfillResume
-                    ? 'Resume backfill'
-                    : 'Import historical email'}
+                <RefreshCw className={`w-4 h-4 ${backfillActive ? 'animate-spin' : ''}`} />
+                {backfillActive ? 'Backfill running...' : 'Import historical email'}
               </button>
             </div>
             {backfillMsg && (
@@ -1103,7 +1121,8 @@ export default function AgentSettingsPage() {
             <p className="text-[11px] text-sage-400">
               &ldquo;Sync All Now&rdquo; pulls only recent mail. &ldquo;Import historical
               email&rdquo; backfills 12 months of the inbox plus a 3-year, name-and-email
-              search for every booked couple — leave the tab open while it runs.
+              search for every booked couple. It runs as a background job (a chunk
+              every 5 minutes) so it survives closing this page or losing connection.
             </p>
           </div>
 
