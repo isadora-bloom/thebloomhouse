@@ -44,8 +44,35 @@ function ymd(d: Date): string {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
 }
 
-function gmailQueryForEmails(emails: string[]): string {
-  const terms = emails.flatMap((e) => [`from:${e}`, `to:${e}`])
+/**
+ * Build the Gmail search for one couple. Matches on BOTH the couple's
+ * own email addresses AND their full names as quoted phrases.
+ *
+ * Why names matter: a booked couple's FIRST inquiry — the email that
+ * proves where they came from — very often did not arrive from their
+ * own address. The Knot / WeddingWire relay an inquiry from a
+ * marketplace address (member@theknot.com etc.) with the couple's real
+ * name and details in the BODY. A from:/to: search alone never finds
+ * it. Gmail's quoted-phrase search covers the subject and body, so
+ * `"Caitlin McCarrington"` reaches the relay email.
+ */
+function gmailQueryForCouple(
+  emails: string[],
+  names: Array<{ first: string | null; last: string | null }>,
+): string {
+  const terms: string[] = []
+  for (const e of emails) {
+    terms.push(`from:${e}`, `to:${e}`)
+  }
+  for (const n of names) {
+    const first = (n.first ?? '').trim()
+    const last = (n.last ?? '').trim()
+    // Require first AND last — a bare first name ("Sarah") matches far
+    // too much of an inbox to be a useful body-search term.
+    if (first.length >= 2 && last.length >= 2) {
+      terms.push(`"${first} ${last}"`)
+    }
+  }
   return `(${terms.join(' OR ')})`
 }
 
@@ -139,7 +166,7 @@ export async function POST(req: Request) {
   // -------------------------------------------------------------------------
   const { data: weddings, error: wErr } = await supabase
     .from('weddings')
-    .select('id, people:people(email)')
+    .select('id, people:people(email, first_name, last_name)')
     .eq('venue_id', venueId)
     .in('status', ['booked', 'completed'])
     .is('merged_into_id', null)
@@ -152,20 +179,26 @@ export async function POST(req: Request) {
 
   while (idx < allCouples.length && Date.now() - startedAt < BUDGET_MS) {
     const w = allCouples[idx]
+    const people = (w.people ?? []) as Array<{
+      email: string | null; first_name: string | null; last_name: string | null
+    }>
     const emails = [
       ...new Set(
-        ((w.people ?? []) as Array<{ email: string | null }>)
+        people
           .map((p) => p.email?.trim().toLowerCase())
           .filter((e): e is string => !!e && e.includes('@')),
       ),
     ]
-    if (emails.length === 0) {
+    const names = people.map((p) => ({ first: p.first_name, last: p.last_name }))
+    const query = gmailQueryForCouple(emails, names)
+    // A couple with neither an email nor a full name is unsearchable.
+    if (query === '()') {
       couplesSkippedNoEmail++
     } else {
       try {
         const found = await fetchNewEmails(venueId, MAX_MSGS_PER_COUPLE, {
           sinceDays: LOOKBACK_DAYS_BOOKED,
-          extraQuery: gmailQueryForEmails(emails),
+          extraQuery: query,
           includeAllLabels: true,
         })
         for (const e of found) {
