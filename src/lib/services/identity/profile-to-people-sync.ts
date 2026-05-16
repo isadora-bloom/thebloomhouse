@@ -950,5 +950,33 @@ export async function syncProfileToPeople(
     }
   }
 
+  // Refresh the couples-table mirror. The reconstruction judge runs
+  // AFTER a wedding is minted, so the couple row was first written by
+  // mirrorCoupleFromWedding while its people were still nameless — it
+  // shows "(Unknown)". Once this sync has stamped the real names onto
+  // the people rows, the mirror is stale until something re-runs it.
+  // Nothing did, which is why reconstructed couples kept rendering as
+  // "(Unknown)" on the couples list even though people + the profile
+  // both held the real names. Re-mirror here so the couples table
+  // converges. Best-effort: a mirror failure never fails the sync.
+  if (updates.length > 0) {
+    try {
+      const { mirrorCoupleFromWedding } = await import('./mirror-couple')
+      const { data: w } = await supabase
+        .from('weddings').select('venue_id').eq('id', weddingId).maybeSingle()
+      if (w?.venue_id) {
+        await mirrorCoupleFromWedding({
+          venueId: w.venue_id as string,
+          weddingId,
+          supabase,
+        })
+      }
+    } catch (err) {
+      console.warn(
+        `[profile-to-people-sync] couple re-mirror failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
   return { ok: true, updated: updates }
 }
