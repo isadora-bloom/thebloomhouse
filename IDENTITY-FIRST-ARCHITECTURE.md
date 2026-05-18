@@ -886,3 +886,169 @@ If any of the following ship to production, the implementation is incomplete and
 ---
 
 **End of brief.**
+
+---
+
+# APPENDIX C — TIER 8 EXECUTION PLAN (2026-05-18)
+
+## C.0 Why this appendix exists
+
+Tier 8 is the execution arm of this doctrine. Phases A and B have *shipped code* (migrations 346–350, the `src/lib/services/identity/*` tree, the `identity_first_tracer` cron job). This appendix records a verify-before-plan audit of that code, reconciles the doctrine with the "Point Zero = the booked wedding" framing, maps the 36-question test battery (`BLOOM-TEST-QUESTIONS.md`) onto the spine, and sequences the remaining work.
+
+Read order for an implementer: C.1 (what's real) → C.2 (the doctrine reconciliation) → C.3 (the orchestrator) → C.4 (battery matrix) → C.5 (work breakdown) → C.6 (stop conditions).
+
+## C.1 Verified state of shipped code (audit 2026-05-18)
+
+Audited against this brief's §1–§9. Every claim below was confirmed by reading the file.
+
+### Genuinely works (do not rebuild)
+
+| Component | File | Note |
+|---|---|---|
+| Structured matcher | `matcher.ts` | Every weight from §2 implemented as integers; capped Damerau-Levenshtein; `needs_judge` = score 40–90; `__test` export wired for the 50-pair fixture. Production-grade. |
+| LLM judge | `llm-judge.ts` | Sonnet, structured output, per-run budget 200 + per-day budget 50 (queries `tracer_run_events`). Doctrine §2 compliant. |
+| Decay sweep | `decay.ts` | `resolved`/`channel_scoped` only, per-row `decay_window_days` default 180, mid-sweep `couple_progression_events` re-check, idempotent. |
+| Progression log | `progression.ts` | Excludes outbound (§3 "Don't skip #1"); never rolls the clock backward. |
+| Resurrection | `resurrection.ts` | Blacklist on reject (§9 "Don't skip #3"); migration 349. |
+| Cron wiring | `cron/route.ts:147,803` | `identity_first_tracer` registered; piggyback drain on `identity_judge_sweep` with an 8-min in-progress guard. |
+
+### Stubbed, partial, or broken (Tier 8 must fix)
+
+| Defect | Evidence | Severity |
+|---|---|---|
+| **The Tracer mints zero couples.** `anchor_discovery` is a no-op `count` query (`anchors.ts:14` admits "does NOT create anything"); `state.totals.couples_minted` is initialised 0 and never incremented. | `tracer.ts:224,808` | **Blocker** — the Tracer cannot reconstruct identity. It sweeps touchpoints and queues `candidate_matches` but never creates a Couple from them. |
+| **No advisory lock.** The `tracer.ts` header describes `pg_try_advisory_xact_lock` + a `lockAndUpsertCouple` helper "see below". The helper does not exist anywhere in the repo. | `tracer.ts:41-46` | **Blocker** — Stop condition #5. Tracer-during-active-venue will corrupt the couple store. |
+| **Judge runs context-blind.** Both call sites pass `context: { primary_touchpoints: [], secondary_touchpoints: [] }`. The judge prompt is built around timelines as "the tiebreaker" — they are always empty. | `tracer.ts:484`, `forwards-linker.ts:306` | High — judge decides on structured signals alone, defeating the §2 hybrid. |
+| **`candidate_matches` duplicates on every rerun.** No unique constraint in mig 346 (only a plain index). `insertCandidateMatch` swallows a `23505` that can never fire. | `tracer.ts:374`, mig 346 §7 | High — violates Stop condition #4 ("zero new rows on second run"). |
+| **`cross_channel_coalesce` is coarse v1.** Header: "v1 implementation: identity_hint exact match within 14 days." Never promotes a fragment, never mints a channel-scoped couple. | `tracer.ts:597` | High — §5 coalescence not implemented. |
+| **Cold-start has no entry point.** Detection works (`anchors.ts:235` trips `coldStart`, runner notifies). No endpoint takes operator-entered couples and creates anchors. | `tracer-runner.ts:155` | Medium — §4 cold-start path dead-ends. |
+| **Not a layered orchestrator.** `runTracer` runs six stages once against a single `loadRecentCouples` snapshot taken at sweep start. No certainty-layered passes, no tombstoning of consumed candidates. | `tracer.ts:794,525` | Medium — see C.3. |
+| `agent_infer` partial — never writes `agent_couple_links`. Resume-from-checkpoint is dead code (`getResumeFrom` only runs when `opts.runId` is passed; the runner never passes one). | `tracer.ts:673,186,831` | Low — defer. |
+
+**Resolved, not a defect:** the `tracer_run_events.run_id` uuid-vs-text drift was fixed by migration `347` (`ALTER COLUMN run_id TYPE text`). Confirm 347 is applied to prod before relying on Forwards Linker telemetry.
+
+### Schema (migration 346) — naming note
+
+The brief's §1 calls the core table `persons`; the shipped migration named it **`couples`**, with `agent_couple_links`, `couple_merge_events`, `couple_progression_events`. The rest match. This appendix uses the shipped names. The brief's prose has not been retro-fitted; **`couples` is canonical.**
+
+## C.2 The reconciliation — "Point Zero = the booked wedding"
+
+The constitution (`bloom-constitution.md`) defined **Point Zero** as the first interaction carrying a name + a reachable identifier — a mid-funnel event. That definition is retired. Tier 8 anchors on the **booked wedding**: the end of the funnel, the venue's highest-trust ground truth.
+
+This is the same inversion §0 of this brief already describes ("walk from known ground truth outward"). Naming it "Point Zero = the booked wedding" sharpens one rule that the rest of Tier 8 depends on:
+
+> **"Inquiries are signal, not entities" does NOT mean "inquiries are noise."**
+> It means the inquiry *row* is not the entity — the *couple* is. The Tracer walks backward from a booked anchor and, for every upstream inquiry it reaches:
+> - inquiry **with sufficient identity** (real name + one reachable identifier) → minted/attached as a **Couple** (`lifecycle_state` `resolved`, or `booked` if it backtraces to an anchor)
+> - inquiry **without** sufficient identity (anonymous Knot view, "Madison B." with no identifier) → a **Fragment**, surfaced only as an aggregate count
+>
+> A residual inquiry that never connects to an anchor is **not a failed record** — if it has identity it is a `resolved` Couple in its own right; if it does not, it is a Fragment. Either way it is no longer a broken half-entity demanding individual repair. This is what dissolves the "201 Unknown weddings" class.
+
+**Why this is load-bearing for the battery (C.4):** ~25 of the 36 test questions need *non-booked* couples as queryable, dedup-able entities — ghoster response times (Q2), which inquiries will ghost (Q19), stalled follow-ups (Q23), unique-couple counts and merge precision (Q6/Q29/Q36). A literal reading of "inquiries are noise" would fail all of them. The Couple/Fragment split is the reconciliation that keeps the battery answerable.
+
+**Entity-model decision (DECISION 1):** Tier 8 commits to the `couples` spine. The alternative — keep `weddings` and add an anchor flag — is rejected: an anchor flag labels rows, it does not resolve identity or produce merge-confidence, so Tiers 7 and 11 of the battery would force the merge-audit substrate to be built anyway. The spine is also already shipped (mig 346 + the Tracer cron); the flag model would mean abandoning cron-running code.
+
+## C.3 The orchestrator — layered backtrace
+
+The shipped Tracer is a single-pass, single-snapshot sweep (C.1). Tier 8 replaces stage 1 + stage 2 with a **certainty-layered backtrace**. This is not a contradiction of the brief's §4 — it is the concrete implementation of "anchor discovery → touchpoint sweep," reorganised so the most certain anchors resolve first and *consume* their candidates before less certain layers run.
+
+```
+Pass 1 — BOOKED anchor.    Anchor couples = signed/booked weddings (a signed
+                           contract is "contracted"; ContractHouse is a
+                           separate product, so booked ≡ contracted here).
+                           Mint lifecycle_state='booked'. Backtrace touchpoints.
+Pass 2 — COMPLETED anchor. Past weddings with no surviving booked row. Same.
+Pass 3 — TOURED anchor.    tour_completed / tour_attended couples not already
+                           anchored. Mint lifecycle_state='resolved'.
+Pass 4 — INQUIRY TRIAGE.   Residual inquiry signal. NOT a 4th anchor type — it
+                           is the Couple/Fragment split from C.2. Identity-
+                           sufficient residuals → 'resolved' Couples; the rest
+                           → Fragments.
+```
+
+**Tombstoning:** after each pass, every `candidate_matches` row and every `touchpoint` consumed by a minted couple is marked resolved so the next pass's matcher snapshot excludes it. This is what "anchor-down per-layer tombstoning" means and it is what makes the passes ordered rather than independent.
+
+**Non-negotiable properties (each is a Tier 8 gate):**
+- **Idempotent** — second full run produces zero new `couples`/`touchpoints`/`fragments`/`candidate_matches`. Requires the missing `candidate_matches` unique constraint (C.5 T8.0).
+- **Advisory-locked** — `pg_try_advisory_xact_lock(hashtext(venue_id||':'||identifier))` around every couple mint; loser re-reads and attaches. Build the `lockAndUpsertCouple` helper the header already promises.
+- **Checkpointed** — wire `getResumeFrom` to a persisted `run_id` so a timeout resumes per-pass, not from scratch.
+- **Matcher + judge with real context** — the judge must receive populated `primary_touchpoints`/`secondary_touchpoints`; build the `JudgeContext` producer.
+
+**DECISION 2 (flag for confirmation):** Passes 1–3 collapse to effectively *two* anchor statuses in Rixey's current data — `anchors.ts` has `['booked','completed','tour_completed']` and migration 346 collapsed everything else into `resolved`. The 4-layer framing is kept for clarity and future CRMs, but the implementer should not invent a "contracted" status that has no rows behind it.
+
+## C.4 Battery traceability matrix
+
+`BLOOM-TEST-QUESTIONS.md` is the **acceptance test for Tier 8**. Each question maps to spine tables + the Phase D item that surfaces the answer. "Gap" = what is missing today.
+
+| Q | Needs | Phase D item | Gap today |
+|---|---|---|---|
+| 1 first-reply median + 12mo delta | `touchpoints` (first inbound vs first venue reply, direction-tagged) | D9 | touchpoints unpopulated; direction tag |
+| 2 response-time dist: bookers vs ghosters | `couples` segmented by lifecycle | D9 | ghosters must exist as Couples |
+| 3 knee in response→tour curve | same + non-linear analysis | D9 | analysis surface |
+| 4 response time × channel | `touchpoints.channel` + timing | D9 | — |
+| 5 multi-platform attribution + *show the logic* | couple-keyed multi-touch + journey ribbon | D3 + ribbon (E) | attribution couple-keyed; ribbon |
+| 6 % cross-surface dupes + merge confidence | `candidate_matches`, `couple_merge_events.confidence_tier` | Identity Report | matcher must run + write tiers |
+| 7 holiday inquiry spike + conversion | touchpoint counts by date + couple outcome | D9 | — |
+| 8 weekend vs weekday tour conversion | tour touchpoints + booked outcome | D9 | — |
+| 9 competitor-event correlation | external context + touchpoint volume | D9 | operator-supplied data |
+| 10 bad weather × tour no-show | Wave 8 weather ⨝ tour touchpoints | D9 | join |
+| 11 booking lead-time distribution | `couples.wedding_date` − first touchpoint | D9 | — |
+| 12 June YoY controlling for marketing | touchpoint volume + confound reasoning | D9 + correlation engine | — |
+| 13 climate-control mentions over time | `touchpoints.raw_payload` text extract | D9 | text-pattern extractor |
+| 14 inquiry→tour ratio, summer | segmented funnel over couples | D9 | — |
+| 15 budget-mention shift + correlation | touchpoint text extract | D9 | extractor |
+| 16 emerging repeat questions | Wave 5B theme detection over couple corpus | D9 | couple corpus |
+| 17 why chose us over Stone Tower | refuse — no data | D6 Sage | calibration |
+| 18 forecast next June | hedge | D6 | calibration |
+| 19 which inquiries will ghost + features | active Couples + Wave 5A close-prob + key_signals | D6 + D9 | per-couple prediction couple-keyed |
+| 20 IG launch causation | correlation engine, correlation≠causation | D6 | — |
+| 21 pricing too high | ask clarifying | D6 | — |
+| 22 response speed by time of day | venue-reply touchpoint timing | D9 | — |
+| 23 replied-to but never followed up | `couples` + `couple_progression_events` stuck-state | D2/D9 | — |
+| 24 inquiries I shouldn't have replied to | retrospective qualification over couples | D9 | — |
+| 25 pre-tour signals predicting signing | pre-tour touchpoints + couple outcome | D9 | feature-importance surface |
+| 26 highest-conversion surface vs highest-volume | couple-keyed first-touch attribution (Wave 7B) | D3/D8 | couple-keyed |
+| 27 first-message language shift | touchpoint text over time | D9 | extractor |
+| 28 blog/reel/pin mention → conversion | touchpoint content attribution | D3/D8 | content tagging |
+| 29 unique-couple count + top/bottom 20 merges | `couples` count + `candidate_matches`/`couple_merge_events` confidence | Identity Report | report surface |
+| 30 % inquiries complete vs partial records | Couples vs Fragments + gap analysis (Wave 9) | Identity Report | report surface |
+| 31 sensitivity refusal | aggregate-only; never name (Wave 4 tags on couple) | D6 | couple-keyed sensitive tags |
+| 32 false-premise challenge | reliable touchpoint volume history | D6 | — |
+| 33 channel-reasoning consistency | D3/D8 + Sage | D3/D6 | — |
+| 34 find 3 likely-to-book + draft + explain | Couples + heat/close-prob + Sage draft + journey | D1 + D6 + ribbon (E) | full chain |
+| 35 conversion by cultural cohort | Couples + Wave 4/5D cultural tags + outcomes | D9 | couple-keyed tags |
+| 36 5 false-merge + 5 missed-merge w/ evidence | `candidate_matches` + `couple_merge_events` + matcher precision/recall | Identity Report | report surface |
+
+**Reading of the matrix:** the battery is answered by **four surfaces** — D9 (cohort intel, ~20 questions), D3 (source attribution, ~5), D6 (Sage honesty/calibration, ~7), and a new **Identity Report** (Q6/29/30/36). The journey ribbon (Phase E) is needed for Q5 and Q34. Every cell depends first on `couples` + `touchpoints` being correctly populated — which is exactly what C.1 says does not happen today.
+
+## C.5 Tier 8 work breakdown
+
+Ordered by dependency. Each numbered item is its own PR (Phase D items must not be bundled — §8 "Don't skip #2", Stop #7).
+
+**T8.0 — Foundations / fix the shipped stubs.** One PR per fix.
+- T8.0a Migration 358: `UNIQUE(venue_id, primary_record_id, secondary_record_id)` on `candidate_matches` (idempotency).
+- T8.0b Build `lockAndUpsertCouple` with `pg_try_advisory_xact_lock`; route every couple mint through it.
+- T8.0c Build the `JudgeContext` producer — populate `primary_touchpoints`/`secondary_touchpoints` before `judgeCandidate`.
+- T8.0d Wire `getResumeFrom` to a persisted `run_id` (checkpointing).
+
+**T8.1 — The layered-backtrace orchestrator.** Replace `anchor_discovery` + `touchpoint_sweep` with the 4-pass orchestrator of C.3: actually mint `couples` from anchors, attach `touchpoints`, run matcher+judge, promote fragments, tombstone between passes. Make `cross_channel_coalesce` apply the real matcher to fragment-pairs.
+- **Gate:** 90% on the 50-pair Rixey fixture (Stop #2); idempotent rerun = zero new rows (Stop #4); ghost count ≤ 10% of historically-booked couples (§3 gate). Run end-to-end on re-imported Rixey data with operator validation before any other venue.
+
+**T8.2 — Phase D, battery-prioritised.** One PR per item, in this order (highest battery coverage first):
+- D9 cohort intel (couple-keyed funnel, anomaly, text-pattern extractors) — unlocks ~20 questions.
+- D3 source attribution (couple-keyed multi-touch over the journey) — Q5/26/28/33.
+- D6 Sage / brain (context from the couple ribbon; honesty calibration) — Q17–21/31/32/34.
+- **Identity Report** — new surface at `/intel/identity-review` extended with the Q6/29/30/36 read: unique-couple count, top/bottom-20 merges by confidence, complete-vs-partial record %.
+- D1 heat, D2 decay surfacing, D8 source-quality scorecards — remaining cells.
+
+**T8.3 — Phase E journey ribbon** for Q5 ("show the logic") and Q34, plus the Appendix-A holy-shit moment. Ribbon completeness gate (§6).
+
+**Deferred past Tier 8:** D4 voice DNA, D5 email-pipeline rekey, D7 portal, D10 cron audit, Phase F sunset, `agent_infer` auto-promotion. None block the battery.
+
+## C.6 Stop conditions for Tier 8
+
+All of Appendix B applies. Tier 8 adds one explicit ship gate:
+
+> **The battery is the gate.** Run `BLOOM-TEST-QUESTIONS.md` against the Rixey instance after T8.2. Tier 8 is not done until the average score is ≥ **+1.0** across all 36 questions AND there are **zero −3 scores in Tier 4** (honesty checks). A single confident confabulation on an honesty question means not ready — fix the failure mode, do not ship around it.
+
+Re-run the battery after every D-item PR; the score should climb monotonically as surfaces migrate onto the spine.
