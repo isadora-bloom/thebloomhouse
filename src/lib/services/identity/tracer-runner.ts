@@ -130,37 +130,50 @@ export async function drainPendingTracerRun(): Promise<{
  * A run is COMPLETE — and so NOT resumable — once it has emitted a
  * `validate`/`succeeded` event (normal finish) or an
  * `anchor_discovery`/`skipped` event (cold-start terminal). Anything
- * else on the most recent run_id means it died mid-flight.
+ * else on the latest Tracer run means it died mid-flight.
  *
- * Only the most recent run_id is considered — an older incomplete run
- * is superseded once a newer one starts. The drain's 8-minute
- * in-progress guard means this is only ever consulted for a run that
- * has already gone idle, i.e. genuinely crashed or timed out.
+ * Only TRACER runs are eligible. The live Forwards Linker also writes
+ * `tracer_run_events` rows — stage `forwards_link`, under a `live:...`
+ * run_id — and it writes them constantly, so the globally-most-recent
+ * row is almost always a linker event. A Tracer run is identified by
+ * its `anchor_discovery` event (every Tracer run opens with one; the
+ * linker never emits that stage). So: find the most recent
+ * `anchor_discovery`, take its run_id, and resume that run unless it
+ * already reached a terminal state.
+ *
+ * The drain's 8-minute in-progress guard means this is only ever
+ * consulted for a run that has already gone idle, i.e. genuinely
+ * crashed or timed out.
  */
 async function findResumableRunId(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<string | null> {
+  // The latest Tracer run = the run_id of the most recent
+  // anchor_discovery event. Excludes live-linker `forwards_link` rows.
+  const { data: starts } = await supabase
+    .from('tracer_run_events')
+    .select('run_id, occurred_at')
+    .eq('venue_id', venueId)
+    .eq('stage', 'anchor_discovery')
+    .order('occurred_at', { ascending: false })
+    .limit(1)
+  const latestRunId = (
+    (starts ?? []) as Array<{ run_id: string }>
+  )[0]?.run_id
+  if (!latestRunId) return null
+
+  // Did that run reach a terminal state?
   const { data } = await supabase
     .from('tracer_run_events')
-    .select('run_id, stage, status, occurred_at')
+    .select('stage, status')
     .eq('venue_id', venueId)
-    .order('occurred_at', { ascending: false })
-    .limit(200)
-  const rows = (data ?? []) as Array<{
-    run_id: string
-    stage: string
-    status: string
-  }>
-  if (rows.length === 0) return null
-
-  // rows[0] is the most recent event → its run_id is the latest run.
-  const latestRunId = rows[0]!.run_id
+    .eq('run_id', latestRunId)
+  const rows = (data ?? []) as Array<{ stage: string; status: string }>
   const complete = rows.some(
     (r) =>
-      r.run_id === latestRunId &&
-      ((r.stage === 'validate' && r.status === 'succeeded') ||
-        (r.stage === 'anchor_discovery' && r.status === 'skipped')),
+      (r.stage === 'validate' && r.status === 'succeeded') ||
+      (r.stage === 'anchor_discovery' && r.status === 'skipped'),
   )
   return complete ? null : latestRunId
 }
