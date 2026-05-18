@@ -9,8 +9,9 @@ out/
 
 # env files (NEVER commit real keys)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.local.example
+!.env.example
 
 # debug
 npm-debug.log*
