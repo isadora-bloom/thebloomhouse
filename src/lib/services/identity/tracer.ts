@@ -607,17 +607,132 @@ async function stageTouchpointSweep(
 // Stage 3: cross_channel_coalesce
 // ---------------------------------------------------------------------------
 //
-// Doctrine §5 (Temporal Coalescence). Scan fragments for promotion
-// candidates: sibling fragments sharing identity_hint within window,
-// or fragment + couple matches.
+// Doctrine §5 (Temporal Coalescence). Two Fragments on different
+// channels that the structured matcher scores as the same couple are
+// promoted into one channel-scoped couple — this is how anonymous
+// cross-surface activity ("Sarah Ross saved you on Knot AND messaged
+// on Instagram") becomes a single queryable entity instead of two
+// dangling Fragments.
 //
-// v1 implementation: identity_hint exact match within 14 days. Coarse
-// but correct. Tuning via the calibration loop in Phase E.
+// T8.1c rebuild. The pre-T8.1c stage only queued `low` candidate
+// matches for fragment pairs with an exact identity_hint match and
+// never promoted anything. Now:
+//
+//   1. Bucket unpromoted fragments by lowercased identity_hint (a
+//      cheap pre-filter — only same-hint fragments are worth a
+//      pair-scan).
+//   2. Score every cross-channel pair within a 14-day window with the
+//      real structured matcher.
+//   3. score > 90  → auto-promote into a channel-scoped couple. 90 is
+//      the matcher's judge-band ceiling, so >90 only fires on
+//      unambiguous evidence — for a Fragment pair, structurally an
+//      exact full-name match plus a cross-channel signal < 6h apart.
+//   4. 30–90       → queue a candidate_match at the matcher's tier for
+//      operator review. (The LLM judge for this Fragment band is
+//      deferred — buildJudgeContext is couple-shaped, not pair-shaped.)
+//   5. < 30        → nothing.
+//
+// Transitive promotion: a per-run map fragment_id → couple_id lets a
+// third fragment join a couple an earlier pair already minted instead
+// of minting a duplicate.
 // ---------------------------------------------------------------------------
+
+// > matcher JUDGE_BAND_HIGH (90). Promotion fires only above the band
+// where doctrine §2 says a human/LLM judge is required.
+const FRAGMENT_PROMOTE_MIN_SCORE = 91
+
+interface CoalesceFragment {
+  id: string
+  channel: string
+  identity_hint: string | null
+  occurred_at: string
+}
+
+function fragmentToMatchable(f: CoalesceFragment): MatchableRecord {
+  return {
+    id: f.id,
+    primary_name: f.identity_hint,
+    observed_at: f.occurred_at,
+  }
+}
+
+/**
+ * Promote one fragment into a couple. Mints a channel-scoped couple
+ * when `existingCoupleId` is null (the first fragment of a pair), else
+ * links into the couple an earlier pair already minted. Returns the
+ * couple id, or null on a mint failure.
+ *
+ * No advisory lock: cross_channel_coalesce runs only inside the
+ * single-process Tracer, never concurrently with itself or the live
+ * Forwards Linker (the Linker does not coalesce).
+ */
+async function promoteFragmentInto(
+  state: RunState,
+  fragment: CoalesceFragment,
+  existingCoupleId: string | null,
+  reason: string,
+): Promise<string | null> {
+  let coupleId = existingCoupleId
+
+  if (!coupleId) {
+    // Fragments carry no email/phone — the only identity is the hint.
+    const { data, error } = await state.supabase
+      .from('couples')
+      .insert({
+        venue_id: state.venueId,
+        primary_contact_name: fragment.identity_hint ?? 'Unnamed couple',
+        lifecycle_state: 'channel_scoped',
+        channel_scope: fragment.channel,
+        last_progression_at: fragment.occurred_at,
+      })
+      .select('id')
+      .single()
+    if (error || !data) {
+      logEvent({
+        level: 'warn',
+        msg: 'tracer.coalesce.mint_failed',
+        venueId: state.venueId,
+        correlationId: state.runId,
+        data: { fragment: fragment.id, error: error?.message ?? 'no data' },
+      })
+      return null
+    }
+    coupleId = (data as { id: string }).id
+    state.totals.couples_minted += 1
+    await state.supabase.from('couple_merge_events').insert({
+      venue_id: state.venueId,
+      event_type: 'fragment_promoted',
+      primary_couple_id: coupleId,
+      rule_triggered: 'cross_channel_coalesce',
+      confidence_tier: 'high',
+      reason,
+    })
+  }
+
+  // Link the fragment one-way (§11 invariant 5 — fragments do not
+  // resurrect). The `is null` guard keeps a re-run idempotent.
+  const { error: upErr } = await state.supabase
+    .from('fragments')
+    .update({
+      promoted_to_couple_id: coupleId,
+      promoted_at: new Date().toISOString(),
+    })
+    .eq('id', fragment.id)
+    .is('promoted_to_couple_id', null)
+  if (upErr) {
+    logEvent({
+      level: 'warn',
+      msg: 'tracer.coalesce.fragment_link_failed',
+      venueId: state.venueId,
+      correlationId: state.runId,
+      data: { fragment: fragment.id, couple: coupleId, error: upErr.message },
+    })
+  }
+  return coupleId
+}
 
 async function stageCoalesce(state: RunState): Promise<void> {
   await emitEvent(state, 'cross_channel_coalesce', 'started')
-  // Find fragment pairs by identity_hint where both unpromoted.
   const { data: frags } = await state.supabase
     .from('fragments')
     .select('id, channel, identity_hint, occurred_at')
@@ -626,15 +741,16 @@ async function stageCoalesce(state: RunState): Promise<void> {
     .not('identity_hint', 'is', null)
     .order('identity_hint', { ascending: true })
     .limit(5000)
-  const rows = ((frags ?? []) as Array<{
-    id: string
-    channel: string
-    identity_hint: string | null
-    occurred_at: string
-  }>)
-  let pairs = 0
-  let bucket: typeof rows = []
+  const rows = (frags ?? []) as CoalesceFragment[]
+
+  // fragment_id → couple_id for fragments promoted earlier in THIS run.
+  const promoted = new Map<string, string>()
+  let promotedCount = 0
+  let candidatesQueued = 0
+
+  let bucket: CoalesceFragment[] = []
   let bucketKey: string | null = null
+
   const tryFlush = async () => {
     if (bucket.length < 2) return
     // Within bucket: O(n^2) pair scan with 14d window. n is small.
@@ -643,22 +759,57 @@ async function stageCoalesce(state: RunState): Promise<void> {
         const a = bucket[i]!
         const b = bucket[j]!
         if (a.channel === b.channel) continue
-        const gap = Math.abs(Date.parse(a.occurred_at) - Date.parse(b.occurred_at))
-        if (gap > 14 * 86_400_000) continue
-        await insertCandidateMatch(
-          state.supabase,
-          state.venueId,
-          a.id,
-          'fragment',
-          b.id,
-          'fragment',
-          'low',
-          `coalesce: identity_hint=${a.identity_hint} gap=${(gap / 86_400_000).toFixed(1)}d channels=${a.channel}+${b.channel}`,
+        const gap = Math.abs(
+          Date.parse(a.occurred_at) - Date.parse(b.occurred_at),
         )
-        pairs += 1
+        if (gap > 14 * 86_400_000) continue
+
+        const verdict = scoreCandidate(
+          fragmentToMatchable(a),
+          fragmentToMatchable(b),
+        )
+
+        if (verdict.score >= FRAGMENT_PROMOTE_MIN_SCORE) {
+          const ca = promoted.get(a.id)
+          const cb = promoted.get(b.id)
+          if (ca && cb && ca !== cb) {
+            // Pair bridges two already-coalesced couples → couple-merge
+            // territory. Queue for the operator; auto couple-merge is
+            // out of T8.1c scope.
+            await insertCandidateMatch(
+              state.supabase, state.venueId,
+              ca, 'couple', cb, 'couple', 'medium',
+              `coalesce: pair bridges two coalesced couples — ${verdict.reason}`,
+            )
+            candidatesQueued += 1
+            continue
+          }
+          const seed = ca ?? cb ?? null
+          const coupleId = await promoteFragmentInto(
+            state, a, seed, `coalesce: ${verdict.reason}`,
+          )
+          if (!coupleId) continue
+          promoted.set(a.id, coupleId)
+          const linked = await promoteFragmentInto(
+            state, b, coupleId, `coalesce: ${verdict.reason}`,
+          )
+          if (linked) {
+            promoted.set(b.id, linked)
+            promotedCount += 1
+          }
+        } else if (verdict.score >= 30) {
+          await insertCandidateMatch(
+            state.supabase, state.venueId,
+            a.id, 'fragment', b.id, 'fragment',
+            verdict.tier === 'medium' ? 'medium' : 'low',
+            `coalesce: ${verdict.reason} gap=${(gap / 86_400_000).toFixed(1)}d`,
+          )
+          candidatesQueued += 1
+        }
       }
     }
   }
+
   for (const r of rows) {
     const k = (r.identity_hint ?? '').toLowerCase()
     if (k !== bucketKey) {
@@ -669,14 +820,15 @@ async function stageCoalesce(state: RunState): Promise<void> {
     bucket.push(r)
   }
   await tryFlush()
-  state.totals.candidate_matches_written += pairs
+
+  state.totals.candidate_matches_written += candidatesQueued
   await emitEvent(
     state,
     'cross_channel_coalesce',
     'succeeded',
     rows.length,
-    pairs,
-    { pairs_queued: pairs },
+    promotedCount,
+    { fragments_scanned: rows.length, promoted: promotedCount, candidates_queued: candidatesQueued },
   )
 }
 
