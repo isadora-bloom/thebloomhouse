@@ -113,6 +113,59 @@ export async function drainPendingTracerRun(): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// Checkpoint resume (T8.1e)
+// ---------------------------------------------------------------------------
+
+/**
+ * Find an incomplete prior Tracer run for a venue, if one exists.
+ *
+ * `runTracer` + `getResumeFrom` already implement stage-level resume:
+ * passing a prior `run_id` makes the run skip every stage that already
+ * reached `succeeded` and pick up at the first one that did not. But
+ * nothing ever passed a `run_id` back in — every run got a fresh uuid,
+ * so a venue whose sweep timed out (marker left set, see the lifecycle
+ * note above) redid the whole run on the next drain tick. This wires
+ * the checkpoint the `tracer_run_events` log was always keeping.
+ *
+ * A run is COMPLETE — and so NOT resumable — once it has emitted a
+ * `validate`/`succeeded` event (normal finish) or an
+ * `anchor_discovery`/`skipped` event (cold-start terminal). Anything
+ * else on the most recent run_id means it died mid-flight.
+ *
+ * Only the most recent run_id is considered — an older incomplete run
+ * is superseded once a newer one starts. The drain's 8-minute
+ * in-progress guard means this is only ever consulted for a run that
+ * has already gone idle, i.e. genuinely crashed or timed out.
+ */
+async function findResumableRunId(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('tracer_run_events')
+    .select('run_id, stage, status, occurred_at')
+    .eq('venue_id', venueId)
+    .order('occurred_at', { ascending: false })
+    .limit(200)
+  const rows = (data ?? []) as Array<{
+    run_id: string
+    stage: string
+    status: string
+  }>
+  if (rows.length === 0) return null
+
+  // rows[0] is the most recent event → its run_id is the latest run.
+  const latestRunId = rows[0]!.run_id
+  const complete = rows.some(
+    (r) =>
+      r.run_id === latestRunId &&
+      ((r.stage === 'validate' && r.status === 'succeeded') ||
+        (r.stage === 'anchor_discovery' && r.status === 'skipped')),
+  )
+  return complete ? null : latestRunId
+}
+
+// ---------------------------------------------------------------------------
 // Per-venue run with operator-visible lifecycle
 // ---------------------------------------------------------------------------
 
@@ -179,7 +232,21 @@ export async function runIdentityFirstTracerForVenue(
 
   await notifyReconstruction(venueId, 'started')
 
-  const summary = await runTracer({ venueId, supabase, ...opts })
+  // T8.1e: resume an incomplete prior run rather than redoing it from
+  // scratch. An explicit opts.runId always wins.
+  const explicitRunId = opts?.runId
+  const runId = explicitRunId ?? (await findResumableRunId(supabase, venueId))
+  if (runId && !explicitRunId) {
+    logEvent({
+      level: 'info',
+      msg: 'tracer_runner.resuming_run',
+      venueId,
+      correlationId: runId,
+      data: { run_id: runId },
+    })
+  }
+
+  const summary = await runTracer({ venueId, supabase, ...opts, runId: runId ?? undefined })
 
   // Terminal states clear the queue marker. A failed run leaves it set
   // so the next drain tick retries.
