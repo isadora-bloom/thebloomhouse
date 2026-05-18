@@ -80,6 +80,7 @@ import {
 } from './tracer'
 import { applyTierRouting } from './route-by-tier'
 import { recordProgressionIfEligible } from './progression'
+import { buildJudgeContext } from './judge-context'
 import type { NormalizedSignal } from './sources/types'
 
 // ---------------------------------------------------------------------------
@@ -303,7 +304,7 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
           couples.find((c) => c.id === best!.coupleId)!,
         ),
         matcher: best.verdict,
-        context: { primary_touchpoints: [], secondary_touchpoints: [] },
+        context: await buildJudgeContext(supabase, venueId, signal, best.coupleId),
         budget: judgeBudget,
         perDayBudget: 50,
         runId,

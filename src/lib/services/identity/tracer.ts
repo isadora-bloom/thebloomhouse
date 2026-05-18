@@ -77,6 +77,7 @@ import {
 } from './sources'
 import { applyTierRouting } from './route-by-tier'
 import { decayStaleCouples } from './decay'
+import { buildJudgeContext } from './judge-context'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -481,7 +482,12 @@ async function processSignal(
         couples.find((c) => c.id === bestVerdict!.coupleId)!,
       ),
       matcher: bestVerdict.verdict,
-      context: { primary_touchpoints: [], secondary_touchpoints: [] },
+      context: await buildJudgeContext(
+        state.supabase,
+        state.venueId,
+        signal,
+        bestVerdict.coupleId,
+      ),
       budget: state.judgeBudget,
       perDayBudget: state.judgePerDayBudget,
       runId: state.runId,
