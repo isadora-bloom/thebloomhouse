@@ -1025,13 +1025,13 @@ Pass 4 — INQUIRY TRIAGE.   Residual inquiry signal. NOT a 4th anchor type — 
 
 Ordered by dependency. Each numbered item is its own PR (Phase D items must not be bundled — §8 "Don't skip #2", Stop #7).
 
-**T8.0 — Foundations / fix the shipped stubs.** One PR per fix.
-- T8.0a Migration 358: `UNIQUE(venue_id, primary_record_id, secondary_record_id)` on `candidate_matches` (idempotency).
-- T8.0b Build `lockAndUpsertCouple` with `pg_try_advisory_xact_lock`; route every couple mint through it.
-- T8.0c Build the `JudgeContext` producer — populate `primary_touchpoints`/`secondary_touchpoints` before `judgeCandidate`.
-- T8.0d Wire `getResumeFrom` to a persisted `run_id` (checkpointing).
+**T8.0 — Foundations.** Only one item is a clean standalone foundation; the rest were re-cut into T8.1 after a verify-as-built pass (2026-05-18) showed they cannot precede the mint path.
+- T8.0a ✅ **DONE** (migration 358, commit `12ca122`) — unique index `uq_candidate_matches_pair` on `(venue_id, primary_record_id, primary_record_type, secondary_record_id, secondary_record_type)`. De-dups existing rows first. Idempotency floor.
+- ~~T8.0b advisory lock~~ → **folded into T8.1.** `pg_advisory_xact_lock` is transaction-scoped (Supabase pools connections, so session-scoped locks leak); the lock must live in the same RPC as the couple upsert, which T8.1 builds. Cannot precede the mint path.
+- ~~T8.0d checkpointing~~ → **folded into T8.1.** `getResumeFrom` wires into the stage loop that T8.1 rewrites into the 4-pass orchestrator.
+- T8.0c JudgeContext producer — standalone-doable, but the judge is barely exercised until T8.1 mints couples. Do it inside T8.1 alongside the matcher wiring.
 
-**T8.1 — The layered-backtrace orchestrator.** Replace `anchor_discovery` + `touchpoint_sweep` with the 4-pass orchestrator of C.3: actually mint `couples` from anchors, attach `touchpoints`, run matcher+judge, promote fragments, tombstone between passes. Make `cross_channel_coalesce` apply the real matcher to fragment-pairs.
+**T8.1 — The layered-backtrace orchestrator.** Replace `touchpoint_sweep` + `cross_channel_coalesce` with the 4-pass orchestrator of C.3. Note: the booked **anchor** couples are already minted — `mirror-couple.ts` (Phase A dual-write) mirrors every booked wedding into `couples`, so `anchor_discovery` legitimately stays a count. The real work is the sweep: attach `touchpoints` to existing anchor couples via the matcher+judge, mint **channel-scoped** couples for partial-identity leads, promote fragment-pairs, and tombstone consumed candidates between passes. Folds in the advisory-lock RPC (T8.0b), the JudgeContext producer (T8.0c), and checkpointing (T8.0d).
 - **Gate:** 90% on the 50-pair Rixey fixture (Stop #2); idempotent rerun = zero new rows (Stop #4); ghost count ≤ 10% of historically-booked couples (§3 gate). Run end-to-end on re-imported Rixey data with operator validation before any other venue.
 
 **T8.2 — Phase D, battery-prioritised.** One PR per item, in this order (highest battery coverage first):
