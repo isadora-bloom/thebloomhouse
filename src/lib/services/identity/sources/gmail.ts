@@ -9,6 +9,20 @@
  * arrived against an unknown sender (orphan — Tracer's job to
  * re-evaluate).
  *
+ * Orphan identity recovery
+ * ------------------------
+ * An orphan row has no people-derived identity (no wedding_id → no
+ * people join). It is NOT identity-less, though: the email itself
+ * carries the sender. This adapter recovers it from two fields so the
+ * row can match or mint a couple instead of always dropping to a
+ * Fragment:
+ *   - extracted_identity.primary_email — the universal body extractor
+ *     (data-integrity sweep) already disambiguated couple vs venue.
+ *   - from_email — but only when author_class tagged the sender a
+ *     couple. from_email is deliberately NOT trusted for vendor /
+ *     platform_system / operator / sage / unknown senders; minting a
+ *     couple off a vendor address pollutes the couples table.
+ *
  * Signal tier mapping
  * -------------------
  * Doctrine §1 places Gmail in the 'high' tier (full identity:
@@ -33,6 +47,10 @@ interface InteractionRow {
   gmail_message_id: string | null
   gmail_thread_id: string | null
   timestamp: string
+  from_email: string | null
+  from_name: string | null
+  author_class: string | null
+  extracted_identity: Record<string, unknown> | null
 }
 
 interface PersonForInteraction {
@@ -54,7 +72,7 @@ async function* walk(
     let q = supabase
       .from('interactions')
       .select(
-        'id, wedding_id, type, direction, subject, body_preview, full_body, gmail_message_id, gmail_thread_id, timestamp',
+        'id, wedding_id, type, direction, subject, body_preview, full_body, gmail_message_id, gmail_thread_id, timestamp, from_email, from_name, author_class, extracted_identity',
       )
       .eq('venue_id', venueId)
       .eq('type', 'email')
@@ -91,18 +109,44 @@ async function* walk(
       const p1 = people.find((p) => p.role === 'partner1') ?? null
       const p2 = people.find((p) => p.role === 'partner2') ?? null
       const isInbound = r.direction === 'inbound'
+
+      // Orphan identity recovery (see header). p1 wins when present
+      // (a wedding_id row); for orphans, fall back to the email itself.
+      const ext = (r.extracted_identity ?? {}) as {
+        primary_email?: unknown
+        phones?: unknown
+      }
+      const extEmail =
+        typeof ext.primary_email === 'string' && ext.primary_email.trim()
+          ? ext.primary_email.trim()
+          : null
+      const extPhone =
+        Array.isArray(ext.phones) && typeof ext.phones[0] === 'string'
+          ? ext.phones[0]
+          : null
+      const classEmail =
+        r.author_class === 'couple' && r.from_email ? r.from_email : null
+      const orphanEmail = extEmail ?? classEmail
+      // from_name only travels with a recovered email — a name with no
+      // identifier is not enough to be a Couple (§C.2) and from_name on
+      // outbound rows can be the venue ("Rixey Manor Team").
+      const orphanName = orphanEmail ? r.from_name ?? null : null
+
+      const primaryName =
+        [p1?.first_name, p1?.last_name].filter(Boolean).join(' ') ||
+        orphanName ||
+        null
+
       yield {
         external_id: r.gmail_message_id ?? r.id,
         channel: 'gmail',
         action_type: isInbound ? 'reply' : 'venue_sent',
         occurred_at: r.timestamp,
         signal_tier: isInbound ? 'high' : 'medium',
-        identity_hint:
-          [p1?.first_name, p1?.last_name].filter(Boolean).join(' ') || null,
-        primary_name:
-          [p1?.first_name, p1?.last_name].filter(Boolean).join(' ') || null,
-        primary_email: p1?.email ?? null,
-        primary_phone: p1?.phone ?? null,
+        identity_hint: primaryName,
+        primary_name: primaryName,
+        primary_email: p1?.email ?? orphanEmail ?? null,
+        primary_phone: p1?.phone ?? extPhone ?? null,
         partner_name:
           [p2?.first_name, p2?.last_name].filter(Boolean).join(' ') || null,
         partner_email: p2?.email ?? null,
