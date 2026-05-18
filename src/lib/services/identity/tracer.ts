@@ -526,21 +526,66 @@ async function processSignal(
   return inc
 }
 
+// signal_tier layering for the sweep (T8.1d). The sweep cannot fully
+// sort a streaming signal source by signal_tier without buffering
+// every signal (the types.ts header forbids it — ~100K+ per venue) or
+// re-walking each adapter once per tier (6x the DB reads). Two cheap
+// mechanisms reach the same end — a later signal sees the couples an
+// earlier signal minted — without either cost:
+//
+//   1. Channel ordering. Adapters sweep high-signal channel first
+//      (calendly / honeybook tours+bookings → gmail / sms replies →
+//      web forms → knot / weddingwire inquiries → instagram / review
+//      saves), so the channels that MINT couples mostly run before the
+//      channels that only ATTACH.
+//   2. Snapshot reload. The couples snapshot the matcher scores
+//      against is re-loaded every SNAPSHOT_RELOAD_EVERY signals, so a
+//      low-tier signal arriving after a high-tier mint matches the
+//      freshly-minted couple instead of orphaning into a Fragment.
+//
+// Tombstoning note (re the original §C.3 wording): the matcher scores
+// signals against `couples`, never against `candidate_matches`, so
+// there is no candidate_matches snapshot to "tombstone so the next
+// pass's matcher excludes it." Duplicate candidate_matches are already
+// prevented by the uq_candidate_matches_pair unique index (T8.0a).
+const CHANNEL_SWEEP_RANK: Record<string, number> = {
+  calendly: 0,
+  honeybook: 0,
+  gmail: 1,
+  sms: 1,
+  phone: 1,
+  web: 2,
+  knot: 3,
+  weddingwire: 3,
+  instagram: 4,
+  review: 4,
+}
+const SNAPSHOT_RELOAD_EVERY = 500
+
 async function stageTouchpointSweep(
   state: RunState,
   adapters: SourceAdapter[],
 ): Promise<void> {
+  // Sweep high-signal channels first (see CHANNEL_SWEEP_RANK above).
+  const ordered = adapters
+    .slice()
+    .sort(
+      (a, b) =>
+        (CHANNEL_SWEEP_RANK[a.channel] ?? 2) -
+        (CHANNEL_SWEEP_RANK[b.channel] ?? 2),
+    )
   await emitEvent(state, 'touchpoint_sweep', 'started', 0, 0, {
-    adapters: adapters.map((a) => a.name),
+    adapters: ordered.map((a) => a.name),
   })
 
-  const couples = await loadRecentCouples(state.supabase, state.venueId)
+  let couples = await loadRecentCouples(state.supabase, state.venueId)
+  let sinceReload = 0
   const adapterStats: Record<
     string,
     { signals: number; tp: number; frag: number; cand: number; mint: number }
   > = {}
 
-  for (const adapter of adapters) {
+  for (const adapter of ordered) {
     if (adapter.name === 'anchors') continue // anchor stage handled it
     const stats = { signals: 0, tp: 0, frag: 0, cand: 0, mint: 0 }
     adapterStats[adapter.name] = stats
@@ -562,6 +607,12 @@ async function stageTouchpointSweep(
         state.totals.fragments_written += r.fragments
         state.totals.candidate_matches_written += r.candidates
         state.totals.couples_minted += r.couplesMinted
+        // Refresh the couples snapshot so later signals match couples
+        // earlier signals just minted (signal_tier layering, T8.1d).
+        if (++sinceReload >= SNAPSHOT_RELOAD_EVERY) {
+          couples = await loadRecentCouples(state.supabase, state.venueId)
+          sinceReload = 0
+        }
         inBatch += 1
         if (inBatch >= 200) {
           await emitEvent(
