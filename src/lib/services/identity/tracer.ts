@@ -444,8 +444,13 @@ async function processSignal(
   state: RunState,
   signal: NormalizedSignal,
   couples: CoupleForMatch[],
-): Promise<{ touchpoints: number; fragments: number; candidates: number }> {
-  const inc = { touchpoints: 0, fragments: 0, candidates: 0 }
+): Promise<{
+  touchpoints: number
+  fragments: number
+  candidates: number
+  couplesMinted: number
+}> {
+  const inc = { touchpoints: 0, fragments: 0, candidates: 0, couplesMinted: 0 }
 
   // Fast-path: signal carries legacy_wedding_id → attach to mirrored couple.
   if (signal.legacy_wedding_id) {
@@ -517,6 +522,7 @@ async function processSignal(
   if (routed.touchpoint_inserted) inc.touchpoints += 1
   if (routed.fragment_inserted) inc.fragments += 1
   if (routed.candidate_match_queued) inc.candidates += 1
+  if (routed.couple_minted) inc.couplesMinted += 1
   return inc
 }
 
@@ -529,11 +535,14 @@ async function stageTouchpointSweep(
   })
 
   const couples = await loadRecentCouples(state.supabase, state.venueId)
-  const adapterStats: Record<string, { signals: number; tp: number; frag: number; cand: number }> = {}
+  const adapterStats: Record<
+    string,
+    { signals: number; tp: number; frag: number; cand: number; mint: number }
+  > = {}
 
   for (const adapter of adapters) {
     if (adapter.name === 'anchors') continue // anchor stage handled it
-    const stats = { signals: 0, tp: 0, frag: 0, cand: 0 }
+    const stats = { signals: 0, tp: 0, frag: 0, cand: 0, mint: 0 }
     adapterStats[adapter.name] = stats
     let batchIndex = 0
     let inBatch = 0
@@ -548,9 +557,11 @@ async function stageTouchpointSweep(
         stats.tp += r.touchpoints
         stats.frag += r.fragments
         stats.cand += r.candidates
+        stats.mint += r.couplesMinted
         state.totals.touchpoints_written += r.touchpoints
         state.totals.fragments_written += r.fragments
         state.totals.candidate_matches_written += r.candidates
+        state.totals.couples_minted += r.couplesMinted
         inBatch += 1
         if (inBatch >= 200) {
           await emitEvent(

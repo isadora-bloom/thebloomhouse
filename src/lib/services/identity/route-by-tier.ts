@@ -14,7 +14,10 @@
  *   medium / low     → INSERT orphan touchpoint (couple_id NULL) +
  *                       INSERT candidate_match row pointing at the
  *                       matched couple (operator-confirmed in Phase E)
- *   below_threshold  → INSERT fragment (no couple link)
+ *   below_threshold  → signal has sufficient identity (§C.2)?
+ *                       yes → MINT a channel-scoped couple + attach
+ *                             touchpoint (advisory-locked, T8.1b)
+ *                       no  → INSERT fragment (no couple link)
  *
  * Idempotency
  * -----------
@@ -41,11 +44,13 @@ import {
 } from './tracer'
 import { recordProgressionIfEligible } from './progression'
 import { maybeResurrectGhost } from './resurrection'
+import { hasSufficientIdentity, lockAndMintCouple } from './mint-couple'
 
 export type TierRoutingAction =
   | 'attached'
   | 'candidate_medium'
   | 'candidate_low'
+  | 'minted'
   | 'fragment'
   | 'duplicate'
 
@@ -55,6 +60,9 @@ export interface TierRoutingResult {
   touchpoint_inserted: boolean
   fragment_inserted: boolean
   candidate_match_queued: boolean
+  /** True when the below_threshold branch minted a new channel-scoped
+   *  couple (as opposed to attaching to one the RPC's re-check found). */
+  couple_minted: boolean
   matched_couple_id: string | null
 }
 
@@ -83,6 +91,7 @@ export async function applyTierRouting(
     touchpoint_inserted: false,
     fragment_inserted: false,
     candidate_match_queued: false,
+    couple_minted: false,
     matched_couple_id: null,
   }
 
@@ -142,7 +151,50 @@ export async function applyTierRouting(
     }
   }
 
-  // below_threshold → fragment
+  // below_threshold → the matcher placed this signal against no
+  // existing couple. §C.2 (Appendix C): a signal WITH sufficient
+  // identity (a reachable identifier OR a real two-token name) IS a
+  // couple in its own right — mint a channel-scoped one. Only an
+  // identity-poor signal (anonymous save, "Madison B." with no
+  // identifier) becomes a Fragment.
+  if (hasSufficientIdentity(signal)) {
+    const mint = await lockAndMintCouple(supabase, venueId, signal)
+    if (mint.coupleId && mint.touchpointInserted) {
+      // Bump the couple's progression clock for an inbound,
+      // progression-eligible action type (§3 Don't skip #1).
+      await recordProgressionIfEligible({
+        supabase,
+        coupleId: mint.coupleId,
+        signal,
+        touchpointId: mint.touchpointId,
+      })
+      // The RPC's email/phone re-check can attach this signal to a
+      // pre-existing couple — which may be a Ghost (§9 resurrection).
+      // A freshly minted couple is never a Ghost, so skip it there.
+      if (!mint.minted) {
+        await maybeResurrectGhost({
+          supabase,
+          venueId,
+          coupleId: mint.coupleId,
+          signal,
+        })
+      }
+    }
+    return {
+      ...empty,
+      action: mint.minted
+        ? 'minted'
+        : mint.touchpointInserted
+          ? 'attached'
+          : 'duplicate',
+      touchpoint_id: mint.touchpointId,
+      touchpoint_inserted: mint.touchpointInserted,
+      couple_minted: mint.minted,
+      matched_couple_id: mint.coupleId,
+    }
+  }
+
+  // Identity-poor → Fragment (aggregate-only; never a half-couple).
   const f = await insertFragment(supabase, venueId, signal)
   return {
     ...empty,

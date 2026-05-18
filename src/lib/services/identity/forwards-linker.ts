@@ -105,9 +105,10 @@ export type LinkAction =
   | 'attached'           // tier=high → touchpoint attached to existing couple
   | 'candidate_medium'   // tier=medium → orphan tp + candidate_match
   | 'candidate_low'      // tier=low → orphan tp + candidate_match
-  | 'fragment'           // tier=below_threshold → fragment row
+  | 'minted'             // tier=below_threshold + sufficient identity → new channel-scoped couple
+  | 'fragment'           // tier=below_threshold + identity-poor → fragment row
   | 'duplicate'          // re-fire of an already-known external_id
-  | 'cold_start'         // venue has zero couples yet → fragment, no match attempted
+  | 'cold_start'         // venue has zero couples yet → mint/fragment, no match attempted
 
 export interface LinkResult {
   action: LinkAction
@@ -261,8 +262,11 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
     // 2. Score against existing couples.
     const couples = await getCouplesCached(supabase, venueId, args.bypassCache ?? false)
     if (couples.length === 0) {
-      // Cold-start: no anchors yet. Route below-threshold to keep the
-      // signal as a fragment for a future Tracer / Linker re-run.
+      // Cold-start: no couples yet. Route below-threshold — an identity-
+      // sufficient signal mints the venue's first channel-scoped couple
+      // (this is how a cold-start venue bootstraps from a live inbound);
+      // an identity-poor one stays a fragment for a future re-run. The
+      // action is still reported as 'cold_start' for telemetry.
       const routed = await applyTierRouting({
         supabase,
         venueId,
@@ -397,6 +401,7 @@ export async function linkSignalBatch(args: {
     attached: 0,
     candidate_medium: 0,
     candidate_low: 0,
+    minted: 0,
     fragment: 0,
     duplicate: 0,
     cold_start: 0,

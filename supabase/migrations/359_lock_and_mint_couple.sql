@@ -61,7 +61,12 @@ CREATE OR REPLACE FUNCTION public.lock_and_mint_couple(
   p_wedding_date  date,
   p_channel_scope text
 )
-RETURNS TABLE (couple_id uuid, minted boolean, touchpoint_inserted boolean)
+RETURNS TABLE (
+  couple_id           uuid,
+  minted              boolean,
+  touchpoint_inserted boolean,
+  touchpoint_id       uuid
+)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
@@ -69,6 +74,7 @@ AS $$
 DECLARE
   v_couple_id uuid;
   v_tp_couple uuid;
+  v_tp_id     uuid;
   v_minted    boolean := false;
   v_tp_rows   integer := 0;
 BEGIN
@@ -78,14 +84,14 @@ BEGIN
   );
 
   -- (2) Idempotency: this exact signal already swept?
-  SELECT tp.couple_id INTO v_tp_couple
+  SELECT tp.couple_id, tp.id INTO v_tp_couple, v_tp_id
   FROM public.touchpoints tp
   WHERE tp.venue_id = p_venue_id
     AND tp.channel = p_channel
     AND tp.external_id = p_external_id
   LIMIT 1;
   IF FOUND THEN
-    RETURN QUERY SELECT v_tp_couple, false, false;
+    RETURN QUERY SELECT v_tp_couple, false, false, v_tp_id;
     RETURN;
   END IF;
 
@@ -153,10 +159,11 @@ BEGIN
     p_venue_id, v_couple_id, p_channel, p_signal_tier, p_action_type,
     p_external_id, p_occurred_at, p_raw_payload
   )
-  ON CONFLICT (venue_id, channel, external_id) DO NOTHING;
+  ON CONFLICT (venue_id, channel, external_id) DO NOTHING
+  RETURNING id INTO v_tp_id;
   GET DIAGNOSTICS v_tp_rows = ROW_COUNT;
 
-  RETURN QUERY SELECT v_couple_id, v_minted, (v_tp_rows > 0);
+  RETURN QUERY SELECT v_couple_id, v_minted, (v_tp_rows > 0), v_tp_id;
 END;
 $$;
 

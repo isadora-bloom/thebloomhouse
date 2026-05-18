@@ -33,6 +33,9 @@ export interface MintCoupleResult {
   /** True when a new touchpoint row was inserted; false when this exact
    *  signal had already been swept (idempotent rerun). */
   touchpointInserted: boolean
+  /** touchpoints.id of the attached touchpoint. Set on a fresh insert
+   *  and on an idempotent re-hit; null only on a pathological return. */
+  touchpointId: string | null
 }
 
 /**
@@ -124,15 +127,26 @@ export async function lockAndMintCouple(
 
   // RETURNS TABLE → supabase-js returns an array of one row.
   const row = (Array.isArray(data) ? data[0] : data) as
-    | { couple_id: string | null; minted: boolean; touchpoint_inserted: boolean }
+    | {
+        couple_id: string | null
+        minted: boolean
+        touchpoint_inserted: boolean
+        touchpoint_id: string | null
+      }
     | null
     | undefined
   if (!row) {
-    return { coupleId: null, minted: false, touchpointInserted: false }
+    return {
+      coupleId: null,
+      minted: false,
+      touchpointInserted: false,
+      touchpointId: null,
+    }
   }
   return {
     coupleId: row.couple_id ?? null,
     minted: Boolean(row.minted),
     touchpointInserted: Boolean(row.touchpoint_inserted),
+    touchpointId: row.touchpoint_id ?? null,
   }
 }
