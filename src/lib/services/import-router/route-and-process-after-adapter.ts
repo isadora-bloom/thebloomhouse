@@ -43,6 +43,7 @@ export interface PersistAndEnqueueInput {
 export interface PersistAndEnqueueResult {
   importRunId: string | null
   reconstructionEnqueuedCount: number
+  orphansRelinked: number
 }
 
 export async function persistAndEnqueueAfterAdapterCommit(
@@ -150,7 +151,25 @@ export async function persistAndEnqueueAfterAdapterCommit(
     }
   }
 
-  return { importRunId, reconstructionEnqueuedCount }
+  // 4. Re-link orphan email interactions to weddings. A bulk import can
+  //    land emails (or the weddings they belong to) that the live
+  //    per-email linker never paired — Gmail synced before the CRM
+  //    weddings existed, a re-sync bypassing the live pipeline, etc.
+  //    relink_orphan_interactions (migration 362) recovers the client
+  //    mail among them via thread / sender-email / person propagation.
+  //    It never mints a wedding, so it cannot duplicate this import.
+  let orphansRelinked = 0
+  try {
+    const { data: relink } = await supabase.rpc(
+      'relink_orphan_interactions',
+      { p_venue_id: venueId },
+    )
+    orphansRelinked = (relink as { relinked?: number } | null)?.relinked ?? 0
+  } catch {
+    // non-fatal — the import itself already committed.
+  }
+
+  return { importRunId, reconstructionEnqueuedCount, orphansRelinked }
 }
 
 function sanitiseFilename(name: string): string {
