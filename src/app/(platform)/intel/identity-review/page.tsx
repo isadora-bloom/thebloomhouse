@@ -88,7 +88,10 @@ export default function IdentityReviewPage() {
   const [snippets, setSnippets] = useState<Map<string, RecordSnippet>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [tier, setTier] = useState<'all' | 'high' | 'medium' | 'low'>('all')
+  // Default to medium — the tier that actually needs an operator
+  // decision. High auto-promotes (never queues); low is "surface only
+  // on request" per the matcher doctrine, so it sits behind its chip.
+  const [tier, setTier] = useState<'all' | 'high' | 'medium' | 'low'>('medium')
   const [working, setWorking] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<string, string>>({})
 
@@ -213,6 +216,16 @@ export default function IdentityReviewPage() {
     [rows, tier],
   )
 
+  const counts = useMemo(() => {
+    const acc = { all: rows.length, high: 0, medium: 0, low: 0 }
+    for (const r of rows) {
+      if (r.confidence_tier === 'high') acc.high += 1
+      else if (r.confidence_tier === 'medium') acc.medium += 1
+      else if (r.confidence_tier === 'low') acc.low += 1
+    }
+    return acc
+  }, [rows])
+
   const resolve = async (matchId: string, action: 'confirm' | 'reject' | 'defer') => {
     setWorking(matchId)
     setFeedback((f) => ({ ...f, [matchId]: '' }))
@@ -275,11 +288,14 @@ export default function IdentityReviewPage() {
                 : 'border-stone-300 bg-white text-stone-700 hover:bg-stone-50'
             }`}
           >
-            {t === 'all' ? 'All' : t}
+            {t === 'all' ? 'All' : t}{' '}
+            <span className={tier === t ? 'opacity-70' : 'text-stone-400'}>
+              {counts[t]}
+            </span>
           </button>
         ))}
         <span className="ml-2 text-xs text-stone-500">
-          {filtered.length} open
+          {filtered.length} shown
         </span>
       </div>
 
