@@ -245,6 +245,7 @@ export default function ClientCodesPage() {
             wedding_date,
             status,
             code_extension,
+            merged_into_id,
             people!people_wedding_id_fkey ( role, first_name, last_name )
           )
         `)
@@ -276,7 +277,13 @@ export default function ClientCodesPage() {
         )
       }
 
-      const mapped: ClientCode[] = (data ?? []).map((row: any) => {
+      const mapped: ClientCode[] = (data ?? [])
+        // Skip codes whose wedding was merged into another. mergeWeddings
+        // moves the people to the canonical wedding and tombstones the
+        // loser with merged_into_id — leaving its code pointing at a
+        // nameless husk that rendered as a duplicate "Unknown" row.
+        .filter((row: any) => !row.weddings?.merged_into_id)
+        .map((row: any) => {
         const wedding = row.weddings
         const people = wedding?.people ?? []
         const p1 = people.find((p: any) => p.role === 'partner1')
