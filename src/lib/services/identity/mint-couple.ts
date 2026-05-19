@@ -68,17 +68,31 @@ export function computeLockKey(signal: NormalizedSignal): string {
 }
 
 /**
- * Has this signal got enough identity to BE a couple rather than a
- * Fragment? Appendix C §C.2: "inquiry with sufficient identity (real
- * name + one reachable identifier) → a Couple; without → a Fragment."
+ * Has this signal got enough identity to MINT a couple (vs. drop to a
+ * Fragment)? Appendix C §C.2: "inquiry with sufficient identity → a
+ * Couple; without → a Fragment."
  *
- * Practical reading: a couple needs a reachable identifier (email or
- * phone) OR a real two-token name. A bare handle or a single-token
- * "Madison B." with no identifier is a Fragment.
+ * This gates MINTING a NEW couple only. A signal that fails it can
+ * still be ATTACHED to an existing couple by the matcher — the email
+ * / phone still travel on the signal for that.
+ *
+ * Gmail is special-cased. It is the noisiest channel — vendor blasts,
+ * platform notifications (Zola/Knot alerts), the venue's own mail. An
+ * orphan Gmail signal mints a couple ONLY if the author classifier
+ * positively tagged the sender a couple. Vendor / platform / operator
+ * / sage / still-unclassified senders stay Fragments until classified
+ * — that is what stopped "Novela", "Signature Event Rentals" and
+ * raw-phone-number rows landing in the couples list.
+ *
+ * Other channels (knot / calendly / instagram) need a reachable email
+ * OR a real two-token name. A bare phone with no name is NOT enough —
+ * it only ever produced a couple literally named "5715551234".
  */
 export function hasSufficientIdentity(signal: NormalizedSignal): boolean {
+  if (signal.channel === 'gmail') {
+    return signal.author_class === 'couple'
+  }
   if (signal.primary_email || signal.partner_email) return true
-  if (signal.primary_phone || signal.partner_phone) return true
   const name = (signal.primary_name ?? '').trim()
   return name.split(/\s+/).filter(Boolean).length >= 2
 }

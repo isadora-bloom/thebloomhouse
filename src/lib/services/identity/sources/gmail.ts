@@ -159,6 +159,7 @@ async function* walk(
           direction: r.direction,
         },
         legacy_wedding_id: r.wedding_id,
+        author_class: r.author_class,
       }
     }
 

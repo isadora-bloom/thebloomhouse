@@ -86,6 +86,14 @@ export interface NormalizedSignal {
    *  can anchor the new touchpoint via couples.source_wedding_id
    *  → couples.id without re-running the matcher. */
   legacy_wedding_id?: string | null
+
+  /** Author classification of the underlying message, when the channel
+   *  has one (Gmail interactions carry interactions.author_class:
+   *  'couple' | 'vendor' | 'platform_system' | 'operator' | 'sage' |
+   *  'unknown'). The mint gate uses it to refuse minting a couple from
+   *  a non-couple sender (a vendor blast, a platform notification).
+   *  Null/undefined on channels without classification. */
+  author_class?: string | null
 }
 
 export interface SourceAdapterArgs {

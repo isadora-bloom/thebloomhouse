@@ -94,6 +94,11 @@ export default function CouplesListPage() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<StatusPill | 'all'>('all')
   const [query, setQuery] = useState('')
+  // Channel-scoped couples (anonymous Knot saves, partial-identity
+  // signals) are real but low-signal and vastly outnumber the couples
+  // an operator actually works. Hidden by default; the toggle brings
+  // them in.
+  const [showChannelScoped, setShowChannelScoped] = useState(false)
 
   useEffect(() => {
     if (!venueId) return
@@ -101,13 +106,23 @@ export default function CouplesListPage() {
     const load = async () => {
       setLoading(true)
       setError(null)
-      const { data, error: err } = await supabase
+      let q = supabase
         .from('couples')
         .select(
           'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, lifecycle_state, wedding_date, source_wedding_id, last_progression_at, updated_at, created_at',
         )
         .eq('venue_id', venueId)
-        .order('updated_at', { ascending: false })
+      if (!showChannelScoped) {
+        // Default view = the couples the operator works (booked,
+        // resolved inquiries, ghosts, agents). Channel-scoped sit
+        // behind the toggle so they don't bury real bookings.
+        q = q.neq('lifecycle_state', 'channel_scoped')
+      }
+      // Order by real activity (last inbound progression), not row
+      // write-time — so a couple touring this weekend surfaces, and a
+      // batch of couples minted in one Tracer run does not.
+      const { data, error: err } = await q
+        .order('last_progression_at', { ascending: false, nullsFirst: false })
         .limit(500)
       if (cancelled) return
       if (err) {
@@ -165,7 +180,7 @@ export default function CouplesListPage() {
     return () => {
       cancelled = true
     }
-  }, [venueId, supabase])
+  }, [venueId, supabase, showChannelScoped])
 
   const filtered = useMemo(() => {
     let out = rows
@@ -242,7 +257,16 @@ export default function CouplesListPage() {
             </span>
           </button>
         ))}
-        <div className="ml-auto flex items-center gap-2 rounded-md border border-stone-300 bg-white px-3 py-1">
+        <label className="ml-auto flex items-center gap-2 text-xs text-stone-600">
+          <input
+            type="checkbox"
+            checked={showChannelScoped}
+            onChange={(e) => setShowChannelScoped(e.target.checked)}
+            className="h-3.5 w-3.5 accent-stone-900"
+          />
+          Show channel-only signals
+        </label>
+        <div className="flex items-center gap-2 rounded-md border border-stone-300 bg-white px-3 py-1">
           <Search className="h-4 w-4 text-stone-400" />
           <input
             value={query}
@@ -365,10 +389,12 @@ export default function CouplesListPage() {
       </div>
 
       <p className="mt-4 text-xs text-stone-500">
-        Showing the latest 500 couples by activity. The Phase B Tracer
-        rebuilds this graph nightly; the Phase C Forwards Linker keeps it
-        current per signal. Pending matches (medium / low tier) live in
-        the review queue above.
+        Showing the 500 most recently active couples. Channel-only
+        signals (anonymous Knot saves and other partial-identity
+        records) are hidden by default — use the toggle to include them.
+        The Phase B Tracer rebuilds this graph nightly; the Phase C
+        Forwards Linker keeps it current per signal. Pending matches
+        live in the review queue above.
       </p>
     </div>
   )
