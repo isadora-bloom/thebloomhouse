@@ -484,7 +484,10 @@ type JobName = (typeof VALID_JOBS)[number]
 // Job handlers
 // ---------------------------------------------------------------------------
 
-async function runJob(job: JobName): Promise<unknown> {
+async function runJob(
+  job: JobName,
+  params?: URLSearchParams,
+): Promise<unknown> {
   switch (job) {
     case 'email_poll': {
       // Live delta poll PLUS one chunk of any pending historical Gmail
@@ -800,7 +803,7 @@ async function runJob(job: JobName): Promise<unknown> {
       // import time; AI is too expensive to retry every night.
       return sweepPhaseBAllVenues()
 
-    case 'identity_first_tracer':
+    case 'identity_first_tracer': {
       // Identity-First Phase B Backwards Tracer (2026-05-14). Walks
       // historical signals on every connected channel and reconstructs
       // the couples / touchpoints / fragments graph in the new schema
@@ -811,7 +814,21 @@ async function runJob(job: JobName): Promise<unknown> {
       // 200/run + 50/venue/day. Cold-start mode: venue with zero
       // booked-anchor couples short-circuits anchor_discovery and
       // emits 'skipped' (no degenerate sweep).
-      return runIdentityFirstTracerAllVenues()
+      //
+      // ?judge_budget=N — overrides the per-run LLM judge cap. A large
+      // historical backfill passes judge_budget=0 to skip the judge
+      // entirely (judge-band matches route to candidate_matches for
+      // operator review instead), keeping the sweep inside the
+      // function time limit. Scheduled runs omit it (default 200).
+      const jb = params?.get('judge_budget')
+      const judgeBudget =
+        jb != null && jb !== '' && Number.isFinite(Number(jb))
+          ? Number(jb)
+          : undefined
+      return runIdentityFirstTracerAllVenues(
+        judgeBudget != null ? { judgeBudget } : undefined,
+      )
+    }
 
     case 'identity_backtrack':
       // T5-Rixey-CCC (2026-05-02). Daily backtrack — for each venue,
@@ -3032,7 +3049,7 @@ async function runCorrelationAndWeatherCancellation(): Promise<{
 // load. 300s is the Vercel Pro ceiling and gives the fleet the runway
 // it needs through ~80-100 venues. Beyond that the architecture needs
 // to move to a queue-per-venue pattern (see scaling notes 2026-05-12).
-export const maxDuration = 300
+export const maxDuration = 800
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -3060,7 +3077,7 @@ export async function GET(request: NextRequest) {
   const { trackCronRun } = await import('@/lib/observability/metrics')
   try {
     console.log(`[cron] Starting job: ${job}`)
-    const wrapped = await trackCronRun(job, async () => runJob(job))
+    const wrapped = await trackCronRun(job, async () => runJob(job, searchParams))
     console.log(`[cron] Completed job: ${job} in ${wrapped.duration_ms}ms`)
     return NextResponse.json({ job, success: true, result: wrapped.result, duration_ms: wrapped.duration_ms })
   } catch (err) {
