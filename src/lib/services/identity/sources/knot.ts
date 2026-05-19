@@ -36,7 +36,19 @@
 
 import type { NormalizedSignal, SourceAdapter, SourceAdapterArgs } from './types'
 
-const KNOT_PLATFORMS = ['knot', 'weddingwire', 'wedding_wire'] as const
+// candidate_identities.source_platform carries the value the storefront
+// importer / clusterer wrote. The canonical values (normalize-source.ts)
+// are `the_knot` / `wedding_wire` / `zola`; the legacy short forms
+// `knot` / `weddingwire` are kept so older rows still match. The
+// pre-2026-05-18 list was `['knot','weddingwire','wedding_wire']`, which
+// missed every `the_knot` row — i.e. the entire real dataset.
+const KNOT_PLATFORMS = [
+  'the_knot',
+  'knot',
+  'wedding_wire',
+  'weddingwire',
+  'zola',
+] as const
 
 interface CandidateRow {
   id: string
