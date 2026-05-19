@@ -57,6 +57,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { recalculateHeatScore } from '../heat-mapping'
 import { recordHistogram } from '@/lib/observability/metrics'
+import { normalizeSource } from '../normalize-source'
 
 const AUTO_CLUSTER_DAYS = 14
 const REVIEW_CLUSTER_DAYS = 30
@@ -545,6 +546,15 @@ export async function clusterSignals(args: {
   const allSignals = await fetchSignals(supabase, signalIds)
   const toProcess = allSignals.filter((s) => !s.candidate_identity_id)
   summary.signals_processed = toProcess.length
+
+  // Canonicalise source_platform before grouping. A signal that
+  // arrived with a sloppy value ('knot', 'TheKnot', 'IG') must cluster
+  // — and write candidate_identities.source_platform — under the
+  // canonical key the Tracer's knot/instagram adapters filter on
+  // ('the_knot', 'instagram'). Null is left null (skipped below).
+  for (const s of toProcess) {
+    if (s.source_platform) s.source_platform = normalizeSource(s.source_platform)
+  }
 
   // Group by (venue_id, source_platform). Almost always one group per
   // brain-dump batch, but we don't assume — multi-venue admin runs

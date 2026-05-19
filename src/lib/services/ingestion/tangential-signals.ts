@@ -12,6 +12,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findIdentityMatches } from '@/lib/services/identity/resolution'
+import { normalizeSource } from '@/lib/services/normalize-source'
+import { clusterSignals } from '@/lib/services/identity/candidate-clusterer'
 
 export interface IdentityCandidate {
   name?: string
@@ -66,6 +68,10 @@ export async function importIdentityCandidates(args: {
 }): Promise<TangentialImportResult> {
   const { supabase, venueId, candidates, sourceEntryId, sourceContext, signalDate } = args
   const out: TangentialImportResult = { written: 0, matched: 0, unmatched: 0 }
+  // IDs of signals inserted this run, so the clusterer can run on them
+  // synchronously below — without this the vision-import path left
+  // signals unclustered until the nightly phase_b_sweep cron.
+  const insertedIds: string[] = []
 
   for (const cand of candidates) {
     const first = (cand.first_name ?? splitFullName(cand.name).first_name).trim()
@@ -130,6 +136,12 @@ export async function importIdentityCandidates(args: {
       .insert({
         venue_id: venueId,
         signal_type: allowedSignalType(cand.signal_type),
+        // source_platform drives the clusterer's grouping and ends up
+        // on candidate_identities.source_platform — the column the
+        // Tracer's knot/instagram adapters filter on. The vision path
+        // previously left it NULL (platform only buried inside
+        // extracted_identity), so the clusterer skipped every row.
+        source_platform: cand.platform ? normalizeSource(cand.platform) : null,
         extracted_identity: extracted,
         source_context: cand.context ?? sourceContext ?? null,
         signal_date: signalDate ?? null,
@@ -143,6 +155,7 @@ export async function importIdentityCandidates(args: {
       .single()
     if (error || !inserted) continue
     out.written++
+    insertedIds.push(inserted.id as string)
     if (matched_person_id) out.matched++
     else {
       out.unmatched++
@@ -161,6 +174,17 @@ export async function importIdentityCandidates(args: {
       } catch (err) {
         console.warn('[tangential-signals-import] signal-pair enqueue failed:', err)
       }
+    }
+  }
+
+  // Cluster the signals just written into candidate_identities, so the
+  // Tracer's knot/instagram adapters (which read candidate_identities)
+  // see them the same day instead of waiting for the nightly sweep.
+  if (insertedIds.length > 0) {
+    try {
+      await clusterSignals({ supabase, signalIds: insertedIds })
+    } catch (err) {
+      console.warn('[tangential-signals-import] cluster failed:', err)
     }
   }
 

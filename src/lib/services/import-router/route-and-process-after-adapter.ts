@@ -22,6 +22,8 @@ import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitResult } from '@/lib/services/crm-import'
 import { enqueueIdentityReconstruction } from '@/lib/services/identity/enqueue-reconstruction'
+import { reclusterVenue } from '@/lib/services/identity/candidate-clusterer'
+import { requestTracerRun } from '@/lib/services/identity/tracer-runner'
 
 const BUCKET_NAME = 'crm-imports'
 
@@ -167,6 +169,29 @@ export async function persistAndEnqueueAfterAdapterCommit(
     orphansRelinked = (relink as { relinked?: number } | null)?.relinked ?? 0
   } catch {
     // non-fatal — the import itself already committed.
+  }
+
+  // 5. Cluster any tangential_signals this import (or an earlier one)
+  //    left unattached. Storefront / site-visitor CRM adapters write
+  //    tangential_signals but never clustered post-commit — so their
+  //    rows became candidate_identities only on the nightly sweep, and
+  //    the Tracer's knot/instagram adapters (which read
+  //    candidate_identities) couldn't see them until then. Idempotent:
+  //    reclusterVenue skips signals already attached to a candidate.
+  try {
+    await reclusterVenue({ supabase, venueId })
+  } catch {
+    // non-fatal
+  }
+
+  // 6. Queue a Backwards Tracer run so the freshly imported, re-linked
+  //    and clustered data flows into the couples / touchpoints spine
+  //    without waiting for a manual trigger. Idempotent — stamps a
+  //    venue marker the Tracer drain picks up.
+  try {
+    await requestTracerRun(supabase, venueId)
+  } catch {
+    // non-fatal
   }
 
   return { importRunId, reconstructionEnqueuedCount, orphansRelinked }
