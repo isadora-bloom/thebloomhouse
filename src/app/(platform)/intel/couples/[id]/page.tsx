@@ -36,6 +36,8 @@ import {
   Inbox,
   HelpCircle,
   Scissors,
+  ExternalLink,
+  Compass,
 } from 'lucide-react'
 import { JourneyRibbon } from '@/components/identity/JourneyRibbon'
 import { JourneyActionChip } from '@/components/identity/JourneyActionChip'
@@ -106,6 +108,45 @@ interface IdentityProfile {
   emotional_themes: string[] | null
   family_dynamics_summary: string | null
   updated_at: string
+}
+
+function channelLabel(channel: string): string {
+  const c = (channel ?? '').toLowerCase()
+  const map: Record<string, string> = {
+    gmail: 'Email',
+    calendly: 'Calendly',
+    the_knot: 'The Knot',
+    knot: 'The Knot',
+    wedding_wire: 'WeddingWire',
+    weddingwire: 'WeddingWire',
+    zola: 'Zola',
+    instagram: 'Instagram',
+    honeybook: 'HoneyBook',
+    sms: 'Text',
+    phone: 'Phone',
+    website: 'Website',
+  }
+  return (
+    map[c] ??
+    (channel ? channel.charAt(0).toUpperCase() + channel.slice(1) : 'Unknown')
+  )
+}
+
+function channelDotColor(channel: string): string {
+  const c = (channel ?? '').toLowerCase()
+  if (c === 'gmail') return '#e11d48'
+  if (c === 'calendly') return '#0284c7'
+  if (c === 'the_knot' || c === 'knot') return '#db2777'
+  if (c === 'wedding_wire' || c === 'weddingwire') return '#d97706'
+  if (c === 'instagram') return '#7c3aed'
+  if (c === 'honeybook') return '#9333ea'
+  if (c === 'sms' || c === 'phone') return '#047857'
+  if (c === 'website') return '#059669'
+  return '#57534e'
+}
+
+function humanAction(action: string): string {
+  return (action ?? '').replace(/_/g, ' ')
 }
 
 export default function CoupleDetailPage() {
@@ -366,14 +407,24 @@ export default function CoupleDetailPage() {
             {partner && <span className="text-stone-500"> &amp; {partner}</span>}
           </h1>
         </div>
-        {touchpoints.length > 0 && (
-          <button
-            onClick={() => setShowUnmerge(true)}
-            className="flex items-center gap-1 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm text-stone-700 hover:bg-stone-50"
-          >
-            <Scissors className="h-3.5 w-3.5" /> Split this couple
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {couple.source_wedding_id && (
+            <a
+              href={`/intel/clients/${couple.source_wedding_id}`}
+              className="flex items-center gap-1 rounded-md border border-stone-300 bg-stone-900 px-3 py-1.5 text-sm text-white hover:bg-stone-700"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Full profile
+            </a>
+          )}
+          {touchpoints.length > 0 && (
+            <button
+              onClick={() => setShowUnmerge(true)}
+              className="flex items-center gap-1 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm text-stone-700 hover:bg-stone-50"
+            >
+              <Scissors className="h-3.5 w-3.5" /> Split this couple
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mb-6">
@@ -402,6 +453,36 @@ export default function CoupleDetailPage() {
           </span>
         </div>
       </div>
+
+      {touchpoints.length > 0 && (
+        <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4">
+          <div className="flex items-center gap-2">
+            <Compass className="h-4 w-4 text-emerald-700" />
+            <h2 className="text-sm font-semibold text-emerald-900">
+              First touch — where they found you
+            </h2>
+          </div>
+          <p className="mt-1 text-sm text-stone-700">
+            <strong>{channelLabel(touchpoints[0]!.channel)}</strong>
+            {' · '}
+            {humanAction(touchpoints[0]!.action_type)}
+            {' · '}
+            {new Date(touchpoints[0]!.occurred_at).toLocaleDateString(undefined, {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}
+            {lastTouch && lastTouch !== firstTouch && (
+              <span className="text-stone-500">
+                {'  →  then '}
+                {touchpoints.length - 1} more across {channelSet.size}{' '}
+                {channelSet.size === 1 ? 'channel' : 'channels'}, most recent{' '}
+                {new Date(lastTouch).toLocaleDateString()}
+              </span>
+            )}
+          </p>
+        </div>
+      )}
 
       {profile && (
         <div className="mb-8 rounded-lg border border-violet-200 bg-violet-50/50 p-4">
@@ -524,6 +605,31 @@ export default function CoupleDetailPage() {
       <div className="rounded-lg border border-stone-200 bg-white p-4">
         <JourneyRibbon touchpoints={touchpoints} />
       </div>
+
+      {touchpoints.length > 0 && (
+        <div className="mt-4 overflow-hidden rounded-lg border border-stone-200 bg-white">
+          <div className="border-b border-stone-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-stone-600">
+            Every touchpoint, in order ({touchpoints.length})
+          </div>
+          <ul className="max-h-96 divide-y divide-stone-50 overflow-y-auto text-sm">
+            {touchpoints.map((t) => (
+              <li key={t.id} className="flex items-center gap-3 px-4 py-1.5">
+                <span className="w-28 shrink-0 text-xs text-stone-400">
+                  {new Date(t.occurred_at).toLocaleDateString()}
+                </span>
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: channelDotColor(t.channel) }}
+                />
+                <span className="w-24 shrink-0 text-xs text-stone-500">
+                  {channelLabel(t.channel)}
+                </span>
+                <span className="text-stone-800">{humanAction(t.action_type)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {candidates.length > 0 && (
         <div className="mt-8">
