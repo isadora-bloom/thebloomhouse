@@ -1865,10 +1865,13 @@ async function sweepPhaseBAllVenues(): Promise<
   }>
 > {
   const supabase = createServiceClient()
+  // NOTE: venues has no `archived_at` column — the prior `.is('archived_at',
+  // null)` filter errored (42703), so `data` came back null and this sweep
+  // was a silent no-op for every venue, every night. Filter dropped; this
+  // now processes all venues, matching runIdentityFirstTracerAllVenues.
   const { data: venues } = await supabase
     .from('venues')
     .select('id, name')
-    .is('archived_at', null)
   const out: Record<string, {
     signals_processed: number
     new_clusters: number
