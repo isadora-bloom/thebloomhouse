@@ -2860,6 +2860,16 @@ export async function processIncomingEmail(
         partnerLastName: partnerParts.slice(1).join(' ') || null,
         signalDate: email.date,
         excludePersonId: personId, // don't match the just-created ghost
+        // D6 cascade (§C.5): pass the inbound email body so cascade
+        // stages 6-8 (body cross-reference, paired-name + corroborator,
+        // family-name + date) can fire. A scheduling-tool notification
+        // body often carries Susan's mention of Tim's email / phone in
+        // the invitee-notes; this is where Q36 false-positives get
+        // caught.
+        bodyText:
+          [email.subject ?? null, email.body ?? null]
+            .filter(Boolean)
+            .join('\n\n') || null,
       })
       const high = matches.find((m) => m.tier === 'high')
       if (high) {

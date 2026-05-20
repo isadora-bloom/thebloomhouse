@@ -32,6 +32,11 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import {
+  cascadeMatch,
+  type CascadeSignal,
+  type CascadeCandidate,
+} from './identity-cascade'
 
 export interface IdentityCandidate {
   venueId: string
@@ -51,6 +56,19 @@ export interface IdentityCandidate {
   /** Optionally exclude an existing person id from match candidates — used
    * by the post-create hook so we don't match a person to itself. */
   excludePersonId?: string | null
+  /** D6 cascade (Tier 8 §C.5). Full body / subject text of the inbound
+   *  message. Lets stages 6-8 of the cascade fire — body cross-
+   *  reference of a known identifier, paired-name + corroborator,
+   *  family-name + matching wedding date. Callers from the email
+   *  pipeline should pass the inbound message's text here; pair-only
+   *  callers (the post-create-person hook) can omit it. */
+  bodyText?: string | null
+  /** Pre-extracted body emails from the inbound message (CC list,
+   *  signature, body links). When set, the cascade does not re-scan
+   *  bodyText for emails. */
+  bodyEmails?: string[]
+  /** Pre-extracted body phones. */
+  bodyPhones?: string[]
 }
 
 export interface IdentitySignal {
@@ -428,6 +446,16 @@ export async function findIdentityMatches(
   if (!candidate.venueId) return []
   const config = await loadVenueConfig(supabase, candidate.venueId)
   const people = await loadCandidatePeople(supabase, candidate.venueId, candidate.excludePersonId ?? null)
+
+  // D6/§C.5 cascade reset (2026-05-20). Run the deterministic cascade
+  // FIRST against couples-grouped-from-people. If any stage 1-8 fires,
+  // return a single high-tier IdentityMatch keyed on the winning
+  // person and skip the per-person scoring loop entirely. The cascade
+  // is the canonical deterministic-first match doctrine; the loop
+  // below is the typo-tolerant fallback for the long tail.
+  const cascadeHit = runCascadeAgainstPeople(candidate, people)
+  if (cascadeHit) return [cascadeHit]
+
   const matches: IdentityMatch[] = []
   for (const p of people) {
     const m = scorePair(candidate, p, config)
@@ -437,6 +465,130 @@ export async function findIdentityMatches(
   const tierOrder = { high: 0, medium: 1, low: 2 } as const
   matches.sort((a, b) => tierOrder[a.tier] - tierOrder[b.tier] || b.confidence - a.confidence)
   return matches
+}
+
+// ---------------------------------------------------------------------------
+// Cascade adapter (D6/§C.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Group people rows by wedding_id and run the 8-stage cascade. Returns
+ * a single high-tier IdentityMatch when the cascade fires, or null.
+ *
+ * Grouping by wedding_id is what makes stages 6/7/8 (which compare
+ * against a COUPLE'S full identifier set) work correctly: Susan's email
+ * referencing Tim's phone needs to see Susan and Tim on the SAME couple.
+ *
+ * The match is returned as an IdentityMatch on the FIRST matching
+ * person on that wedding (typically partner1). Downstream wedding-
+ * linking reads .wedding_id off the person, so any person on the
+ * matched wedding resolves to the same wedding_id.
+ */
+function runCascadeAgainstPeople(
+  candidate: IdentityCandidate,
+  people: PersonRow[],
+): IdentityMatch | null {
+  if (people.length === 0) return null
+
+  // Index people by wedding_id; people without a wedding_id stay
+  // ungrouped (the cascade is couple-keyed, so they cannot match
+  // stages 6/7/8 anyway; stages 1-5 still fire against each as a
+  // singleton couple).
+  const byWedding = new Map<string, PersonRow[]>()
+  const orphan: PersonRow[] = []
+  for (const p of people) {
+    if (p.wedding_id) {
+      const list = byWedding.get(p.wedding_id)
+      if (list) list.push(p)
+      else byWedding.set(p.wedding_id, [p])
+    } else {
+      orphan.push(p)
+    }
+  }
+
+  const cascadeCandidates: CascadeCandidate[] = []
+  for (const [wid, members] of byWedding) {
+    cascadeCandidates.push({
+      coupleId: wid, // re-using wedding_id as the cascade's couple key
+      weddingDate: members[0]?.wedding_date ?? null,
+      people: members.map((p) => ({
+        firstName: p.first_name ?? null,
+        lastName: p.last_name ?? null,
+        email: p.email ?? null,
+        phone: p.phone ?? null,
+      })),
+    })
+  }
+  for (const p of orphan) {
+    cascadeCandidates.push({
+      coupleId: `person:${p.id}`,
+      weddingDate: null,
+      people: [
+        {
+          firstName: p.first_name ?? null,
+          lastName: p.last_name ?? null,
+          email: p.email ?? null,
+          phone: p.phone ?? null,
+        },
+      ],
+    })
+  }
+
+  const signal: CascadeSignal = {
+    primaryEmail: candidate.email ?? null,
+    primaryPhone: candidate.phone ?? null,
+    firstName: candidate.firstName ?? null,
+    lastName: candidate.lastName ?? null,
+    bodyText: candidate.bodyText ?? null,
+    weddingDate: candidate.weddingDate ?? null,
+    bodyEmails: candidate.bodyEmails,
+    bodyPhones: candidate.bodyPhones,
+  }
+
+  const result = cascadeMatch(signal, cascadeCandidates)
+  if (!result.matched) return null
+
+  // Find the canonical person to return. For wedding-grouped candidates
+  // we prefer the person whose identifier the cascade actually matched
+  // on — match by email first, then phone, then name; fall back to
+  // partner1 / first member.
+  let matchedPerson: PersonRow | null = null
+  if (result.coupleId.startsWith('person:')) {
+    const pid = result.coupleId.slice('person:'.length)
+    matchedPerson = people.find((p) => p.id === pid) ?? null
+  } else {
+    const members = byWedding.get(result.coupleId) ?? []
+    const ev = result.evidence.toLowerCase()
+    // Try to pull the matched identifier out of the evidence string.
+    matchedPerson =
+      members.find((p) => {
+        if (!p.email) return false
+        return ev.includes(p.email.toLowerCase())
+      }) ??
+      members.find((p) => {
+        if (!p.phone) return false
+        const digits = p.phone.replace(/\D+/g, '')
+        return digits && ev.includes(digits)
+      }) ??
+      members.find((p) => p.role === 'partner1') ??
+      members[0] ??
+      null
+  }
+  if (!matchedPerson) return null
+
+  return {
+    personId: matchedPerson.id,
+    tier: 'high',
+    confidence: 1.0,
+    signals: [
+      {
+        type: `cascade_${result.stage}`,
+        detail: result.evidence,
+        weight: 1.0,
+      },
+    ],
+    label: buildLabel(matchedPerson),
+  }
 }
 
 /**
