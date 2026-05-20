@@ -113,6 +113,12 @@ export interface FunnelResult {
    *  un-acknowledged, often vendor noise) — surfaced as a count only. */
   channelScopedCount: number
   ghostCount: number
+  /** Engaged couples whose only signal is the mirror-couple back-fill —
+   *  i.e. they have ZERO touchpoints attached. These still count in the
+   *  inquiry stage (the venue acknowledged them) but they drag every
+   *  downstream ratio toward zero because there is nothing in the spine
+   *  yet to evaluate. Surfaced so the funnel can be read honestly. */
+  couplesWithoutTouchpoints: number
   bySeason: FunnelSegment[]
   byTourWeekday: FunnelSegment[]
   byHolidayWindow: FunnelSegment[]

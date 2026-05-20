@@ -125,6 +125,8 @@ export function computeFunnel(
     ).length,
     ghostCount: data.couples.filter((c) => c.lifecycle_state === 'ghost')
       .length,
+    couplesWithoutTouchpoints: facts.filter((f) => f.touchpoints.length === 0)
+      .length,
     bySeason,
     byTourWeekday,
     byHolidayWindow,

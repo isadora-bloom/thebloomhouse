@@ -23,15 +23,27 @@ export interface CoupleFacts {
   touchpoints: TouchpointRow[]
   /** Earliest touchpoint of any direction; falls back to created_at. */
   firstTouchAt: string
-  /** Earliest inbound touchpoint — the inquiry arriving. */
+  /** Earliest inbound touchpoint — the inquiry arriving (any channel,
+   *  any action). Used by YoY / anomaly / text patterns to define a
+   *  "new arrival." */
   firstInboundAt: string | null
-  /** Channel of the first inbound touchpoint. */
-  arrivalChannel: string | null
-  /** Hours from first inbound to first venue reply. null when the
-   *  couple has an inbound but the venue never replied, or has no
-   *  inbound at all. `hasReply` disambiguates the two. */
+  /** Earliest *messageable* inbound — a touchpoint the venue can reply
+   *  to in writing. Currently `action_type === 'reply'` (gmail-class
+   *  inbound). A Calendly tour_booked is NOT messageable — it is
+   *  self-service — so response-time and the conversion curve key off
+   *  this, never off firstInboundAt. */
+  firstMessageableInboundAt: string | null
+  /** Channel of the first messageable inbound. Almost always 'gmail'
+   *  in v1; left as a string so a future SMS / IG-DM adapter can show
+   *  through the same byChannel surface without re-shaping the type. */
+  messageableChannel: string | null
+  /** Hours from first messageable inbound to first venue reply. null
+   *  when the couple has a messageable inbound but the venue never
+   *  replied, or has no messageable inbound at all.
+   *  `hasMessageableInbound` + `hasReply` disambiguate. */
   responseHours: number | null
   hasInbound: boolean
+  hasMessageableInbound: boolean
   hasReply: boolean
   /** Furthest funnel stage reached, 1 (inquiry) .. 5 (booked). */
   furthest: number
@@ -41,6 +53,15 @@ export interface CoupleFacts {
   /** occurred_at of the tour (attended preferred, else booked). */
   tourAt: string | null
   outcome: 'booked' | 'ghost' | 'in_progress'
+}
+
+/** A touchpoint counts as a "messageable" inbound — an inquiry the
+ *  venue can reply to in writing — iff its action_type is the gmail
+ *  inbound verb. A Calendly tour_booked is inbound but self-service:
+ *  treating it as an inquiry-to-respond-to inflates the response-time
+ *  median by days and inverts the bookers-vs-ghosters comparison. */
+export function isMessageableInbound(tp: TouchpointRow): boolean {
+  return tp.action_type === 'reply'
 }
 
 export function buildCoupleFacts(data: CohortData): CoupleFacts[] {
@@ -61,6 +82,7 @@ export function buildCoupleFacts(data: CohortData): CoupleFacts[] {
     const progEvents = progressionByCouple.get(couple.id) ?? new Set<string>()
 
     let firstInbound: TouchpointRow | null = null
+    let firstMessageableInbound: TouchpointRow | null = null
     let firstReply: TouchpointRow | null = null
     let hasTourBooked = false
     let hasToured = false
@@ -70,10 +92,18 @@ export function buildCoupleFacts(data: CohortData): CoupleFacts[] {
       const outbound = isOutbound(tp)
       if (!outbound && !firstInbound) firstInbound = tp
       if (
+        !outbound &&
+        !firstMessageableInbound &&
+        isMessageableInbound(tp)
+      ) {
+        firstMessageableInbound = tp
+      }
+      if (
         outbound &&
         !firstReply &&
-        firstInbound &&
-        Date.parse(tp.occurred_at) >= Date.parse(firstInbound.occurred_at)
+        firstMessageableInbound &&
+        Date.parse(tp.occurred_at) >=
+          Date.parse(firstMessageableInbound.occurred_at)
       ) {
         firstReply = tp
       }
@@ -101,10 +131,10 @@ export function buildCoupleFacts(data: CohortData): CoupleFacts[] {
     if (booked) furthest = 5 // booked implies every upstream stage
 
     let responseHours: number | null = null
-    if (firstInbound && firstReply) {
+    if (firstMessageableInbound && firstReply) {
       const gap =
         Date.parse(firstReply.occurred_at) -
-        Date.parse(firstInbound.occurred_at)
+        Date.parse(firstMessageableInbound.occurred_at)
       if (Number.isFinite(gap) && gap >= 0) responseHours = gap / HOUR_MS
     }
 
@@ -113,9 +143,15 @@ export function buildCoupleFacts(data: CohortData): CoupleFacts[] {
       touchpoints: tps,
       firstTouchAt: tps.length > 0 ? tps[0].occurred_at : couple.created_at,
       firstInboundAt: firstInbound ? firstInbound.occurred_at : null,
-      arrivalChannel: firstInbound ? firstInbound.channel : null,
+      firstMessageableInboundAt: firstMessageableInbound
+        ? firstMessageableInbound.occurred_at
+        : null,
+      messageableChannel: firstMessageableInbound
+        ? firstMessageableInbound.channel
+        : null,
       responseHours,
       hasInbound: firstInbound !== null,
+      hasMessageableInbound: firstMessageableInbound !== null,
       hasReply: firstReply !== null,
       furthest,
       toured: furthest >= 4,

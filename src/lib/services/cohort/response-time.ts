@@ -1,12 +1,16 @@
 /**
  * D9 — response time (battery Q1 / Q2 / Q4 / Q22).
  *
- * The gap between a couple's first inbound touchpoint (the inquiry
- * arriving) and the venue's first reply (CoupleFacts.responseHours).
+ * Response time is measured only over *messageable* arrivals — a
+ * touchpoint the venue can reply to in writing. A Calendly tour_booked
+ * is inbound but self-service; treating it as an inquiry-the-venue-
+ * must-respond-to inflated the median by days on the first live run
+ * (5.1d overall, calendly 16.1d, bookers 18.9d). See facts.ts
+ * `isMessageableInbound`.
  *
- * A couple with an inbound but no venue reply is a "never replied" —
- * counted separately, never folded into the median as a zero or an
- * infinity. That count itself feeds Q23 / Q24.
+ * A couple with a messageable inbound but no venue reply is a "never
+ * replied" — counted separately, never folded into the median as a
+ * zero or an infinity. That count itself feeds Q23 / Q24.
  */
 
 import type { CohortData, Distribution, ResponseTimeResult } from './types'
@@ -24,16 +28,16 @@ export function computeResponseTime(
 
   const overall: Distribution = summarize(repliedHours)
   const neverRepliedCount = facts.filter(
-    (f) => f.hasInbound && !f.hasReply,
+    (f) => f.hasMessageableInbound && !f.hasReply,
   ).length
 
-  // 12-month delta — split by inquiry arrival.
+  // 12-month delta — split by messageable inquiry arrival.
   const now = Date.now()
   const last12: number[] = []
   const prior12: number[] = []
   for (const f of replied) {
-    if (!f.firstInboundAt) continue
-    const age = now - Date.parse(f.firstInboundAt)
+    if (!f.firstMessageableInboundAt) continue
+    const age = now - Date.parse(f.firstMessageableInboundAt)
     if (age < 0) continue
     if (age <= YEAR_MS) last12.push(f.responseHours as number)
     else if (age <= 2 * YEAR_MS) prior12.push(f.responseHours as number)
@@ -58,10 +62,12 @@ export function computeResponseTime(
     (outcome) => ({ outcome, dist: summarize(outcomeBuckets[outcome]) }),
   )
 
-  // By arrival channel (Q4).
+  // By messageable channel (Q4). Currently `'reply'` only lands on
+  // gmail, so this is a one-row table in v1; the shape is preserved so
+  // a future SMS / IG-DM adapter shows through without re-wiring.
   const channelBuckets = new Map<string, number[]>()
   for (const f of replied) {
-    const ch = f.arrivalChannel ?? 'unknown'
+    const ch = f.messageableChannel ?? 'unknown'
     const list = channelBuckets.get(ch)
     if (list) list.push(f.responseHours as number)
     else channelBuckets.set(ch, [f.responseHours as number])
@@ -70,11 +76,12 @@ export function computeResponseTime(
     .map(([channel, hours]) => ({ channel, dist: summarize(hours) }))
     .sort((a, b) => b.dist.n - a.dist.n)
 
-  // By arrival hour-of-day in venue local time (Q22).
+  // By arrival hour-of-day in venue local time (Q22) — bucketed off
+  // the messageable inbound timestamp so we are timing real inquiries.
   const hourBuckets: number[][] = Array.from({ length: 24 }, () => [])
   for (const f of replied) {
-    if (!f.firstInboundAt) continue
-    const p = zonedParts(f.firstInboundAt, data.timezone)
+    if (!f.firstMessageableInboundAt) continue
+    const p = zonedParts(f.firstMessageableInboundAt, data.timezone)
     if (!p) continue
     hourBuckets[p.hour].push(f.responseHours as number)
   }

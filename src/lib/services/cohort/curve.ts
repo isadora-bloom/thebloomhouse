@@ -89,10 +89,16 @@ export function computeCurve(facts: CoupleFacts[]): CurveResult {
       'time grows, rather than falling off a cliff at one threshold.'
   }
 
-  // Pre-tour signals (Q25). Over couples that toured.
-  const toured = facts.filter((f) => f.toured)
-  const touredBookers = toured.filter((f) => f.booked)
-  const touredGhosts = toured.filter((f) => f.isGhost)
+  // Pre-tour signals (Q25). Cohort = couples whose furthest stage was
+  // at least tour-booked. The old "toured" cohort had ghost-rate
+  // denominator 0 in practice — `tour_attended` almost never fires
+  // on Rixey data (Calendly outcomes aren't classified, HoneyBook only
+  // fires it on status='tour_completed'), so toured && isGhost was
+  // empty and every lift came back null. Anchoring on hasTourBooked
+  // (furthest >= 3) gives a real comparison.
+  const tourBookedCohort = facts.filter((f) => f.furthest >= 3)
+  const touredBookers = tourBookedCohort.filter((f) => f.booked)
+  const touredGhosts = tourBookedCohort.filter((f) => f.isGhost)
 
   const SIGNALS: { signal: string; test: (f: CoupleFacts) => boolean }[] = [
     {

@@ -3,19 +3,24 @@
  *
  * Q12: "Were June inquiries up year-over-year, controlling for
  * marketing spend?" We give the operator the two halves of that
- * question side by side — inbound touchpoint volume per calendar month
+ * question side by side — *distinct new inquiries per calendar month*
  * this year vs last year, with the marketing spend for the same months
  * alongside. We do not attempt the regression; we surface the confound
  * so the operator (or Sage) can reason about it honestly.
  *
- * "This year" is anchored to the most recent inbound touchpoint, not
- * the wall clock — a venue mid-import or paused should still get a
- * meaningful comparison.
+ * Honesty fix (2026-05-19): the first pass counted inbound *touch-
+ * points* per month, so a single couple emailing five times moved the
+ * chart by five and the re-import landed +2000% on April. Now we count
+ * each couple once, in the month of its earliest inbound touchpoint.
+ *
+ * "This year" is anchored to the most recent inbound, not the wall
+ * clock — a venue mid-import or paused should still get a meaningful
+ * comparison.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CohortData, YoYResult } from './types'
-import { isOutbound } from './direction'
+import type { CoupleFacts } from './facts'
 import { MONTH_LABEL, ratio, zonedParts } from './helpers'
 
 function key(year: number, month: number): string {
@@ -24,14 +29,16 @@ function key(year: number, month: number): string {
 
 export async function computeYoY(
   data: CohortData,
+  facts: CoupleFacts[],
   supabase: SupabaseClient,
 ): Promise<YoYResult> {
-  // Monthly inbound counts keyed (year, month).
+  // Distinct new inquiries per (year, month) = couples whose earliest
+  // inbound touchpoint fell in that month.
   const counts = new Map<string, number>()
   let maxYear = 0
-  for (const tp of data.touchpoints) {
-    if (isOutbound(tp)) continue
-    const p = zonedParts(tp.occurred_at, data.timezone)
+  for (const f of facts) {
+    if (!f.firstInboundAt) continue
+    const p = zonedParts(f.firstInboundAt, data.timezone)
     if (!p) continue
     counts.set(key(p.year, p.month), (counts.get(key(p.year, p.month)) ?? 0) + 1)
     if (p.year > maxYear) maxYear = p.year

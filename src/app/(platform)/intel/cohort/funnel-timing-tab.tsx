@@ -231,6 +231,19 @@ export function FunnelTimingTab() {
         title="Couple funnel"
         hint={`${funnel.ghostCount} ghosted · ${funnel.channelScopedCount} channel-scoped`}
       >
+        {funnel.couplesWithoutTouchpoints > 0 && (
+          <div className="bg-amber-50/60 border border-amber-200 rounded-lg px-3 py-2 mb-3 text-xs text-amber-800">
+            <span className="font-medium">
+              {funnel.couplesWithoutTouchpoints} of {inquiryCount} engaged
+              couples
+            </span>{' '}
+            have no touchpoints attached — they were mirror-backfilled from
+            legacy weddings and the Tracer has not re-bound interactions to
+            them yet. They count at the inquiry stage but drag every
+            downstream ratio toward zero. Read the funnel with this in mind
+            until the spine is fully rebound.
+          </div>
+        )}
         <div className="space-y-2">
           {funnel.overall.map((stage) => {
             const width =
@@ -272,8 +285,13 @@ export function FunnelTimingTab() {
       <Section
         icon={<Timer className="w-4 h-4" />}
         title="Response time"
-        hint="first inbound → first venue reply"
+        hint="messageable inbound → first venue reply"
       >
+        <p className="text-[11px] text-sage-500 mb-3">
+          Measured only over messageable inbound (gmail-class) — a Calendly
+          self-booked tour is inbound but is not an inquiry the venue
+          responds to, so it never enters this metric.
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div className="bg-sage-50/60 rounded-lg p-3">
             <div className="text-[10px] uppercase tracking-wide text-sage-500 font-semibold">
@@ -312,8 +330,11 @@ export function FunnelTimingTab() {
             </div>
           </div>
           <div className="bg-sage-50/60 rounded-lg p-3">
-            <div className="text-[10px] uppercase tracking-wide text-sage-500 font-semibold">
-              Inquiries never replied to
+            <div
+              className="text-[10px] uppercase tracking-wide text-sage-500 font-semibold"
+              title="Messageable inbound with no subsequent venue reply."
+            >
+              Messageable inquiries never replied to
             </div>
             <div className="mt-1 text-sm font-semibold text-sage-900">
               {responseTime.neverRepliedCount}
@@ -361,6 +382,11 @@ export function FunnelTimingTab() {
                 ))}
               </tbody>
             </table>
+            <p className="text-[11px] text-sage-400 mt-1">
+              Only gmail produces messageable arrivals today. SMS / IG-DM /
+              other channels will land here once their adapters write
+              action_type=&apos;reply&apos; touchpoints.
+            </p>
           </>
         )}
       </Section>
@@ -545,7 +571,7 @@ export function FunnelTimingTab() {
       <Section
         icon={<CalendarRange className="w-4 h-4" />}
         title={`Year over year — ${yoy.thisYearLabel} vs ${yoy.lastYearLabel}`}
-        hint="inbound inquiry volume"
+        hint="distinct new inquiries per month"
       >
         <table className="w-full text-sm">
           <thead>

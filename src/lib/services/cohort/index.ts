@@ -43,7 +43,7 @@ export async function buildCohortIntel(
 
   // Async analyses (need their own scoped DB reads) in parallel.
   const [yoy, weather] = await Promise.all([
-    computeYoY(data, supabase),
+    computeYoY(data, facts, supabase),
     computeWeather(data, supabase),
   ])
 
@@ -77,7 +77,7 @@ export async function buildCohortIntel(
     textPatterns: computeTextPatterns(data, facts),
     yoy,
     weather,
-    anomalies: computeAnomalies(data),
+    anomalies: computeAnomalies(data, facts),
   }
 }
 
