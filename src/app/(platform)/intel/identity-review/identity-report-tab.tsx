@@ -849,26 +849,7 @@ function LifecycleAuditSection() {
         )}
 
         {data && data.drift.length > 0 && (
-          <div>
-            <div className="text-xs uppercase tracking-wide text-stone-500 mb-2">
-              Lifecycle drift ({data.drift.length})
-            </div>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {data.drift.slice(0, 100).map((row) => (
-                <DriftRow
-                  key={row.coupleId}
-                  row={row}
-                  appliedStatus={applied[row.coupleId]}
-                  onApply={() => applyRow(row)}
-                />
-              ))}
-            </div>
-            {data.drift.length > 100 && (
-              <p className="text-xs text-stone-500 mt-2">
-                Showing first 100 of {data.drift.length.toLocaleString()}.
-              </p>
-            )}
-          </div>
+          <DriftSection drift={data.drift} applied={applied} setApplied={setApplied} applyRow={applyRow} />
         )}
 
         {data && data.duplicates.length > 0 && (
@@ -1004,6 +985,223 @@ function DuplicateGroupCard({ group }: { group: DuplicateGroup }) {
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// DriftSection - groups drift by transition + offers bulk-apply per group.
+// The first live run (2026-05-20) produced 667 drift rows; clicking
+// Apply 667 times is not the operator experience. Grouping by
+// (current -> expected) gives one-click bulk application of the
+// homogeneous corrections.
+// ---------------------------------------------------------------------------
+
+function DriftSection({
+  drift,
+  applied,
+  setApplied,
+  applyRow,
+}: {
+  drift: LifecycleAuditRow[]
+  applied: Record<string, string>
+  setApplied: React.Dispatch<React.SetStateAction<Record<string, string>>>
+  applyRow: (row: LifecycleAuditRow) => Promise<void>
+}) {
+  // Group by (current -> expected) transition.
+  type Group = {
+    current: string
+    expected: string
+    rows: LifecycleAuditRow[]
+  }
+  const groups: Group[] = []
+  const groupKey = (r: LifecycleAuditRow) =>
+    `${r.currentState ?? '(null)'}->${r.expectedState ?? '(null)'}`
+  const byKey = new Map<string, Group>()
+  for (const row of drift) {
+    const k = groupKey(row)
+    let g = byKey.get(k)
+    if (!g) {
+      g = {
+        current: row.currentState ?? '(null)',
+        expected: row.expectedState ?? '(null)',
+        rows: [],
+      }
+      byKey.set(k, g)
+      groups.push(g)
+    }
+    g.rows.push(row)
+  }
+  // Order: terminal-positive corrections first (resolved->ghost,
+  // booked->completed, channel_scoped->resolved), then lower-stakes
+  // ones (resolved->channel_scoped).
+  const transitionRank = (current: string, expected: string): number => {
+    const e = expected
+    if (e === 'booked' || e === 'completed') return 0
+    if (e === 'ghost') return 1
+    if (e === 'resolved') return 2
+    if (e === 'channel_scoped') return 3
+    return 4
+  }
+  groups.sort((a, b) => transitionRank(a.current, a.expected) - transitionRank(b.current, b.expected))
+
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-stone-500 mb-2">
+        Lifecycle drift ({drift.length})
+      </div>
+      <div className="space-y-3">
+        {groups.map((g) => (
+          <DriftGroupCard
+            key={`${g.current}->${g.expected}`}
+            group={g}
+            applied={applied}
+            setApplied={setApplied}
+            applyRow={applyRow}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DriftGroupCard({
+  group,
+  applied,
+  setApplied,
+  applyRow,
+}: {
+  group: {
+    current: string
+    expected: string
+    rows: LifecycleAuditRow[]
+  }
+  applied: Record<string, string>
+  setApplied: React.Dispatch<React.SetStateAction<Record<string, string>>>
+  applyRow: (row: LifecycleAuditRow) => Promise<void>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [bulkState, setBulkState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null)
+
+  const unappliedRows = group.rows.filter((r) => !applied[r.coupleId])
+
+  const bulkApply = async () => {
+    if (unappliedRows.length === 0) return
+    setBulkState('running')
+    setBulkMessage(null)
+    // Chunk to 500 max per bulk-apply call.
+    const CHUNK = 500
+    let totalUpdated = 0
+    let totalSkipped = 0
+    try {
+      for (let i = 0; i < unappliedRows.length; i += CHUNK) {
+        const slice = unappliedRows.slice(i, i + CHUNK)
+        const res = await fetch('/api/admin/intel/lifecycle-audit/bulk-apply', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            coupleIds: slice.map((r) => r.coupleId),
+            newState: group.expected,
+          }),
+        })
+        const body = (await res.json()) as {
+          ok: boolean
+          updated?: number
+          skipped?: number
+          error?: string
+        }
+        if (!res.ok || !body.ok) {
+          setBulkState('error')
+          setBulkMessage(body.error ?? `HTTP ${res.status}`)
+          return
+        }
+        totalUpdated += body.updated ?? 0
+        totalSkipped += body.skipped ?? 0
+        // Mark each in-flight row applied so the per-row state stays
+        // consistent with the bulk run.
+        setApplied((m) => {
+          const next = { ...m }
+          for (const r of slice) next[r.coupleId] = 'applied'
+          return next
+        })
+      }
+      setBulkState('done')
+      setBulkMessage(
+        `Updated ${totalUpdated}; skipped ${totalSkipped} (not in your venue or already done).`,
+      )
+    } catch (err) {
+      setBulkState('error')
+      setBulkMessage(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const busy = bulkState === 'running'
+
+  return (
+    <div className="border border-stone-200 rounded-md">
+      <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-xs text-stone-600 hover:text-stone-900"
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+        <div className="flex-1 text-sm">
+          <span className="font-mono text-rose-700">{group.current}</span>
+          <span className="text-stone-400"> → </span>
+          <span className="font-mono text-emerald-700">{group.expected}</span>
+          <span className="text-stone-500 ml-2">
+            ({group.rows.length} couple{group.rows.length === 1 ? '' : 's'},{' '}
+            {unappliedRows.length} unapplied)
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={bulkApply}
+          disabled={busy || unappliedRows.length === 0}
+          className={`shrink-0 inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium ${
+            busy
+              ? 'bg-stone-300 text-white cursor-wait'
+              : unappliedRows.length === 0
+                ? 'bg-stone-200 text-stone-500'
+                : 'bg-stone-900 text-white hover:bg-stone-800'
+          }`}
+        >
+          {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+          {busy
+            ? 'Applying…'
+            : unappliedRows.length === 0
+              ? 'All applied'
+              : `Apply all ${unappliedRows.length}`}
+        </button>
+      </div>
+      {bulkMessage && (
+        <div
+          className={`px-3 py-1.5 text-xs ${bulkState === 'error' ? 'text-rose-700' : 'text-stone-600'}`}
+        >
+          {bulkMessage}
+        </div>
+      )}
+      {expanded && (
+        <div className="px-3 py-2 space-y-2 max-h-96 overflow-y-auto">
+          {group.rows.slice(0, 200).map((row) => (
+            <DriftRow
+              key={row.coupleId}
+              row={row}
+              appliedStatus={applied[row.coupleId]}
+              onApply={() => applyRow(row)}
+            />
+          ))}
+          {group.rows.length > 200 && (
+            <p className="text-xs text-stone-500">
+              Showing first 200 of {group.rows.length.toLocaleString()}; bulk
+              apply hits them all.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

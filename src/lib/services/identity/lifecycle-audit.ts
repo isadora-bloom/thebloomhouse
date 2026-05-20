@@ -187,12 +187,48 @@ function deriveExpectedState(
   }
 }
 
+/**
+ * Build the partner-pair key used for duplicate detection.
+ *
+ * Tightened 2026-05-20 after the first live run flagged 137 noisy
+ * groups dominated by first-name-plus-initial fragments. Doctrine
+ * now requires:
+ *
+ *   - partner1 has at least TWO whitespace-separated tokens
+ *   - the LAST token (the surname proxy) has ≥3 characters (drops
+ *     single-letter initials like "Courtney H")
+ *   - the name is not literally "Unnamed couple" or similar
+ *     placeholder noise
+ *
+ * Records that fail any check get a null key and are excluded from
+ * the duplicate scan. They are still surfaced by the lifecycle drift
+ * pass (most fail because they are fragment-shape records with no
+ * progression events and should be channel_scoped, not resolved).
+ */
+const PLACEHOLDER_NAMES = new Set([
+  'unnamed couple',
+  'unknown',
+  '(unknown)',
+  '(unnamed)',
+  '(no name)',
+  'no name',
+])
+
 function partnerNameKey(couple: CoupleRow): string | null {
   const a = (couple.primary_contact_name ?? '').trim().toLowerCase()
   const b = (couple.partner_contact_name ?? '').trim().toLowerCase()
-  if (!a) return null
-  // First+last of partner1 + first token of partner2 (if any).
-  const partner2First = b.split(/\s+/)[0] ?? ''
+  if (!a || PLACEHOLDER_NAMES.has(a)) return null
+
+  const partner1Tokens = a.split(/\s+/).filter(Boolean)
+  if (partner1Tokens.length < 2) return null
+  const partner1Last = partner1Tokens[partner1Tokens.length - 1]
+  if (!partner1Last || partner1Last.length < 3) return null
+
+  // First token of partner2 when present. partner2 is OPTIONAL — the
+  // partner1 full name is the primary disambiguator. Including
+  // partner2 when available lets us distinguish "Sarah Smith & James"
+  // from "Sarah Smith & Mike" at the same venue.
+  const partner2First = (b.split(/\s+/).find((t) => t.length >= 2)) ?? ''
   return partner2First ? `${a}|${partner2First}` : a
 }
 
