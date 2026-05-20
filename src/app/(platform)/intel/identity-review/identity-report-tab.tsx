@@ -37,6 +37,8 @@ import {
   Loader2,
   AlertCircle,
   ShieldAlert,
+  Wrench,
+  Check,
 } from 'lucide-react'
 import type {
   IdentityReport,
@@ -178,6 +180,9 @@ export default function IdentityReportTab() {
 
   return (
     <div className="space-y-6">
+      {/* One-shot maintenance actions */}
+      <MaintenancePanel />
+
       {/* Q6 — couples summary + confidence distribution */}
       <Section
         icon={<Users className="w-4 h-4" />}
@@ -576,6 +581,143 @@ function DimensionCard({
         {fmtNum(count)} <span className="text-stone-400">/ {fmtNum(total)}</span>
       </div>
       <div className="text-[11px] text-stone-500 mt-0.5">{pct}%</div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// MaintenancePanel - one-shot operator actions for the post-T8.2 backfills.
+// Authenticated browser fetch sends the session cookie automatically, so the
+// /api/admin/* endpoints' getPlatformAuth resolves the venue without a curl
+// wrestle. Each button calls its endpoint, shows the resulting counts.
+// ---------------------------------------------------------------------------
+
+type ActionState = 'idle' | 'running' | 'done' | 'error'
+
+function MaintenancePanel() {
+  return (
+    <section className="bg-white border border-stone-200 rounded-xl shadow-sm">
+      <div className="px-6 py-4 border-b border-stone-200 flex items-center gap-2">
+        <Wrench className="w-4 h-4 text-stone-500" />
+        <h2 className="text-base font-semibold text-stone-900">
+          Maintenance actions
+        </h2>
+        <span className="text-xs text-stone-500 ml-auto">
+          One-shot backfills. Safe to re-run; second runs no-op.
+        </span>
+      </div>
+      <div className="px-6 py-4 space-y-3">
+        <ActionRow
+          title="Tracer rebind"
+          description="Backfills touchpoints for mirror-backfilled couples that have a wedding link but zero touchpoints. Closes the amber honesty card on /intel/cohort."
+          endpoint="/api/admin/identity/tracer-rebind"
+          body={{ coupleLimit: 1000 }}
+          renderResult={(r: { couplesScanned?: number; couplesUpdated?: number; touchpointsInserted?: number }) =>
+            `Scanned ${r.couplesScanned ?? 0} couples; backfilled ${r.couplesUpdated ?? 0} of them (${r.touchpointsInserted ?? 0} new touchpoints).`
+          }
+        />
+        <ActionRow
+          title="Calendly attendance sweep"
+          description="Fires tour_attended for past-scheduled Calendly bookings that lack a terminal outcome. Populates the Toured stage on cohort funnel + Q10 weather x no-show."
+          endpoint="/api/admin/calendly/attendance-sweep"
+          body={{ bookingLimit: 2000 }}
+          renderResult={(r: { bookingsScanned?: number; attendedInserted?: number; cancelledSkipped?: number }) =>
+            `Scanned ${r.bookingsScanned ?? 0} bookings; ${r.attendedInserted ?? 0} marked attended; ${r.cancelledSkipped ?? 0} already had a cancellation.`
+          }
+        />
+      </div>
+    </section>
+  )
+}
+
+function ActionRow<R extends Record<string, unknown>>({
+  title,
+  description,
+  endpoint,
+  body,
+  renderResult,
+}: {
+  title: string
+  description: string
+  endpoint: string
+  body: Record<string, unknown>
+  renderResult: (r: R) => string
+}) {
+  const [state, setState] = useState<ActionState>('idle')
+  const [message, setMessage] = useState<string | null>(null)
+
+  const run = async () => {
+    setState('running')
+    setMessage(null)
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const text = await res.text()
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        parsed = null
+      }
+      if (!res.ok) {
+        const errMsg =
+          parsed && typeof parsed === 'object' && 'error' in parsed
+            ? String((parsed as Record<string, unknown>).error)
+            : `HTTP ${res.status}`
+        setMessage(errMsg)
+        setState('error')
+        return
+      }
+      if (parsed && typeof parsed === 'object') {
+        setMessage(renderResult(parsed as R))
+      } else {
+        setMessage('Completed.')
+      }
+      setState('done')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err))
+      setState('error')
+    }
+  }
+
+  const busy = state === 'running'
+
+  return (
+    <div className="border border-stone-200 rounded-md p-3">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-stone-900">{title}</div>
+          <p className="text-xs text-stone-600 mt-0.5">{description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={run}
+          disabled={busy}
+          className={`shrink-0 inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+            busy
+              ? 'bg-stone-300 text-white cursor-wait'
+              : state === 'done'
+                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                : 'bg-stone-900 text-white hover:bg-stone-800'
+          }`}
+        >
+          {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+          {state === 'done' && !busy && <Check className="w-3 h-3" />}
+          {busy ? 'Running…' : state === 'done' ? 'Run again' : 'Run'}
+        </button>
+      </div>
+      {message && (
+        <div
+          className={`mt-2 text-xs ${
+            state === 'error' ? 'text-rose-700' : 'text-stone-700'
+          }`}
+        >
+          {message}
+        </div>
+      )}
     </div>
   )
 }
