@@ -289,6 +289,9 @@ export const MODE_INTEL: ModeConfig = {
         // intensity sits across the cohort + hottest/coldest active
         // couples today.
         { label: 'Heat', href: '/intel/heat', icon: Flame },
+        // D8 (Tier 8) — per-channel quality scorecard combining volume +
+        // conversion + response time + heat + match precision.
+        { label: 'Source quality', href: '/intel/source-quality', icon: BarChart3 },
         // Wave 6E — marketing-agency tracker. "Is Hawthorn paying off?"
         { label: 'Marketing Agencies', href: '/intel/agencies', icon: Briefcase },
         // Social integration -- operator-driven weekly capture of
