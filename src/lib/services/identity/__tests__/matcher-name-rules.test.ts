@@ -74,14 +74,22 @@ describe('matcher — name-rule doctrine', () => {
     expect(nameSignal?.evidence).toMatch(/levenshtein2/)
   })
 
-  it('STILL fires on Kayla Williams / Kayla Williams (exact full name)', () => {
+  it('STILL fires on Kayla Williams / Kayla Williams (exact full name → cascade stage 2)', () => {
+    // After the 2026-05-20 cascade reset, an exact full-name pair is
+    // caught by cascade stage 2 (exact_full_name) before the legacy
+    // Levenshtein path runs. The signal name changes from `name_match`
+    // to `cascade_exact_full_name`; the doctrine outcome is the same
+    // (high-confidence match).
     const verdict = scoreCandidate(
       rec('a', 'Kayla Williams'),
       rec('b', 'Kayla Williams'),
     )
-    const nameSignal = verdict.signals.find((s) => s.name === 'name_match')
-    expect(nameSignal).toBeDefined()
-    expect(nameSignal?.evidence).toMatch(/full_name_exact/)
+    const cascadeSignal = verdict.signals.find((s) =>
+      s.name.startsWith('cascade_'),
+    )
+    expect(cascadeSignal).toBeDefined()
+    expect(cascadeSignal?.name).toBe('cascade_exact_full_name')
+    expect(verdict.tier).toBe('high')
   })
 
   it('STILL fires on Layla / Kayla (true distance-1 short-name typo)', () => {

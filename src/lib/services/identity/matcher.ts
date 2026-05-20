@@ -40,6 +40,12 @@ import {
   canonicaliseEmail,
   normalizePhone,
 } from './resolver'
+import {
+  cascadeMatch,
+  describeMatch,
+  type CascadeSignal,
+  type CascadeCandidate,
+} from './identity-cascade'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -283,6 +289,57 @@ function hoursApart(a: string | null | undefined, b: string | null | undefined):
 // Public API
 // ---------------------------------------------------------------------------
 
+/**
+ * Split a "First Last" full-name string into its parts. The matcher
+ * receives full names; the cascade reads first / last separately.
+ * Returns nulls when the string is empty or single-token.
+ */
+function splitFullName(
+  full: string | null | undefined,
+): { firstName: string | null; lastName: string | null } {
+  if (!full) return { firstName: null, lastName: null }
+  const parts = full.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return { firstName: null, lastName: null }
+  if (parts.length === 1) return { firstName: parts[0], lastName: null }
+  return {
+    firstName: parts[0],
+    lastName: parts[parts.length - 1],
+  }
+}
+
+function asCascadeSignal(r: MatchableRecord): CascadeSignal {
+  const split = splitFullName(r.primary_name)
+  return {
+    primaryEmail: r.primary_email ?? null,
+    primaryPhone: r.primary_phone ?? null,
+    firstName: split.firstName,
+    lastName: split.lastName,
+  }
+}
+
+function asCascadeCandidate(r: MatchableRecord): CascadeCandidate {
+  const split = splitFullName(r.primary_name)
+  const partnerSplit = splitFullName(r.partner_name)
+  return {
+    coupleId: r.id,
+    weddingDate: r.wedding_date ?? null,
+    people: [
+      {
+        firstName: split.firstName,
+        lastName: split.lastName,
+        email: r.primary_email ?? null,
+        phone: r.primary_phone ?? null,
+      },
+      {
+        firstName: partnerSplit.firstName,
+        lastName: partnerSplit.lastName,
+        email: r.partner_email ?? null,
+        phone: r.partner_phone ?? null,
+      },
+    ].filter((p) => p.firstName || p.email || p.phone),
+  }
+}
+
 export function scoreCandidate(
   primary: MatchableRecord,
   secondary: MatchableRecord,
@@ -294,6 +351,33 @@ export function scoreCandidate(
       signals: [],
       needs_judge: false,
       reason: 'self-match',
+    }
+  }
+
+  // D6/§C.5 cascade reset (2026-05-20). Run the deterministic cascade
+  // FIRST. If any stage matches, return a high-tier verdict with the
+  // cascade evidence; skip the fuzzy scoring entirely. Stages 6/7/8
+  // need bodyText and never fire from scoreCandidate (which operates
+  // on MatchableRecord pairs, not inbound messages) — those run from
+  // the live email-pipeline path. Stages 1-5 cover every deterministic
+  // pair-comparison the matcher needs.
+  const cascadeResult = cascadeMatch(
+    asCascadeSignal(primary),
+    [asCascadeCandidate(secondary)],
+  )
+  if (cascadeResult.matched) {
+    return {
+      score: TIER_HIGH,
+      tier: 'high',
+      signals: [
+        {
+          name: `cascade_${cascadeResult.stage}`,
+          weight: TIER_HIGH,
+          evidence: cascadeResult.evidence,
+        },
+      ],
+      needs_judge: false,
+      reason: `cascade:${describeMatch(cascadeResult)}`,
     }
   }
 
