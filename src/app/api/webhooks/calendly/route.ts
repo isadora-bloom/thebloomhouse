@@ -103,8 +103,31 @@ export async function POST(request: NextRequest) {
       uri: payload?.uri,
     })
 
+    if (eventType === 'invitee.canceled' || eventType === 'invitee_canceled') {
+      // D9 outcome-classifier fix (2026-05-20). Calendly's invitee.canceled
+      // event is the only deterministic signal we get for cancellation;
+      // wire it into a tour_cancelled spine touchpoint so D9's cohort
+      // funnel + D3 attribution + Q10 weather × no-show have real data
+      // to read.
+      const supabase = createServiceClient()
+      const cancelPayload = (body.payload as Record<string, unknown>) ?? {}
+      try {
+        const { handleCalendlyCancellation } = await import(
+          '@/lib/services/identity/calendly-outcomes'
+        )
+        const result = await handleCalendlyCancellation(supabase, cancelPayload)
+        console.log('[webhook/calendly] cancellation handled', result)
+      } catch (err) {
+        console.warn(
+          '[webhook/calendly] cancellation handler failed:',
+          err instanceof Error ? err.message : err,
+        )
+      }
+      return NextResponse.json({ received: true })
+    }
+
     if (eventType !== 'invitee.created') {
-      // Only handle new bookings for now
+      // Only handle new bookings + cancellations for now
       console.log(`[webhook/calendly] Ignoring event type: ${eventType}`)
       return NextResponse.json({ received: true })
     }
