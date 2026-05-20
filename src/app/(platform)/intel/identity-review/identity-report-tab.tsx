@@ -36,12 +36,14 @@ import {
   AlertTriangle,
   Loader2,
   AlertCircle,
+  ShieldAlert,
 } from 'lucide-react'
 import type {
   IdentityReport,
   IdentityReportMerge,
   IdentityReportPending,
 } from '@/lib/services/identity/identity-report'
+import type { SuspectMerge, SuspectClass } from '@/lib/services/identity/suspect-merges'
 
 interface ApiResponse {
   ok: boolean
@@ -113,6 +115,7 @@ function MetaCard({
 
 export default function IdentityReportTab() {
   const [data, setData] = useState<IdentityReport | null>(null)
+  const [suspects, setSuspects] = useState<SuspectMerge[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -120,14 +123,22 @@ export default function IdentityReportTab() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/admin/intel/identity-report', {
-        cache: 'no-store',
-      })
-      const body: ApiResponse = await res.json()
-      if (!body.ok || !body.report) {
-        setError(body.error ?? 'Failed to load identity report')
+      const [reportRes, suspectsRes] = await Promise.all([
+        fetch('/api/admin/intel/identity-report', { cache: 'no-store' }),
+        fetch('/api/admin/intel/suspect-merges', { cache: 'no-store' }),
+      ])
+      const reportBody: ApiResponse = await reportRes.json()
+      if (!reportBody.ok || !reportBody.report) {
+        setError(reportBody.error ?? 'Failed to load identity report')
       } else {
-        setData(body.report)
+        setData(reportBody.report)
+      }
+      const suspectsBody = (await suspectsRes.json()) as {
+        ok: boolean
+        suspects?: SuspectMerge[]
+      }
+      if (suspectsBody.ok && Array.isArray(suspectsBody.suspects)) {
+        setSuspects(suspectsBody.suspects)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -359,6 +370,99 @@ export default function IdentityReportTab() {
           signals on the matcher's calibration.
         </p>
       </Section>
+
+      {/* Suspect merges - cleanup diagnostic */}
+      <Section
+        icon={<ShieldAlert className="w-4 h-4" />}
+        title="Suspect merges (cleanup queue)"
+        hint="Past merges that fail the post-2026-05-20 matcher guards"
+      >
+        {suspects === null ? (
+          <p className="text-sm text-stone-500">
+            Loading suspect-merge diagnostic…
+          </p>
+        ) : suspects.length === 0 ? (
+          <p className="text-sm text-stone-500">
+            No suspect merges found. The matcher guards are catching everything
+            before it lands.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-stone-700 mb-3">
+              Each row below is a couple-merge Bloom performed where the
+              evidence looks shaped like a known false-positive pattern. Read
+              the names: if the two couples are clearly different people, the
+              merge needs reversing. Use the existing review queue's reject
+              action (or the operator-merge endpoint) to walk it back.
+            </p>
+            <div className="space-y-2">
+              {suspects.map((s) => (
+                <SuspectMergeCard key={s.mergeEventId} suspect={s} />
+              ))}
+            </div>
+            <p className="text-xs text-stone-500 mt-3">
+              The diagnostic flags three signal classes:{' '}
+              <strong>substring_name</strong> (one couple&apos;s first or last
+              name is a strict substring of the other&apos;s — the
+              Makayla/Kayla shape),{' '}
+              <strong>levenshtein_reason</strong> (merge was performed under
+              the legacy Levenshtein-2 rule which the post-2026-05-20 guards
+              now reject), and <strong>low_tier_name_only</strong> (low-
+              confidence merges keyed on name signals without an email or
+              phone corroborator).
+            </p>
+          </>
+        )}
+      </Section>
+    </div>
+  )
+}
+
+function SuspectMergeCard({ suspect }: { suspect: SuspectMerge }) {
+  const signalLabel: Record<SuspectClass, string> = {
+    substring_name: 'substring',
+    levenshtein_reason: 'legacy levenshtein',
+    low_tier_name_only: 'low-tier name only',
+  }
+  const signalClass: Record<SuspectClass, string> = {
+    substring_name: 'bg-rose-100 text-rose-800 border-rose-200',
+    levenshtein_reason: 'bg-amber-100 text-amber-800 border-amber-200',
+    low_tier_name_only: 'bg-stone-100 text-stone-700 border-stone-200',
+  }
+  return (
+    <div className="border border-stone-200 rounded-md p-3 text-sm">
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex flex-wrap items-center gap-1">
+          {suspect.signals.map((sig) => (
+            <span
+              key={sig}
+              className={`inline-flex items-center text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${signalClass[sig]}`}
+            >
+              {signalLabel[sig]}
+            </span>
+          ))}
+          <span
+            className={`inline-flex items-center text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${tierBadgeClass(suspect.confidenceTier)}`}
+          >
+            {suspect.confidenceTier ?? 'unknown'}
+          </span>
+        </div>
+        <span className="text-xs text-stone-500">
+          {fmtDate(suspect.occurredAt)}
+        </span>
+      </div>
+      <div className="text-stone-900">
+        {suspect.primaryFirstName ?? suspect.primaryLabel ?? '(unknown primary)'}{' '}
+        {suspect.primaryLastName ? suspect.primaryLastName : ''}{' '}
+        <span className="text-stone-400">↔</span>{' '}
+        {suspect.secondaryFirstName ?? suspect.secondaryLabel ?? '(unknown secondary)'}{' '}
+        {suspect.secondaryLastName ? suspect.secondaryLastName : ''}
+      </div>
+      {suspect.reason && (
+        <div className="text-xs text-stone-600 mt-1 italic">
+          &quot;{suspect.reason}&quot;
+        </div>
+      )}
     </div>
   )
 }
