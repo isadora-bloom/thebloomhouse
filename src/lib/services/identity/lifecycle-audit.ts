@@ -33,13 +33,19 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Live ENGAGED states the funnel reports on (channel_scoped + agent
 // sit outside).
-const ENGAGED_STATES = new Set(['resolved', 'booked', 'ghost'])
+const ENGAGED_STATES = new Set(['resolved', 'booked', 'ghost', 'completed'])
 
 // Days quiet before a 'resolved' couple should flip to 'ghost' under
 // doctrine §3. Mirrors the existing decay-sweep default.
 const DECAY_WINDOW_DAYS = 180
 
-export type LifecycleState = 'channel_scoped' | 'resolved' | 'booked' | 'ghost' | 'agent'
+export type LifecycleState =
+  | 'channel_scoped'
+  | 'resolved'
+  | 'booked'
+  | 'completed'
+  | 'ghost'
+  | 'agent'
 
 export interface LifecycleAuditRow {
   coupleId: string
@@ -113,23 +119,25 @@ function deriveExpectedState(
   progressionEvents: ProgressionRow[],
   weddingStatus: string | null,
 ): { expected: LifecycleState; rationale: string } {
-  // Booked wins on hard signals: a contract_signed event OR a positive
-  // legacy weddings.status.
+  // Booked vs completed: depends on wedding_date.
+  //   - has signed evidence AND wedding_date < now  -> 'completed'
+  //   - has signed evidence AND wedding_date >= now -> 'booked'
+  //   - has signed evidence AND no wedding_date     -> 'booked' (default)
   const TERMINAL_POSITIVE_WEDDING_STATUSES = new Set(['booked', 'completed', 'signed'])
   const hasContractSigned = progressionEvents.some(
     (p) => p.event_type === 'contract_signed',
   )
-  if (hasContractSigned) {
-    return { expected: 'booked', rationale: 'has contract_signed progression event' }
-  }
-  if (
+  const hasPositiveLegacyStatus =
     weddingStatus &&
     TERMINAL_POSITIVE_WEDDING_STATUSES.has(weddingStatus.toLowerCase())
-  ) {
-    return {
-      expected: 'booked',
-      rationale: `legacy weddings.status = '${weddingStatus}'`,
-    }
+  if (hasContractSigned || hasPositiveLegacyStatus) {
+    const weddingPassed =
+      couple.wedding_date && Date.parse(couple.wedding_date) < Date.now()
+    const expected: LifecycleState = weddingPassed ? 'completed' : 'booked'
+    const rationale = hasContractSigned
+      ? `has contract_signed progression event${weddingPassed ? ' + wedding has passed' : ''}`
+      : `legacy weddings.status = '${weddingStatus}'${weddingPassed ? ' + wedding has passed' : ''}`
+    return { expected, rationale }
   }
 
   // Terminal-negative: legacy weddings.status = lost / cancelled /

@@ -75,13 +75,17 @@ interface CoupleRow {
 // Susan-facing filters per §3. Map a friendly pill name to the
 // derivation. Booked/Past/Agent map straight from lifecycle_state;
 // Active/Cooling/Lost depend on last_progression_at.
+// 2026-05-20 rename: "Past" -> "Lost" (raw lifecycle 'ghost'); the
+// old "Lost" 120d-quiet pill was renamed to "Quiet" so the two are
+// distinct. "Completed" is the new post-wedding terminal-positive.
 const PILL_FILTERS: Array<{ key: StatusPill | 'all'; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'Active', label: 'Active' },
   { key: 'Cooling', label: 'Cooling' },
-  { key: 'Lost', label: 'Lost' },
+  { key: 'Quiet', label: 'Quiet' },
   { key: 'Booked', label: 'Booked' },
-  { key: 'Past', label: 'Past' },
+  { key: 'Completed', label: 'Completed' },
+  { key: 'Lost', label: 'Lost' },
   { key: 'Agent', label: 'Agent' },
 ]
 
@@ -203,9 +207,10 @@ export default function CouplesListPage() {
       all: rows.length,
       Active: 0,
       Cooling: 0,
+      Quiet: 0,
       Lost: 0,
-      Past: 0,
       Booked: 0,
+      Completed: 0,
       Agent: 0,
       New: 0,
     }

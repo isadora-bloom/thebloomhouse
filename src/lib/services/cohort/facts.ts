@@ -121,7 +121,10 @@ export function buildCoupleFacts(data: CohortData): CoupleFacts[] {
     if (progEvents.has('tour_attended')) hasToured = true
 
     const hasOutbound = tps.some((tp) => isOutbound(tp))
-    const booked = couple.lifecycle_state === 'booked'
+    // 'completed' is the post-wedding terminal-positive state added
+    // 2026-05-20. For cohort metrics it counts as booked (the wedding
+    // contract was signed; the date has now passed).
+    const booked = couple.lifecycle_state === 'booked' || couple.lifecycle_state === 'completed'
     const isGhost = couple.lifecycle_state === 'ghost'
 
     let furthest = 1

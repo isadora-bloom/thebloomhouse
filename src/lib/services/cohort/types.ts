@@ -16,7 +16,10 @@
 /** lifecycle_state values that represent a couple the venue engaged
  *  with. `channel_scoped` (un-acknowledged prospect / often vendor
  *  noise) and `agent` are excluded from funnel ratios. */
-export const ENGAGED_STATES = ['resolved', 'booked', 'ghost'] as const
+// 2026-05-20: 'completed' added as a post-wedding terminal-positive
+// state distinct from 'booked' (pre-wedding signed contract). Both
+// count as engaged for funnel ratios + cohort metrics.
+export const ENGAGED_STATES = ['resolved', 'booked', 'ghost', 'completed'] as const
 export type EngagedState = (typeof ENGAGED_STATES)[number]
 
 /** A median / distribution is only surfaced at or above this n.

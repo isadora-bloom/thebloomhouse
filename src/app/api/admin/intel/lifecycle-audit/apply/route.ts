@@ -21,6 +21,7 @@ const ALLOWED_STATES = new Set([
   'channel_scoped',
   'resolved',
   'booked',
+  'completed',
   'ghost',
 ])
 

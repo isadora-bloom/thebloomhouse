@@ -633,6 +633,15 @@ function MaintenancePanel() {
             `Scanned ${r.bookingsScanned ?? 0} bookings; ${r.attendedInserted ?? 0} marked attended; ${r.cancelledSkipped ?? 0} already had a cancellation.`
           }
         />
+        <ActionRow
+          title="Post-wedding sweep"
+          description="Flips couples whose lifecycle_state is 'booked' AND wedding_date < today to 'completed'. Keeps surfaces honest about which bookings are still ahead vs already done."
+          endpoint="/api/admin/identity/post-wedding-sweep"
+          body={{ limit: 2000 }}
+          renderResult={(r: { bookedScanned?: number; completedTransitioned?: number }) =>
+            `Scanned ${r.bookedScanned ?? 0} booked couples with past wedding dates; transitioned ${r.completedTransitioned ?? 0} to completed.`
+          }
+        />
       </div>
     </section>
   )
