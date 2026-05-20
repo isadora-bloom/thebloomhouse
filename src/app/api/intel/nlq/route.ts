@@ -103,6 +103,10 @@ export async function POST(request: NextRequest) {
       queryId: result.queryId,
       tokensUsed: result.tokensUsed,
       cost: result.cost,
+      // D6: honesty rail flags (advisory). Empty array when nothing
+      // tripped a rule; otherwise the UI renders a "Sage may have
+      // over-claimed -- double check" ribbon with the reasons.
+      honestyFlags: result.honestyFlags,
     })
   } catch (err) {
     console.error('[api/intel/nlq] POST error:', err)

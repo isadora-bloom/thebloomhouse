@@ -12,12 +12,22 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import {
   getVenueManifest,
   manifestToSystemPrompt,
 } from '@/lib/services/manifest/venue-manifest'
+import {
+  loadCoupleContext,
+  findCoupleByName,
+  buildCoupleContextBlock,
+} from '@/lib/services/sage/couple-context'
+import {
+  inspectResponseForHonesty,
+  type HonestyFlag,
+} from '@/lib/services/sage/honesty-rails'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
 // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): bumped 1.1 → 1.2.
@@ -40,6 +50,10 @@ interface NLQResult {
   queryId: string
   tokensUsed: number
   cost: number
+  /** D6 (Tier 8 §C.5). Post-call honesty inspector flags. Empty array
+   *  when nothing tripped a rule. Surface renders these as advisory
+   *  ribbons; never as blocking errors. */
+  honestyFlags: HonestyFlag[]
 }
 
 interface PositioningSuggestion {
@@ -1761,18 +1775,29 @@ export async function answerNaturalLanguageQuery(
   // what's out of scope. Without this, the audit caught the model
   // asking the user for data it should already have ("I see 178
   // active tours but no monthly breakdown — can you provide?").
-  const [venueData, manifest] = await Promise.all([
+  const [venueData, manifest, coupleContextBlock] = await Promise.all([
     gatherVenueData(venueId),
     getVenueManifest(venueId),
+    // D6 (Tier 8 §C.5). When the question references a specific couple
+    // by name, load that couple's spine ribbon and fold it into the
+    // system prompt so Sage answers from the ribbon rather than from
+    // generic priors. Best-effort: a missing match (or a typo) leaves
+    // the block empty and the venue-aggregate context still answers.
+    resolveCoupleContextBlockFromQuery(supabase, venueId, query),
   ])
   const dataContext = formatDataContext(venueData)
   const manifestPrompt = manifestToSystemPrompt(manifest)
 
-  // Call AI with manifest + venue data as context.
+  // Call AI with manifest + venue data + (optional) couple ribbon as
+  // context. honestyRails:true is the D6 doctrine — every operator NLQ
+  // answer is gated by the Tier-4 honesty rails (refuse on missing
+  // data, hedge forecasts, evidence-required predictions, etc.).
   const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
     venueId,
     surface: 'nlq_intel',
     taskInstructions: buildNLQTaskInstructions(venueData.venueName),
+    honestyRails: true,
+    coupleContextBlock,
   })
   const aiResult = await callAI({
     systemPrompt: `${manifestPrompt}\n\n---\n\n${systemPrompt}`,
@@ -1784,6 +1809,12 @@ export async function answerNaturalLanguageQuery(
     promptVersion,
     contentTier,
   })
+
+  // D6: scan the response against the honesty rails. Flags are surfaced
+  // to the caller; they are advisory, not a block. False positives are
+  // cheap (a "Sage may have over-claimed — double check" ribbon on the
+  // UI); false negatives are the real risk we're trading against.
+  const honestyFlags = inspectResponseForHonesty(query, aiResult.text)
 
   // Log the query and response
   const { data: logEntry, error: logError } = await supabase
@@ -1809,6 +1840,58 @@ export async function answerNaturalLanguageQuery(
     queryId: (logEntry?.id as string) ?? '',
     tokensUsed: aiResult.inputTokens + aiResult.outputTokens,
     cost: aiResult.cost,
+    honestyFlags,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// D6 helpers — couple-name resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Heuristic name extractor from the NLQ. The operator usually types a
+ * couple's first name ("how is Sarah doing?"), occasionally a full
+ * name. We grab the first capitalized run of length ≥ 3 that isn't a
+ * known stop word, and only treat it as a name candidate when the
+ * query contains a reference signal ("the couple", "she", "them",
+ * possessive). This keeps us from chasing every capitalized noun.
+ */
+const NAME_REFERENCE_PATTERNS = /\b(the couple|her|him|them|their|she|he|'s|wedding)\b/i
+const NAME_STOPWORDS = new Set([
+  'Inquiry', 'Inquiries', 'Tour', 'Tours', 'Sage', 'Bloom', 'Calendly',
+  'Knot', 'Wedding', 'Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday',
+  'Thursday', 'Friday', 'June', 'July', 'August', 'September', 'October',
+  'November', 'December', 'January', 'February', 'March', 'April', 'May',
+  'Spring', 'Summer', 'Fall', 'Winter', 'Instagram', 'Pinterest', 'Google',
+  'Stone', 'Tower',
+])
+
+function extractNameCandidate(query: string): string | null {
+  if (!NAME_REFERENCE_PATTERNS.test(query)) return null
+  const matches = query.match(/\b[A-Z][a-z]{2,}\b/g)
+  if (!matches) return null
+  for (const m of matches) {
+    if (!NAME_STOPWORDS.has(m)) return m
+  }
+  return null
+}
+
+async function resolveCoupleContextBlockFromQuery(
+  supabase: SupabaseClient,
+  venueId: string,
+  query: string,
+): Promise<string | null> {
+  try {
+    const name = extractNameCandidate(query)
+    if (!name) return null
+    const hit = await findCoupleByName(supabase, venueId, name)
+    if (!hit) return null
+    const ctx = await loadCoupleContext(supabase, hit.coupleId)
+    if (!ctx) return null
+    return buildCoupleContextBlock(ctx)
+  } catch {
+    // Couple-context is enrichment, not a gate.
+    return null
   }
 }
 

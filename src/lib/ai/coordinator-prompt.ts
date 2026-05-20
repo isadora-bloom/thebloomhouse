@@ -22,6 +22,7 @@ import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { COORDINATOR_RULES } from '@/config/prompts/coordinator-rules'
 import { buildPersonalityPrompt } from '@/lib/ai/personality-builder'
 import { loadCoordinatorPersonalityData } from '@/lib/ai/personality-loader'
+import { HONESTY_RAILS_BLOCK } from '@/lib/services/sage/honesty-rails'
 
 /**
  * Surface enum. One entry per coordinator-facing narrator. Adding a
@@ -94,6 +95,26 @@ export interface CoordinatorPromptContext {
    */
   coupleNotesBlock?: string | null
   /**
+   * D6 (2026-05-19). Operator honesty rails. When true, the assembler
+   * inserts the HONESTY_RAILS_BLOCK between personality and numbers-
+   * guard. Codifies the six Tier-4 battery failure modes (refuse-on-
+   * missing-data, hedge-forecasts, evidence-required predictions,
+   * correlation-vs-causation, aggregate-not-name on sensitive themes,
+   * challenge-false-premise). Operator surfaces should default this on;
+   * couple-facing surfaces should NOT — refusing a couple is the wrong
+   * doctrine for that audience.
+   */
+  honestyRails?: boolean
+  /**
+   * D6 (2026-05-19). Optional per-couple context block produced by
+   * `buildCoupleContextBlock(loadCoupleContext(...))`. Inserted after
+   * the couple-notes block (tone fuel) and before the numbers-guard
+   * block (numeric allowlist). Lets NLQ and per-couple narrators
+   * answer specific-couple questions from the spine rather than from
+   * priors.
+   */
+  coupleContextBlock?: string | null
+  /**
    * Sensitivity tier of the inputs (Playbook 21.3.1):
    *   1 = couple PII paragraphs (heat narration, decay narration,
    *       risk flags, journey narrative, post-tour brief).
@@ -153,7 +174,10 @@ const PROMPT_VERSIONS: Record<CoordinatorSurface, string> = {
   // Wave 1B: journey narrative is per-wedding by construction; bumped.
   journey_narrative: 'journey-narrative.prompt.v2.1',
   cultural_moments_propose: 'cultural-moments-llm-propose.v2.0',
-  nlq_intel: 'intel-brain.prompt.v2.0',
+  // D6 (2026-05-19): NLQ bumped to v2.1 — honesty rails + optional
+  // per-couple ribbon context now part of the system prompt. Cache
+  // invalidation is intentional so pre-D6 answers don't linger.
+  nlq_intel: 'intel-brain.prompt.v2.1',
   post_tour_brief: 'post-tour-brief.prompt.v2.0',
   reengagement_drafter: 're-engagement-drafter.prompt.v2.0',
 }
@@ -276,12 +300,27 @@ export async function buildCoordinatorPrompt(
   const hasCoupleNotes = coupleNotesBlock.length > 0
   const numbersGuardBlock = renderNumbersGuardBlock(ctx.numbersGuard, hasCoupleNotes)
   const taskBlock = `\n\n## YOUR TASK\n\n${ctx.taskInstructions.trim()}`
+  // D6 (Tier 8 §C.5). Honesty rails sit AFTER personality (so voice is
+  // set first) and BEFORE numbers-guard (so numeric discipline knows
+  // refusal is allowed even when an allowlist is present). The block
+  // never displaces tone fuel — couple-notes still render first.
+  const honestyRailsBlock = ctx.honestyRails
+    ? `\n\n${HONESTY_RAILS_BLOCK}`
+    : ''
+  // D6: per-couple ribbon context (when the surface scoped the
+  // conversation to a single couple).  Rendered after the tone-fuel
+  // notes block so the LLM sees voice context first, then facts.
+  const coupleContextBlock = ctx.coupleContextBlock
+    ? `\n\n${ctx.coupleContextBlock.trim()}`
+    : ''
 
   const systemPrompt = [
     UNIVERSAL_RULES,
     COORDINATOR_RULES,
     personalityPrompt,
     coupleNotesBlock,
+    coupleContextBlock,
+    honestyRailsBlock,
     numbersGuardBlock,
     taskBlock,
   ]
