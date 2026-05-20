@@ -46,6 +46,11 @@ import type {
   IdentityReportPending,
 } from '@/lib/services/identity/identity-report'
 import type { SuspectMerge, SuspectClass } from '@/lib/services/identity/suspect-merges'
+import type {
+  LifecycleAuditReport,
+  LifecycleAuditRow,
+  DuplicateGroup,
+} from '@/lib/services/identity/lifecycle-audit'
 
 interface ApiResponse {
   ok: boolean
@@ -375,6 +380,9 @@ export default function IdentityReportTab() {
           signals on the matcher's calibration.
         </p>
       </Section>
+
+      {/* Lifecycle audit - drift + duplicate diagnostics */}
+      <LifecycleAuditSection />
 
       {/* Suspect merges - cleanup diagnostic */}
       <Section
@@ -718,6 +726,275 @@ function ActionRow<R extends Record<string, unknown>>({
           {message}
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// LifecycleAuditSection - drift + duplicate diagnostics on the spine.
+// Loads lazily on user-click (the underlying scan walks every couple +
+// every progression event for the venue; not free).
+// ---------------------------------------------------------------------------
+
+function LifecycleAuditSection() {
+  const [data, setData] = useState<LifecycleAuditReport | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [applied, setApplied] = useState<Record<string, string>>({})
+
+  const run = async () => {
+    setLoading(true)
+    setError(null)
+    setData(null)
+    try {
+      const res = await fetch('/api/admin/intel/lifecycle-audit', {
+        cache: 'no-store',
+      })
+      const body = (await res.json()) as {
+        ok: boolean
+        report?: LifecycleAuditReport
+        error?: string
+      }
+      if (!body.ok || !body.report) {
+        setError(body.error ?? 'Failed to load audit')
+      } else {
+        setData(body.report)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const applyRow = async (row: LifecycleAuditRow) => {
+    if (!row.expectedState) return
+    setApplied((m) => ({ ...m, [row.coupleId]: 'applying' }))
+    try {
+      const res = await fetch('/api/admin/intel/lifecycle-audit/apply', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          coupleId: row.coupleId,
+          newState: row.expectedState,
+        }),
+      })
+      const body = (await res.json()) as { ok: boolean; error?: string }
+      if (!res.ok || !body.ok) {
+        setApplied((m) => ({
+          ...m,
+          [row.coupleId]: `failed: ${body.error ?? res.statusText}`,
+        }))
+      } else {
+        setApplied((m) => ({ ...m, [row.coupleId]: 'applied' }))
+      }
+    } catch (err) {
+      setApplied((m) => ({
+        ...m,
+        [row.coupleId]: `failed: ${err instanceof Error ? err.message : String(err)}`,
+      }))
+    }
+  }
+
+  return (
+    <section className="bg-white border border-stone-200 rounded-xl shadow-sm">
+      <div className="px-6 py-4 border-b border-stone-200 flex items-center gap-2">
+        <AlertTriangle className="w-4 h-4 text-stone-500" />
+        <h2 className="text-base font-semibold text-stone-900">
+          Lifecycle audit
+        </h2>
+        <span className="text-xs text-stone-500 ml-auto">
+          Diff couples whose lifecycle disagrees with their spine signals +
+          surface likely-duplicate couples the cascade missed.
+        </span>
+      </div>
+      <div className="px-6 py-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={run}
+            disabled={loading}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              loading
+                ? 'bg-stone-300 text-white cursor-wait'
+                : 'bg-stone-900 text-white hover:bg-stone-800'
+            }`}
+          >
+            {loading && <Loader2 className="w-3 h-3 animate-spin" />}
+            {loading ? 'Scanning…' : data ? 'Re-run audit' : 'Run audit'}
+          </button>
+          {data && (
+            <div className="text-xs text-stone-600">
+              {data.meta.couplesScanned.toLocaleString()} couples scanned ·{' '}
+              {data.meta.driftCount.toLocaleString()} drift ·{' '}
+              {data.meta.duplicateGroupCount.toLocaleString()} duplicate
+              groups ({data.meta.duplicateCoupleCount.toLocaleString()} couples)
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="text-xs text-rose-700 px-3 py-2 rounded bg-rose-50 border border-rose-200">
+            {error}
+          </div>
+        )}
+
+        {data && data.drift.length > 0 && (
+          <div>
+            <div className="text-xs uppercase tracking-wide text-stone-500 mb-2">
+              Lifecycle drift ({data.drift.length})
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {data.drift.slice(0, 100).map((row) => (
+                <DriftRow
+                  key={row.coupleId}
+                  row={row}
+                  appliedStatus={applied[row.coupleId]}
+                  onApply={() => applyRow(row)}
+                />
+              ))}
+            </div>
+            {data.drift.length > 100 && (
+              <p className="text-xs text-stone-500 mt-2">
+                Showing first 100 of {data.drift.length.toLocaleString()}.
+              </p>
+            )}
+          </div>
+        )}
+
+        {data && data.duplicates.length > 0 && (
+          <div>
+            <div className="text-xs uppercase tracking-wide text-stone-500 mb-2">
+              Likely duplicate couples ({data.duplicates.length} groups)
+            </div>
+            <p className="text-xs text-stone-600 mb-2">
+              Couples whose partner1 first+last names AND partner2 first name
+              match within the venue. The cascade missed these because
+              identifiers (email / phone) diverge on the records. Operator
+              merges via the existing /api/admin/identity/resolve action.
+            </p>
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {data.duplicates.slice(0, 30).map((g) => (
+                <DuplicateGroupCard key={g.key} group={g} />
+              ))}
+            </div>
+            {data.duplicates.length > 30 && (
+              <p className="text-xs text-stone-500 mt-2">
+                Showing first 30 of {data.duplicates.length.toLocaleString()}.
+              </p>
+            )}
+          </div>
+        )}
+
+        {data && data.drift.length === 0 && data.duplicates.length === 0 && (
+          <p className="text-sm text-stone-500 italic">
+            Clean. No lifecycle drift, no duplicate-couple candidates.
+          </p>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function DriftRow({
+  row,
+  appliedStatus,
+  onApply,
+}: {
+  row: LifecycleAuditRow
+  appliedStatus: string | undefined
+  onApply: () => void
+}) {
+  const isApplied = appliedStatus === 'applied'
+  const isApplying = appliedStatus === 'applying'
+  const isFailed = appliedStatus?.startsWith('failed')
+  return (
+    <div className="border border-stone-200 rounded-md p-3 text-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-stone-900">
+            {row.primaryName ?? row.primaryEmail ?? '(unknown)'}
+          </div>
+          <div className="text-xs text-stone-600 mt-0.5">
+            <span className="font-mono text-rose-700">
+              {row.currentState ?? '(null)'}
+            </span>{' '}
+            →{' '}
+            <span className="font-mono text-emerald-700">
+              {row.expectedState ?? '(null)'}
+            </span>
+          </div>
+          <div className="text-[11px] text-stone-500 mt-0.5 italic">
+            {row.rationale}
+          </div>
+          {appliedStatus && (
+            <div
+              className={`text-[11px] mt-1 ${isApplied ? 'text-emerald-700' : isFailed ? 'text-rose-700' : 'text-stone-500'}`}
+            >
+              {appliedStatus}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={isApplied || isApplying}
+          className={`shrink-0 inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${
+            isApplied
+              ? 'bg-emerald-100 text-emerald-700'
+              : isApplying
+                ? 'bg-stone-300 text-white'
+                : 'bg-stone-900 text-white hover:bg-stone-800'
+          }`}
+        >
+          {isApplied ? 'Applied' : isApplying ? '...' : 'Apply'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function DuplicateGroupCard({ group }: { group: DuplicateGroup }) {
+  return (
+    <div className="border border-stone-200 rounded-md p-3 text-sm">
+      <div className="text-[11px] text-stone-500 mb-1">
+        {group.couples.length} likely-duplicate records for this couple
+      </div>
+      <ul className="space-y-1.5">
+        {group.couples.map((c) => (
+          <li
+            key={c.coupleId}
+            className="flex items-center gap-2 text-stone-800"
+          >
+            <a
+              href={`/intel/couples/${c.coupleId}`}
+              className="font-medium hover:underline"
+            >
+              {c.primaryName ?? '(no name)'}
+              {c.partnerName ? ` & ${c.partnerName}` : ''}
+            </a>
+            <span className="text-xs text-stone-500">
+              {c.primaryEmail ?? 'no email'}
+            </span>
+            <span
+              className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                c.lifecycleState === 'booked'
+                  ? 'bg-sky-100 text-sky-800 border-sky-200'
+                  : c.lifecycleState === 'ghost'
+                    ? 'bg-stone-100 text-stone-500 border-stone-200'
+                    : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+              }`}
+            >
+              {c.lifecycleState ?? 'unknown'}
+            </span>
+            {c.weddingDate && (
+              <span className="text-[11px] text-stone-500 ml-auto">
+                wed {c.weddingDate}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
