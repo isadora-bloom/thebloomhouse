@@ -281,6 +281,10 @@ export const MODE_INTEL: ModeConfig = {
         // distributions over the identity-first spine, plus the Wave 5B
         // LLM theme rollup. See IDENTITY-FIRST-ARCHITECTURE.md §C.5.
         { label: 'Cohort Intelligence', href: '/intel/cohort', icon: Layers },
+        // D3 (Tier 8) — couple-keyed source attribution over the spine.
+        // Four multi-touch models with per-couple ribbon transparency
+        // (Q5 "show the logic"). See IDENTITY-FIRST-ARCHITECTURE.md §C.5.
+        { label: 'Attribution', href: '/intel/attribution', icon: Share2 },
         // Wave 6E — marketing-agency tracker. "Is Hawthorn paying off?"
         { label: 'Marketing Agencies', href: '/intel/agencies', icon: Briefcase },
         // Social integration -- operator-driven weekly capture of
