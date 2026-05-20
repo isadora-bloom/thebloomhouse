@@ -277,6 +277,10 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'Sources & ROI', href: '/intel/sources', icon: TrendingUp },
         { label: 'ROI dashboard', href: '/intel/roi', icon: BarChart3 },
+        // D9 (Tier 8) — couple-keyed funnel + response-time / lead-time
+        // distributions over the identity-first spine, plus the Wave 5B
+        // LLM theme rollup. See IDENTITY-FIRST-ARCHITECTURE.md §C.5.
+        { label: 'Cohort Intelligence', href: '/intel/cohort', icon: Layers },
         // Wave 6E — marketing-agency tracker. "Is Hawthorn paying off?"
         { label: 'Marketing Agencies', href: '/intel/agencies', icon: Briefcase },
         // Social integration -- operator-driven weekly capture of
