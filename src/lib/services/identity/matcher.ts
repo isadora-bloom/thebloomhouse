@@ -207,12 +207,50 @@ function firstPlusInitialMatches(a: string | null, b: string | null): boolean {
   return ai === bi
 }
 
+/**
+ * Name-typo equivalence under bounded edit distance.
+ *
+ * Two doctrine guards against the Tier-8 §C.5 failure mode the audit
+ * 2026-05-20 caught (Rixey couple Makayla Keeley merged with a Kayla
+ * Williams thread on a single name-substring distance-2 match):
+ *
+ *  1. STRICT-SUBSTRING GUARD. If either lowercased name strictly contains
+ *     the other as a contiguous substring (case-insensitive), refuse the
+ *     match. This is almost always a name-truncation false-positive
+ *     ("Kayla" ⊂ "Makayla", "Anna" ⊂ "Hannah", "Joel" ⊂ "Joelle") rather
+ *     than a typo. Real typos like "Sarah" → "Saraha" or "Jon" → "John"
+ *     do not share a contiguous-substring relationship.
+ *
+ *  2. LENGTH-AWARE DISTANCE. For short names (< 6 chars), require
+ *     distance ≤ 1, not ≤ 2. Edit-distance 2 on a 5-character name is a
+ *     40% edit ratio — too permissive to be a typo signal. Real typos
+ *     on short names are almost always single edits; pairs at distance 2
+ *     on short names are usually different names ("Kayla" vs "Layla",
+ *     "Hugo" vs "Hugh", "Maya" vs "Maja"). For longer names (≥ 6 chars)
+ *     the original distance-2 cap stays — "Stephanie" / "Stefanie" /
+ *     "Stephany" all need distance 1-2 tolerance to merge.
+ *
+ * The guards are defence in depth. A clean fix would also require a
+ * corroborating signal (last initial, email domain, ±72h temporal) before
+ * the Levenshtein weight fires alone; that is a larger redesign tracked
+ * separately. These guards stop the worst-shaped false positive without
+ * touching every caller.
+ */
 function nameWithinLevenshtein2(a: string | null, b: string | null): boolean {
   const na = lowerTrim(a)
   const nb = lowerTrim(b)
   if (!na || !nb) return false
   if (na === nb) return false // already handled by exact match
-  return levenshteinCapped(na, nb, 2) <= 2
+
+  // Strict-substring guard: refuse when either name fully contains the
+  // other. Name-truncation false-positive shape (Kayla ⊂ Makayla).
+  if (na.includes(nb) || nb.includes(na)) return false
+
+  // Length-aware distance cap. Short names (< 6 chars) tolerate one
+  // edit only; longer names keep the original two-edit cap.
+  const shorter = Math.min(na.length, nb.length)
+  const cap = shorter < 6 ? 1 : 2
+  return levenshteinCapped(na, nb, cap) <= cap
 }
 
 function emailsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
