@@ -85,9 +85,10 @@ interface RawCoupleRow {
   created_at: string
   primary_contact_name: string | null
   /** Mirror-link to the legacy weddings row, when one exists. Created
-   *  by the mirror-couple migration; null for couples minted directly
-   *  by the Tracer on a non-wedding signal. */
-  wedding_id?: string | null
+   *  by mirror-couple.ts; null for couples minted directly by the
+   *  Tracer on a non-wedding signal. Canonical column is
+   *  `source_wedding_id` (migration 346). */
+  source_wedding_id?: string | null
 }
 
 interface RawTouchpointRow {
@@ -152,7 +153,7 @@ export async function loadCoupleContext(
   const { data: coupleRow } = await supabase
     .from('couples')
     .select(
-      'id, venue_id, lifecycle_state, channel_scope, wedding_date, heat_score, created_at, primary_contact_name, wedding_id',
+      'id, venue_id, lifecycle_state, channel_scope, wedding_date, heat_score, created_at, primary_contact_name, source_wedding_id',
     )
     .eq('id', coupleId)
     .maybeSingle<RawCoupleRow>()
@@ -193,16 +194,18 @@ export async function loadCoupleContext(
     (progs ?? []) as RawProgressionRow[]
   ).map((p) => ({ eventType: p.event_type, occurredAt: p.occurred_at }))
 
-  // Forensic profile (Wave 4) — keyed on the legacy wedding_id. Best-
-  // effort: a missing or unreadable profile leaves the field null and
-  // the surface still renders the ribbon.
+  // Forensic profile (Wave 4) — keyed on the legacy wedding_id (the
+  // `couple_identity_profile.wedding_id` column is the existing Wave 4
+  // contract, the spine's couples.source_wedding_id is the join key).
+  // Best-effort: a missing or unreadable profile leaves the field null
+  // and the surface still renders the ribbon.
   let forensicProfile: Record<string, unknown> | null = null
-  if (coupleRow.wedding_id) {
+  if (coupleRow.source_wedding_id) {
     try {
       const { data: prof } = await supabase
         .from('couple_identity_profile')
         .select('profile')
-        .eq('wedding_id', coupleRow.wedding_id)
+        .eq('wedding_id', coupleRow.source_wedding_id)
         .maybeSingle<{ profile: Record<string, unknown> | null }>()
       forensicProfile = prof?.profile ?? null
     } catch {
@@ -219,7 +222,7 @@ export async function loadCoupleContext(
     weddingDate: coupleRow.wedding_date ?? null,
     heatScore: coupleRow.heat_score ?? null,
     createdAt: coupleRow.created_at,
-    weddingId: coupleRow.wedding_id ?? null,
+    weddingId: coupleRow.source_wedding_id ?? null,
     ribbon,
     progression,
     forensicProfile,
