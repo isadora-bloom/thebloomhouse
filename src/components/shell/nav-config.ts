@@ -285,6 +285,10 @@ export const MODE_INTEL: ModeConfig = {
         // Four multi-touch models with per-couple ribbon transparency
         // (Q5 "show the logic"). See IDENTITY-FIRST-ARCHITECTURE.md §C.5.
         { label: 'Attribution', href: '/intel/attribution', icon: Share2 },
+        // D1 (Tier 8) — heat distribution + extremes. Where engagement
+        // intensity sits across the cohort + hottest/coldest active
+        // couples today.
+        { label: 'Heat', href: '/intel/heat', icon: Flame },
         // Wave 6E — marketing-agency tracker. "Is Hawthorn paying off?"
         { label: 'Marketing Agencies', href: '/intel/agencies', icon: Briefcase },
         // Social integration -- operator-driven weekly capture of
