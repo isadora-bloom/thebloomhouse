@@ -604,6 +604,16 @@ export default function CoupleDetailPage() {
 
       <div className="rounded-lg border border-stone-200 bg-white p-4">
         <JourneyRibbon touchpoints={touchpoints} />
+        {touchpoints.length > 0 && coupleId && (
+          <div className="mt-3 text-right">
+            <a
+              href={`/intel/couples/${coupleId}/journey`}
+              className="text-xs text-stone-500 underline-offset-2 hover:text-stone-800 hover:underline"
+            >
+              View full journey with progression anchors →
+            </a>
+          </div>
+        )}
       </div>
 
       {touchpoints.length > 0 && (

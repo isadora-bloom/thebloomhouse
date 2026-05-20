@@ -42,11 +42,29 @@ export interface JourneyTouchpoint {
   raw_payload: Record<string, unknown> | null
 }
 
+/** Progression-event anchor — booked / lost / tour_attended etc.
+ *  Rendered as a vertical bar with a label rather than a dot, so the
+ *  operator can see state-transitions distinct from touchpoint activity. */
+export interface JourneyAnchor {
+  /** Stable key for React. */
+  id: string
+  occurred_at: string
+  event_type: string
+}
+
 interface JourneyRibbonProps {
   touchpoints: JourneyTouchpoint[]
+  /** Optional progression anchors (booked / lost / tour_attended /
+   *  contract_signed). When supplied, the ribbon draws a vertical bar
+   *  for each anchor with a label above the baseline. */
+  anchors?: JourneyAnchor[]
   height?: number
   rightPaddingDays?: number
   onTouchpointClick?: (t: JourneyTouchpoint) => void
+  /** When true, render the channel legend below the ribbon. Off by
+   *  default for the embedded couple-detail use; on for the standalone
+   *  full-page journey view. */
+  showLegend?: boolean
 }
 
 interface PositionedTouchpoint extends JourneyTouchpoint {
@@ -113,11 +131,50 @@ function actionLabel(action: string): string {
   return action.replace(/_/g, ' ')
 }
 
+/**
+ * Friendly label + colour for a progression-event anchor. Booked /
+ * contract_signed are the operator's terminal-positive signals; lost
+ * is terminal-negative (rendered red); the rest are intermediate
+ * milestones rendered in sage.
+ */
+function anchorStyle(eventType: string): { label: string; color: string } {
+  const e = eventType.toLowerCase()
+  if (e === 'contract_signed' || e === 'booked') {
+    return { label: 'Booked', color: '#16a34a' }
+  }
+  if (e === 'tour_attended') return { label: 'Toured', color: '#0ea5e9' }
+  if (e === 'tour_booked') return { label: 'Tour booked', color: '#7c3aed' }
+  if (e === 'tour_rescheduled') return { label: 'Rescheduled', color: '#d97706' }
+  if (e === 'lost' || e === 'tour_cancelled' || e === 'no_show') {
+    return { label: e === 'lost' ? 'Lost' : e === 'no_show' ? 'No-show' : 'Cancelled', color: '#dc2626' }
+  }
+  return { label: e.replace(/_/g, ' '), color: '#57534e' }
+}
+
+/** Channel + colour pairs the legend renders. Only channels actually
+ *  present in the touchpoint set are shown so the legend doesn't bloat
+ *  with every possible adapter. */
+function buildLegendEntries(touchpoints: JourneyTouchpoint[]): Array<{
+  channel: string
+  color: string
+}> {
+  const seen = new Set<string>()
+  const out: Array<{ channel: string; color: string }> = []
+  for (const t of touchpoints) {
+    if (seen.has(t.channel)) continue
+    seen.add(t.channel)
+    out.push({ channel: t.channel, color: channelColor(t.channel) })
+  }
+  return out
+}
+
 export function JourneyRibbon({
   touchpoints,
+  anchors = [],
   height = 64,
   rightPaddingDays = 30,
   onTouchpointClick,
+  showLegend = false,
 }: JourneyRibbonProps) {
   const ribbonRef = useRef<SVGSVGElement>(null)
   const [expandedClusterIdx, setExpandedClusterIdx] = useState<number | null>(null)
@@ -127,7 +184,7 @@ export function JourneyRibbon({
     | null
   >(null)
 
-  const { positioned, clusters, span, totalWidth, gaps } = useMemo(() => {
+  const { positioned, clusters, span, totalWidth, gaps, positionedAnchors } = useMemo(() => {
     if (touchpoints.length === 0) {
       return {
         positioned: [] as PositionedTouchpoint[],
@@ -135,6 +192,7 @@ export function JourneyRibbon({
         span: 0,
         totalWidth: 800,
         gaps: [] as Array<{ left: PositionedTouchpoint; right: PositionedTouchpoint }>,
+        positionedAnchors: [] as Array<JourneyAnchor & { x: number }>,
       }
     }
     const sorted = [...touchpoints].sort(
@@ -183,14 +241,26 @@ export function JourneyRibbon({
       }
     }
 
+    // Place anchors on the same time axis as touchpoints.
+    const positionedAnchors = anchors
+      .map((a) => {
+        const ms = Date.parse(a.occurred_at) - firstMs
+        const x = totalSpan > 0 ? left + (ms / totalSpan) * usable : left
+        return { ...a, x }
+      })
+      // Drop anchors that fall outside the rendered span (e.g. before
+      // the earliest touchpoint when timestamps drift).
+      .filter((a) => a.x >= 0 && a.x <= width)
+
     return {
       positioned,
       clusters,
       span: totalSpan,
       totalWidth: width,
       gaps,
+      positionedAnchors,
     }
-  }, [touchpoints, rightPaddingDays])
+  }, [touchpoints, anchors, rightPaddingDays])
 
   if (touchpoints.length === 0) {
     return (
@@ -237,6 +307,43 @@ export function JourneyRibbon({
                 strokeWidth={1}
                 strokeDasharray="1 2"
               />
+            </g>
+          )
+        })}
+
+        {/* progression-event anchors */}
+        {positionedAnchors.map((a) => {
+          const style = anchorStyle(a.event_type)
+          return (
+            <g key={`anchor-${a.id}`} style={{ color: style.color }}>
+              <line
+                x1={a.x}
+                x2={a.x}
+                y1={baselineY - 18}
+                y2={baselineY + 12}
+                stroke={style.color}
+                strokeWidth={2}
+                opacity={0.9}
+              />
+              <rect
+                x={a.x - 28}
+                y={2}
+                width={56}
+                height={14}
+                rx={3}
+                fill={style.color}
+                opacity={0.95}
+              />
+              <text
+                x={a.x}
+                y={12}
+                fontSize={9}
+                fontWeight={600}
+                textAnchor="middle"
+                fill="white"
+              >
+                {style.label}
+              </text>
             </g>
           )
         })}
@@ -398,6 +505,44 @@ export function JourneyRibbon({
         <span>{formatDuration(span)} span</span>
         <span>now</span>
       </div>
+
+      {/* Channel legend (opt-in via showLegend; renders only channels
+          actually present in the ribbon so the legend never bloats with
+          unused adapters). */}
+      {showLegend && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-stone-600">
+          <span className="text-stone-400 uppercase tracking-wide">Channels</span>
+          {buildLegendEntries(touchpoints).map((entry) => (
+            <span key={entry.channel} className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ backgroundColor: entry.color }}
+              />
+              <span>{entry.channel}</span>
+            </span>
+          ))}
+          <span className="ml-3 text-stone-400">Confidence:</span>
+          <span className="flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ backgroundColor: '#57534e' }}
+            />
+            <span>high</span>
+          </span>
+          <span className="flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full border-2 border-stone-700 bg-white"
+            />
+            <span>medium</span>
+          </span>
+          <span className="flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full border border-dashed border-stone-700 bg-white"
+            />
+            <span>low</span>
+          </span>
+        </div>
+      )}
     </div>
   )
 }
