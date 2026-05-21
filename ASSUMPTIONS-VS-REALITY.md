@@ -108,3 +108,31 @@ These I genuinely cannot verify without operator help:
 3. **What does `gmail_backfill_emails` show for Rixey?** A number near zero means the backfill cron is not running or is failing silently. A number in the thousands means it has ingested but the binding step is the broken link.
 
 Three SQL queries, executable in the Supabase SQL editor, would resolve all three. Once those answer, the consolidation plan can be honestly redrawn.
+
+---
+
+## Addendum 2026-05-21 — verified failure shape: duplicate partner2 rows
+
+**Real example:** booked couple shows in UI as "Liam Hunt & Liam null & Lea Nowak" with four `people` rows (Liam Hunt with email, two `first_name='Liam' last_name=null` rows without email, Lea Nowak with email).
+
+**Diagnosed writer:** `src/lib/services/email/pipeline.ts` has three call sites (lines 2198, 2850, 3053) that insert a new partner2 `people` row whenever email body extraction yields a `partnerName`. None of them check whether a partner2 already exists on the wedding.
+
+**Doctrine that was supposed to clean it up:** Wave 4 Phase 4 — Sonnet judge in `reconstruct.ts` emits `is_phantom_partner_relationship`, `profile-to-people-sync` tombstones the phantom row. This does NOT detect "duplicate first-name partner2 rows on the same wedding" — it only detects "couple has no real second partner."
+
+**What this confirms:**
+- The 3-year Gmail backfill RAN on Rixey. Multiple partner2 inserts per wedding only accumulate when many historical emails are processed through the legacy write path.
+- The cascade I shipped today does NOT prevent this bug class because the three pipeline.ts insert sites do not route through the cascade RPC.
+- Every legacy insert site is a continuing source of bug-shaped state.
+
+**Open SQL to know scope:**
+```sql
+SELECT w.id, count(p.id) AS people_count,
+       array_agg(p.first_name || ' ' || COALESCE(p.last_name, 'null')) AS names
+  FROM weddings w JOIN people p ON p.wedding_id = w.id
+ WHERE w.venue_id = '<rixey>'
+   AND w.status = 'booked'
+   AND p.merged_into_id IS NULL
+ GROUP BY w.id
+HAVING count(p.id) > 2
+ ORDER BY count(p.id) DESC;
+```
