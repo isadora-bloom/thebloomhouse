@@ -610,11 +610,15 @@ async function main() {
       resolved++
       summary.push(`G${g.n}: DETACH — removed "${nameOf(target)}" from wedding (not part of this couple)`)
     } else {
-      // rerole — distinct mis-roled humans.
-      const keeper = targetRoleRows.find((r) => r.id.startsWith(g.action.keepRoleIdPrefix))
+      // rerole — distinct mis-roled humans. The if-chain guarantees the
+      // rerole variant; capture it into a const so the narrowing survives
+      // the function calls below (property-access narrowing is reset by calls).
+      if (g.action.kind !== 'rerole') continue
+      const action = g.action
+      const keeper = targetRoleRows.find((r) => r.id.startsWith(action.keepRoleIdPrefix))
       if (!keeper) {
         console.log(
-          `  REVIEW — keepRoleIdPrefix "${g.action.keepRoleIdPrefix}" matched no live ${g.role} row. Left for operator.`,
+          `  REVIEW — keepRoleIdPrefix "${action.keepRoleIdPrefix}" matched no live ${g.role} row. Left for operator.`,
         )
         review++
         summary.push(`G${g.n}: REVIEW — keepRoleIdPrefix unmatched`)
@@ -623,9 +627,9 @@ async function main() {
       const flippers = targetRoleRows.filter((r) => r.id !== keeper.id)
       // A re-role into the opposite role must not collide with an existing row
       // already holding that role — otherwise we just move the duplication.
-      const oppositeRole = g.action.flipToRole
+      const oppositeRole = action.flipToRole
       const existingOpposite = live.filter((r) => r.role === oppositeRole)
-      console.log(`  CLASSIFY: DISTINCT MIS-ROLED. ${g.action.note}`)
+      console.log(`  CLASSIFY: DISTINCT MIS-ROLED. ${action.note}`)
       if (existingOpposite.length > 0 && flippers.length > 0) {
         console.log(
           `  REVIEW — wedding already has ${existingOpposite.length} live ${oppositeRole} ` +

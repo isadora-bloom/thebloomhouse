@@ -2198,28 +2198,77 @@ export async function processIncomingEmail(
       if (extracted.partnerName) {
         const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
         const trimmedP2 = extracted.partnerName.trim()
-        const [p2First, ...p2Rest] = trimmedP2.split(/\s+/)
-        const p2Last = p2Rest.join(' ') || null
+        const [p2First] = trimmedP2.split(/\s+/)
 
         if (p2First) {
-          // Insert partner2 placeholder and route through the chokepoint
-          // so name_evidence + display_handle pick up correctly. Phantom
-          // tombstoning is handled async by profile-to-people-sync after
+          // M4 flip (PHASE-1-BATCH-1.md §3.2, 2026-05-22): route the
+          // partner2 mint through the `mintPerson` chokepoint instead of
+          // a raw `people.insert`. mintPerson's partner2 invariant
+          // (P2) does the wedding-scoped enrich-or-skip — an existing
+          // partner2 on this wedding is enriched in place, never
+          // duplicated. The partner2's name is the `signals.fullName`
+          // (from mintPerson's view this person IS the subject —
+          // `enrichExistingPartner2` and `createPerson` both read the
+          // incoming name from `signals.fullName`). Phantom tombstoning
+          // is still handled async by profile-to-people-sync after
           // reconstruct.ts judges the wedding.
-          const { data: p2 } = await supabase
-            .from('people')
-            .insert({
-              venue_id: venueId,
-              wedding_id: weddingId,
+          let p2Id: string | null = null
+          try {
+            const { mintPerson } = await import('@/lib/services/identity/mint-person')
+            const p2Result = await mintPerson({
+              venueId,
+              weddingId,
               role: 'partner2',
-              first_name: p2First,
-              last_name: p2Last,
+              signals: {
+                email: null,
+                phone: null,
+                fullName: trimmedP2,
+                weddingDate: null,
+                partner1Name: null,
+                partner2Name: null,
+              },
+              source: 'email_pipeline',
+              reason: 'partner2',
+              supabase,
             })
-            .select('id')
-            .single()
-          if (p2?.id) {
+            p2Id = p2Result.personId
+          } catch (err) {
+            // mintPerson never throws by contract; this catch is a
+            // belt for an unexpected import/runtime failure.
+            await logPipelineError(venueId, 'partner2_mint', err, {
+              weddingId,
+              interactionId,
+            }, correlationId)
+          }
+          // mintPerson returns personId:null on a resolver error — and,
+          // once migration 367's partial unique index is applied, a
+          // concurrent-race loser routing through the create path hits
+          // the unique violation → resolver_error → null. Either way the
+          // correct recovery is the same: a partner2 already exists on
+          // this wedding (the TS enrich-or-skip is the guard when 367 is
+          // absent; the index is the guard when present). Re-query for
+          // the live partner2 row and use it rather than treating it as
+          // a hard failure.
+          if (!p2Id) {
             try {
-              await captureNameEvidence(supabase, p2.id as string, {
+              const { data: existingP2 } = await supabase
+                .from('people')
+                .select('id')
+                .eq('venue_id', venueId)
+                .eq('wedding_id', weddingId)
+                .eq('role', 'partner2')
+                .is('merged_into_id', null)
+                .order('created_at', { ascending: true })
+                .limit(1)
+                .maybeSingle()
+              if (existingP2?.id) p2Id = existingP2.id as string
+            } catch (err) {
+              console.warn('[pipeline] partner2 re-query after null mint failed:', err instanceof Error ? err.message : err)
+            }
+          }
+          if (p2Id) {
+            try {
+              await captureNameEvidence(supabase, p2Id, {
                 full: trimmedP2,
                 source: 'partner_mention_in_body',
                 interactionId,
@@ -3053,29 +3102,71 @@ export async function processIncomingEmail(
         if (schedulingEvent.extras?.partnerName) {
           const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
           const trimmedP2 = schedulingEvent.extras.partnerName.trim()
-          const [p2First, ...rest] = trimmedP2.split(/\s+/)
-          const p2Last = rest.join(' ') || null
+          const [p2First] = trimmedP2.split(/\s+/)
           const p2Email = schedulingEvent.extras.partnerEmail ?? null
+          const p2Phone = schedulingEvent.extras.phone ?? null
           if (p2First) {
-            const { data: p2 } = await supabase
-              .from('people')
-              .insert({
-                venue_id: venueId,
-                wedding_id: weddingId,
+            // M5 flip (PHASE-1-BATCH-1.md §3.2, 2026-05-22): route the
+            // Calendly/scheduling partner2 mint through `mintPerson`.
+            // Same enrich-or-skip invariant as M4. M5 carries the
+            // partner2's email + phone from the booking form — pass them
+            // in `signals` so the resolver match chain + enrich both
+            // see them. The partner2's name is `signals.fullName`.
+            let p2Id: string | null = null
+            try {
+              const { mintPerson } = await import('@/lib/services/identity/mint-person')
+              const p2Result = await mintPerson({
+                venueId,
+                weddingId,
                 role: 'partner2',
-                first_name: p2First,
-                last_name: p2Last,
-                email: p2Email,
-                phone: schedulingEvent.extras.phone ?? null,
+                signals: {
+                  email: p2Email,
+                  phone: p2Phone,
+                  fullName: trimmedP2,
+                  weddingDate: null,
+                  partner1Name: null,
+                  partner2Name: null,
+                },
+                source: 'email_pipeline',
+                reason: 'partner2',
+                supabase,
               })
-              .select('id')
-              .single()
-            if (p2?.id) {
+              p2Id = p2Result.personId
+            } catch (err) {
+              // mintPerson never throws by contract; belt for an
+              // unexpected import/runtime failure.
+              await logPipelineError(venueId, 'partner2_mint', err, {
+                weddingId,
+                interactionId,
+              }, correlationId)
+            }
+            // null result → resolver error OR (once migration 367 is
+            // applied) a concurrent-race unique-violation. Both mean a
+            // partner2 already exists on this wedding — re-query and use
+            // the live row instead of failing hard.
+            if (!p2Id) {
+              try {
+                const { data: existingP2 } = await supabase
+                  .from('people')
+                  .select('id')
+                  .eq('venue_id', venueId)
+                  .eq('wedding_id', weddingId)
+                  .eq('role', 'partner2')
+                  .is('merged_into_id', null)
+                  .order('created_at', { ascending: true })
+                  .limit(1)
+                  .maybeSingle()
+                if (existingP2?.id) p2Id = existingP2.id as string
+              } catch (err) {
+                console.warn('[pipeline] partner2 re-query after null mint failed:', err instanceof Error ? err.message : err)
+              }
+            }
+            if (p2Id) {
               try {
                 // form_relay confidence — Calendly forms are coordinator-
                 // approved structured data, slightly stronger than a
                 // body-mention but weaker than calculator/contract.
-                await captureNameEvidence(supabase, p2.id as string, {
+                await captureNameEvidence(supabase, p2Id, {
                   full: trimmedP2,
                   email: p2Email,
                   source: 'form_relay',

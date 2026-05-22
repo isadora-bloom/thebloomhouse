@@ -70,7 +70,14 @@ const CANONICAL = new Set([
 //   2. portal/mint-wedding/route.ts (single-call, isolated)
 //   3. data-integrity/remediation/wedding-has-people.ts (3 sites — backfill)
 //   4. agent/reprocess-orphans/route.ts (already mintWedding-aware)
-//   5. email/pipeline.ts (the hot path — G6 findOrCreateContact collapse)
+//   5. email/pipeline.ts — the hot path. As of 2026-05-22 the two
+//      partner2 INSERT sites (M4 fresh_inquiry ~:2211, M5 Calendly
+//      ~:3062) have been flipped to `mintPerson` (PHASE-1-BATCH-1.md
+//      §3.2 — the Liam Hunt duplicate-partner2 fix). The ONLY remaining
+//      direct INSERT in pipeline.ts is the partner1 site at ~:695
+//      (`findOrCreateContact` step 3, M2/M3) — that is what keeps this
+//      file grandfathered. Remove the file from GRANDFATHERED once M2/M3
+//      route through the G6 findOrCreateContact collapse.
 //
 // Any future addition to this set requires a memo entry in
 // bloom-identity-resolution-doctrine.md.
