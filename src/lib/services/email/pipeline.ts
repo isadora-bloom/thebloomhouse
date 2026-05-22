@@ -660,87 +660,116 @@ export async function findOrCreateContact(
     }
   }
 
-  // 3. Create a new person. Wave 2A: route every name signal through the
-  // identity name-capture chokepoint instead of splitting `name` directly
-  // here. We still need an initial first_name on the INSERT (the inbox
-  // join must render something synchronously), so the fallback chain is:
-  //   - email local part as a placeholder when the from_name is empty
-  //     OR username/proxy-shaped (Knot relays send "User <hex>" / smushed
-  //     handles — those should never become first_name).
-  //   - Otherwise, the leading whitespace token of `name`.
-  // The chokepoint then runs immediately after the INSERT to record the
-  // shape-classified evidence + dual-write the picked first / last /
-  // confidence columns + capture display_handle for username shapes.
-  // people.role must be one of the CHECK values; 'partner1' is the
-  // default for an inquiry sender.
-  const { isUsernameShaped, isProxyShaped, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+  // 3. Create a new person.
+  //
+  // M2 flip (PHASE-1-BATCH-1.md §3.3, 2026-05-22): the partner1 person
+  // creation routes through the `mintPerson` chokepoint instead of a raw
+  // `people.insert`. Only the *create* is rerouted — match steps 1
+  // (canonical resolver) and 2 (contacts-table fallback) above already
+  // ran and missed, so by the time we are here a fresh person is
+  // genuinely needed. `mintPerson` re-runs its own identifier match
+  // chain (email_exact → email_canonical → phone); on this no-match path
+  // that chain also misses (same data), so it falls through to
+  // `createPerson` — the create outcome is unchanged. The chokepoint
+  // additionally: (a) routes the name through the name-capture
+  // shape-classifier (no `Rosaliehoyle` from `rosaliehoyle@gmail.com` —
+  // it replaces the old `placeholderFirst` email-local-part heuristic),
+  // (b) fires the venue self-loop guard, (c) records source provenance.
+  //
+  // NOTE — divergence ruled minimal (PHASE-1-BATCH-1.md §3.3): the
+  // contacts-table fallback (step 2) is NOT part of mintPerson's chain.
+  // It is intentionally left as a pre-mintPerson match step here — it
+  // absorbs `contacts` stragglers not on `people.email`. Routing only the
+  // create through mintPerson keeps that fallback intact, so contact
+  // resolution behaviour is unchanged; only the INSERT is at the
+  // chokepoint.
+  const { mintPerson } = await import('@/lib/services/identity/mint-person')
   const trimmedName = (name ?? '').trim()
-  const placeholderFirst = (() => {
-    if (!trimmedName) return email.split('@')[0]
-    if (isProxyShaped(trimmedName) || isUsernameShaped(trimmedName)) {
-      return email.split('@')[0]
-    }
-    return trimmedName.split(/\s+/)[0] ?? email.split('@')[0]
-  })()
+  const mintResult = await mintPerson({
+    venueId,
+    signals: {
+      email,
+      phone: extras?.phone ?? null,
+      fullName: trimmedName || null,
+      weddingDate: null,
+      partner1Name: null,
+      partner2Name: null,
+    },
+    source: 'email_pipeline',
+    reason: 'findOrCreateContact:partner1',
+    ownEmailsHint: ownEmails,
+    supabase,
+  })
 
-  const personInsert: Record<string, unknown> = {
-    venue_id: venueId,
-    role: 'partner1',
-    first_name: placeholderFirst,
-    last_name: null,
-    email,
-  }
-  if (extras?.phone) personInsert.phone = extras.phone
-  const { data: newPerson, error: personError } = await supabase
-    .from('people')
-    .insert(personInsert)
-    .select('id')
-    .single()
-
-  if (personError || !newPerson) {
-    console.error('[pipeline] Failed to create person:', personError?.message)
+  // mintPerson never throws by contract. personId:null means the
+  // self-loop guard fired (venue's own address — already filtered at
+  // step 0, so unexpected here) or the resolver INSERT failed. Either
+  // way there is no row to mirror or match; preserve the legacy
+  // failure shape `{ personId:null, isNew:true }`.
+  if (!mintResult.personId) {
+    console.error(
+      '[pipeline] findOrCreateContact: mintPerson returned null',
+      `(matchedBy=${mintResult.matchedBy})`,
+    )
     return { personId: null, weddingId: null, isNew: true }
   }
-
-  // Now that the row exists, route the from-name signal through the
-  // chokepoint. Source = gmail_from_name → dynamic confidence based on
-  // shape. If trimmedName is empty (rare — Knot sometimes sends bare
-  // emails with no display name), skip the capture; the placeholder
-  // first_name from email-local-part is the only signal we have.
-  if (trimmedName) {
-    try {
-      await captureNameEvidence(supabase, newPerson.id as string, {
-        full: trimmedName,
-        email,
-        source: 'gmail_from_name',
-      })
-    } catch (err) {
-      console.warn('[pipeline] name-capture (findOrCreateContact) failed:', err instanceof Error ? err.message : err)
-    }
-  }
+  const newPerson = { id: mintResult.personId }
+  // `isNew` from mintPerson maps to `findOrCreateContact`'s isNewContact:
+  // true only on a genuine `created_new`. If mintPerson's own match
+  // chain matched an existing person (an identifier the steps above
+  // somehow missed — e.g. a phone-only match), isNew is false and the
+  // wedding-creation gate downstream correctly does NOT mint a couple.
+  const mintIsNew = mintResult.isNew
 
   // 4. Mirror the email onto contacts so subsequent lookups that go through
   // contacts find it. contacts has no venue_id; tenancy is via person_id.
-  await supabase.from('contacts').insert({
-    person_id: newPerson.id,
-    type: 'email',
-    value: email,
-    is_primary: true,
-  })
+  //
+  // M3 finding (PHASE-1-BATCH-1.md §3.3, 2026-05-22): this contacts-mirror
+  // write is NOT redundant — verified that mintPerson / resolvePersonOnly /
+  // createPerson do NOT write the `contacts` identifier mirror anywhere
+  // (`merge-people.ts` only RE-POINTS existing `contacts.person_id` during
+  // a merge; it does not create the row). So the mirror insert stays, but
+  // it is now CO-LOCATED with the mintPerson call and guarded on
+  // `mintIsNew` — only a genuinely fresh person needs a fresh contacts
+  // row. When mintPerson matched an existing person, that person already
+  // has its contacts mirror; inserting again would create a duplicate
+  // identifier row. (The pre-M2 code always inserted because the raw
+  // path always created — guarding on mintIsNew preserves that 1:1
+  // create→mirror invariant now that the create can resolve to a match.)
+  if (mintIsNew) {
+    await supabase.from('contacts').insert({
+      person_id: newPerson.id,
+      type: 'email',
+      value: email,
+      is_primary: true,
+    })
+  }
 
   // 5. Phase 8 identity resolution — run the matcher against the new
   // person. A high-confidence match auto-merges; medium/low lands in
   // client_match_queue for triage; matching tangential_signals get
   // linked. Fire-and-forget: a matching failure must never break ingest.
+  //
+  // M2 flip note (2026-05-22): the legacy code only ever reached this
+  // step with a genuinely fresh INSERT, so the matcher always ran
+  // against a new row. With mintPerson, the create path can instead
+  // resolve to an EXISTING person via its identifier chain
+  // (`mintIsNew === false`). The Phase-8 matcher (`enqueueIdentityMatches`)
+  // is built for a brand-new row — running it against an already-merged
+  // canonical person is a no-op at best and a spurious re-merge at
+  // worst. Guard it on `mintIsNew` so behaviour matches the pre-flip
+  // contract: matcher runs iff a fresh person was created.
   let survivorId = newPerson.id
-  try {
-    const { enqueueIdentityMatches } = await import('@/lib/services/identity/enqueue')
-    const result = await enqueueIdentityMatches({ supabase, venueId, newPersonId: newPerson.id })
-    if (result.autoMergedIntoPersonId && result.autoMergedIntoPersonId !== newPerson.id) {
-      survivorId = result.autoMergedIntoPersonId
+  if (mintIsNew) {
+    try {
+      const { enqueueIdentityMatches } = await import('@/lib/services/identity/enqueue')
+      const result = await enqueueIdentityMatches({ supabase, venueId, newPersonId: newPerson.id })
+      if (result.autoMergedIntoPersonId && result.autoMergedIntoPersonId !== newPerson.id) {
+        survivorId = result.autoMergedIntoPersonId
+      }
+    } catch (err) {
+      console.error('[pipeline] enqueueIdentityMatches failed:', err instanceof Error ? err.message : err)
     }
-  } catch (err) {
-    console.error('[pipeline] enqueueIdentityMatches failed:', err instanceof Error ? err.message : err)
   }
 
   if (survivorId !== newPerson.id) {
@@ -752,7 +781,12 @@ export async function findOrCreateContact(
     return { personId: survivorId, weddingId: (survivor?.wedding_id as string | null) ?? null, isNew: false }
   }
 
-  return { personId: newPerson.id, weddingId: null, isNew: true }
+  // `isNew` is `mintIsNew`, not a hard-coded `true`: when mintPerson's
+  // identifier match chain resolved to an existing person, this is NOT a
+  // new contact and the downstream wedding-creation gate (which keys on
+  // `isNewContact`) must not mint a fresh couple. When mintPerson created
+  // a fresh row, `mintIsNew` is true — identical to the legacy contract.
+  return { personId: newPerson.id, weddingId: null, isNew: mintIsNew }
 }
 
 /**
@@ -1166,7 +1200,62 @@ export async function processIncomingEmail(
       signal_class: 'unclassified',
     }
     if (email.connectionId) outboundPayload.gmail_connection_id = email.connectionId
-    await supabase.from('interactions').insert(outboundPayload)
+    const { data: outboundRow } = await supabase
+      .from('interactions')
+      .insert(outboundPayload)
+      .select('id')
+      .single()
+
+    // M6 flip (PHASE-1-BATCH-1.md §3.4, 2026-05-22): the cascade write
+    // for the self-loop outbound interaction. This `isOwnOutbound` branch
+    // `return`s here — it never reaches the inbound `linkSignal` call at
+    // the end of `processIncomingEmail` — so the cascade equivalent must
+    // be added inline. Dual-write: the legacy `interactions.insert` above
+    // STAYS; this routes the same event through the Forwards Linker so
+    // `couples`/`touchpoints` get the equivalent write in lockstep.
+    //
+    // `action_type:'venue_sent'` + `signal_tier:'medium'` — matches the
+    // batch Gmail adapter (`identity/sources/gmail.ts`): outbound
+    // venue-sent mail is NOT couple progression (doctrine §3), so the
+    // Tracer's progression-event writer (which keys on `action_type`)
+    // correctly skips it. Using the SAME `external_id` (email.messageId)
+    // as the batch adapter also keeps the touchpoint rerun-safe — a later
+    // batch sweep of the same Gmail id dedups against this live write.
+    if (outboundRow?.id) {
+      try {
+        const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+        const { emailToNormalizedSignal } = await import(
+          '@/lib/services/identity/email-to-signal'
+        )
+        const linkResult = await linkSignal({
+          supabase,
+          venueId,
+          signal: emailToNormalizedSignal({
+            email,
+            interactionId: outboundRow.id as string,
+            emailDate,
+            rawFromName,
+            rawFromEmail,
+            actionType: 'venue_sent',
+            signalTier: 'medium',
+          }),
+          correlationId,
+          source: 'live:email_outbound',
+        })
+        console.log(
+          `[pipeline] cascade_link (self-loop outbound): action=${linkResult.action} ` +
+            `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+            `touchpoint=${linkResult.touchpoint_id ?? 'none'}`,
+        )
+      } catch (err) {
+        // Load-bearing dual-write, same contract as the inbound linkSignal
+        // call: surface the failure to error_logs but never throw out of
+        // the pipeline — the legacy interactions row stays source of truth.
+        await logPipelineError(venueId, 'cascade_link', err, {
+          interactionId: outboundRow.id,
+        }, correlationId)
+      }
+    }
     // Recompute the thread's lifecycle folder so a venue-side outbound
     // captured via self-loop promotes the thread out of 'new_inquiry'
     // (any outbound makes the thread no longer a virgin first-touch).
@@ -4880,17 +4969,29 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
   // Get the thread ID and inbound connectionId from the original interaction.
   // The connectionId ensures the reply goes out FROM the same Gmail account
   // that received the inquiry (multi-Gmail fix).
+  //
+  // M7 flip (2026-05-22): also pull the original interaction's
+  // `wedding_id` + `correlation_id` here so the cascade write below can
+  // (a) anchor the outbound touchpoint to the couple via the legacy
+  // wedding binding and (b) thread the same correlation id through the
+  // linker's telemetry. `sendApprovedDraft` itself writes the new
+  // outbound interaction with `wedding_id:null`, but the draft's PARENT
+  // inbound interaction is wedding-bound — that is the context to carry.
   let threadId: string | undefined
   let inboundConnectionId: string | undefined
+  let parentWeddingId: string | null = null
+  let parentCorrelationId: string | null = null
   if (draft.interaction_id) {
     const { data: interaction } = await supabase
       .from('interactions')
-      .select('gmail_thread_id, gmail_connection_id')
+      .select('gmail_thread_id, gmail_connection_id, wedding_id, correlation_id')
       .eq('id', draft.interaction_id)
       .single()
 
     threadId = (interaction?.gmail_thread_id as string) ?? undefined
     inboundConnectionId = (interaction?.gmail_connection_id as string) ?? undefined
+    parentWeddingId = (interaction?.wedding_id as string | null) ?? null
+    parentCorrelationId = (interaction?.correlation_id as string | null) ?? null
   }
 
   // Send via Gmail. Approved drafts MUST go through the venue's authenticated
@@ -4979,20 +5080,92 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
 
   // Create outbound interaction record
   // signal-class-justified: outbound venue-side sends are not lead signals
-  await supabase.from('interactions').insert({
-    venue_id: draft.venue_id,
-    wedding_id: null, // Could link if needed
-    type: 'email',
-    direction: 'outbound',
-    subject: draft.subject,
-    body_preview: (draft.draft_body as string).slice(0, 300),
-    full_body: draft.draft_body,
-    to_email: draft.to_email,
-    gmail_message_id: sentMessageId,
-    gmail_thread_id: threadId ?? null,
-    timestamp: new Date().toISOString(),
-    signal_class: 'unclassified',
-  })
+  const outboundSentAt = new Date().toISOString()
+  const { data: outboundInteraction } = await supabase
+    .from('interactions')
+    .insert({
+      venue_id: draft.venue_id,
+      wedding_id: null, // Could link if needed
+      type: 'email',
+      direction: 'outbound',
+      subject: draft.subject,
+      body_preview: (draft.draft_body as string).slice(0, 300),
+      full_body: draft.draft_body,
+      to_email: draft.to_email,
+      gmail_message_id: sentMessageId,
+      gmail_thread_id: threadId ?? null,
+      timestamp: outboundSentAt,
+      signal_class: 'unclassified',
+    })
+    .select('id')
+    .single()
+
+  // M7 flip (PHASE-1-BATCH-1.md §3.4, 2026-05-22): the cascade write for
+  // the approved-draft outbound interaction. `sendApprovedDraft` is a
+  // SEPARATE function from `processIncomingEmail` — it had no `linkSignal`
+  // call today — so the cascade equivalent is added here. Dual-write: the
+  // legacy `interactions.insert` above STAYS (it still writes
+  // `wedding_id:null`); this routes the same outbound event through the
+  // Forwards Linker so `couples`/`touchpoints` get the equivalent write.
+  //
+  // The legacy row is `wedding_id:null` (unbound); the cascade does NOT
+  // need that — `linkSignal` resolves the couple itself. We additionally
+  // pass `weddingId` = the PARENT inbound interaction's wedding (the
+  // draft's `interaction_id` chain) as the matcher's `legacy_wedding_id`
+  // anchor hint, so the outbound touchpoint binds to the same couple the
+  // draft was written for without re-running the full matcher.
+  //
+  // `action_type:'venue_sent'` + `signal_tier:'medium'` — identical to
+  // M6 and the batch Gmail adapter: outbound venue mail is not couple
+  // progression. `external_id` = the Gmail message id (sentMessageId) so
+  // a later batch sweep dedups against this live touchpoint.
+  if (outboundInteraction?.id) {
+    try {
+      const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+      const { emailToNormalizedSignal } = await import(
+        '@/lib/services/identity/email-to-signal'
+      )
+      const linkResult = await linkSignal({
+        supabase,
+        venueId: draft.venue_id as string,
+        signal: emailToNormalizedSignal({
+          email: {
+            messageId: sentMessageId,
+            threadId: threadId ?? null,
+            subject: (draft.subject as string) ?? null,
+          },
+          interactionId: outboundInteraction.id as string,
+          emailDate: outboundSentAt,
+          // Outbound: no inbound sender identity. The couple is resolved
+          // via the parent wedding anchor hint, not a From header.
+          rawFromName: null,
+          rawFromEmail: null,
+          weddingId: parentWeddingId,
+          actionType: 'venue_sent',
+          signalTier: 'medium',
+        }),
+        correlationId: parentCorrelationId ?? undefined,
+        source: 'live:approved_draft',
+      })
+      console.log(
+        `[pipeline] cascade_link (approved draft): action=${linkResult.action} ` +
+          `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+          `touchpoint=${linkResult.touchpoint_id ?? 'none'}`,
+      )
+    } catch (err) {
+      // Load-bearing dual-write, same contract as the M1/M6 linkSignal
+      // calls: surface the failure but never throw — the legacy
+      // interactions row stays source of truth during the dual-write
+      // window. logPipelineError builds its own service client.
+      await logPipelineError(
+        draft.venue_id as string,
+        'cascade_link',
+        err,
+        { interactionId: outboundInteraction.id, draftId },
+        parentCorrelationId ?? undefined,
+      )
+    }
+  }
 
   // Refresh the thread's lifecycle folder — the freshly-sent reply
   // pushes a new_inquiry thread to potential_client (outbound>=1 +
