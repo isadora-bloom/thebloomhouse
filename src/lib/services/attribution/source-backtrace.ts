@@ -80,6 +80,17 @@ export const WEAK_FIRST_TOUCH_SOURCES = new Set([
   'dubsado',
 ])
 
+// NOTE (2026-05-21): an "F2" body-text discovery scan was prototyped here
+// (scan email bodies for "how did you hear" + platform keywords via the
+// Wave 15 canonical mapper). A dry run against Rixey proved it ~100%
+// false-positive: it matched "Add to Google Calendar" links in Calendly
+// notification emails as source=google, the idiom "tie the knot" as
+// source=the_knot, and "recommended vendors" policy questions as
+// referral. The discovery moment is NOT present in these couples' email
+// bodies — they came via Calendly/HoneyBook funnels. F2 was reverted;
+// only F1 (NULL-source filter unblock) ships. See bloom-consolidation-
+// checkpoint memory for the full diagnosis.
+
 export interface Evidence {
   interactionId: string
   fromEmail: string | null
@@ -588,11 +599,16 @@ export async function findBacktraceCandidates(
   const includeNoMatch = options.includeNoMatch === true
   const sb = createServiceClient()
 
+  // F1 (2026-05-21): include NULL source — HoneyBook CSV imports land
+  // with weddings.source = NULL (the CSV doesn't carry a source column),
+  // and the original `.in('source', [...weak])` filter was blind to them.
+  // The 63 Rixey Untracked bookings ALL fit this shape.
+  const weakList = [...WEAK_FIRST_TOUCH_SOURCES].join(',')
   const { data: weddings, error: wedErr } = await sb
     .from('weddings')
     .select('id, source, inquiry_date, created_at')
     .eq('venue_id', venueId)
-    .in('source', [...WEAK_FIRST_TOUCH_SOURCES])
+    .or(`source.is.null,source.in.(${weakList})`)
   if (wedErr) console.warn('[backtrace] weddings query error:', wedErr.message)
   const weddingRows = (weddings ?? []) as WeddingRow[]
   if (weddingRows.length === 0) return []
@@ -849,7 +865,10 @@ export async function backtraceOneWedding(
     | { id: string; venue_id: string; source: string | null; inquiry_date: string | null; created_at: string }
     | null
   if (!wedRow || wedRow.venue_id !== venueId) return null
-  if (!wedRow.source || !WEAK_FIRST_TOUCH_SOURCES.has(wedRow.source)) return null
+  // F1 (2026-05-21): accept NULL source (HoneyBook CSV imports landed
+  // without source) OR a weak first-touch tag. Skip only when source is
+  // set AND non-weak (already attributed to a real channel).
+  if (wedRow.source != null && !WEAK_FIRST_TOUCH_SOURCES.has(wedRow.source)) return null
 
   // Pull this couple's full identity cluster — name tokens AND every
   // email associated with the wedding's people rows.
@@ -955,7 +974,10 @@ export async function backtraceOneWedding(
   const candidate: BacktraceCandidate = {
     weddingId,
     coupleNames,
-    currentSource: wedRow.source,
+    // F1: wedRow.source may now be null (HoneyBook CSV import case);
+    // coerce to 'unknown' to match findBacktraceCandidates' behaviour
+    // and the BacktraceCandidate.currentSource: string contract.
+    currentSource: wedRow.source ?? 'unknown',
     inquiryDate: wedRow.inquiry_date,
     suggestedSource: normalized,
     evidence,
