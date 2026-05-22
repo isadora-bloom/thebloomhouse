@@ -39,6 +39,8 @@ The plan cannot gate itself without these. None existed; all are built here firs
 **0.2 — Generate the kill list.** Produce `CONSOLIDATION-PLAN-FROZEN.md` mechanically from the Day 1 catalogs + D1/D2/D3: deletion budget → Phase 4, re-key list → Phase 1, per-limb migration → Phase 3. Now bookkeeping, not a guess.
 
 **0.3 — Loop current-state assessment (gap #7).** None of the five loops is greenfield; all have components. Document the real starting state so "wire Loop N" in Phase 3 is concrete, not hand-waved:
+
+> **DONE 2026-05-22 → `LOOP-ASSESSMENT.md` (real code trace; supersedes the filename-level bullets below).** Verdicts: Loop 1 voice ~85% closed · Loop 2 prediction does NOT close (calibration is read-only, the model never reads it back) · Loop 3 attribution ~50%, gap = 6 unregistered `vercel.json` crons · Loop 4 positioning ~90% · Loop 5 capacity is not a loop (three unconnected parts). All five read legacy tables only → all are Phase 3 reader-migration targets. The bullets below were the pre-trace filename guess — trust `LOOP-ASSESSMENT.md`.
 - **Loop 1 (voice):** `draft_feedback`, `voice-dna-extract.ts`, `draft_edit_insights`, `voice/gmail-backfill.ts` all exist. The draft→edit→diff→voice-DNA→next-draft chain has every part — Phase 3.1 confirms it closes end-to-end.
 - **Loop 2 (prediction):** substantial — `per-couple-derive.ts` (close probability), a real `calibration/` module (`analyze.ts`, `measure-outcomes.ts`, `record-prediction.ts`), `prediction_snapshots`/`prediction_outcomes` tables. Built; Phase 3 confirms closure.
 - **Loop 3 (attribution):** `source-backtrace.ts`, discovery-source, `attribution_events`, marketing-spend. Partial (the § N.12 discovery work). Phase 3.3 finishes.
@@ -57,10 +59,10 @@ The plan cannot gate itself without these. None existed; all are built here firs
 
 **Goal:** every writer routes through the cascade so `couples`/`touchpoints` and the legacy tables are written in lockstep — no new divergence. Legacy is still read; NOT yet read-only.
 
-**1.1 — Promote the cascade shadow→primary.** Today the cascade runs via `route-by-tier.ts` → tracer cron + `pipeline.ts:4109` `linkSignal` (fire-and-forget). Make `linkSignal` synchronous, awaited, error-surfaced. The cascade write becomes load-bearing.
+**1.1 — Promote the cascade shadow→primary.** Today the cascade runs via `route-by-tier.ts` → tracer cron + `pipeline.ts:4109` `linkSignal`. The pipeline call is **already `await`ed** (verified 2026-05-22) — it is shadow by a *discarded `LinkResult` + empty `catch{}` + trailing position*, not a missing `await`. Promotion = capture the result, surface errors (log or re-throw), act on the couple binding, reposition as a first-class pipeline step. The cascade write becomes load-bearing. Detail: `PHASE-1-BATCH-1.md` §P5.
 
 **1.2 — Migrate the writers, in ordered batches (gap #6).** Agent A catalogued 138 writers: 36 already cascade-routed; of the 102 others — ~50 identity-bearing (MIGRATE), ~40 lifecycle/heat/metadata UPDATEs (legitimately stay — R1 is a creation boundary), 8 `cleanup-ghost-weddings` sites (DELETE — constitution-violating), 4 couple-pages (stay). The ~50 MIGRATE writers, sequenced highest-volume-first so the riskiest code is done while attention is freshest:
-- **Batch 1 — the email pipeline.** `pipeline.ts:2211/2907/3062` (the Liam Hunt partner2 sites) + the other `pipeline.ts` writers. Highest volume, highest risk.
+- **Batch 1 — the email pipeline.** Decomposed in `PHASE-1-BATCH-1.md`: 39 write sites → 9 MIGRATE, 30 STAY. The Liam Hunt partner2 sites are `pipeline.ts:2211` + `:3062` only — `:2907` is an `interactions` re-link UPDATE, not a partner2 insert (earlier conflation, corrected). Highest volume, highest risk.
 - **Batch 2 — the ingestion adapters.** Calendly webhook, HoneyBook CRM import, Twilio/SMS, Zoom, OpenPhone.
 - **Batch 3 — the 15 direct-writing crons** (Agent F): route each through the cascade.
 - **Batch 4 — long-tail** writers (brain-dump, reprocess endpoints, data-integrity remediations).
@@ -81,7 +83,7 @@ Phase 1's schema work is therefore *additive only* — write the couple-keyed `t
 
 **1.6 — CI guards + RLS.** `check-cascade-only-writer.mjs` + `check-rls-on-venue-id.mjs`. Patch the 2 PII RLS-OFF tables (`notifications`, `wedding_timeline`) and resolve the 13 default-deny tables (Agent G).
 
-**1.7 — Verify the two open items** (`CASCADE-CANONICAL-WRITER.md` §9): does `lock_and_mint_couple` write a `couple_merge_events` audit row; the `CascadeSignal`↔`NormalizedSignal` adaptation.
+**1.7 — The two open items, RESOLVED 2026-05-22** (`CASCADE-CANONICAL-WRITER.md` §9): (a) `lock_and_mint_couple` does **not** write a `couple_merge_events` audit row — a confirmed gap, not an open question. Batch 1 §P3 adds the audit row and routes `tracer.ts:730`'s chokepoint-bypassing direct `INSERT INTO couples` through `lockAndMintCouple`. (b) `CascadeSignal` and `NormalizedSignal` are distinct types with no direct adapter — the live path round-trips lossily through `MatchableRecord`, dropping body text so `cascadeMatch` stages 6-8 never fire from `linkSignal` (`PHASE-1-BATCH-1.md` Q5).
 
 **Phase 1 gate:** CI guards green. Per-writer shadow-compare divergence zero for every migrated writer. A venue-wide divergence check (spine vs legacy counts + sample reconcile) passes. Battery runner re-run — score should be unchanged (Phase 1 changes writes, not reads) — a *drop* signals a regression.
 
@@ -127,7 +129,7 @@ Per-limb recipe: migrate the limb's reads legacy→spine → **triage** its cros
 
 **3.4 — Portal + Loop 4 (positioning).** The Portal plans the EVENT — it migrates onto `weddings` reached via `couples.source_wedding_id`, not onto `couples` directly (D1). Sever the 5 Portal cross-limb imports. Close Loop 4 (reviews → themes → drafts). Battery: Q34.
 
-Loops 2 (prediction) and 5 (capacity) are confirmed-or-finished lighter-touch with their limbs; they are not battery-gated for the ship (Critical Audit: not survival-critical).
+Loops 2 (prediction) and 5 (capacity) are not battery-gated for the ship (Critical Audit: not survival-critical) — but `LOOP-ASSESSMENT.md` corrects §0.3: Loop 2 does **not** close today (calibration is read-only; Phase 3.2 must *build* the calibration→prediction feedback edge, not confirm it) and Loop 5 is **not a loop** (three unconnected parts; Phase 3.5 is a build-or-cut decision). Still lighter-touch and off the critical path — but build work, not confirmation.
 
 **Phase 3 gate (per limb):** the limb's battery subset ≥ +1.0; its loop demonstrably closes; its legacy reads are deleted; CI guard still green.
 
