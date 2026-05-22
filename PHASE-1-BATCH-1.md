@@ -116,3 +116,23 @@ Fold into `CASCADE-CANONICAL-WRITER.md` + `src/lib/spine/cascade.ts` header:
 ## Batch 1 done-definition (the gate to Batch 2)
 
 P1-P5 shipped · all 9 MIGRATE sites flipped · per-site shadow-compare divergence zero · CI guard `check-cascade-only-writer.mjs` green on `pipeline.ts` · battery re-run shows no regression from the 1.447 baseline (Phase 1 changes writes, not reads — a drop signals a bug). Then Batch 2 (ingestion adapters: Calendly, HoneyBook, Twilio, Zoom, OpenPhone).
+
+---
+
+## Pressure-test findings & remediation (2026-05-22)
+
+A 4-agent adversarial pressure-test (doctrine / engineering-spec / code-correctness / battery) ran against the P1-P5 commit `352cf23`. Outcome: P1, P3, P4 sound as shipped; P2 was incomplete; P5's commit message over-claimed; the battery axis is regression-SAFE.
+
+**P2 — was incomplete, now COMPLETED (commit follows `352cf23`).** The pressure-test found `enrichExistingPartner2` only closed the *2nd-and-later* partner2 case: the first partner2 fell through to `resolver.createPerson`, which hard-coded `role:'partner1'` + no `wedding_id`, so the next signal missed it and still duplicated. Plus a TOCTOU race (no DB uniqueness) and a surname-lowercasing bug. Remediation:
+- `createPerson`/`resolvePersonOnly`/`mintPerson` now thread `role`+`weddingId` → a fresh partner2 mints correctly stamped. Default (no context) unchanged.
+- **Migration 367** — partial unique index `people (venue_id, wedding_id, role) WHERE merged_into_id IS NULL AND wedding_id IS NOT NULL AND role IN ('partner1','partner2')`. The DB now enforces the invariant the TS check only checked optimistically (closes the race). Migration has a `DO`-block pre-flight that fails loud + names offending groups if pre-existing partner dups exist (it does NOT auto-dedup — that is the audited merge cascade's job).
+- `lastNameOf` no longer lowercases (was corrupting stored surnames).
+- **M4/M5 flip note:** once `pipeline.ts:2211/3062` route through `mintPerson`, a concurrent-race loser will hit the migration-367 unique index — the flip must treat a unique-violation as "partner already exists, re-query", not a hard failure.
+
+**P5 — code is correct; the commit message over-claimed.** PHASE-1-BATCH-1.md §P5 listed 5 steps; P5 did 1, 2, 5. Step 3 (in-pipeline divergence logging) is delegated to `scripts/shadow-compare.ts` — acceptable. **Step 4 (reposition `linkSignal` as a first-class step so later steps consume its couple binding) is deliberately NOT done and should stay not-done** — repositioning so legacy steps depend on the cascade binding would violate the Phase 1 dual-write rule ("legacy stays source of truth"). §P5 step 4 was wrong for Phase 1; corrected here. No P5 code change needed.
+
+**P3 — open item for the site-flip.** The tracer reroute's synthetic touchpoint uses `external_id = fragment.id` (the fragment PK), not the original event's external_id — so it will NOT dedup against a live-linker touchpoint for the same event → latent double-count in touchpoint/journey counts. Resolve when M8/the tracer path is touched (added to Q-list below as Q6).
+
+**Battery — regression-SAFE.** `intel-brain` (the NLQ read path) reads ~30 tables; zero overlap with anything P1-P5 writes (`couples`/`touchpoints`/`couple_merge_events`/`people`/cascade). P1-P5 moves no battery question now (correct — prerequisites). **Hazard:** the battery runner reads `.env.local` → prod `jsxxgwprxuqgcauzlxcb`; migrations 366/367 are written for the consolidation Supabase branch. Any post-366/367 battery run must point `.env.local` at the DB the migrations were applied to, or it measures the wrong substrate.
+
+- **Q6 (new) — tracer synthetic touchpoint external_id.** Use the fragment's original event external_id, not the fragment PK, or document the double-count as accepted. Resolve at the tracer/M8 step.

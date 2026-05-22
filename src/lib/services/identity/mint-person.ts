@@ -180,11 +180,18 @@ export async function mintPerson(input: MintPersonInput): Promise<MintPersonResu
       // No existing partner2 — fall through to the resolver path. It
       // will run the identifier match chain (in case partner2 DOES
       // share an identifier with an existing person) and on miss
-      // INSERT a fresh person. Note: the resolver's createPerson hard-
-      // codes role:'partner1' on INSERT; the caller / a follow-up step
-      // is responsible for stamping role:'partner2' + wedding_id on the
-      // freshly-minted row. Re-pointing the buggy call sites (M4/M5) is
-      // a later step — see PHASE-1-BATCH-1.md §3.2.
+      // INSERT a fresh person.
+      //
+      // P2 GAP A fix (2026-05-22): the `weddingId` + `role` below are
+      // threaded into `resolvePersonOnly` → `createPerson`, so the
+      // FIRST partner2 minted for this wedding lands correctly stamped
+      // (`role:'partner2'`, `wedding_id:<id>`) — not as the historic
+      // `role:'partner1'`, `wedding_id:NULL` row that was invisible to
+      // this very dedup query, leaving the second partner2 signal free
+      // to insert a duplicate. The DB-level partial unique index
+      // (migration 367) is the belt to this suspenders. Re-pointing the
+      // buggy call sites (M4/M5) to route through mintPerson is the
+      // next step — see PHASE-1-BATCH-1.md §3.2.
     } catch (err) {
       // A dedup-query failure must not block the mint — degrade to the
       // pre-P2 behaviour (resolver path) rather than dropping the person.
@@ -204,6 +211,14 @@ export async function mintPerson(input: MintPersonInput): Promise<MintPersonResu
     const result = await resolvePersonOnly(input.venueId, input.signals, {
       sourceLabel: input.source,
       supabase,
+      // P2 GAP A fix (2026-05-22): thread the wedding + role context so a
+      // fresh INSERT in createPerson is stamped correctly. Only forwarded
+      // when both are present; resolvePersonOnly + createPerson treat
+      // them as optional and fall back to the pre-P2 default
+      // (`role:'partner1'`, no `wedding_id`) when absent.
+      ...(input.weddingId && input.role
+        ? { weddingId: input.weddingId, personRole: input.role }
+        : {}),
     })
     return {
       personId: result.personId,

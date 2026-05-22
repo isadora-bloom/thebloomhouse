@@ -109,6 +109,30 @@ export interface ResolverOptions {
    * write-site so new weddings never drift in the first place.
    */
   inquirySignalAt?: string
+  /**
+   * Partner-role context for a fresh person mint (P2 GAP A fix,
+   * 2026-05-22).
+   *
+   * `resolvePersonOnly`'s no-match branch delegates to `createPerson`,
+   * which historically hard-coded `role:'partner1'` and never set
+   * `wedding_id`. That meant the FIRST partner2 minted for a wedding
+   * landed as a `role:'partner1'`, `wedding_id:NULL` row — invisible to
+   * `enrichExistingPartner2`'s `(role='partner2', wedding_id=...)` query,
+   * so the SECOND partner2 signal still inserted a duplicate. The P2
+   * partner2-dedup invariant only closed the 2nd-and-later case.
+   *
+   * When the caller knows the wedding + which partner role the person
+   * fills, it threads them here. `createPerson` then stamps `role` and
+   * `wedding_id` on the INSERT so the first partner2 is correctly
+   * `role:'partner2'`, `wedding_id:<id>` — and the next partner2 signal's
+   * dedup query finds it.
+   *
+   * Both optional. Omitted → `createPerson` behaves exactly as before
+   * (`role:'partner1'`, no `wedding_id`). Every pre-P2 caller is
+   * unaffected.
+   */
+  personRole?: 'partner1' | 'partner2'
+  weddingId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -174,11 +198,30 @@ export function normalizePhone(phone: string | null | undefined): string | null 
   return `+${digits}`
 }
 
+/**
+ * Extract the last name token from a full name, preserving its original
+ * casing.
+ *
+ * P2 GAP C fix (2026-05-22): this used to `lower()` its result. That was
+ * harmless for `findByNamePlusDate` (it feeds an `.ilike()` filter, which
+ * is case-insensitive anyway) but actively corrupting for
+ * `enrichExistingPartner2`, which writes this value straight into the
+ * `people.last_name` COLUMN — surnames were being stored lowercased
+ * (`'hunt'` sitting next to a properly-cased `'Liam'`). `firstNameOf`
+ * never lowercased, so the two were asymmetric.
+ *
+ * Both callers are now case-safe with a cased return:
+ *   - `findByNamePlusDate` (line ~407) uses `.ilike()` → case-insensitive.
+ *   - `enrichExistingPartner2` (line ~898) writes to a column → wants the
+ *     cased value.
+ * If a future caller needs a lowercased value for an exact comparison it
+ * must lowercase at the comparison site, not here.
+ */
 function lastNameOf(fullName: string | null | undefined): string | null {
   if (!fullName) return null
   const parts = fullName.trim().split(/\s+/).filter(Boolean)
   if (parts.length < 2) return null
-  return lower(parts[parts.length - 1])
+  return parts[parts.length - 1].trim() || null
 }
 
 function firstNameOf(fullName: string | null | undefined): string | null {
@@ -691,11 +734,23 @@ export async function resolveCanonicalPerson(
 // Person + wedding insert helpers (used after no-match case 5).
 // ---------------------------------------------------------------------------
 
+/**
+ * Partner-role context for a fresh `people` INSERT. When supplied,
+ * `createPerson` stamps `role` + `wedding_id` instead of falling back to
+ * the hard-coded `role:'partner1'` / null `wedding_id`. P2 GAP A fix
+ * (2026-05-22) — see the `ResolverOptions.personRole` doc block.
+ */
+interface PartnerContext {
+  role?: 'partner1' | 'partner2'
+  weddingId?: string
+}
+
 async function createPerson(
   supabase: SupabaseClient,
   venueId: string,
   signals: IdentitySignals,
   sourceLabel: string | null,
+  partnerContext?: PartnerContext,
 ): Promise<string | null> {
   // Wave 2B: route the resolver's createPerson through the identity
   // name-capture chokepoint instead of writing first/last directly. The
@@ -720,12 +775,20 @@ async function createPerson(
   // new person.
   const { captureNameEvidence, inferNameFromEmail } = await import('./name-capture')
 
+  // P2 GAP A fix (2026-05-22): when the caller supplied partner-role
+  // context, stamp `role` + `wedding_id` on the INSERT. Without it, the
+  // FIRST partner2 minted for a wedding landed as `role:'partner1'`,
+  // `wedding_id:NULL` — invisible to `enrichExistingPartner2`'s
+  // `(role='partner2', wedding_id=...)` dedup query, so the next
+  // partner2 signal still inserted a duplicate (the Liam Hunt class).
+  // Default preserved: no context → `role:'partner1'`, no `wedding_id`.
   const insert: Record<string, unknown> = {
     venue_id: venueId,
-    role: 'partner1',
+    role: partnerContext?.role ?? 'partner1',
     first_name: null,
     last_name: null,
   }
+  if (partnerContext?.weddingId) insert.wedding_id = partnerContext.weddingId
   if (signals.email) insert.email = normalizeEmail(signals.email) ?? signals.email
   if (signals.phone) insert.phone = normalizePhone(signals.phone)
   const { data, error } = await supabase
@@ -1132,7 +1195,18 @@ export async function resolvePersonOnly(
   // No match — create fresh person via the same chokepoint path
   // resolveIdentity uses, so name-capture confidence + display_handle
   // rules apply uniformly.
-  const newId = await createPerson(supabase, venueId, signals, sourceLabel)
+  //
+  // P2 GAP A fix (2026-05-22): forward any partner-role context the
+  // caller supplied so the fresh row is stamped with the correct `role`
+  // + `wedding_id`. mintPerson's partner2 invariant relies on this: the
+  // FIRST partner2 it mints must land as `role:'partner2'`,
+  // `wedding_id:<id>` so the NEXT partner2 signal's dedup query finds
+  // it. Omitted → createPerson defaults (`role:'partner1'`, no
+  // `wedding_id`), unchanged for every pre-P2 caller.
+  const newId = await createPerson(supabase, venueId, signals, sourceLabel, {
+    role: options.personRole,
+    weddingId: options.weddingId,
+  })
   if (!newId) {
     throw new Error('resolvePersonOnly: createPerson failed; cannot proceed')
   }

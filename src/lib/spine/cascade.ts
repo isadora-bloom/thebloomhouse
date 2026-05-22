@@ -9,8 +9,8 @@
  *
  *   1. Every new caller imports the canonical writer from here, not from
  *      the scattered `services/identity/*` files.
- *   2. The Day 12 CI guard (`check-cascade-only-writer`) has ONE explicit
- *      allowed-writer surface to verify against.
+ *   2. The CI guard (`check-cascade-only-writer`, §1.6 — NOT yet built)
+ *      will have ONE explicit allowed-writer surface to verify against.
  *
  * This is NOT a stub. Every writer below is real, tested code. This file
  * is a namespace, not an implementation:
