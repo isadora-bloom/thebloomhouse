@@ -15,16 +15,23 @@
  * This is NOT a stub. Every writer below is real, tested code. This file
  * is a namespace, not an implementation:
  *
- *   lockAndMintCouple — couple + touchpoint (new `couples`/`touchpoints`
- *                       spine). Advisory-locked via the
+ *   linkSignal        — THE ORCHESTRATOR. Whole-cascade entry: match ->
+ *                       judge -> route-by-tier -> mint/attach/candidate/
+ *                       fragment. Every Batch-1 identity/touchpoint
+ *                       writer calls THIS (not lockAndMintCouple direct —
+ *                       that skips the matcher and mints duplicates).
+ *                       Live at pipeline.ts:4109: awaited, but still
+ *                       SHADOW — the LinkResult is discarded, errors are
+ *                       swallowed by an empty catch, the call sits last.
+ *                       Phase 1 §1.1 / §P5 promotes it to load-bearing.
+ *   lockAndMintCouple — couple + touchpoint chokepoint (new `couples`/
+ *                       `touchpoints` spine). Advisory-locked via the
  *                       `lock_and_mint_couple` RPC (migration 359).
- *                       Built AND wired — but in SHADOW MODE: live paths
- *                       are route-by-tier.ts -> identity_first_tracer
- *                       cron, and pipeline.ts:4109 -> linkSignal (fire-
- *                       and-forget). Runs parallel to the legacy
- *                       weddings/interactions pipeline. Days 9-11 work
- *                       is PROMOTION (shadow -> primary), not adoption.
+ *                       A LEAF — reached only via applyTierRouting inside
+ *                       linkSignal; not called directly by limb writers.
  *   mintPerson        — `people` rows (legacy people-table chokepoint).
+ *                       Carries the partner2 enrich-or-skip invariant
+ *                       (weddingId+role, Phase 1 §P2).
  *   mintWedding       — legacy `weddings`-table chokepoint
  *                       (adopted 2026-05-12).
  *
@@ -33,10 +40,23 @@
  * Lifecycle / heat / metadata UPDATEs are NOT constrained here — R1 is a
  * creation boundary, not a commit boundary.
  *
- * Verify-Day-7 open items (CASCADE-CANONICAL-WRITER.md §3.1, §4):
- *   (a) does `lock_and_mint_couple` write a `couple_merge_events` audit row
- *   (b) the `CascadeSignal`-vs-`NormalizedSignal` adaptation
+ * Day-7 open items — RESOLVED 2026-05-22 (PHASE-1-BATCH-1.md §1.7, §8):
+ *   (a) `lock_and_mint_couple` did NOT write a `couple_merge_events`
+ *       audit row — confirmed gap; migration 366 adds a `couple_minted`
+ *       row inside the RPC mint branch.
+ *   (b) `CascadeSignal` and `NormalizedSignal` are distinct types with no
+ *       direct adapter; the live path round-trips lossily through
+ *       `MatchableRecord`, dropping body text (cascadeMatch stages 6-8
+ *       never fire from linkSignal — see PHASE-1-BATCH-1.md Q5).
  */
+
+export {
+  linkSignal,
+  linkSignalBatch,
+  type LinkSignalArgs,
+  type LinkResult,
+  type LinkAction,
+} from '@/lib/services/identity/forwards-linker'
 
 export {
   lockAndMintCouple,

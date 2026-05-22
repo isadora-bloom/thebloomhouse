@@ -78,6 +78,7 @@ import {
 import { applyTierRouting } from './route-by-tier'
 import { decayStaleCouples } from './decay'
 import { buildJudgeContext } from './judge-context'
+import { lockAndMintCouple } from './mint-couple'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -713,9 +714,32 @@ function fragmentToMatchable(f: CoalesceFragment): MatchableRecord {
  * links into the couple an earlier pair already minted. Returns the
  * couple id, or null on a mint failure.
  *
- * No advisory lock: cross_channel_coalesce runs only inside the
- * single-process Tracer, never concurrently with itself or the live
- * Forwards Linker (the Linker does not coalesce).
+ * P3b (PHASE-1-BATCH-1.md §2 P3): the mint goes through the
+ * `lockAndMintCouple` chokepoint rather than a direct `INSERT INTO
+ * couples` — that direct insert was a chokepoint-bypass. The
+ * `couple_merge_events` 'fragment_promoted' audit row this function has
+ * always written STAYS — it is the coalesce-specific audit. The
+ * chokepoint additionally writes its own 'couple_minted' row (mig 366),
+ * so a coalesce-minted couple now carries both: a generic mint-trail
+ * row and the fragment-promotion row. That is intentional double
+ * coverage, not a bug.
+ *
+ * The advisory lock is now real (the RPC owns it). Previously this
+ * relied on cross_channel_coalesce being single-process; the chokepoint
+ * makes it correct even if that ever stops being true.
+ *
+ * Fragment → NormalizedSignal note: a CoalesceFragment carries only
+ * id / channel / identity_hint / occurred_at — no email or phone. The
+ * synthesised signal therefore has no contact identifiers, so
+ * `computeLockKey` falls through to a `handle:<channel>:<hint>` key
+ * (or `signal:<channel>:<id>` if the hint is empty — though stageCoalesce
+ * filters out null hints). The RPC's email/phone re-check is a no-op for
+ * such a signal, so it always mints rather than attaching. The RPC also
+ * inserts a `touchpoints` row keyed on (venue_id, channel, external_id)
+ * = (venue, fragment.channel, fragment.id) — a synthetic touchpoint
+ * representing the fragment promotion. That touchpoint did not exist
+ * under the old direct-insert path; see the session report for the
+ * behaviour-change flag.
  */
 async function promoteFragmentInto(
   state: RunState,
@@ -727,29 +751,57 @@ async function promoteFragmentInto(
 
   if (!coupleId) {
     // Fragments carry no email/phone — the only identity is the hint.
-    const { data, error } = await state.supabase
-      .from('couples')
-      .insert({
-        venue_id: state.venueId,
-        primary_contact_name: fragment.identity_hint ?? 'Unnamed couple',
-        lifecycle_state: 'channel_scoped',
-        channel_scope: fragment.channel,
-        last_progression_at: fragment.occurred_at,
-      })
-      .select('id')
-      .single()
-    if (error || !data) {
+    // Build a minimal NormalizedSignal so the mint routes through the
+    // advisory-locked `lock_and_mint_couple` chokepoint.
+    const fragmentSignal: NormalizedSignal = {
+      external_id: fragment.id,
+      channel: fragment.channel,
+      action_type: 'fragment_promoted',
+      occurred_at: fragment.occurred_at,
+      signal_tier: 'medium',
+      identity_hint: fragment.identity_hint,
+      primary_name: fragment.identity_hint,
+      raw_payload: {
+        source: 'tracer.cross_channel_coalesce',
+        fragment_id: fragment.id,
+        reason,
+      },
+    }
+
+    let mintResult
+    try {
+      mintResult = await lockAndMintCouple(
+        state.supabase,
+        state.venueId,
+        fragmentSignal,
+      )
+    } catch (err) {
       logEvent({
         level: 'warn',
         msg: 'tracer.coalesce.mint_failed',
         venueId: state.venueId,
         correlationId: state.runId,
-        data: { fragment: fragment.id, error: error?.message ?? 'no data' },
+        data: {
+          fragment: fragment.id,
+          error: err instanceof Error ? err.message : String(err),
+        },
       })
       return null
     }
-    coupleId = (data as { id: string }).id
-    state.totals.couples_minted += 1
+
+    if (!mintResult.coupleId) {
+      logEvent({
+        level: 'warn',
+        msg: 'tracer.coalesce.mint_failed',
+        venueId: state.venueId,
+        correlationId: state.runId,
+        data: { fragment: fragment.id, error: 'rpc returned null couple_id' },
+      })
+      return null
+    }
+
+    coupleId = mintResult.coupleId
+    if (mintResult.minted) state.totals.couples_minted += 1
     await state.supabase.from('couple_merge_events').insert({
       venue_id: state.venueId,
       event_type: 'fragment_promoted',

@@ -4099,49 +4099,49 @@ export async function processIncomingEmail(
     }
   }
 
-  // Phase C Forwards Linker — shadow-mode write to the new identity
-  // schema. Fire-and-forget; never blocks pipeline response. Doctrine
-  // anchor: IDENTITY-FIRST-ARCHITECTURE.md §4. The legacy pipeline is
-  // unchanged above; the linker writes a parallel record into
-  // touchpoints/fragments so couples can rebuild without backfill.
+  // Phase C Forwards Linker — the cascade write into the new identity
+  // schema (couples/touchpoints/fragments). Doctrine anchor:
+  // IDENTITY-FIRST-ARCHITECTURE.md §4. Phase 1 §1.1 / §P5 PROMOTION
+  // (2026-05-22): this was shadow — its LinkResult was discarded and
+  // every error was swallowed. It is now LOAD-BEARING: the result is
+  // captured + observable and a failure is surfaced to error_logs.
+  // It still does NOT throw out of the pipeline — during the Phase 1
+  // dual-write window the legacy tables remain the source of truth, so
+  // a cascade hiccup must not fail the email tick. Divergence between
+  // the cascade binding and the legacy weddingId is the job of the
+  // shadow-compare harness (scripts/shadow-compare.ts), not this path.
   if (interactionId) {
     try {
       const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
-      await linkSignal({
+      const { emailToNormalizedSignal } = await import(
+        '@/lib/services/identity/email-to-signal'
+      )
+      const linkResult = await linkSignal({
         supabase,
         venueId,
-        signal: {
-          external_id: email.messageId ?? interactionId,
-          channel: 'gmail',
-          action_type: 'reply',
-          occurred_at: emailDate,
-          signal_tier: 'high',
-          identity_hint: rawFromName ?? rawFromEmail ?? null,
-          primary_name: rawFromName ?? null,
-          primary_email: rawFromEmail ?? null,
-          primary_phone: null,
-          partner_name: null,
-          partner_email: null,
-          partner_phone: null,
-          wedding_date: null,
-          session_ip: null,
-          session_fingerprint: null,
-          raw_payload: {
-            subject: email.subject,
-            interaction_id: interactionId,
-            draft_id: draftId,
-            thread_id: email.threadId ?? null,
-          },
-          legacy_wedding_id: weddingId ?? null,
-        },
+        signal: emailToNormalizedSignal({
+          email,
+          interactionId,
+          emailDate,
+          rawFromName,
+          rawFromEmail,
+          draftId,
+          weddingId,
+        }),
         correlationId,
         source: 'live:email',
       })
-    } catch {
-      // Linker logs the failure structured via logEvent + writes a
-      // failed-status row to tracer_run_events. Surface there, not in
-      // cron stdout. The legacy email-pipeline path must not break on
-      // a linker hiccup.
+      console.log(
+        `[pipeline] cascade_link: action=${linkResult.action} ` +
+          `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+          `tier=${linkResult.tier ?? 'none'} touchpoint=${linkResult.touchpoint_id ?? 'none'}`,
+      )
+    } catch (err) {
+      // Promotion: the cascade write is load-bearing — a failure is
+      // surfaced to error_logs (not just the linker's tracer_run_events
+      // row) so it shows in pipeline error telemetry. Still caught: the
+      // legacy path must not break on a linker hiccup during dual-write.
+      await logPipelineError(venueId, 'cascade_link', err, { interactionId }, correlationId)
     }
   }
 

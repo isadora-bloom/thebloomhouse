@@ -804,6 +804,120 @@ function pickNameSourceForLabel(label: string | null):
   return 'form_relay'
 }
 
+/**
+ * Partner2 dedup invariant — the structural fix for the Liam Hunt
+ * duplicate-partner2 bug class (P2, 2026-05-22).
+ *
+ * The bug
+ * -------
+ * `pipeline.ts:2211` (fresh_inquiry) and `:3062` (Calendly/scheduling)
+ * both INSERT `people{role:'partner2', wedding_id, ...}` unconditionally
+ * — no check for an existing partner2 on that wedding. The email/phone
+ * match chain in `resolvePersonOnly` cannot catch this: the two partners
+ * of one couple routinely share NO email and NO phone, so partner2's
+ * signal misses every identifier-based step and a duplicate row is
+ * minted. The Liam Hunt couple ended up with four `people` rows.
+ *
+ * The fix
+ * -------
+ * The only signal that links the two partners is structural: "same
+ * wedding, role=partner2". That cannot be expressed in `IdentitySignals`
+ * — it needs wedding context. This helper makes the wedding-scoped
+ * check: given a `weddingId`, look for an existing non-tombstoned
+ * partner2 on that wedding at this venue. If one exists, ENRICH it with
+ * any new non-null identity fields the incoming signal carries and
+ * return its id (the caller skips the INSERT). If none exists, return
+ * null and the caller proceeds with the normal mint.
+ *
+ * Enrich rules (conservative, never-destroy):
+ *   - email / phone — fill only when the existing row's column is null.
+ *     Normalised the same way the rest of the resolver normalises.
+ *   - last_name — fill only when the existing row's is null/blank.
+ *   - first_name — fill only when the existing row's is null/blank. A
+ *     populated first_name is never overwritten here; name arbitration
+ *     by confidence is the name-capture chokepoint's job, not this
+ *     dedup path. (Callers that want the chokepoint to re-arbitrate
+ *     should still call captureNameEvidence on the returned id.)
+ *
+ * Multi-venue safety: every query filters `venue_id`.
+ *
+ * Returns the existing partner2's id on a hit, or null on no match.
+ * Never throws — a query failure surfaces as a thrown error to the
+ * caller via the awaited supabase call; `mintPerson` wraps this in a
+ * try/catch and degrades to the resolver path.
+ */
+export async function enrichExistingPartner2(
+  supabase: SupabaseClient,
+  venueId: string,
+  weddingId: string,
+  signals: IdentitySignals,
+): Promise<string | null> {
+  // Find the existing partner2 on this wedding. Exclude merged-away
+  // (tombstoned) rows — a tombstoned partner2 must not block a fresh
+  // mint. Oldest-first so a (pathological) pre-existing duplicate set
+  // resolves deterministically to the canonical (first-created) row.
+  const { data: rows, error } = await supabase
+    .from('people')
+    .select('id, email, phone, first_name, last_name')
+    .eq('venue_id', venueId)
+    .eq('wedding_id', weddingId)
+    .eq('role', 'partner2')
+    .is('merged_into_id', null)
+    .order('created_at', { ascending: true })
+    .limit(1)
+  if (error) {
+    throw new Error(`enrichExistingPartner2: partner2 lookup failed: ${error.message}`)
+  }
+  if (!rows || rows.length === 0) return null
+
+  const existing = rows[0] as {
+    id: string
+    email: string | null
+    phone: string | null
+    first_name: string | null
+    last_name: string | null
+  }
+  const personId = await resolveCanonicalPerson(supabase, existing.id)
+
+  // Build the never-destroy field merge. partner2's identity signals
+  // arrive as the signal's primary fields (the caller passes partner2's
+  // email/phone/name as signals.email / signals.phone / signals.fullName
+  // — not the partnerN variants).
+  const incomingLast = lastNameOf(signals.fullName) ?? lastNameOf(signals.partner2Name)
+  const incomingFirst = firstNameOf(signals.fullName) ?? firstNameOf(signals.partner2Name)
+  const blank = (s: string | null | undefined) => !s || !String(s).trim()
+
+  const updates: Record<string, unknown> = {}
+  if (signals.email && blank(existing.email)) {
+    updates.email = normalizeEmail(signals.email) ?? signals.email
+  }
+  if (signals.phone && blank(existing.phone)) {
+    updates.phone = normalizePhone(signals.phone)
+  }
+  if (incomingLast && blank(existing.last_name)) {
+    updates.last_name = incomingLast
+  }
+  if (incomingFirst && blank(existing.first_name)) {
+    updates.first_name = incomingFirst
+  }
+  if (Object.keys(updates).length > 0) {
+    const { error: updErr } = await supabase
+      .from('people')
+      .update(updates)
+      .eq('id', personId)
+    if (updErr) {
+      // Enrichment is best-effort — the dedup itself (returning the
+      // existing id so no duplicate is inserted) is the load-bearing
+      // part. Log and still return the id.
+      console.warn(
+        `[identity/resolver] enrichExistingPartner2: field merge failed for ${personId}:`,
+        updErr.message,
+      )
+    }
+  }
+  return personId
+}
+
 async function createWedding(
   supabase: SupabaseClient,
   venueId: string,
