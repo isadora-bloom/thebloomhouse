@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // run-battery.ts — Bloom Test Question Battery runner.
 //
-// CONSOLIDATION-PLAN-PHASED.md §0.1 (gap #3). Feeds each of the 36 questions
-// in BLOOM-TEST-QUESTIONS.md through the NLQ brain, captures the answer,
+// CONSOLIDATION-PLAN-PHASED.md §0.1 (gap #3). Feeds each of the 38 questions
+// in BLOOM-TEST-QUESTIONS.md (1-36 + the 32a/32b variants) through the NLQ
+// brain, captures the answer,
 // scores it against the rubric in that doc + the expected-shapes in
 // `battery-expected.ts`, and emits:
 //   - a readable per-question table to stdout

@@ -458,9 +458,12 @@ export const EXPECTED_SHAPES: ExpectedShape[] = [
   },
 ]
 
-if (EXPECTED_SHAPES.length !== 36) {
+// 38 = questions 1-36 in BLOOM-TEST-QUESTIONS.md (31/32 exist in the
+// "**31. (NEW)...:**" form) + the 32a/32b false-premise variants. The
+// plan's "36-question battery" is a loose label; 38 is the real count.
+if (EXPECTED_SHAPES.length !== 38) {
   // Sanity guard — keeps this file honest if a question is added/removed.
   throw new Error(
-    `battery-expected.ts: expected 36 question shapes, found ${EXPECTED_SHAPES.length}`
+    `battery-expected.ts: expected 38 question shapes, found ${EXPECTED_SHAPES.length}`
   )
 }
