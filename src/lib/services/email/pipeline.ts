@@ -2213,15 +2213,17 @@ export async function processIncomingEmail(
       }, correlationId)
     }
 
-    // M9 flip (PHASE-1-BATCH-1.md §3 item 6, 2026-05-22): the cascade
-    // write for the human-escalation email. This `humanRequested` block
-    // `return`s at the end (below) BEFORE the inbound `linkSignal` call
-    // at the end of `processIncomingEmail` — so a human-request email
-    // (BOTH the `weddingId`-set arm and the weddingless cold-sender arm
-    // above) never reached the Forwards Linker and produced no spine
-    // touchpoint. The cascade equivalent is therefore added inline here,
-    // positioned AFTER the engagement-event write and BEFORE the
-    // `return`, so it runs for both arms of the `if (weddingId)` block.
+    // M9 flip (PHASE-1-BATCH-1.md §3 item 6, 2026-05-22; doctrine fix
+    // 2026-05-23 — see "Pressure-test findings" in PHASE-1-BATCH-1.md):
+    // the cascade write for the human-escalation email. This
+    // `humanRequested` block `return`s at the end (below) BEFORE the
+    // inbound `linkSignal` call at the end of `processIncomingEmail` —
+    // so a human-request email (BOTH the `weddingId`-set arm and the
+    // weddingless cold-sender arm above) never reached the Forwards
+    // Linker and produced no spine touchpoint. The cascade equivalent
+    // is therefore added inline here, positioned AFTER the
+    // engagement-event write and BEFORE the `return`, so it runs for
+    // both arms of the `if (weddingId)` block.
     //
     // Dual-write: the legacy `engagement_events` write above STAYS
     // untouched (it is a heat-table write the cascade has no
@@ -2229,21 +2231,43 @@ export async function processIncomingEmail(
     // email through `linkSignal` so `couples`/`touchpoints` get the
     // equivalent write in lockstep.
     //
-    // `action_type:'reply'` — a human-escalation email is an inbound,
-    // couple-driven signal. `signal_tier` keeps the adapter's 'high'
-    // default (inbound email carries full identity — email + often a
-    // signed name/phone; M6/M7's 'medium' was for venue-SENT mail and
-    // is wrong here). `'reply'` is chosen over a bare `'human_requested'`
-    // deliberately: `progression.ts:progressionEventTypeFor` only maps
-    // gmail `'reply'`/`'inquiry'`/`'inbound_followup'` to a progression
-    // event — a non-standard `'human_requested'` verb would return null
-    // and SILENTLY DROP the progression record, even though a couple
-    // asking for a human IS genuine inbound progression. `'reply'`
-    // keeps progression intact; the `human_requested` semantics are
-    // preserved in `raw_payload.escalation` for forensics. Using the
-    // same `external_id` (email.messageId, via the adapter) as the
-    // batch Gmail adapter keeps the touchpoint rerun-safe — a later
-    // Tracer sweep of the same Gmail id dedups against this live write.
+    // `action_type:'human_requested'` — a human-escalation email is an
+    // inbound, couple-driven signal AND the truth of what the couple
+    // did. `signal_tier` keeps the adapter's 'high' default (inbound
+    // email carries full identity — email + often a signed name/phone;
+    // M6/M7's 'medium' was for venue-SENT mail and is wrong here).
+    //
+    // Pre-fix this site passed `action_type:'reply'` and stashed the
+    // escalation in `raw_payload.escalation` because progression.ts's
+    // `progressionEventTypeFor` only mapped `'reply'`/`'inquiry'`/
+    // `'inbound_followup'` for gmail — a bare `'human_requested'` would
+    // return null and silently drop the progression record. The
+    // pressure-test flagged this as a quiet downgrade: a touchpoint
+    // reader sees `action_type:'reply'` for a human-escalation and has
+    // to grep payload to recover the truth. Migration 368 + the
+    // progression.ts mapping fix (gmail/`human_requested` →
+    // `'inbound_human_request'`) close the loop: the honest action_type
+    // can now flow end-to-end AND produce a progression row.
+    //
+    // DEPLOY ORDER caveat: this code requires migration 368 to be
+    // applied first. Without 368, a `'inbound_human_request'`
+    // event_type insert into `couple_progression_events` fails the
+    // CHECK constraint (PG error 23514). `recordProgressionIfEligible`
+    // (progression.ts:124-130) catches the insert error and returns
+    // `{recorded: false}` silently — so a misordered deploy degrades
+    // to "no progression row, no clock bump" rather than a pipeline
+    // crash. The touchpoint write itself still succeeds. The legacy
+    // `engagement_events` dual-write above is unaffected. But the
+    // intent is for migration 368 to land first so progression rows
+    // DO get written for human-escalations.
+    //
+    // The `raw_payload.escalation:'human_requested'` workaround is
+    // RETIRED — action_type now carries the truth.
+    //
+    // Using the same `external_id` (email.messageId, via the adapter)
+    // as the batch Gmail adapter keeps the touchpoint rerun-safe — a
+    // later Tracer sweep of the same Gmail id dedups against this
+    // live write.
     //
     // Both arms covered: for a wedding-bound email `weddingId` is passed
     // as the matcher's `legacy_wedding_id` anchor — the cascade couple
@@ -2264,16 +2288,8 @@ export async function processIncomingEmail(
           rawFromName,
           rawFromEmail,
           weddingId,
-          actionType: 'reply',
+          actionType: 'human_requested',
         })
-        // Preserve the human-escalation semantics in the touchpoint's
-        // raw_payload — `action_type` stays 'reply' for progression
-        // correctness, but operator forensics can still see this was an
-        // escalation, mirroring the engagement_event's metadata.via.
-        signal.raw_payload = {
-          ...signal.raw_payload,
-          escalation: 'human_requested',
-        }
         const linkResult = await linkSignal({
           supabase,
           venueId,

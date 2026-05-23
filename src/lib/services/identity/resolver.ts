@@ -802,39 +802,79 @@ async function createPerson(
   }
   const personId = data.id as string
 
+  // Provenance fix for partner2 mints (PHASE-1-BATCH-1 pressure-test
+  // remediation, 2026-05-23 — option B).
+  //
+  // The pollution
+  // -------------
+  // The M4/M5 flip (commit c39cd17) passes `source:'email_pipeline'` to
+  // mintPerson for partner2. Inside this `createPerson`, the call below
+  // labels the source via `pickNameSourceForLabel('email_pipeline')` →
+  // `'gmail_from_name'`. For partner2 that is WRONG provenance: the name
+  // actually came from the email body (M4) or Calendly extras (M5), NOT
+  // from a Gmail `From:` header (the From-header belongs to partner1,
+  // the sender). The M4/M5 call sites already fire their OWN
+  // `captureNameEvidence` immediately after the mintPerson return, with
+  // the honest source `'partner_mention_in_body'` (M4) / `'form_relay'`
+  // (M5). The inner capture below is therefore a duplicate row with
+  // wrong provenance. The picker arbitrates correctly so the displayed
+  // name is right, but `name_evidence` audit ends up polluted with a
+  // false `'gmail_from_name'` entry for partner2.
+  //
+  // The fix (option B over option A — see PHASE-1-BATCH-1.md)
+  // ---------------------------------------------------------
+  // When `partnerContext?.role === 'partner2'`, suppress the inner
+  // captureNameEvidence here. Partner2 mints are DOCTRINALLY always
+  // followed by the caller's own evidence write with honest provenance
+  // — the doctrine is encoded here, in the chokepoint, rather than
+  // relying on every partner2 caller to remember to pass an opt-out
+  // flag (option A). Verified safe: the only callers of `createPerson`
+  // with `partnerContext?.role === 'partner2'` are (1) `resolvePersonOnly`
+  // forwarded from `mintPerson` when `role='partner2'` + `weddingId` set
+  // (M4 + M5 only today; both fire honest evidence after), and
+  // (2) `createPartner2Person` from mintPerson's C1 collision guard
+  // (also reached only by M4/M5 paths).
+  //
+  // Partner1 path is unchanged — the inner capture still runs (the
+  // `email_pipeline` → `'gmail_from_name'` mapping IS honest for
+  // partner1, who is the email sender).
+  const suppressInnerCapture = partnerContext?.role === 'partner2'
+
   // Now route every available name signal through the chokepoint. Order
   // doesn't matter — the picker will pick by confidence.
-  try {
-    const fullForCapture = signals.fullName ?? signals.partner1Name
-    if (fullForCapture) {
-      await captureNameEvidence(supabase, personId, {
-        full: fullForCapture,
-        email: signals.email ?? null,
-        source: importedSource,
-      })
-    }
-    if (signals.email) {
-      // Email-handle parse: pre-derive (first, last) from the local part
-      // ("rosalie.hoyle@gmail.com" → "Rosalie Hoyle") and let the
-      // chokepoint apply shape detection. Username-shaped local parts
-      // (e.g. "rosaliehoyle@gmail.com") collapse to display_handle.
-      // Confidence is the source's static 20.
-      const fromEmail = inferNameFromEmail(signals.email)
-      if (fromEmail) {
+  if (!suppressInnerCapture) {
+    try {
+      const fullForCapture = signals.fullName ?? signals.partner1Name
+      if (fullForCapture) {
         await captureNameEvidence(supabase, personId, {
-          first: fromEmail.first,
-          last: fromEmail.last,
-          email: signals.email,
-          source: 'email_handle_parse',
+          full: fullForCapture,
+          email: signals.email ?? null,
+          source: importedSource,
         })
       }
+      if (signals.email) {
+        // Email-handle parse: pre-derive (first, last) from the local part
+        // ("rosalie.hoyle@gmail.com" → "Rosalie Hoyle") and let the
+        // chokepoint apply shape detection. Username-shaped local parts
+        // (e.g. "rosaliehoyle@gmail.com") collapse to display_handle.
+        // Confidence is the source's static 20.
+        const fromEmail = inferNameFromEmail(signals.email)
+        if (fromEmail) {
+          await captureNameEvidence(supabase, personId, {
+            first: fromEmail.first,
+            last: fromEmail.last,
+            email: signals.email,
+            source: 'email_handle_parse',
+          })
+        }
+      }
+    } catch (err) {
+      // Capture must never break the resolver. Legacy callers will see
+      // the row with null first/last; the picker will run when the next
+      // signal arrives.
+      console.warn('[identity/resolver] name-capture in createPerson failed:',
+        err instanceof Error ? err.message : err)
     }
-  } catch (err) {
-    // Capture must never break the resolver. Legacy callers will see
-    // the row with null first/last; the picker will run when the next
-    // signal arrives.
-    console.warn('[identity/resolver] name-capture in createPerson failed:',
-      err instanceof Error ? err.message : err)
   }
 
   return personId

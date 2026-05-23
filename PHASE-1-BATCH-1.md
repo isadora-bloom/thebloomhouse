@@ -19,19 +19,20 @@ Phase 1 is **dual-write**, not delete. A migrated writer routes through the casc
 `pipeline.ts` has **39 write sites**: **9 MIGRATE**, **30 STAY**, **0 DELETE**.
 STAY = lifecycle/heat/status/metadata UPDATEs on existing rows, draft-status writes, observability inserts — R1 is a *creation* boundary, these legitimately stay direct. Full STAY table is in the agent trace; not repeated here.
 
-The **9 MIGRATE sites** (line numbers verified 2026-05-22, will drift — re-grep at execution):
+The **9 MIGRATE sites** + **M10 (discovered during pressure-test)**. Line numbers DRIFT — `Shipped` column is canonical; see §3 for full per-site detail.
 
-| # | site | table | what it creates | cascade target |
+| # | site | table | what it creates | **Shipped** |
 |---|---|---|---|---|
-| M1 | `pipeline.ts:1581` | `interactions` | the core inbound touchpoint (every classified inbound email) | `linkSignal` — **already fires at :4109**; covered by P5 promotion |
-| M2 | `pipeline.ts:696` | `people` | partner1 person row (`findOrCreateContact` step 3, no match) | `mintPerson` |
-| M3 | `pipeline.ts:724` | `contacts` | email-contact identifier mirror for the new person | co-locate with M2 in the `mintPerson` path |
-| M4 | `pipeline.ts:2211` | `people` | **partner2 row, fresh_inquiry path — Liam Hunt bug, no dedup** | `mintPerson` w/ `weddingId`+`role` (P2) |
-| M5 | `pipeline.ts:3062` | `people` | **partner2 row, scheduling/Calendly path — Liam Hunt bug, no dedup** | `mintPerson` w/ `weddingId`+`role` (P2) |
-| M6 | `pipeline.ts:1169` | `interactions` | outbound interaction, `isOwnOutbound` self-loop | `linkSignal` (`action_type:'outbound'`) |
-| M7 | `pipeline.ts:4891` | `interactions` | outbound interaction from `sendApprovedDraft` (writes `wedding_id:null` — unbound) | `linkSignal` — **separate function, no cascade call today** |
-| M8 | `pipeline.ts:2435` | `candidate_identities` | sub-Point-Zero pre-couple identity record | cascade fragment path — **needs reconciliation, see Q3** |
-| M9 | `pipeline.ts:1940` | `engagement_events` | weddingless engagement event (cold sender, `human_requested`) | `linkSignal` — **needs reconciliation, see Q4** |
+| M1 | `pipeline.ts:~1581` | `interactions` | core inbound touchpoint | ✅ **VERIFIED, no code** — `linkSignal:~4109` already routes it (P5 made it load-bearing). `b9745be` |
+| M2 | `pipeline.ts:~696` | `people` | partner1 person (`findOrCreateContact`) | ✅ **FLIPPED — partial route.** Only the *create* goes through `mintPerson`; the canonical-resolver + contacts-table match steps stay outside the chokepoint (preserves contact resolution). `8d95181` + alias/pool fixes in `307ffd6` |
+| M3 | `pipeline.ts:~724` | `contacts` | email-contact mirror | ✅ **STAY** — `mintPerson`/resolver do NOT write the contacts mirror. Guarded on `mintIsNew` + alias-recovery on resolved-existing (`307ffd6`). `8d95181` |
+| M4 | `pipeline.ts:~2210` | `people` | partner2 fresh_inquiry (Liam Hunt) | ✅ **FLIPPED** — `mintPerson({weddingId, role:'partner2', signals.fullName})` + same-wedding collision guard. `c39cd17` + `307ffd6` |
+| M5 | `pipeline.ts:~3060` | `people` | partner2 Calendly/scheduling (Liam Hunt) | ✅ **FLIPPED** — same. `c39cd17` + `307ffd6` |
+| M6 | `pipeline.ts:~1169` | `interactions` | outbound `isOwnOutbound` self-loop | ✅ **`linkSignal` added** — `action_type:'venue_sent'` + `signal_tier:'medium'` (NOT `'outbound'` — byte-consistent with the batch Gmail adapter for rerun-safe dedup). `8d95181` |
+| M7 | `sendApprovedDraft` | `interactions` | outbound from operator-approved send | ✅ **`linkSignal` added** (separate function). `8d95181` |
+| M8 | `pipeline.ts:~2435` | `candidate_identities` | sub-Point-Zero pre-couple | ✅ **STAY-as-dual-write — pragmatic deferral** (not doctrinal sanction). `candidate_identities` is a live Wave-10 layer (42 readers incl. battery `intel-brain.ts`) that the spine eventually subsumes (Phase 3/4). Cascade equivalent already fires via `:~4204` `linkSignal`. Verified 252/252 cohort coverage. `317b112` |
+| M9 | humanRequested block | (touchpoint via `linkSignal`) | spine record for human-escalation | ✅ **`linkSignal` added**. The `engagement_events.insert` at `:1940` STAYS (heat write — cascade doesn't touch heat). `action_type:'human_requested'` once migration **368** lands (extends `couple_progression_events.event_type` CHECK). `317b112` + `307ffd6` + this commit |
+| **M10** | `flushPendingAutoSends` | `interactions` (was missing) | outbound from autonomous-send cron | ✅ **MISSED in original enumeration — discovered by pressure-test.** No `interactions` row + no cascade call since the loop was built. Both added (legacy + `linkSignal`). Historical backfill script `scripts/backfill-autosend-interactions.ts` ready for operator. `307ffd6` + this commit |
 
 **Partner2 bug confirmed:** M4 (`:2211`) and M5 (`:3062`) both do an unconditional `people.insert({role:'partner2'})` with **no check for an existing partner2** on the wedding. The header comment at M4 *claims* a skip-if-exists guard — it is not in the code. The plan's third cited line `:2907` is **not** a partner2 insert — it is an `interactions` UPDATE (re-link); the plan conflated a dependent re-link with a duplicate-creating insert.
 
@@ -73,7 +74,7 @@ Highest-volume / highest-risk first, per plan §1.2. Each site: wire the cascade
 3. **M2 + M3** — partner1 + contact mirror. ✅ **FLIPPED 2026-05-22** (commit `8d95181`). M2: `findOrCreateContact`'s partner1 `people.insert` routes through `mintPerson` — only the create is rerouted; the canonical-resolver + contacts-table match steps stay (preserves contact-resolution behaviour). `isNewContact` derives correctly; step-5 matcher + return guarded on `mintIsNew`. `pipeline.ts` is now off the `check-no-direct-people-insert` grandfather list. M3: verified `mintPerson`/resolver do NOT write the contacts mirror, so M3's `contacts.insert` STAYS, guarded on `mintIsNew`.
 4. **M6 + M7** — outbound interactions. ✅ **FLIPPED 2026-05-22** (commit `8d95181`). M6: the `isOwnOutbound` self-loop branch returns before the `:~4109` `linkSignal`, so a `linkSignal` call was added inline. M7: `sendApprovedDraft` is a separate function — added a `linkSignal` call anchored on the parent inbound interaction's `wedding_id` + `correlation_id`. Both use `emailToNormalizedSignal` with `action_type:'venue_sent'` + `signal_tier:'medium'` — byte-consistent with the batch Gmail adapter so the touchpoint dedups rerun-safely.
 5. **M8 (`candidate_identities`)** — ✅ **STAY-AS-DUAL-WRITE, VERIFIED 2026-05-22** (Q3 resolved). Q3 found: the cascade equivalent ALREADY fires — the M8 branch does not return early before the `:~4204` `linkSignal`, and every M8 email reaches it. `candidate_identities` is a LIVE Wave-10 identity layer (~30 readers incl. `intel-brain.ts` battery path) genuinely distinct from `fragments` — its legacy insert stays (dual-write; dropped in Phase 4). M8 needs NO new code. Verified via `scripts/verify-m8-coverage.ts`: **252/252 M8-cohort interactions** have a cascade `touchpoints` OR `fragments` row (100% coverage). The Wave-10-vs-spine collapse is a Phase 3/4 concern, out of Batch 1 scope.
-6. **M9 (`engagement_events`)** — ✅ **FLIPPED 2026-05-22** (Q4 resolved; commit to follow). Q4 corrected the worklist: `engagement_events` is a heat-table the cascade has zero relationship to — the `:1940` insert is a STAY, not an M-site. The REAL M9 gap: the `humanRequested` block returns at `:~1978` BEFORE the `:~4204` `linkSignal`, so human-escalation emails never reach the cascade (both the weddingless arm AND the `weddingId`-set arm). Added a `linkSignal` call inside the `humanRequested` block, positioned to cover both arms before the return. `action_type:'reply'` (not `'human_requested'` — `'reply'` preserves progression-log inclusion per `progression.ts`; the escalation semantics are kept in `raw_payload.escalation`). `signal_tier:'high'` (inbound default).
+6. **M9 (`engagement_events`)** — ✅ **FLIPPED 2026-05-22 + DOCTRINE-DEBT CLOSED 2026-05-23** (Q4 resolved). Q4 corrected the worklist: `engagement_events` is a heat-table the cascade has zero relationship to — the `:1940` insert is a STAY, not an M-site. The REAL M9 gap: the `humanRequested` block returns at `:~1978` BEFORE the `:~4204` `linkSignal`, so human-escalation emails never reach the cascade (both the weddingless arm AND the `weddingId`-set arm). Added a `linkSignal` call inside the `humanRequested` block, positioned to cover both arms before the return. **Doctrine-debt close (this commit):** initial flip used `action_type:'reply'` + `raw_payload.escalation` workaround because `progressionEventTypeFor` only mapped `'reply'`/`'inquiry'`/`'inbound_followup'`. Now: migration **368** extends `couple_progression_events.event_type` CHECK to add `'inbound_human_request'`; `ProgressionEventType` + `progressionEventTypeFor` extended; M9 passes `action_type:'human_requested'` directly. Fail-safe: `recordProgressionIfEligible` already swallows CHECK violations, so a misordered deploy degrades to "no progression row" not a pipeline crash — but **migration 368 should land before the code reaches that DB** for correct progression-log inclusion.
 
 ---
 
@@ -96,11 +97,12 @@ Highest-volume / highest-risk first, per plan §1.2. Each site: wire the cascade
 - **`mintWedding` call sites → not Batch-1 MIGRATE; mirror is a review item** (§5 above).
 - **Plan line `:2907` is not a partner2 site** — the real Liam Hunt sites are `:2211` + `:3062` only.
 
-## 7. Open questions to resolve at execution (not blockers to starting P1-P5)
+## 7. Open questions
 
-- **Q3 — `candidate_identities` vs `fragments`.** M8 writes `candidate_identities`; the cascade's below-threshold path writes `fragments`. Are these the same concept under two table names, or distinct? Resolve before flipping M8. (`candidate_identities` is the legacy Wave-10 table; `fragments` is the migration-346 spine — likely M8 should write a `fragment`, but verify the readers.)
-- **Q4 — `engagement_events` double writer.** M9 (`:1940`, weddingless) and the sibling `:1902` (wedding-bound, via `recordEngagementEventsBatch`) write the same event type two ways. Reconcile: should M9 route through `recordEngagementEventsBatch` first, then the cascade?
-- **Q5 — cascade body-stages are dead on the live path.** `NormalizedSignal`→`CascadeSignal` round-trips through `MatchableRecord`, which has no body fields, so `cascadeMatch` stages 6/7/8 (body cross-ref, paired-name, family-name) never fire from `linkSignal` — only from the batch Tracer. Decide: add a real body-carrying adapter, or document body-stages as Tracer-only. Not a Batch-1 blocker but affects match quality.
+- **Q3 — `candidate_identities` vs `fragments`.** ✅ **RESOLVED 2026-05-22.** Distinct, not synonyms. `candidate_identities` is the Wave-10 cluster table (42 readers, incl. battery); `fragments` is the migration-346 spine pre-couple record. M8 stays as dual-write — the cascade already produces a fragment-or-couple via `:~4204` `linkSignal` for every M8 email. The Wave-10-vs-spine collapse is a Phase 3/4 reader-migration concern. Pragmatic deferral, not doctrinal sanction.
+- **Q4 — `engagement_events` double writer.** ✅ **RESOLVED 2026-05-22.** `engagement_events` is a heat table; the cascade has zero relationship to it. M9's `:1940` insert STAYS (heat write). The actual fix was adding a `linkSignal` call inside the `humanRequested` block (the early `return` at `:~1978` was bypassing the trailing cascade write).
+- **Q5 — cascade body-stages dead on the live path.** Still OPEN. `NormalizedSignal`→`CascadeSignal` round-trips through `MatchableRecord`, which has no body fields, so `cascadeMatch` stages 6/7/8 (body cross-ref, paired-name, family-name) never fire from `linkSignal` — only from the batch Tracer. Decide: add a real body-carrying adapter, or document body-stages as Tracer-only. Not a Batch-1 blocker but affects match quality.
+- **Q6 — tracer synthetic touchpoint `external_id`.** Still OPEN. Tracer's `promoteFragmentInto` reroute (P3) creates a `touchpoint` keyed on the fragment's PK, not the original event id → latent double-count vs a live-linker touchpoint for the same event. Resolve at the tracer/M8 step.
 
 ## 8. Doc corrections to apply (from the code trace)
 
@@ -115,7 +117,7 @@ Fold into `CASCADE-CANONICAL-WRITER.md` + `src/lib/spine/cascade.ts` header:
 
 ## Batch 1 done-definition (the gate to Batch 2)
 
-P1-P5 shipped · all 9 MIGRATE sites flipped · per-site shadow-compare divergence zero · CI guard `check-cascade-only-writer.mjs` green on `pipeline.ts` · battery re-run shows no regression from the 1.447 baseline (Phase 1 changes writes, not reads — a drop signals a bug). Then Batch 2 (ingestion adapters: Calendly, HoneyBook, Twilio, Zoom, OpenPhone).
+P1-P5 shipped ✅ · all 9 MIGRATE sites resolved (M1/M8 verified, M2-M7 + M9 flipped) ✅ · M10 (discovered) flipped ✅ · CI guard `check-cascade-only-writer.mjs` green on `pipeline.ts` ✅ (built 2026-05-23 — exit 0 on baseline, 23 grandfathered files for Phase 3/4 chip-down) · battery re-run not yet executed against branch-with-migrations-applied — pending operator (the DB-target hazard means a re-run against prod won't reflect Batch 1 writes; substrate is structurally unchanged either way per the pressure-test). **Per-site shadow-compare gate effectively re-scoped under dual-write doctrine** — see `CONSOLIDATION-PLAN-PHASED.md` §1.3 v2. Then Batch 2 (ingestion adapters: Calendly, HoneyBook, Twilio, Zoom, OpenPhone).
 
 ---
 
@@ -136,3 +138,24 @@ A 4-agent adversarial pressure-test (doctrine / engineering-spec / code-correctn
 **Battery — regression-SAFE.** `intel-brain` (the NLQ read path) reads ~30 tables; zero overlap with anything P1-P5 writes (`couples`/`touchpoints`/`couple_merge_events`/`people`/cascade). P1-P5 moves no battery question now (correct — prerequisites). **Hazard:** the battery runner reads `.env.local` → prod `jsxxgwprxuqgcauzlxcb`; migrations 366/367 are written for the consolidation Supabase branch. Any post-366/367 battery run must point `.env.local` at the DB the migrations were applied to, or it measures the wrong substrate.
 
 - **Q6 (new) — tracer synthetic touchpoint external_id.** Use the fragment's original event external_id, not the fragment PK, or document the double-count as accepted. Resolve at the tracer/M8 step.
+
+---
+
+## Pressure-test 2 + gap-closure (2026-05-22 → 2026-05-23)
+
+After all 9 site-flips landed, a second 4-agent pressure-test (doctrine / engineering-spec / code / battery) found 1 CRITICAL + 2 HIGH + 3 MEDIUM defects and three spec-level gaps. All fixed in `307ffd6` + this commit.
+
+**Code defects fixed (`307ffd6`):** C1 M5 partner2 same-email collision (Calendly partnerEmail==inviteeEmail → matched partner1 of same wedding → name pollution) closed by a new `mintPerson` guard + `createPartner2Person` helper that discards same-wedding/cross-wedding-partner1/2 matches and mints fresh. C2 M2 `weddingId` dropped on alias/pool resolver hits — fixed by querying the matched person's wedding_id at the return. C3 `flushPendingAutoSends` missing both legacy `interactions` row AND cascade call (pre-existing bug — autonomous sends invisible to follow-up-sequences / signal-inference / voice-dna / thread view since the loop was built) — both added; **historical backfill script ready** (`scripts/backfill-autosend-interactions.ts` — read-only by default, `--apply` to write, operator runs against the branch first). 3 MEDIUMs: M2 bare-email name regression (display_handle fallback), M3 contacts mirror gap on alias hits, M2 tangential-signal promotion skipped on alias hits (split `enqueueIdentityMatches` via `skipAutoMerge` option).
+
+**Doctrine debt closed (this commit):** M9 `action_type:'reply'` honesty workaround → migration **368** extends `couple_progression_events.event_type` CHECK to add `'inbound_human_request'`; `ProgressionEventType` + `progressionEventTypeFor` extended; M9 passes `action_type:'human_requested'` directly (raw_payload.escalation workaround removed). M4/M5 partner2 name-capture provenance bogus audit row → `createPerson` now suppresses its inner `captureNameEvidence` when `partnerContext?.role === 'partner2'` (the M4/M5 callers fire honest evidence with `source:'partner_mention_in_body'` / `'form_relay'` after). M8 framing in §3 item 5 reworded from "doctrinally distinct" to "pragmatic deferral."
+
+**Spec gaps closed (this commit):**
+1. **`scripts/check-cascade-only-writer.mjs` built.** Walks `src/**` (skips `identity/`, `spine/` which ARE the allowed-writer surface), detects INSERT/UPSERT/RPC to the 10 guarded tables (4 spine + 6 legacy identity), grandfather list of 23 files with one-line justifications per file. Exit 0 on baseline; sanity-checked to trip on new violations. `pipeline.ts` cleanly removed from the spine + people + weddings grandfather scope (still grandfathered for `interactions` + `candidate_identities` — Phase 3 limb migration).
+2. **Per-site shadow-compare gate honestly re-scoped** in `CONSOLIDATION-PLAN-PHASED.md` §1.3 v2 (this commit) — under dual-write, divergence reduces to "did we add a cascade call alongside the legacy write," which typecheck+guards+logic-trace verify by construction; the `OldPathRunner` harness retains value for Phase 2 reimport reconciliation + Phase 3 reader migration where cascade outputs replace legacy reads.
+3. **§1 table + §7 Q3/Q4** updated to reflect actual shipped state (was a reader trap — pre-flip verdicts still showing).
+
+**Operator carry-forwards into Batch 2:**
+- Apply migration **367** (partner2 unique index — needs branch dashboard re-run, 15 dup groups already resolved) and migration **368** (`event_type` CHECK extension — needs branch dashboard run).
+- Review JC Matos / Jancarlo Matos cross-role merge from the dup-resolution (commit `a5777ff`).
+- Run `scripts/backfill-autosend-interactions.ts --apply` on the branch (dry-run found 0 rows on the branch — autonomous-send flush hasn't fired since the May 14 wipe; rerun against prod when desired).
+- Re-run the battery against whichever DB the migrations landed on (the `.env.local` → prod hazard is unresolved).

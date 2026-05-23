@@ -17,6 +17,15 @@
  *   - contract_signed          (channel=honeybook, action=contract_signed)
  *   - inbound_followup         (any inbound reply to an open thread)
  *   - fragment_match_returned  (operator confirms a candidate match)
+ *   - inbound_human_request    (couple asks for a human — M9 escalation;
+ *                               mapped from channel=gmail action=human_requested.
+ *                               Added 2026-05-23 by migration 368 +
+ *                               PHASE-1-BATCH-1 pressure-test remediation,
+ *                               so the honest `action_type:'human_requested'`
+ *                               at pipeline.ts M9 produces a progression
+ *                               row instead of being a quiet downgrade to
+ *                               `action_type:'reply'` with the semantic
+ *                               buried in raw_payload.escalation.)
  *
  * Outbound action types and the venue's own sends NEVER write.
  *
@@ -47,6 +56,7 @@ export type ProgressionEventType =
   | 'contract_signed'
   | 'inbound_followup'
   | 'fragment_match_returned'
+  | 'inbound_human_request'
 
 /**
  * Map a NormalizedSignal to its progression event type if it qualifies.
@@ -66,6 +76,13 @@ export function progressionEventTypeFor(
   if (channel === 'gmail') {
     if (action === 'reply' || action === 'inquiry') return 'email_reply'
     if (action === 'inbound_followup') return 'inbound_followup'
+    // M9 doctrine fix (PHASE-1-BATCH-1 pressure-test remediation,
+    // 2026-05-23 + migration 368). A human-escalation email is genuine
+    // inbound progression — the couple just asked for a human, the decay
+    // clock SHOULD move. Pre-fix, the M9 site passed action_type:'reply'
+    // as a workaround for this very map being incomplete; the action_type
+    // now carries the truth and the workaround is retired.
+    if (action === 'human_requested') return 'inbound_human_request'
   }
   if (channel === 'calendly') {
     if (action === 'tour_booked') return 'tour_booked'
