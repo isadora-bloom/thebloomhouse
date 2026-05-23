@@ -31,8 +31,28 @@ export async function enqueueIdentityMatches(args: {
   supabase: SupabaseClient
   venueId: string
   newPersonId: string
+  /**
+   * Skip the auto-merge (step 2) AND the client_match_queue writes
+   * (step 3). Tangential-signal promotion (step 4) still runs.
+   *
+   * Use case (PHASE-1-BATCH-1 remediation, 2026-05-23 — MEDIUM defect):
+   * when `mintPerson` resolved to an EXISTING person via its alias_emails
+   * branch or `findPersonByPoolIdentifier` fallback, the caller has NO
+   * fresh row — the auto-merge logic is wrong (there's nothing new to
+   * merge; would only re-merge an already-canonical row) and the low/
+   * medium-tier client_match_queue writes are spurious (same reason —
+   * no fresh signal). But the historical alias/pool hit IS new evidence
+   * that this person is reachable via a previously-unlinked identifier,
+   * which is exactly the signal `promoteTangentialSignals` exists to
+   * follow up on (a Sarah-H Knot signal becomes linkable to the canonical
+   * Sarah Highland row when an alias arrives that previously sat
+   * unmatched on the tangential_signals pool).
+   *
+   * Default false — every pre-2026-05-23 caller behaves exactly as before.
+   */
+  skipAutoMerge?: boolean
 }): Promise<EnqueueResult> {
-  const { supabase, venueId, newPersonId } = args
+  const { supabase, venueId, newPersonId, skipAutoMerge = false } = args
 
   // 1. Load the just-created person into a candidate shape.
   const { data: newPerson } = await supabase
@@ -63,74 +83,86 @@ export async function enqueueIdentityMatches(args: {
     wedding_date: weddingDate,
   })
 
-  const matches = await findIdentityMatches(supabase, candidate)
-
-  // 2. High-tier: auto-merge new into existing. Keep the OLDER person as
-  // the survivor (more history attached, safer defaults).
+  // When skipAutoMerge is set, the caller is the M2 alias/pool-hit path
+  // where the input person is already an EXISTING canonical row (not a
+  // fresh INSERT). We skip findIdentityMatches entirely — its job is to
+  // discover dup candidates relative to a NEW row, and re-running it
+  // against an existing canonical person yields spurious merge candidates
+  // (the row will high-tier-match itself via the same identifiers that
+  // got it minted). Tangential promotion (step 4 below) is the part that
+  // is legitimate to run unconditionally — it cross-references the
+  // person's identifiers against the unmatched-signals pool.
   let autoMerged: string | null = null
-  const high = matches.find((m) => m.tier === 'high')
-  if (high) {
-    // Which row is older? Keep that one. If the existing person is older,
-    // merge new → existing; otherwise merge existing → new. Almost always
-    // the existing one wins, but we check to be safe.
-    const { data: existing } = await supabase
-      .from('people')
-      .select('created_at')
-      .eq('id', high.personId)
-      .single()
-    const existingOlder =
-      existing && new Date(existing.created_at as string).getTime() <= new Date(newPerson.created_at as string).getTime()
-    if (existingOlder) {
-      const res = await mergePeople({
-        supabase, venueId,
-        keepPersonId: high.personId,
-        mergePersonId: newPersonId,
-        tier: 'high',
-        signals: high.signals,
-        confidence: high.confidence,
-      })
-      autoMerged = res.keepPersonId
-    } else {
-      const res = await mergePeople({
-        supabase, venueId,
-        keepPersonId: newPersonId,
-        mergePersonId: high.personId,
-        tier: 'high',
-        signals: high.signals,
-        confidence: high.confidence,
-      })
-      autoMerged = res.keepPersonId
-    }
-  }
-
-  // 3. Medium + low tiers → client_match_queue. Skip if we already merged
-  // into one of these matches (auto-merge already consolidated that pair).
   let queued = 0
-  for (const m of matches) {
-    if (m.tier === 'high') continue
-    if (autoMerged && m.personId === autoMerged) continue
-    // Dedupe: don't enqueue a pair that already exists in the queue.
-    const { data: existing } = await supabase
-      .from('client_match_queue')
-      .select('id')
-      .eq('venue_id', venueId)
-      .or(
-        `and(person_a_id.eq.${m.personId},person_b_id.eq.${newPersonId}),and(person_a_id.eq.${newPersonId},person_b_id.eq.${m.personId})`
-      )
-      .in('status', ['pending', 'snoozed'])
-      .limit(1)
-    if (existing && existing.length > 0) continue
-    await supabase.from('client_match_queue').insert({
-      venue_id: venueId,
-      person_a_id: m.personId,
-      person_b_id: newPersonId,
-      match_type: m.signals[0]?.type ?? 'unknown',
-      confidence: m.confidence,
-      signals: m.signals,
-      tier: m.tier,
-      status: 'pending',
-    })
-    queued++
+
+  if (!skipAutoMerge) {
+    const matches = await findIdentityMatches(supabase, candidate)
+
+    // 2. High-tier: auto-merge new into existing. Keep the OLDER person as
+    // the survivor (more history attached, safer defaults).
+    const high = matches.find((m) => m.tier === 'high')
+    if (high) {
+      // Which row is older? Keep that one. If the existing person is older,
+      // merge new → existing; otherwise merge existing → new. Almost always
+      // the existing one wins, but we check to be safe.
+      const { data: existing } = await supabase
+        .from('people')
+        .select('created_at')
+        .eq('id', high.personId)
+        .single()
+      const existingOlder =
+        existing && new Date(existing.created_at as string).getTime() <= new Date(newPerson.created_at as string).getTime()
+      if (existingOlder) {
+        const res = await mergePeople({
+          supabase, venueId,
+          keepPersonId: high.personId,
+          mergePersonId: newPersonId,
+          tier: 'high',
+          signals: high.signals,
+          confidence: high.confidence,
+        })
+        autoMerged = res.keepPersonId
+      } else {
+        const res = await mergePeople({
+          supabase, venueId,
+          keepPersonId: newPersonId,
+          mergePersonId: high.personId,
+          tier: 'high',
+          signals: high.signals,
+          confidence: high.confidence,
+        })
+        autoMerged = res.keepPersonId
+      }
+    }
+
+    // 3. Medium + low tiers → client_match_queue. Skip if we already merged
+    // into one of these matches (auto-merge already consolidated that pair).
+    for (const m of matches) {
+      if (m.tier === 'high') continue
+      if (autoMerged && m.personId === autoMerged) continue
+      // Dedupe: don't enqueue a pair that already exists in the queue.
+      const { data: existing } = await supabase
+        .from('client_match_queue')
+        .select('id')
+        .eq('venue_id', venueId)
+        .or(
+          `and(person_a_id.eq.${m.personId},person_b_id.eq.${newPersonId}),and(person_a_id.eq.${newPersonId},person_b_id.eq.${m.personId})`
+        )
+        .in('status', ['pending', 'snoozed'])
+        .limit(1)
+      if (existing && existing.length > 0) continue
+      await supabase.from('client_match_queue').insert({
+        venue_id: venueId,
+        person_a_id: m.personId,
+        person_b_id: newPersonId,
+        match_type: m.signals[0]?.type ?? 'unknown',
+        confidence: m.confidence,
+        signals: m.signals,
+        tier: m.tier,
+        status: 'pending',
+      })
+      queued++
+    }
   }
 
   // 4. Promote matching tangential_signals. A signal "matches" when its

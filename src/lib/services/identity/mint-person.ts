@@ -54,6 +54,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import {
   resolvePersonOnly,
   enrichExistingPartner2,
+  createPartner2Person,
   type IdentitySignals,
 } from './resolver'
 // venueOwnEmails lives in email/pipeline.ts which transitively imports
@@ -117,6 +118,19 @@ export interface MintPersonResult {
      *  supplied wedding was found and enriched in place; no new row was
      *  inserted. `isNew` is false and `personId` is the existing row. */
     | 'partner2_enriched'
+    /** C1 collision guard fired (PHASE-1-BATCH-1 remediation, 2026-05-23):
+     *  the resolver's identifier match chain returned an existing person
+     *  who is already partner1 (or partner2) of the SAME wedding as
+     *  `input.weddingId`. The match was discarded and a fresh partner2
+     *  row was minted via `createPartner2Person`. Surfaces in telemetry
+     *  so the same-email-twice form-entry pattern is auditable. */
+    | 'partner2_same_wedding_collision'
+    /** C1 collision guard fired (cross-wedding case): the resolver
+     *  returned a person who is partner1 / partner2 of a DIFFERENT
+     *  wedding. Conservative call — false-negative (mint fresh, let
+     *  audited merge cascade dedup if they really are the same human)
+     *  beats false-positive (pollute the other couple). */
+    | 'partner2_cross_wedding_collision'
 }
 
 export async function mintPerson(input: MintPersonInput): Promise<MintPersonResult> {
@@ -220,6 +234,141 @@ export async function mintPerson(input: MintPersonInput): Promise<MintPersonResu
         ? { weddingId: input.weddingId, personRole: input.role }
         : {}),
     })
+
+    // 3. C1 collision guard (PHASE-1-BATCH-1 remediation, 2026-05-23).
+    //
+    // When role='partner2' + weddingId is set, the resolver's identifier
+    // match chain (email_exact / canonical / phone) is blind to wedding
+    // context. Two pathological cases:
+    //
+    //   (a) Same-wedding collision: the operator/couple typed the same
+    //       email or phone for both partners on a Calendly form (or a
+    //       couple shares one inbox). The resolver matches partner1 of
+    //       THIS wedding and returns it with isNew=false. Without this
+    //       guard, the M5 follow-up `captureNameEvidence({full: partner2,
+    //       source:'form_relay'})` writes partner2's name onto partner1's
+    //       row — pollution + no partner2 row ever exists.
+    //
+    //   (b) Cross-wedding collision: partner2's email/phone happens to
+    //       match a person on a DIFFERENT wedding's partner1/partner2.
+    //       Genuinely-same-human across two couples (vendor, planner) is
+    //       so rare that the false-positive risk (silently attach to the
+    //       other couple, pollute identity, lose this couple's partner2)
+    //       outweighs the false-negative cost (mint fresh, let the audited
+    //       merge cascade dedup if it really is the same human).
+    //
+    // Doctrine: partner1 and partner2 of the same wedding are distinct
+    // humans by definition; partner2-of-X being-the-same-human-as-partner-
+    // of-Y is rare and recoverable via merge.
+    //
+    // Guard only fires when (a) caller asked for partner2, (b) weddingId
+    // is set, (c) the resolver returned a NON-NEW row (so we have someone
+    // to check), AND (d) the row's wedding_id is a partner1/partner2 of
+    // some wedding. enrichExistingPartner2 above already covered the
+    // same-wedding partner2 case (which is the intended dedup target —
+    // enrich and return); this guard catches the partner1-same-wedding
+    // and cross-wedding-partner cases that enrich missed.
+    if (
+      input.role === 'partner2'
+      && input.weddingId
+      && result.personId
+      && !result.isNew
+    ) {
+      try {
+        const { data: matched } = await supabase
+          .from('people')
+          .select('wedding_id, role')
+          .eq('id', result.personId)
+          .maybeSingle()
+        const matchedWeddingId = (matched?.wedding_id as string | null) ?? null
+        const matchedRole = (matched?.role as string | null) ?? null
+        const isPartner = matchedRole === 'partner1' || matchedRole === 'partner2'
+        const sameWedding = matchedWeddingId === input.weddingId
+        const crossWeddingPartner =
+          isPartner
+          && matchedWeddingId !== null
+          && matchedWeddingId !== input.weddingId
+
+        // (a) Same-wedding collision — almost always partner1 (the
+        //     partner2-on-same-wedding case is caught by
+        //     enrichExistingPartner2 step above, but we re-cover it here
+        //     defensively for the race where enrich saw zero rows and the
+        //     resolver path then matched a freshly-inserted partner2 from
+        //     a concurrent tick).
+        // (b) Cross-wedding partner collision — see doctrine comment.
+        if (sameWedding || crossWeddingPartner) {
+          const collisionKind = sameWedding
+            ? 'partner2_same_wedding_collision'
+            : 'partner2_cross_wedding_collision'
+          console.warn(
+            `[mintPerson] C1 collision guard fired (${collisionKind}): ` +
+              `resolver returned person=${result.personId} ` +
+              `(wedding=${matchedWeddingId}, role=${matchedRole}) on a ` +
+              `role=partner2 mint for wedding=${input.weddingId}. ` +
+              `Discarding match and minting fresh partner2.`,
+          )
+          const freshId = await createPartner2Person(
+            supabase,
+            input.venueId,
+            input.weddingId,
+            input.signals,
+            input.source,
+          )
+          if (freshId) {
+            return {
+              personId: freshId,
+              isNew: true,
+              matchedBy: collisionKind,
+            }
+          }
+          // createPartner2Person returned null — INSERT failed. The
+          // post-migration-367 unique-violation case is itself a signal
+          // that a partner2 already exists on this wedding (a concurrent
+          // tick won the race). Re-run enrichExistingPartner2 once to
+          // resolve to that row rather than degrading to the polluting
+          // resolver match.
+          try {
+            const enriched = await enrichExistingPartner2(
+              supabase,
+              input.venueId,
+              input.weddingId,
+              input.signals,
+            )
+            if (enriched) {
+              return {
+                personId: enriched,
+                isNew: false,
+                matchedBy: 'partner2_enriched',
+              }
+            }
+          } catch (err) {
+            console.warn(
+              `[mintPerson] post-collision enrich re-check failed:`,
+              err instanceof Error ? err.message : err,
+            )
+          }
+          // Both fresh-mint and re-enrich failed. Surface resolver_error
+          // (personId:null) so the caller's re-query fallback fires — same
+          // shape as the post-P2 null-result path. Better to drop the
+          // partner2 signal entirely than pollute partner1.
+          return {
+            personId: null,
+            isNew: false,
+            matchedBy: 'resolver_error',
+          }
+        }
+      } catch (err) {
+        // Collision query failure must not block the mint — degrade to
+        // the resolver's return (preserves pre-C1 behaviour). The bug
+        // class C1 closes is rare; a query failure here is rarer still.
+        console.warn(
+          `[mintPerson] C1 collision check failed (wedding=${input.weddingId}); ` +
+            `accepting resolver match:`,
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+
     return {
       personId: result.personId,
       isNew: result.isNew,

@@ -743,6 +743,120 @@ export async function findOrCreateContact(
       value: email,
       is_primary: true,
     })
+  } else {
+    // M3 alias/pool-hit mirror (PHASE-1-BATCH-1 remediation, 2026-05-23 —
+    // MEDIUM defect).
+    //
+    // When mintPerson resolved to an EXISTING person via the alias_emails
+    // branch in `findByEmailExact` or the `findPersonByPoolIdentifier`
+    // fallback, the INCOMING email is — by definition — an alias the
+    // resolver knew about (it's in the historical pool / alias_emails
+    // array) but may NOT yet be on the matched person's `contacts` table.
+    // The post-flip M3 guard `if (mintIsNew)` skips the contacts insert in
+    // exactly this case, leaving the new alias invisible to the next
+    // inbound (which uses contacts as step 2 of its match chain).
+    //
+    // Fix: when the inbound email is genuinely NEW for the matched person
+    // (not already on contacts), write the mirror. Conservative — checks
+    // first to avoid creating duplicate identifier rows. The note
+    // distinguishes this insert from the M3 mintIsNew path so audits can
+    // tell the two cases apart.
+    try {
+      const { data: existing } = await supabase
+        .from('contacts')
+        .select('id')
+        .eq('person_id', newPerson.id)
+        .eq('type', 'email')
+        .ilike('value', email)
+        .limit(1)
+      if (!existing || existing.length === 0) {
+        await supabase.from('contacts').insert({
+          person_id: newPerson.id,
+          type: 'email',
+          value: email,
+          // Not the primary — the matched person already has one. This is
+          // an alias discovered via the resolver's pool/alias chain.
+          // (contacts has no `note` column to record that distinction;
+          // the alias-discovery semantics live in this comment + the
+          // resolver's pool/alias_emails source-of-truth.)
+          is_primary: false,
+        })
+      }
+    } catch (err) {
+      // Mirror failure is non-fatal — the resolve already returned a
+      // person; the next inbound for the same alias will hit the pool /
+      // alias_emails branch again and resolve correctly even without
+      // contacts. Log so the gap is auditable.
+      console.warn(
+        '[pipeline] M3 alias-mirror insert failed:',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+  if (mintIsNew) {
+    // Bare-email display-handle fallback (PHASE-1-BATCH-1 remediation,
+    // 2026-05-23 — MEDIUM defect).
+    //
+    // Pre-M2-flip, when a bare email arrived with no display name AND a
+    // single-token local part (`bob@gmail.com`), `findOrCreateContact`'s
+    // legacy `placeholderFirst = email.split('@')[0]` heuristic wrote
+    // `first_name='bob'` so the inbox row at least said "Bob" instead of
+    // the raw email. Post-flip:
+    //   - The incoming `trimmedName` is empty (no display name on the
+    //     From header).
+    //   - `createPerson` (resolver.ts:805-831) tries `inferNameFromEmail`,
+    //     which rejects single-token local parts at name-capture.ts:589-592
+    //     ("no handle splitter"). No evidence is captured.
+    //   - The picker leaves `first_name`/`display_handle` null.
+    //   - Inbox display falls back to the raw email.
+    //
+    // The doctrine: do NOT pollute `first_name` with a username (the
+    // `Rosaliehoyle` bug class). Populate `display_handle` instead — the
+    // doctrinally-correct slot for "we have a handle but not a real name"
+    // (already used by name-capture for username/proxy shape evidence,
+    // name-capture.ts:1156-1162). Conservative: only fires when both
+    // first_name AND display_handle are NULL on the freshly-minted row
+    // (so a name-capture path that DID populate something — e.g. a
+    // first.last email through `inferNameFromEmail` — is left untouched),
+    // AND only when no incoming display name was provided.
+    const incomingDisplay = (name ?? '').trim()
+    if (!incomingDisplay) {
+      try {
+        const at = email.indexOf('@')
+        const local = at > 0 ? email.slice(0, at) : ''
+        // Only attempt for plausible single-token local parts. A digit-
+        // heavy local part (`user12345@…`) or an empty one stays null.
+        const looksLikeBareHandle =
+          local.length >= 2 && local.length <= 40 && /^[a-z][a-z0-9._-]*$/i.test(local)
+        if (looksLikeBareHandle) {
+          // Capitalize first letter; leave the rest as-is (some handles
+          // are camelCase + meaningful — `bobSmith` stays `BobSmith`).
+          const handle = local.charAt(0).toUpperCase() + local.slice(1)
+          const { data: cur } = await supabase
+            .from('people')
+            .select('first_name, display_handle')
+            .eq('id', newPerson.id)
+            .maybeSingle()
+          const hasFirst = !!(cur?.first_name && String(cur.first_name).trim())
+          const hasHandle = !!(cur?.display_handle && String(cur.display_handle).trim())
+          if (!hasFirst && !hasHandle) {
+            await supabase
+              .from('people')
+              .update({ display_handle: handle })
+              .eq('id', newPerson.id)
+          }
+        }
+      } catch (err) {
+        // Never break ingest on the display-handle backfill. The legacy
+        // path used to silently leave first_name=local-part on failure;
+        // this path leaves display_handle null and the inbox falls back
+        // to the email — strictly safer than corrupting first_name.
+        console.warn(
+          '[pipeline] bare-email display_handle backfill failed:',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
   }
 
   // 5. Phase 8 identity resolution — run the matcher against the new
@@ -770,6 +884,31 @@ export async function findOrCreateContact(
     } catch (err) {
       console.error('[pipeline] enqueueIdentityMatches failed:', err instanceof Error ? err.message : err)
     }
+  } else {
+    // PHASE-1-BATCH-1 remediation (MEDIUM defect, 2026-05-23): when
+    // mintPerson resolved to an EXISTING person via the alias_emails
+    // branch / pool fallback, the auto-merge MUST stay skipped (no fresh
+    // row to merge) BUT the tangential-signal promotion is legitimate
+    // and was being skipped too as a side effect of the single
+    // `if (mintIsNew)` guard. `enqueueIdentityMatches({skipAutoMerge:true})`
+    // runs ONLY step 4 (promoteTangentialSignals) — it cross-references
+    // the canonical person's identifiers against the unmatched
+    // tangential_signals pool and links any that now resolve via the
+    // newly-discovered alias. Same fire-and-forget contract.
+    try {
+      const { enqueueIdentityMatches } = await import('@/lib/services/identity/enqueue')
+      await enqueueIdentityMatches({
+        supabase,
+        venueId,
+        newPersonId: newPerson.id,
+        skipAutoMerge: true,
+      })
+    } catch (err) {
+      console.error(
+        '[pipeline] enqueueIdentityMatches (tangential-only) failed:',
+        err instanceof Error ? err.message : err,
+      )
+    }
   }
 
   if (survivorId !== newPerson.id) {
@@ -781,12 +920,51 @@ export async function findOrCreateContact(
     return { personId: survivorId, weddingId: (survivor?.wedding_id as string | null) ?? null, isNew: false }
   }
 
+  // C2 fix (PHASE-1-BATCH-1 remediation, 2026-05-23): when mintPerson
+  // resolved to an EXISTING person via its identifier chain — alias_emails
+  // branch in findByEmailExact, the pool fallback findPersonByPoolIdentifier,
+  // or any other resolver-internal step that pre-flip we never reached
+  // because the legacy path always inserted — `mintIsNew` is false and the
+  // matched person already has a wedding_id we MUST carry through.
+  //
+  // Pre-flip, the only "matched existing" path was the post-INSERT
+  // `enqueueIdentityMatches` auto-merge into a survivor, and the survivor-
+  // wedding-id query above handled it. Post-flip, the survivor branch
+  // doesn't fire on alias/pool hits (mintPerson already deduplicated, so
+  // there's no NEW row to auto-merge from). Dropping the wedding_id at
+  // this return makes the upstream gate at pipeline.ts:~2212 see
+  // weddingId=null + isNewContact=false → wedding-creation skipped → the
+  // inbound interaction lands wedding_id=null at the interaction level →
+  // the email is orphaned. C2 closes that.
+  //
+  // mintIsNew=true → fresh person → no prior wedding to carry (legacy
+  // behaviour); mintIsNew=false → query the matched person's wedding_id
+  // (mirrors the survivor query above).
+  let returnWeddingId: string | null = null
+  if (!mintIsNew) {
+    try {
+      const { data: matched } = await supabase
+        .from('people')
+        .select('wedding_id')
+        .eq('id', newPerson.id)
+        .maybeSingle()
+      returnWeddingId = (matched?.wedding_id as string | null) ?? null
+    } catch (err) {
+      // Query failure must not break ingest — degrade to weddingId=null
+      // (the pre-C2 shape) so the rest of the pipeline still runs.
+      console.warn(
+        '[pipeline] findOrCreateContact: matched-person wedding_id lookup failed:',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
   // `isNew` is `mintIsNew`, not a hard-coded `true`: when mintPerson's
   // identifier match chain resolved to an existing person, this is NOT a
   // new contact and the downstream wedding-creation gate (which keys on
   // `isNewContact`) must not mint a fresh couple. When mintPerson created
   // a fresh row, `mintIsNew` is true — identical to the legacy contract.
-  return { personId: newPerson.id, weddingId: null, isNew: mintIsNew }
+  return { personId: newPerson.id, weddingId: returnWeddingId, isNew: mintIsNew }
 }
 
 /**
@@ -4720,6 +4898,161 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
           .from('admin_notifications')
           .update({ read: true, read_at: new Date().toISOString() })
           .eq('id', notif.id)
+
+        // C3 fix (PHASE-1-BATCH-1 remediation, 2026-05-23): the autonomous
+        // send is the THIRD outbound codepath that produces a venue-sent
+        // email — alongside M6 (`isOwnOutbound` self-loop) and M7
+        // (`sendApprovedDraft`). The Batch-1 worklist enumerated 9 MIGRATE
+        // sites but missed this one; both writes are added here.
+        //
+        // (1) LEGACY interactions row (pre-existing gap, NOT just a Batch-1
+        //     miss): flushPendingAutoSends previously wrote draft
+        //     status='sent' but produced NO `interactions` row. Multiple
+        //     readers depend on outbound interactions to function
+        //     correctly:
+        //       - `follow-up-sequences.ts:179` queries the latest
+        //         outbound interaction for `daysSinceContact` — without
+        //         this row a venue's nurture cron re-fires day-0
+        //         follow-ups after an autonomous send.
+        //       - `signal-inference.ts:388` reads `direction='outbound'`
+        //         to dedup signals against the venue's own sends.
+        //       - `voice-dna-extract.ts:153` filters outbound rows for
+        //         the coordinator-voice corpus (the existing subject-
+        //         heuristic anti-Sage filter already accounts for this
+        //         row's eventual presence).
+        //       - `intel/clients/[id]` thread view shows outbound rows
+        //         in the email timeline.
+        //     The legacy direct write here matches M7 (`sendApprovedDraft`
+        //     :5169-5186) byte-for-byte except for `auto_sent` semantics
+        //     (M7 is operator-approved, not auto). `signal_class:
+        //     'unclassified'` matches both M6 and M7's outbound rule.
+        //     wedding_id stays null (M7 also writes null) — the cascade
+        //     write (2) carries the couple-binding context separately.
+        //
+        // (2) CASCADE linkSignal (Batch-1 miss): mirrors M6/M7's pattern
+        //     — pull the parent inbound interaction's `wedding_id` +
+        //     `correlation_id` to anchor the touchpoint to the same
+        //     couple the draft was written for. `action_type:
+        //     'venue_sent'` + `signal_tier:'medium'` per the M7 doctrine
+        //     comment (outbound venue mail is not couple progression).
+        //     `external_id` = the Gmail message id so a later Tracer
+        //     sweep dedups against this live touchpoint.
+        //
+        // Both writes catch + logPipelineError; never throw out of the
+        // flush loop. The draft status='sent' update above already
+        // committed, so a cascade/legacy failure here is a telemetry hole
+        // (auditable via error_logs) but does not double-send.
+        let parentWeddingId: string | null = null
+        let parentCorrelationId: string | null = null
+        let parentInteractionId: string | null = null
+        try {
+          const { data: draftRow } = await supabase
+            .from('drafts')
+            .select('interaction_id')
+            .eq('id', draft.id)
+            .maybeSingle()
+          parentInteractionId = (draftRow?.interaction_id as string | null) ?? null
+          if (parentInteractionId) {
+            const { data: parent } = await supabase
+              .from('interactions')
+              .select('wedding_id, correlation_id')
+              .eq('id', parentInteractionId)
+              .maybeSingle()
+            parentWeddingId = (parent?.wedding_id as string | null) ?? null
+            parentCorrelationId = (parent?.correlation_id as string | null) ?? null
+          }
+        } catch (err) {
+          // Parent-context lookup is best-effort. A miss degrades both
+          // writes to "unbound outbound" (legacy: wedding_id:null, same
+          // shape as M7; cascade: linker resolves identity itself).
+          console.warn(
+            '[pipeline] flushPendingAutoSends: parent-interaction lookup failed:',
+            err instanceof Error ? err.message : err,
+          )
+        }
+
+        // (1) Legacy interactions row — outbound mirror.
+        let outboundInteractionId: string | null = null
+        try {
+          const outboundPayload: Record<string, unknown> = {
+            venue_id: venueId,
+            wedding_id: null,
+            type: 'email',
+            direction: 'outbound',
+            subject: details.subject,
+            body_preview: (draft.draft_body as string).slice(0, 300),
+            full_body: draft.draft_body,
+            to_email: details.toEmail,
+            gmail_message_id: sentMessageId,
+            gmail_thread_id: details.threadId ?? null,
+            timestamp: nowIso,
+            signal_class: 'unclassified',
+          }
+          if (parentCorrelationId) outboundPayload.correlation_id = parentCorrelationId
+          const { data: outboundRow } = await supabase
+            .from('interactions')
+            .insert(outboundPayload)
+            .select('id')
+            .single()
+          outboundInteractionId = (outboundRow?.id as string | null) ?? null
+        } catch (err) {
+          await logPipelineError(venueId, 'autosend_outbound_interaction', err, {
+            draftId: draft.id,
+            sentMessageId,
+            notificationId: notif.id,
+          }, parentCorrelationId ?? undefined)
+        }
+
+        // (2) Cascade write — same shape as M6/M7. Skips when the legacy
+        //     write failed (no interactionId to thread through the
+        //     adapter's raw_payload); the cascade still works without it
+        //     but losing the linkage is worse than losing the telemetry,
+        //     so we prefer to fail loud via the logPipelineError above.
+        if (outboundInteractionId) {
+          try {
+            const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+            const { emailToNormalizedSignal } = await import(
+              '@/lib/services/identity/email-to-signal'
+            )
+            const linkResult = await linkSignal({
+              supabase,
+              venueId,
+              signal: emailToNormalizedSignal({
+                email: {
+                  messageId: sentMessageId,
+                  threadId: details.threadId ?? null,
+                  subject: details.subject ?? null,
+                },
+                interactionId: outboundInteractionId,
+                emailDate: nowIso,
+                // Outbound: no inbound sender identity. The couple is
+                // resolved via the parent wedding anchor hint.
+                rawFromName: null,
+                rawFromEmail: null,
+                draftId: draft.id,
+                weddingId: parentWeddingId,
+                actionType: 'venue_sent',
+                signalTier: 'medium',
+              }),
+              correlationId: parentCorrelationId ?? undefined,
+              source: 'live:autosend_flush',
+            })
+            console.log(
+              `[pipeline] cascade_link (autosend flush): action=${linkResult.action} ` +
+                `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+                `touchpoint=${linkResult.touchpoint_id ?? 'none'}`,
+            )
+          } catch (err) {
+            // Load-bearing dual-write, same contract as M1/M6/M7
+            // linkSignal calls: surface to error_logs but never throw —
+            // the draft status='sent' update + the legacy interactions
+            // row above remain source of truth during dual-write.
+            await logPipelineError(venueId, 'cascade_link', err, {
+              interactionId: outboundInteractionId,
+              draftId: draft.id,
+            }, parentCorrelationId ?? undefined)
+          }
+        }
 
         sentCount++
         continue

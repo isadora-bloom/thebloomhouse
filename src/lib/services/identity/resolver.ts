@@ -981,6 +981,58 @@ export async function enrichExistingPartner2(
   return personId
 }
 
+/**
+ * Mint a fresh partner2 row directly, bypassing the resolver's identifier
+ * match chain. C1 fix (PHASE-1-BATCH-1.md remediation, 2026-05-23).
+ *
+ * Why this exists
+ * ---------------
+ * `mintPerson({role:'partner2', weddingId, signals:{email:X,...}})` runs:
+ *   1. `enrichExistingPartner2` (wedding-scoped). On miss →
+ *   2. `resolvePersonOnly` → `findByEmailExact`/`findByPhone`.
+ *
+ * Step 2's identifier match chain is BLIND to wedding context — it returns
+ * the first person at this venue whose email/phone matches. The partner2
+ * collision class:
+ *
+ *   - Same-wedding collision: operator types the same email/phone for both
+ *     partners on a Calendly form (or a couple shares one inbox). Without
+ *     this helper, the resolver matches the EXISTING partner1 of the SAME
+ *     wedding and returns that id with `isNew=false`. The downstream
+ *     `captureNameEvidence(..., {full: partner2Name, source:'form_relay'})`
+ *     then writes partner2's NAME onto partner1's row → no partner2 exists
+ *     for the wedding; partner1's name_evidence is polluted.
+ *
+ *   - Cross-wedding collision: partner2's email/phone happens to match a
+ *     person on a DIFFERENT wedding. False-positive matches are rare but
+ *     destructive — attaching the new signal to the other wedding loses
+ *     the partner2 row entirely and pollutes the other couple's identity.
+ *     Doctrine decision: conservative false-NEGATIVE — create a fresh
+ *     partner2 row; let the audited merge cascade dedup later if the two
+ *     people genuinely are the same human (vendor / planner sharing
+ *     contact info across couples).
+ *
+ * This helper is the escape hatch `mintPerson` calls when it detects a
+ * collision. It runs `createPerson` with `partnerContext` stamped, so the
+ * fresh row lands as `role:'partner2'`, `wedding_id:<id>` — visible to the
+ * next `enrichExistingPartner2` query, closing the loop.
+ *
+ * Returns the new person id on success, or null on INSERT failure.
+ * Never throws.
+ */
+export async function createPartner2Person(
+  supabase: SupabaseClient,
+  venueId: string,
+  weddingId: string,
+  signals: IdentitySignals,
+  sourceLabel: string | null,
+): Promise<string | null> {
+  return createPerson(supabase, venueId, signals, sourceLabel, {
+    role: 'partner2',
+    weddingId,
+  })
+}
+
 async function createWedding(
   supabase: SupabaseClient,
   venueId: string,
