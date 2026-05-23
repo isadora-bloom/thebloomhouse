@@ -2035,6 +2035,91 @@ export async function processIncomingEmail(
       }, correlationId)
     }
 
+    // M9 flip (PHASE-1-BATCH-1.md §3 item 6, 2026-05-22): the cascade
+    // write for the human-escalation email. This `humanRequested` block
+    // `return`s at the end (below) BEFORE the inbound `linkSignal` call
+    // at the end of `processIncomingEmail` — so a human-request email
+    // (BOTH the `weddingId`-set arm and the weddingless cold-sender arm
+    // above) never reached the Forwards Linker and produced no spine
+    // touchpoint. The cascade equivalent is therefore added inline here,
+    // positioned AFTER the engagement-event write and BEFORE the
+    // `return`, so it runs for both arms of the `if (weddingId)` block.
+    //
+    // Dual-write: the legacy `engagement_events` write above STAYS
+    // untouched (it is a heat-table write the cascade has no
+    // relationship to — NOT an M-site). This routes the SAME inbound
+    // email through `linkSignal` so `couples`/`touchpoints` get the
+    // equivalent write in lockstep.
+    //
+    // `action_type:'reply'` — a human-escalation email is an inbound,
+    // couple-driven signal. `signal_tier` keeps the adapter's 'high'
+    // default (inbound email carries full identity — email + often a
+    // signed name/phone; M6/M7's 'medium' was for venue-SENT mail and
+    // is wrong here). `'reply'` is chosen over a bare `'human_requested'`
+    // deliberately: `progression.ts:progressionEventTypeFor` only maps
+    // gmail `'reply'`/`'inquiry'`/`'inbound_followup'` to a progression
+    // event — a non-standard `'human_requested'` verb would return null
+    // and SILENTLY DROP the progression record, even though a couple
+    // asking for a human IS genuine inbound progression. `'reply'`
+    // keeps progression intact; the `human_requested` semantics are
+    // preserved in `raw_payload.escalation` for forensics. Using the
+    // same `external_id` (email.messageId, via the adapter) as the
+    // batch Gmail adapter keeps the touchpoint rerun-safe — a later
+    // Tracer sweep of the same Gmail id dedups against this live write.
+    //
+    // Both arms covered: for a wedding-bound email `weddingId` is passed
+    // as the matcher's `legacy_wedding_id` anchor — the cascade couple
+    // already exists and `linkSignal` attaches via the legacy-wedding
+    // fast path (idempotent). For the weddingless cold-sender arm
+    // `weddingId` is null and the linker resolves identity / routes to a
+    // fragment itself — the correct cascade outcome for a cold signal.
+    if (interactionId) {
+      try {
+        const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+        const { emailToNormalizedSignal } = await import(
+          '@/lib/services/identity/email-to-signal'
+        )
+        const signal = emailToNormalizedSignal({
+          email,
+          interactionId,
+          emailDate,
+          rawFromName,
+          rawFromEmail,
+          weddingId,
+          actionType: 'reply',
+        })
+        // Preserve the human-escalation semantics in the touchpoint's
+        // raw_payload — `action_type` stays 'reply' for progression
+        // correctness, but operator forensics can still see this was an
+        // escalation, mirroring the engagement_event's metadata.via.
+        signal.raw_payload = {
+          ...signal.raw_payload,
+          escalation: 'human_requested',
+        }
+        const linkResult = await linkSignal({
+          supabase,
+          venueId,
+          signal,
+          correlationId,
+          source: 'live:email_human_requested',
+        })
+        console.log(
+          `[pipeline] cascade_link (human_requested): action=${linkResult.action} ` +
+            `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+            `touchpoint=${linkResult.touchpoint_id ?? 'none'}`,
+        )
+      } catch (err) {
+        // Load-bearing dual-write, same contract as the M1/M6/M7
+        // linkSignal calls: surface the failure to error_logs but never
+        // throw out of the pipeline — the legacy engagement_events /
+        // interactions rows stay source of truth during dual-write.
+        await logPipelineError(venueId, 'cascade_link', err, {
+          interactionId,
+          weddingId,
+        }, correlationId)
+      }
+    }
+
     try {
       await createNotification({
         venueId,
