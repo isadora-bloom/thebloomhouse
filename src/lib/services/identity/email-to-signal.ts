@@ -19,6 +19,36 @@
  * parsed-email → signal converter for the live tick. They both yield
  * `NormalizedSignal` but have no shared code path and must not be
  * conflated.
+ *
+ * 2026-05-26 — Relay-resolved identity override (operator-impact fix).
+ * ---------------------------------------------------------------------
+ * For relay-resolved emails (venue_calculator submissions, Calendly-via-
+ * Gmail forwards, Zola/Knot/WeddingWire inquiries), the From header
+ * carries the venue's OWN address (e.g. `hello@rixeymanor.com`) — NOT
+ * the prospect's. Feeding `rawFromEmail` into the cascade signal makes
+ * the matcher score `primary_email='hello@rixeymanor.com'` against
+ * every couple — useless and actively harmful (collapses unrelated
+ * prospects under one venue-self identity).
+ *
+ * The legacy `findOrCreateContact` path already does the right thing —
+ * it swaps `fromEmail` for `formLead.leadEmail` / `schedulingEvent.
+ * inviteeEmail` before resolving the contact. The cascade-side
+ * `linkSignal` call did NOT — the resolved identity was computed in
+ * pipeline.ts and never forwarded to the adapter.
+ *
+ * The adapter now accepts optional `resolvedEmail` / `resolvedName` /
+ * `resolvedPhone` fields. When supplied, they take precedence over
+ * `rawFromName` / `rawFromEmail` for the matcher-facing
+ * `primary_email` / `primary_name` / `primary_phone` / `identity_hint`.
+ * The raw From values are preserved in `raw_payload` for the audit
+ * trail. `channelOverride` + `actionTypeOverride` let callers replace
+ * the defaults (`'gmail'` / `'reply'`) with the canonical channel for
+ * the resolved relay (`'calendly'`, `'knot'`, `'weddingwire'`, `'zola'`,
+ * `'website'`) and an appropriate verb (`'tour_booked'`,
+ * `'channel_inquiry'`, `'calculator_submitted'`).
+ *
+ * Backward compatible — callers that don't supply the resolved* fields
+ * keep the pre-existing behaviour byte-identical.
  */
 
 import type { NormalizedSignal } from './sources/types'
@@ -74,13 +104,60 @@ export interface EmailSignalInput {
    * the pre-P1 literal.
    */
   signalTier?: NormalizedSignal['signal_tier']
+  /**
+   * Post-relay-resolution prospect email (e.g. `formLead.leadEmail`
+   * or `schedulingEvent.inviteeEmail`). When set, becomes the
+   * matcher-facing `primary_email` instead of `rawFromEmail`. The
+   * raw value is preserved in `raw_payload.raw_from_email` for audit.
+   *
+   * THIS IS THE FIX. Without it the cascade matcher scored relay-
+   * resolved emails against `hello@<venue>.com` and split the spine
+   * couple in two (one for the calculator submission, one for the
+   * Calendly tour notification — same prospect, two unbridged
+   * couples).
+   */
+  resolvedEmail?: string | null
+  /** Post-relay-resolution prospect display name (e.g.
+   *  `formLead.leadName` or `schedulingEvent.inviteeName`). */
+  resolvedName?: string | null
+  /** Post-relay-resolution prospect phone, when the relay exposes
+   *  one (Calendly `extras.phone` is the typical source; FormRelay
+   *  does not currently carry a phone field). */
+  resolvedPhone?: string | null
+  /**
+   * Override the default `'gmail'` channel. Used by relay-resolved
+   * signals so the cascade tags the touchpoint with the canonical
+   * channel of the underlying relay (`'calendly'`, `'knot'`,
+   * `'weddingwire'`, `'zola'`, `'website'`) instead of the carrier
+   * Gmail. Channel taxonomy is defined in `sources/types.ts`.
+   */
+  channelOverride?: string
+  /**
+   * Override the default action_type (`'reply'` for inbound). For
+   * relay-resolved signals this becomes the verb that drives
+   * `progression.ts` mapping (e.g. `'tour_booked'` for Calendly,
+   * `'channel_inquiry'` for Knot/WW/Zola, `'calculator_submitted'`
+   * for venue_calculator).
+   */
+  actionTypeOverride?: string
 }
 
 /**
  * Build the cascade `NormalizedSignal` for an email-pipeline event.
  *
  * Output is byte-identical to the pre-P1 inline literal when called
- * with only the required fields (actionType + signalTier defaulted).
+ * with only the required fields (actionType + signalTier defaulted,
+ * resolved* + *Override fields omitted).
+ *
+ * Identity priority for matcher-facing primary_* fields:
+ *   1. resolvedEmail / resolvedName / resolvedPhone (when supplied)
+ *   2. rawFromName / rawFromEmail (default, byte-identical legacy)
+ *
+ * Channel + action_type priority:
+ *   1. channelOverride / actionTypeOverride (when supplied)
+ *   2. 'gmail' / actionType param (default 'reply')
+ *
+ * raw_payload always carries the From-header values for audit trail.
  */
 export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSignal {
   const {
@@ -93,18 +170,47 @@ export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSign
     weddingId = null,
     actionType = 'reply',
     signalTier = 'high',
+    resolvedEmail = null,
+    resolvedName = null,
+    resolvedPhone = null,
+    channelOverride,
+    actionTypeOverride,
   } = input
+
+  // Identity resolution — relay-resolved values win when present.
+  // null/undefined falls through to the raw From header, preserving
+  // legacy behaviour for genuine inbound (no formLead, no
+  // schedulingEvent) and for outbound (raw From explicitly nulled).
+  const primaryEmail = resolvedEmail ?? rawFromEmail
+  const primaryName = resolvedName ?? rawFromName
+  const primaryPhone = resolvedPhone ?? null
+  const identityHint = primaryName ?? primaryEmail ?? null
+
+  // Channel + verb — overrides take precedence so a Calendly-via-Gmail
+  // forward lands on touchpoints.channel='calendly' (matching the batch
+  // Calendly adapter at sources/calendly.ts), not on 'gmail'. This
+  // matters for progression.ts dispatch (e.g. 'tour_booked' on
+  // channel='calendly' fires the right progression event).
+  const channel = channelOverride ?? 'gmail'
+  const finalActionType = actionTypeOverride ?? actionType
+
+  // Whether identity was relay-resolved — emitted in raw_payload for
+  // forensics. A relay-resolved signal whose later matching fails is
+  // a different failure shape than a raw-From signal whose matching
+  // fails; this flag lets operator queries distinguish them without
+  // re-parsing the body.
+  const identityResolved = Boolean(resolvedEmail || resolvedName || resolvedPhone)
 
   return {
     external_id: email.messageId ?? interactionId,
-    channel: 'gmail',
-    action_type: actionType,
+    channel,
+    action_type: finalActionType,
     occurred_at: emailDate,
     signal_tier: signalTier,
-    identity_hint: rawFromName ?? rawFromEmail ?? null,
-    primary_name: rawFromName ?? null,
-    primary_email: rawFromEmail ?? null,
-    primary_phone: null,
+    identity_hint: identityHint,
+    primary_name: primaryName,
+    primary_email: primaryEmail,
+    primary_phone: primaryPhone,
     partner_name: null,
     partner_email: null,
     partner_phone: null,
@@ -116,6 +222,13 @@ export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSign
       interaction_id: interactionId,
       draft_id: draftId,
       thread_id: email.threadId ?? null,
+      // 2026-05-26: preserve raw From for audit trail when identity
+      // was relay-resolved. The cascade matcher reads primary_* only;
+      // these fields exist purely for operator forensics
+      // (`why did this signal bind to that couple?`).
+      raw_from_email: rawFromEmail,
+      raw_from_name: rawFromName,
+      identity_resolved: identityResolved,
     },
     legacy_wedding_id: weddingId ?? null,
   }

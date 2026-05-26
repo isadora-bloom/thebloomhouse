@@ -377,7 +377,9 @@ function parseZola(from: string, body: string): FormRelayLead | null {
   if (!isZola) return null
 
   // Real reply-to lives in the body, not the From header.
-  const connectMatch = body.match(/connect-[a-f0-9-]+@zola\.com/i)
+  // Zola moved the per-prospect relay onto a subdomain (e.g.
+  // connect-{uuid}@vmkt-message.zola.com) — must match any zola.com subdomain.
+  const connectMatch = body.match(/connect-[a-f0-9-]+@(?:[\w-]+\.)*zola\.com/i)
   const replyTo = connectMatch ? connectMatch[0].toLowerCase() : fromAddr
 
   // Prospect name(s): "Molly w & Ethan W sent you an inquiry!"

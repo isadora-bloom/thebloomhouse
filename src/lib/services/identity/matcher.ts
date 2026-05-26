@@ -114,6 +114,37 @@ const W = {
   cross_channel_temporal_lt_6h: 35,
   cross_channel_temporal_lt_48h: 20,
   cross_channel_temporal_lt_2w: 10,
+  /**
+   * Both-partners full-name cross-match bonus (added 2026-05-26).
+   *
+   * Fires ON TOP OF the single `full_name_exact` 60 when the SAME pair
+   * of full names appears on both records — in either pair direction.
+   * The Glascow / Minette case (calculator + Calendly arriving 7
+   * minutes apart at the same venue, opposite primary/partner role
+   * assignments, different email addresses) scored 60 before this
+   * bonus, landing in the 40-90 judge band where the resolver only
+   * queued a candidate for operator review. The operator was
+   * (correctly) frustrated: two signals carrying the same two full
+   * names within the same hour at the same venue IS the same couple.
+   *
+   * Bonus chosen so the total clears the auto-attach threshold (100)
+   * even with no other signal present:
+   *   60 (single full_name_exact) + 50 (both-partners cross) = 110 → high
+   *
+   * Why 50, not 100: the cascade stage 5b is the primary path for this
+   * shape (deterministic, returns `high` immediately). This bonus only
+   * fires in the score-based fallback when stage 5b did not match —
+   * typically because callers reshape records into MatchableRecord
+   * pairs (matcher.scoreCandidate) where the cascade signal/candidate
+   * is built per-record and the partner-side coverage is partial. A
+   * +50 bonus is the smallest delta that gets the case to auto-attach
+   * without inflating less-evidenced shapes; the doctrine §C.5 reset
+   * specifically calls out keeping integer weights tight and
+   * defensible. The single-full-name-exact baseline (60) is unchanged
+   * so existing single-side matches still queue for review, not
+   * auto-attach.
+   */
+  both_partners_full_name_cross_match: 50,
 } as const
 
 // ---------------------------------------------------------------------------
@@ -309,11 +340,19 @@ function splitFullName(
 
 function asCascadeSignal(r: MatchableRecord): CascadeSignal {
   const split = splitFullName(r.primary_name)
+  const partnerSplit = splitFullName(r.partner_name)
   return {
     primaryEmail: r.primary_email ?? null,
     primaryPhone: r.primary_phone ?? null,
     firstName: split.firstName,
     lastName: split.lastName,
+    // Propagate partner name so cascade stage 5b can fire on pairs
+    // that both carry full partner identity (the Glascow / Minette
+    // 2026-05-26 shape — same couple, opposite role ordering, both
+    // signals had both partners). Single-side records leave partner
+    // fields null and stage 5b skips.
+    partnerFirstName: partnerSplit.firstName,
+    partnerLastName: partnerSplit.lastName,
   }
 }
 
@@ -451,6 +490,49 @@ export function scoreCandidate(
   if (bestNameWeight > 0) {
     score += bestNameWeight
     signals.push({ name: 'name_match', weight: bestNameWeight, evidence: bestNameEvidence })
+  }
+
+  // ---- Both-partners full-name cross-match bonus (2026-05-26) ------------
+  //
+  // Doctrine: the couple is the unit ([[bloom-identity-first-doctrine]]).
+  // When BOTH records carry both partner full names AND the same pair
+  // of full names exact-matches across the pair (cross OR same), that
+  // is near-certain identity. The single-side `full_name_exact` 60
+  // alone scores 60 (judge band); adding +50 here clears the 100
+  // auto-attach threshold.
+  //
+  // Conservative gates:
+  //   - Both records' primary_name AND partner_name must split into
+  //     full first+last keys. Single-token names ("Tim") don't satisfy
+  //     fullNameMatches above so this branch is consistent with the
+  //     stage 5b cascade definition.
+  //   - The two sides of each record must be DISTINCT (refuses a
+  //     mirrored extractor where partner_name == primary_name).
+  //   - At least one full_name_exact must already have fired above —
+  //     the bonus is additive, never a primary signal on its own.
+  if (bestNameEvidence.startsWith('full_name_exact:')) {
+    const a1 = lowerTrim(primary.primary_name)
+    const a2 = lowerTrim(primary.partner_name)
+    const b1 = lowerTrim(secondary.primary_name)
+    const b2 = lowerTrim(secondary.partner_name)
+    const allFull =
+      a1 && a2 && b1 && b2 &&
+      a1.split(/\s+/).length >= 2 && a2.split(/\s+/).length >= 2 &&
+      b1.split(/\s+/).length >= 2 && b2.split(/\s+/).length >= 2
+    const distinctSides = a1 !== a2 && b1 !== b2
+    if (allFull && distinctSides) {
+      // Cross-pair: a1↔b2 AND a2↔b1. Same-pair: a1↔b1 AND a2↔b2.
+      const crossPair = a1 === b2 && a2 === b1
+      const samePair = a1 === b1 && a2 === b2
+      if (crossPair || samePair) {
+        score += W.both_partners_full_name_cross_match
+        signals.push({
+          name: 'both_partners_full_name_cross_match',
+          weight: W.both_partners_full_name_cross_match,
+          evidence: `${a1} + ${a2} ↔ ${b1} + ${b2} (${crossPair ? 'cross' : 'same'})`,
+        })
+      }
+    }
   }
 
   // ---- Wedding date proximity --------------------------------------------

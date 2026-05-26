@@ -202,7 +202,10 @@ export function isPerProspectRelay(email: string | null | undefined): boolean {
   if (/^[a-z0-9][a-z0-9._-]*\.[a-z0-9._-]+@member\.theknot\.com$/i.test(e)) return true
 
   // Zola connect-{uuid} per-prospect.
-  if (/^connect-[a-f0-9-]{6,}@zola\.com$/i.test(e)) return true
+  // Zola moved per-prospect relays onto vmkt-message.zola.com (and possibly
+  // other subdomains); allow any zola.com subdomain so the connect-* pattern
+  // is correctly classified as per-prospect (and thus usable as the real reply).
+  if (/^connect-[a-f0-9-]{6,}@(?:[\w-]+\.)*zola\.com$/i.test(e)) return true
 
   return false
 }

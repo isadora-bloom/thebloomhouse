@@ -8,13 +8,30 @@
  * deterministic rule first, exiting on the first hit, and only falling
  * through to the fuzzy scorer when nothing deterministic matched.
  *
- * The 8 stages, in order:
+ * The 10 stages, in order:
  *
  *   1. Exact primary email match
  *   2. Exact full first + last name match (case-insensitive)
+ *   2b. Partner-side exact full first + last name match. Mirror of stage
+ *       2 against the signal's partner_first/partner_last slot. Carries
+ *       the Glascow / Minette 2026-05-26 race: signal arrived with
+ *       partner_name='Glascow Tennille' while the existing wedding row
+ *       only had Glascow on it (partner backfill hadn't fired yet) —
+ *       stage 2 missed because the signal's primary side (Minette) was
+ *       not on the candidate, stage 2b catches it on the partner side.
  *   3. Nickname (per nicknames.ts) + exact last name match
  *   4. Exact phone match (E.164 normalised)
  *   5. Email-localpart logical-name match (timmy.blogs ↔ timothyblogs)
+ *   5b. Both-partners cross-match — when the signal carries a partner
+ *       full name and BOTH the signal's primary and partner full names
+ *       exact-match (cross-paired OR same-paired) the candidate couple's
+ *       two people. This is the Glascow / Minette case (2026-05-26):
+ *       calculator submission with primary=Glascow / partner=Minette and
+ *       Calendly tour 7 minutes later with primary=Minette / partner=
+ *       Glascow at the same venue. Both full names matching across both
+ *       sides is near-certain identity even when emails differ. The
+ *       same-pair flavour fires for the trivial case where signal and
+ *       candidate share the same role ordering.
  *   6. Body / CC cross-reference of a known identifier on the inbound
  *      message — Susan sends an email referencing Tim's email or phone
  *      anywhere in the body / CC list, and Tim's identifier is on file
@@ -57,6 +74,14 @@ export interface CascadeSignal {
   firstName?: string | null
   /** Sender's last name as it appeared on the signal. */
   lastName?: string | null
+  /** Partner first name when the signal carries one (Calendly Q&A
+   *  partner field, calculator partner_name, brain-dump partner row,
+   *  HoneyBook secondary contact). Stage 5b uses both partner fields to
+   *  test for the both-partner-cross-match shape. Unknown / single-
+   *  person signals can leave these null and stage 5b will simply not
+   *  fire. */
+  partnerFirstName?: string | null
+  partnerLastName?: string | null
   /** Full body text (subject + body + CC field joined when applicable).
    *  Used by stages 6/7/8 for cross-reference and paired-name scans. */
   bodyText?: string | null
@@ -91,9 +116,11 @@ export interface CascadeCandidate {
 export type CascadeStageId =
   | 'exact_email'
   | 'exact_full_name'
+  | 'partner_full_name'
   | 'nickname_plus_last_name'
   | 'exact_phone'
   | 'email_localpart_logical_name'
+  | 'both_partners_full_name_match'
   | 'body_cross_reference'
   | 'paired_name_with_corroborator'
   | 'family_name_plus_date'
@@ -193,6 +220,52 @@ function stage2ExactFullName(
   return null
 }
 
+/**
+ * Stage 2b — partner-side exact full-name match.
+ *
+ * Mirror of stage 2, but tests the signal's PARTNER first+last against
+ * the candidate's people. The Glascow / Minette 2026-05-26 race shape
+ * is what motivates this:
+ *   - At the moment the Calendly signal arrived, the existing
+ *     calculator-minted wedding only had partner1=Glascow on it
+ *     (partner2=Minette would be backfilled by reconstruction minutes
+ *     later). Stage 2 with signal first=Minette, last=Nupa vs
+ *     candidate people=[Glascow Tennille] missed. But the Calendly
+ *     signal also carried partner_first=Glascow, partner_last=Tennille
+ *     — an explicit "and my partner is Glascow Tennille" identity
+ *     claim. That side does exact-match the lone candidate person.
+ *
+ * Doctrine: a signal's `partner_*` slot is a first-class identity
+ * claim, not auxiliary metadata. Treating it as equal-tier-strength to
+ * the primary slot is the couple-is-the-unit doctrine in code.
+ *
+ * Multi-venue safe.
+ */
+function stage2bPartnerFullName(
+  signal: CascadeSignal,
+  candidates: CascadeCandidate[],
+): CascadeMatch | null {
+  const sf = lowerTrim(signal.partnerFirstName)
+  const sl = lowerTrim(signal.partnerLastName)
+  if (!sf || !sl) return null
+  for (const c of candidates) {
+    for (const p of c.people) {
+      const pf = lowerTrim(p.firstName)
+      const pl = lowerTrim(p.lastName)
+      if (!pf || !pl) continue
+      if (pf === sf && pl === sl) {
+        return {
+          matched: true,
+          coupleId: c.coupleId,
+          stage: 'partner_full_name',
+          evidence: `partner_full_name_exact:${sf} ${sl}`,
+        }
+      }
+    }
+  }
+  return null
+}
+
 function stage3NicknamePlusLastName(
   signal: CascadeSignal,
   candidates: CascadeCandidate[],
@@ -265,6 +338,101 @@ function stage5EmailLocalpartLogicalName(
           evidence: `localpart:${sigLp}~${candLp}`,
         }
       }
+    }
+  }
+  return null
+}
+
+/**
+ * Stage 5b — both-partners full-name match.
+ *
+ * Fires when the signal carries BOTH a primary full name and a partner
+ * full name and the candidate couple has at least two people whose full
+ * names exact-match the signal's two names (in either pairing direction).
+ *
+ * Doctrine: the couple is the unit ([[bloom-identity-first-doctrine]]).
+ * If two signals carry the same two full names — even with different
+ * primary/partner role assignments and different email addresses — that
+ * is the same couple. The 2026-05-26 Glascow / Minette case is the
+ * canonical shape: calculator submission with
+ * primary='Glascow Tennille' / partner='Minette Nupa' (gmail address)
+ * and a Calendly tour 7 minutes later with primary='Minette Nupa' /
+ * partner='Glascow Tennille' (yahoo address). The matcher previously
+ * scored this 60 (single full_name_exact on one side) and queued for
+ * operator review; this stage promotes it to a deterministic match.
+ *
+ * Conservative by design:
+ *   - Both signal sides AND both candidate people must carry first +
+ *     last name. Single-token names ("Tim") never satisfy fullNameKey.
+ *   - Last names on both signal sides must be non-empty after trim.
+ *   - Cross-pair match (A↔partner2, partner↔A) is the strong shape;
+ *     same-pair match (A↔A, partner↔partner) is equivalent identity
+ *     evidence and also fires here.
+ *   - Each signal side must match a DISTINCT candidate person. A
+ *     coincidence where one candidate person matches both signal sides
+ *     would otherwise inflate to a false positive.
+ *
+ * Multi-venue safe — no Rixey-specific clauses.
+ */
+function stage5bBothPartnersFullNameMatch(
+  signal: CascadeSignal,
+  candidates: CascadeCandidate[],
+): CascadeMatch | null {
+  const sigPF = lowerTrim(signal.firstName)
+  const sigPL = lowerTrim(signal.lastName)
+  const sigQF = lowerTrim(signal.partnerFirstName)
+  const sigQL = lowerTrim(signal.partnerLastName)
+  if (!sigPF || !sigPL || !sigQF || !sigQL) return null
+
+  // Refuse to fire if the signal's two "people" are the same person.
+  // Defends against an upstream extractor that mirrored a single name
+  // into both primary and partner slots.
+  if (sigPF === sigQF && sigPL === sigQL) return null
+
+  for (const c of candidates) {
+    if (c.people.length < 2) continue
+
+    // Resolve each candidate person's full-name key once.
+    const peopleKeys = c.people.map((p) => {
+      const f = lowerTrim(p.firstName)
+      const l = lowerTrim(p.lastName)
+      return f && l ? { f, l, idx: -1 } : null
+    })
+    // Need at least two candidate people with full names.
+    const withFull = peopleKeys.filter((k): k is { f: string; l: string; idx: number } => Boolean(k))
+    if (withFull.length < 2) continue
+
+    // Find DISTINCT candidate people for signal's two sides. Try
+    // primary→peopleA + partner→peopleB across all index pairs.
+    let matched: { a: number; b: number } | null = null
+    for (let i = 0; i < peopleKeys.length; i++) {
+      const pi = peopleKeys[i]
+      if (!pi) continue
+      if (pi.f !== sigPF || pi.l !== sigPL) continue
+      for (let j = 0; j < peopleKeys.length; j++) {
+        if (i === j) continue
+        const pj = peopleKeys[j]
+        if (!pj) continue
+        if (pj.f === sigQF && pj.l === sigQL) {
+          matched = { a: i, b: j }
+          break
+        }
+      }
+      if (matched) break
+    }
+    if (!matched) continue
+
+    // Determine cross vs same pair for the evidence string. The
+    // candidate carries no role marker on the CascadeCandidate.people
+    // contract, so "cross" here means signal-primary mapped to a
+    // candidate person OTHER than the first slot. This is a label
+    // only — both shapes fire as the same stage.
+    const orientation = matched.a === 0 && matched.b === 1 ? 'same_pair' : 'cross_pair'
+    return {
+      matched: true,
+      coupleId: c.coupleId,
+      stage: 'both_partners_full_name_match',
+      evidence: `both_partners:${sigPF} ${sigPL} + ${sigQF} ${sigQL} (${orientation})`,
     }
   }
   return null
@@ -470,9 +638,11 @@ function stage8FamilyNamePlusDate(
 const STAGES: Array<(s: CascadeSignal, c: CascadeCandidate[]) => CascadeMatch | null> = [
   stage1ExactEmail,
   stage2ExactFullName,
+  stage2bPartnerFullName,
   stage3NicknamePlusLastName,
   stage4ExactPhone,
   stage5EmailLocalpartLogicalName,
+  stage5bBothPartnersFullNameMatch,
   stage6BodyCrossReference,
   stage7PairedNameWithCorroborator,
   stage8FamilyNamePlusDate,
@@ -510,12 +680,16 @@ export function describeMatch(m: CascadeMatch): string {
       return `exact email match (${m.evidence})`
     case 'exact_full_name':
       return `exact full-name match (${m.evidence})`
+    case 'partner_full_name':
+      return `partner-side exact full-name match (${m.evidence})`
     case 'nickname_plus_last_name':
       return `nickname match with exact last name (${m.evidence})`
     case 'exact_phone':
       return `exact phone match (${m.evidence})`
     case 'email_localpart_logical_name':
       return `email-localpart logical-name match (${m.evidence})`
+    case 'both_partners_full_name_match':
+      return `both-partners full-name match (${m.evidence})`
     case 'body_cross_reference':
       return `body cross-referenced a known identifier (${m.evidence})`
     case 'paired_name_with_corroborator':

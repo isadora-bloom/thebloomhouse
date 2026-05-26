@@ -539,6 +539,13 @@ function runCascadeAgainstPeople(
     primaryPhone: candidate.phone ?? null,
     firstName: candidate.firstName ?? null,
     lastName: candidate.lastName ?? null,
+    // Propagate the partner names so cascade stage 5b
+    // (both-partners full-name match) can fire on Calendly /
+    // calculator signals that carry both sides. Without these, the
+    // Glascow / Minette 2026-05-26 shape silently degrades to
+    // single-side full_name_exact in the score-based fallback.
+    partnerFirstName: candidate.partnerFirstName ?? null,
+    partnerLastName: candidate.partnerLastName ?? null,
     bodyText: candidate.bodyText ?? null,
     weddingDate: candidate.weddingDate ?? null,
     bodyEmails: candidate.bodyEmails,

@@ -40,6 +40,7 @@ import {
   eventKindToStatus,
   timeAwareTourKind,
   type SchedulingEvent,
+  type SchedulingEventKind,
 } from '@/lib/services/ingestion/scheduling-tool-parsers'
 import { findIdentityMatches } from '@/lib/services/identity/resolution'
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
@@ -111,6 +112,149 @@ function extractUtmFromExtractedIdentity(
     }
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// 2026-05-26 — Relay-resolved identity for cascade `linkSignal` writes.
+// ---------------------------------------------------------------------------
+//
+// THE BUG (Glascow Tennille trace, operator-impact):
+// For relay-resolved emails (venue_calculator submissions, Calendly-via-
+// Gmail forwards, Zola/Knot/WW inquiries) the raw From header is the
+// venue's OWN address. Feeding rawFromEmail/rawFromName into the
+// cascade signal made the matcher score `primary_email='hello@<venue>.
+// com'` + `primary_name='<Venue> Calculator'` — so the matcher had
+// zero chance of unifying the calculator submission (signal A, email
+// gtennilledpt@gmail.com via legacy resolver) with the Calendly tour
+// notification for the SAME couple (signal B, email nupaminette@yahoo.
+// com via legacy resolver). The legacy `findOrCreateContact` path
+// correctly swaps in `formLead.leadEmail` / `schedulingEvent.
+// inviteeEmail` at line ~1160; the cascade-side `linkSignal` call did
+// NOT, so the two signals landed as two unbridged spine couples.
+//
+// THE FIX:
+// Pass `resolvedEmail` / `resolvedName` / `resolvedPhone` +
+// `channelOverride` + `actionTypeOverride` to the adapter at each
+// inbound `linkSignal` call site so the cascade sees the prospect's
+// real identity + the canonical relay channel.
+
+/**
+ * Canonical channel for a `FormRelayLead.source`. Matches the channel
+ * taxonomy in `identity/sources/types.ts` and the keys
+ * `progression.ts` dispatches on for new_channel_inquiry mapping
+ * (`'knot' | 'weddingwire' | 'zola' | 'website'`). The Knot, WW, Zola
+ * batch adapters use the single-token forms; venue_calculator is the
+ * venue's own website form, so it maps to 'website' to align with
+ * `progression.ts:174` ("if channel === 'website' && action ===
+ * 'inquiry_form_submitted' → new_channel_inquiry"). HCTG is mapped
+ * to 'here_comes_the_guide' as-is — there is no shorter canonical form
+ * in the taxonomy yet, and progression.ts has no dispatch for it
+ * (a fragment-routed signal with no progression event is the correct
+ * pre-coverage behaviour).
+ */
+function formLeadSourceToChannel(source: FormRelayLead['source']): string {
+  switch (source) {
+    case 'the_knot':
+      return 'knot'
+    case 'wedding_wire':
+      return 'weddingwire'
+    case 'zola':
+      return 'zola'
+    case 'venue_calculator':
+      return 'website'
+    case 'here_comes_the_guide':
+      return 'here_comes_the_guide'
+    default:
+      // Exhaustiveness — TS-narrowed to never. If a new source lands
+      // without a mapping it falls back to the literal string so the
+      // touchpoint still binds, just without a progression mapping.
+      return source as string
+  }
+}
+
+/**
+ * Canonical action_type for a `FormRelayLead.source`. Picks the verb
+ * that `progression.ts` already dispatches for the resolved channel:
+ *   - venue_calculator → 'inquiry_form_submitted' (matches website
+ *     mapping at progression.ts:174-175 → new_channel_inquiry).
+ *     The Glascow Tennille trace shows this is the right doctrine
+ *     fit — a calculator submission IS the venue's website inquiry
+ *     form firing.
+ *   - knot / weddingwire / zola → 'inquiry' (matches knot/weddingwire/
+ *     zola mapping at progression.ts:168-170 → new_channel_inquiry).
+ *   - here_comes_the_guide → 'inquiry' (no progression mapping yet
+ *     but the verb is sensible; fragment-routed).
+ */
+function formLeadSourceToActionType(source: FormRelayLead['source']): string {
+  switch (source) {
+    case 'venue_calculator':
+      return 'inquiry_form_submitted'
+    case 'the_knot':
+    case 'wedding_wire':
+    case 'zola':
+    case 'here_comes_the_guide':
+      return 'inquiry'
+    default:
+      return 'inquiry'
+  }
+}
+
+/**
+ * Canonical action_type for a `SchedulingEventKind`. The schedulingEvent
+ * is delivered via Gmail (Calendly/Acuity/HoneyBook/Dubsado all email
+ * the venue when bookings happen) — without this override the cascade
+ * would write `action_type:'reply'` on a Calendly tour_scheduled and
+ * the matcher would miss the canonical 'tour_booked' progression event.
+ *
+ * Mapped against progression.ts:139-167:
+ *   - tour_scheduled → 'tour_booked' (channel='calendly' dispatch)
+ *   - tour_completed → 'tour_attended' (channel='calendly' dispatch)
+ *   - tour_rescheduled → 'tour_rescheduled' (channel='calendly')
+ *   - tour_cancelled → 'tour_cancelled' (verb is sensible; no
+ *       progression mapping in current progression.ts — fragment-
+ *       routed touchpoint with no progression event is the right
+ *       pre-coverage behaviour, the legacy engagement_events write at
+ *       pipeline.ts:~3743 already carries the cancellation signal)
+ *   - contract_signed → 'contract_signed' (channel='honeybook')
+ *   - contract_sent / payment_received / final_walkthrough /
+ *     pre_wedding_event / planning_meeting → pass-through (no
+ *     progression mapping today; touchpoint still records the truth)
+ *   - honeybook_contract_signed → 'contract_signed' (CRM-tagged
+ *     equivalent — DRY with the unprefixed verb)
+ *   - honeybook_payment_received / honeybook_refund /
+ *     honeybook_amendment → pass-through (no progression mapping yet)
+ */
+function schedulingEventKindToAction(kind: SchedulingEventKind): string {
+  switch (kind) {
+    case 'tour_scheduled':
+      return 'tour_booked'
+    case 'tour_completed':
+      return 'tour_attended'
+    case 'tour_rescheduled':
+      return 'tour_rescheduled'
+    case 'tour_cancelled':
+      return 'tour_cancelled'
+    case 'contract_signed':
+    case 'honeybook_contract_signed':
+      return 'contract_signed'
+    case 'contract_sent':
+      return 'contract_sent'
+    case 'payment_received':
+    case 'honeybook_payment_received':
+      return 'payment_received'
+    case 'final_walkthrough':
+      return 'final_walkthrough'
+    case 'pre_wedding_event':
+      return 'pre_wedding_event'
+    case 'planning_meeting':
+      return 'planning_meeting'
+    case 'honeybook_refund':
+      return 'honeybook_refund'
+    case 'honeybook_amendment':
+      return 'honeybook_amendment'
+    default:
+      return kind
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2281,6 +2425,15 @@ export async function processIncomingEmail(
         const { emailToNormalizedSignal } = await import(
           '@/lib/services/identity/email-to-signal'
         )
+        // 2026-05-26 — relay-resolved identity override (operator-impact
+        // fix). When the human-escalation email arrived via a form relay
+        // (calculator/Knot/WW/Zola) or a Calendly-via-Gmail forward,
+        // raw From is the venue's own address — feeding that into the
+        // matcher is the Glascow Tennille bug. Prefer formLead /
+        // schedulingEvent identity when present; channelOverride routes
+        // the touchpoint to the canonical relay channel. Genuine inbound
+        // (no relay) leaves resolvedEmail/Name null and keeps legacy
+        // raw-From behaviour byte-identical.
         const signal = emailToNormalizedSignal({
           email,
           interactionId,
@@ -2289,6 +2442,25 @@ export async function processIncomingEmail(
           rawFromEmail,
           weddingId,
           actionType: 'human_requested',
+          // formLead wins over schedulingEvent (matches the identity-
+          // priority order at pipeline.ts:1277-1281 for fromEmail).
+          resolvedEmail: formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? null,
+          resolvedName: formLead?.leadName ?? schedulingEvent?.inviteeName ?? null,
+          resolvedPhone: schedulingEvent?.extras?.phone ?? null,
+          // Channel override: if a relay fired, tag the cascade
+          // touchpoint with that channel. The action_type stays
+          // 'human_requested' (the escalation truth) — the channel
+          // describes *where* the escalation came in. For scheduling-
+          // tool forwards we pass the source through directly (the
+          // SchedulingToolSource values 'calendly' | 'acuity' |
+          // 'honeybook' | 'dubsado' are valid channel taxonomy keys —
+          // 'calendly' + 'honeybook' both used by batch adapters in
+          // identity/sources/).
+          channelOverride: formLead
+            ? formLeadSourceToChannel(formLead.source)
+            : schedulingEvent
+              ? schedulingEvent.source
+              : undefined,
         })
         const linkResult = await linkSignal({
           supabase,
@@ -4575,6 +4747,17 @@ export async function processIncomingEmail(
       const { emailToNormalizedSignal } = await import(
         '@/lib/services/identity/email-to-signal'
       )
+      // 2026-05-26 — relay-resolved identity override (operator-impact
+      // fix, Glascow Tennille trace). M1 main inbound write. For
+      // relay-resolved emails (calculator submissions, Calendly-via-
+      // Gmail forwards, Knot/WW/Zola inquiries) the raw From header
+      // is the venue's OWN address — feeding that into the matcher
+      // collapsed unrelated prospects under one venue-self identity.
+      // Prefer formLead / schedulingEvent identity when present;
+      // channelOverride + actionTypeOverride route the cascade
+      // touchpoint to the canonical relay channel + verb. Genuine
+      // inbound (no relay) leaves resolved* null and keeps legacy
+      // raw-From behaviour byte-identical.
       const linkResult = await linkSignal({
         supabase,
         venueId,
@@ -4586,6 +4769,31 @@ export async function processIncomingEmail(
           rawFromEmail,
           draftId,
           weddingId,
+          // formLead wins over schedulingEvent (matches the identity-
+          // priority order at pipeline.ts:1277-1281 for fromEmail).
+          resolvedEmail: formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? null,
+          resolvedName: formLead?.leadName ?? schedulingEvent?.inviteeName ?? null,
+          resolvedPhone: schedulingEvent?.extras?.phone ?? null,
+          // Channel + verb override for relay-resolved signals so
+          // progression.ts dispatches the right event_type (a Calendly
+          // tour_booked under channel='calendly' lands as
+          // 'tour_booked'; a calculator submission under
+          // channel='website' + action='inquiry_form_submitted' lands
+          // as 'new_channel_inquiry'). For schedulingEvent, the
+          // SchedulingToolSource values 'calendly'|'acuity'|'honeybook'
+          // |'dubsado' map directly to channel taxonomy keys; the
+          // event-kind→action mapping below covers tour_scheduled vs
+          // contract_signed vs final_walkthrough etc.
+          channelOverride: formLead
+            ? formLeadSourceToChannel(formLead.source)
+            : schedulingEvent
+              ? schedulingEvent.source
+              : undefined,
+          actionTypeOverride: formLead
+            ? formLeadSourceToActionType(formLead.source)
+            : schedulingEvent
+              ? schedulingEventKindToAction(schedulingEvent.kind)
+              : undefined,
         }),
         correlationId,
         source: 'live:email',
