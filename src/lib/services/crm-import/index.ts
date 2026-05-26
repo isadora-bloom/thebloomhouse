@@ -471,6 +471,33 @@ export async function commitNormalisedRows(args: {
     touchedWeddingIds: [],
   }
 
+  // H3 cascade-signal accumulator (PHASE-1-BATCH-2.md §3 phase A H3,
+  // 2026-05-26). HoneyBook-only — built per row as the legacy
+  // interactions batch lands, flushed once via `linkSignalBatch` at
+  // the END of the loop so a per-import judge budget (Pbatch2-11) can
+  // be allocated across all rows. Each `pendingSignals` entry carries
+  // the prebuilt `NormalizedSignal` plus a short telemetry tag.
+  //
+  // Non-HoneyBook adapters (generic_csv / web_form / tour_scheduler /
+  // dubsado-scaffold / etc.) get no signals — H3 explicitly scopes to
+  // HoneyBook because:
+  //   (a) the HoneyBook adapter is the only one that emits the
+  //       synthetic `extracted_identity.hear_source` provenance row
+  //       that the cascade needs to read as a true attribution signal.
+  //   (b) the other CRM/CSV adapters have their own Pbatch2 sites
+  //       (web_form has its live-write cascade plumbing already;
+  //       generic_csv carries no provider-specific attribution).
+  const isHoneybookImport = crmSource === 'honeybook'
+  type PendingHoneybookSignal = {
+    signal: import('@/lib/services/identity/sources/types').NormalizedSignal
+    rowSourceId: string | null
+    weddingId: string
+    /** Confidence sort key (higher = judge gets it first when budget
+     *  is tight): 'high' tier = 2, 'medium' = 1, 'low'/'aggregate' = 0. */
+    sortKey: number
+  }
+  const pendingHoneybookSignals: PendingHoneybookSignal[] = []
+
   for (const row of rows) {
     // #88 (Stream PPP, 2026-05-03): per-row client-side rollback. The
     // route-level pre-commit validation (validateAllRows) already catches
@@ -787,53 +814,112 @@ export async function commitNormalisedRows(args: {
         ?? pickChokepointSourceForCrm(crmSource)
 
       let p1InsertedId: string | null = null
+      // Track whether the mintPerson call genuinely CREATED a fresh row
+      // (matchedBy='created_new') vs resolved to an existing one via the
+      // alias_emails branch / pool / etc. The post-mint contracts-table-
+      // mirror flow (further down) does NOT exist here today, but the
+      // resolved-existing case must NOT re-run name-capture against a
+      // canonical person — same shape as the Batch-1 M2 `mintIsNew` gate
+      // (commit 8d95181) for the email-pipeline `findOrCreateContact`.
+      let p1MintIsNew = false
       if (
         !resolvedPartner1Id &&
         (row.partner1_first_name || row.partner1_last_name || row.partner1_email)
       ) {
-        const { data: p1Row } = await supabase
-          .from('people')
-          .insert({
-            venue_id: venueId,
-            wedding_id: weddingId,
-            role: 'partner1',
-            first_name: row.partner1_first_name ?? null,
-            last_name: row.partner1_last_name ?? null,
+        // H1 flip (PHASE-1-BATCH-2.md §3 phase A H1, 2026-05-26): route
+        // the partner1 mint through the `mintPerson` chokepoint instead
+        // of a raw `people.insert`. Only the CREATE is rerouted — the
+        // upstream `resolveIdentity` call at :609 already attempted the
+        // canonical-resolver match step and missed (otherwise
+        // `resolvedPartner1Id` would be set and this whole branch
+        // skipped). mintPerson re-runs its own identifier match chain
+        // (email_exact → email_canonical → phone) — on the same null
+        // result the chain also misses, so it falls through to
+        // `createPerson` and the create outcome is unchanged. The
+        // chokepoint additionally: (a) routes the name through the
+        // name-capture shape-classifier (no `Rosaliehoyle` junk-name),
+        // (b) fires the venue self-loop guard (same class as the email
+        // pipeline), (c) records `source:'crm_import'` provenance.
+        //
+        // Pattern mirrors Batch-1 M2 (commit 8d95181):
+        //   - Map mintResult.isNew → p1MintIsNew (a fresh row, not an
+        //     alias/pool hit) so post-mint operations don't mis-fire.
+        //   - On personId:null log + degrade (mintPerson never throws
+        //     by contract; null means self-loop blocked or resolver
+        //     INSERT failed — neither should fire here since the
+        //     resolver miss above already screened email+phone, but
+        //     defend in depth).
+        const partner1FullName = [row.partner1_first_name, row.partner1_last_name]
+          .filter(Boolean).join(' ') || null
+        const { mintPerson } = await import('@/lib/services/identity/mint-person')
+        const p1Mint = await mintPerson({
+          venueId,
+          weddingId,
+          role: 'partner1',
+          signals: {
             email: row.partner1_email ?? null,
             phone: row.partner1_phone ?? null,
-            confidence_flag: confidenceFlag,
-            crm_source: crmSource,
-          })
-          .select('id')
-          .single()
-        if (p1Row?.id) {
-          p1InsertedId = p1Row.id as string
+            fullName: partner1FullName,
+            weddingDate: row.wedding_date ?? null,
+            partner1Name: partner1FullName,
+            partner2Name: [row.partner2_first_name, row.partner2_last_name]
+              .filter(Boolean).join(' ') || null,
+          },
+          source: 'crm_import',
+          reason: `crm_import:${crmSource}:partner1`,
+          supabase,
+        })
+        if (!p1Mint.personId) {
+          // Self-loop blocked, or resolver_error. The pre-flip path
+          // would have logged the failure and continued; preserve that
+          // contract. The wedding row already exists; the partner1
+          // people-mirror gap is auditable via the warn line + the
+          // mintPerson telemetry surface.
+          console.warn(
+            `[crm-import] mintPerson (partner1) returned null ` +
+              `(matchedBy=${p1Mint.matchedBy}, wedding=${weddingId}, ` +
+              `crm_source=${crmSource}). Continuing without partner1 row.`,
+          )
+        } else {
+          p1InsertedId = p1Mint.personId
+          p1MintIsNew = p1Mint.matchedBy === 'created_new'
           // Capture the partner1 name signal through the chokepoint.
           // Pre-split first/last is the cleanest signal; the chokepoint
           // records evidence + recomputes the picker output. Even when
           // the row already had a real first/last, we still capture so
           // the evidence array reflects the import as a source.
-          try {
-            await captureNameEvidence(supabase, p1InsertedId, {
-              first: row.partner1_first_name ?? null,
-              last: row.partner1_last_name ?? null,
-              email: row.partner1_email ?? null,
-              source: chokepointSource,
-            })
-            if (row.partner1_email) {
-              const fromEmail = inferNameFromEmail(row.partner1_email)
-              if (fromEmail) {
-                await captureNameEvidence(supabase, p1InsertedId, {
-                  first: fromEmail.first,
-                  last: fromEmail.last,
-                  email: row.partner1_email,
-                  source: 'email_handle_parse',
-                })
+          //
+          // Guard on p1MintIsNew: when mintPerson resolved to an EXISTING
+          // person via its identifier chain (alias_emails branch,
+          // pool fallback), running captureNameEvidence with raw CSV
+          // first/last would pollute a canonical record with this
+          // import's (possibly stale) name evidence. Pre-flip the create
+          // always inserted, so name-capture always ran against a
+          // brand-new row — preserve that contract by gating on
+          // genuinely-fresh creates.
+          if (p1MintIsNew) {
+            try {
+              await captureNameEvidence(supabase, p1InsertedId, {
+                first: row.partner1_first_name ?? null,
+                last: row.partner1_last_name ?? null,
+                email: row.partner1_email ?? null,
+                source: chokepointSource,
+              })
+              if (row.partner1_email) {
+                const fromEmail = inferNameFromEmail(row.partner1_email)
+                if (fromEmail) {
+                  await captureNameEvidence(supabase, p1InsertedId, {
+                    first: fromEmail.first,
+                    last: fromEmail.last,
+                    email: row.partner1_email,
+                    source: 'email_handle_parse',
+                  })
+                }
               }
+            } catch (err) {
+              console.warn('[crm-import] name-capture (partner1) failed:',
+                err instanceof Error ? err.message : err)
             }
-          } catch (err) {
-            console.warn('[crm-import] name-capture (partner1) failed:',
-              err instanceof Error ? err.message : err)
           }
         }
       }
@@ -853,8 +939,25 @@ export async function commitNormalisedRows(args: {
       const p2HasFirst = !!(row.partner2_first_name && row.partner2_first_name.trim())
       const p2HasLast = !!(row.partner2_last_name && row.partner2_last_name.trim())
       if (p2HasFirst || p2HasLast) {
-        // Run the dedupe ONLY when we have a non-empty first name to
-        // query with — empty-string ilike matches all.
+        // H2 flip (PHASE-1-BATCH-2.md §3 phase A H2, 2026-05-26): route
+        // the partner2 mint through the `mintPerson` chokepoint — the
+        // **Liam Hunt class** fix. The pre-flip `ilike('first_name', ...)`
+        // dedup only catches duplicate first-names that match
+        // case-insensitively; it misses last-name-only signals, spelling
+        // variants ("Cat" vs "Catherine"), and the cross-channel case
+        // where partner2's email/phone landed earlier via Calendly /
+        // Knot relay etc. mintPerson's partner2 invariant
+        // (enrichExistingPartner2 + the migration-367 unique index on
+        // `(venue_id, wedding_id, role) WHERE merged_into_id IS NULL
+        // AND role IN ('partner1','partner2')`) closes that class
+        // permanently. Pattern mirrors Batch-1 M4/M5 (commit c39cd17).
+        //
+        // The existing `alreadyExists` ilike check is KEPT as a belt
+        // on mintPerson's suspenders — when it fires TRUE, we skip the
+        // mint entirely, which preserves the pre-flip "obvious case
+        // 1-line skip" telemetry shape. When it fires FALSE,
+        // mintPerson's enrich-or-skip takes over and the C1 + dup-
+        // partner2 cases are covered.
         let alreadyExists = false
         if (p2HasFirst) {
           const { data: existingP2 } = await supabase
@@ -867,43 +970,104 @@ export async function commitNormalisedRows(args: {
           alreadyExists = !!(existingP2 && existingP2.length > 0)
         }
         if (!alreadyExists) {
-          const { data: p2Row } = await supabase
-            .from('people')
-            .insert({
-              venue_id: venueId,
-              wedding_id: weddingId,
+          // partner2 name passed in `signals.fullName` — mintPerson's
+          // enrich path (`enrichExistingPartner2`) and create path
+          // (`createPartner2Person` / `createPerson`) both read the
+          // incoming name from there.
+          const partner2FullName = [row.partner2_first_name, row.partner2_last_name]
+            .filter(Boolean).join(' ') || null
+          let p2Id: string | null = null
+          let p2MintIsNew = false
+          try {
+            const { mintPerson } = await import('@/lib/services/identity/mint-person')
+            const p2Mint = await mintPerson({
+              venueId,
+              weddingId,
               role: 'partner2',
-              first_name: row.partner2_first_name ?? null,
-              last_name: row.partner2_last_name ?? null,
-              email: row.partner2_email ?? null,
-              phone: row.partner2_phone ?? null,
-              confidence_flag: confidenceFlag,
-              crm_source: crmSource,
-            })
-            .select('id')
-            .single()
-          if (p2Row?.id) {
-            try {
-              await captureNameEvidence(supabase, p2Row.id as string, {
-                first: row.partner2_first_name ?? null,
-                last: row.partner2_last_name ?? null,
+              signals: {
                 email: row.partner2_email ?? null,
-                source: chokepointSource,
-              })
-              if (row.partner2_email) {
-                const fromEmail = inferNameFromEmail(row.partner2_email)
-                if (fromEmail) {
-                  await captureNameEvidence(supabase, p2Row.id as string, {
-                    first: fromEmail.first,
-                    last: fromEmail.last,
-                    email: row.partner2_email,
-                    source: 'email_handle_parse',
-                  })
-                }
-              }
+                phone: row.partner2_phone ?? null,
+                fullName: partner2FullName,
+                weddingDate: row.wedding_date ?? null,
+                partner1Name: [row.partner1_first_name, row.partner1_last_name]
+                  .filter(Boolean).join(' ') || null,
+                partner2Name: partner2FullName,
+              },
+              source: 'crm_import',
+              reason: `crm_import:${crmSource}:partner2`,
+              supabase,
+            })
+            p2Id = p2Mint.personId
+            // 'created_new' OR collision-guard fresh-mint count as
+            // genuinely-new for the name-capture gate; 'partner2_enriched'
+            // and 'resolver_error' / 'self_loop_blocked' do not.
+            p2MintIsNew =
+              p2Mint.matchedBy === 'created_new'
+              || p2Mint.matchedBy === 'partner2_same_wedding_collision'
+              || p2Mint.matchedBy === 'partner2_cross_wedding_collision'
+          } catch (err) {
+            // mintPerson never throws by contract; belt for an
+            // unexpected import/runtime failure.
+            console.warn(
+              '[crm-import] mintPerson (partner2) threw unexpectedly:',
+              err instanceof Error ? err.message : err,
+            )
+          }
+          // personId:null — resolver error, self-loop blocked, or
+          // (post-migration-367) a concurrent-race unique-violation
+          // round-tripped to the C1 collision branch's createPartner2
+          // → enrich re-check → null. Either way the correct recovery
+          // is the same as Batch-1 M4/M5: re-query the live partner2
+          // row on this wedding and use it. Better than failing-hard.
+          if (!p2Id) {
+            try {
+              const { data: existingP2 } = await supabase
+                .from('people')
+                .select('id')
+                .eq('venue_id', venueId)
+                .eq('wedding_id', weddingId)
+                .eq('role', 'partner2')
+                .is('merged_into_id', null)
+                .order('created_at', { ascending: true })
+                .limit(1)
+                .maybeSingle()
+              if (existingP2?.id) p2Id = existingP2.id as string
             } catch (err) {
-              console.warn('[crm-import] name-capture (partner2) failed:',
-                err instanceof Error ? err.message : err)
+              console.warn(
+                '[crm-import] partner2 re-query after null mint failed:',
+                err instanceof Error ? err.message : err,
+              )
+            }
+          }
+          if (p2Id) {
+            // Name-capture gate: only on a genuinely-fresh mint. The
+            // re-queried-after-null path is conservative — that row
+            // already exists and probably already has name evidence;
+            // re-running capture against it would be the same
+            // pollution risk as H1's `p1MintIsNew` gate.
+            if (p2MintIsNew) {
+              try {
+                await captureNameEvidence(supabase, p2Id, {
+                  first: row.partner2_first_name ?? null,
+                  last: row.partner2_last_name ?? null,
+                  email: row.partner2_email ?? null,
+                  source: chokepointSource,
+                })
+                if (row.partner2_email) {
+                  const fromEmail = inferNameFromEmail(row.partner2_email)
+                  if (fromEmail) {
+                    await captureNameEvidence(supabase, p2Id, {
+                      first: fromEmail.first,
+                      last: fromEmail.last,
+                      email: row.partner2_email,
+                      source: 'email_handle_parse',
+                    })
+                  }
+                }
+              } catch (err) {
+                console.warn('[crm-import] name-capture (partner2) failed:',
+                  err instanceof Error ? err.message : err)
+              }
             }
           }
         }
@@ -1073,6 +1237,146 @@ export async function commitNormalisedRows(args: {
               }
             }
           }
+
+          // H3 dual-write (PHASE-1-BATCH-2.md §3 phase A H3, 2026-05-26):
+          // accumulate cascade signal(s) for this HoneyBook row alongside
+          // the legacy interactions insert above. The legacy `interactions`
+          // batch STAYS source-of-truth; the cascade-side write happens at
+          // the END of the loop via `linkSignalBatch` so a per-import
+          // judge budget (Pbatch2-11) can be allocated across all rows.
+          //
+          // Per row, we may emit UP TO TWO signals:
+          //   (a) the status-derived row signal — always, encoding
+          //       inquiry/booked/lost lifecycle state into the spine via
+          //       `crm_imported_*` action_types.
+          //   (b) the synthetic-provenance attribution signal — when ANY
+          //       interaction in `row.interactions` carries
+          //       `extracted_identity.hear_source` (the HoneyBook adapter
+          //       emits exactly one such row per wedding when it
+          //       recognises the lead-source field). This is the only
+          //       true attribution signal HoneyBook provides; sending it
+          //       through the spine as `action_type:'crm_attribution'`
+          //       is what makes "did Knot drive that booking?" answerable
+          //       from the cohort funnel.
+          //
+          // Confidence-sort key (Pbatch2-11): high-tier signals get the
+          // LLM judge first when the budget is tight. Attribution rows
+          // with a recognised hear_source are signal_tier='high';
+          // booked/completed rows are 'high'; everything else is
+          // 'medium'. We tag a numeric sortKey now and sort in the flush.
+          //
+          // try/catch wrapper: linkSignal builder failures must never
+          // throw out of `commitNormalisedRows`. The legacy interactions
+          // insert above is the source of truth; a cascade-build failure
+          // is auditable via the warn but never blocks the import.
+          if (isHoneybookImport) {
+            try {
+              const { honeybookCsvToNormalizedSignal } = await import(
+                '@/lib/services/identity/honeybook-csv-to-signal'
+              )
+              const builderRow: import(
+                '@/lib/services/identity/honeybook-csv-to-signal'
+              ).HoneybookCsvRowInput = {
+                source_id: row.source_id ?? null,
+                partner1_first_name: row.partner1_first_name ?? null,
+                partner1_last_name: row.partner1_last_name ?? null,
+                partner1_email: row.partner1_email ?? null,
+                partner1_phone: row.partner1_phone ?? null,
+                partner2_first_name: row.partner2_first_name ?? null,
+                partner2_last_name: row.partner2_last_name ?? null,
+                partner2_email: row.partner2_email ?? null,
+                partner2_phone: row.partner2_phone ?? null,
+                wedding_date: row.wedding_date ?? null,
+                status: row.status ?? null,
+                inquiry_date: row.inquiry_date ?? null,
+                booked_at: row.booked_at ?? null,
+                lost_at: row.lost_at ?? null,
+                source: row.source ?? null,
+                raw_row: row.raw_row ?? null,
+              }
+              // Pick out the synthetic-provenance interaction (if any)
+              // so the attribution signal can be emitted with the
+              // hear_source payload and the matching importRowId.
+              const provenanceDecision = decisions.find((d) => {
+                const ext = (d.interaction.extracted_identity ?? null) as
+                  | { hear_source?: unknown; hear_source_raw?: unknown }
+                  | null
+                return (
+                  d.willInsert
+                  && ext
+                  && (typeof ext.hear_source === 'string'
+                    || typeof ext.hear_source_raw === 'string')
+                )
+              }) ?? null
+
+              // (a) status-derived row signal — always emit. The builder
+              //     skips the attribution promotion when neither
+              //     extracted_identity nor mode='attribution' is set.
+              const rowSignal = honeybookCsvToNormalizedSignal({
+                row: builderRow,
+                weddingId,
+                importRowId: null,
+                mode: 'row',
+              })
+              pendingHoneybookSignals.push({
+                signal: rowSignal,
+                rowSourceId: row.source_id ?? null,
+                weddingId,
+                sortKey: rowSignal.signal_tier === 'high' ? 2
+                  : rowSignal.signal_tier === 'medium' ? 1
+                  : 0,
+              })
+
+              // (b) synthetic-provenance attribution signal — only when
+              //     the HoneyBook adapter emitted a hear_source-bearing
+              //     row. Pass the recognised + raw hear_source into the
+              //     builder so it auto-promotes to action_type:
+              //     'crm_attribution' and surfaces the value in
+              //     raw_payload for downstream readers.
+              if (provenanceDecision) {
+                const ext = provenanceDecision.interaction.extracted_identity as
+                  | { hear_source?: unknown; hear_source_raw?: unknown }
+                  | null
+                const attributionRow: import(
+                  '@/lib/services/identity/honeybook-csv-to-signal'
+                ).HoneybookCsvRowInput = {
+                  ...builderRow,
+                  extracted_identity: {
+                    hear_source:
+                      typeof ext?.hear_source === 'string'
+                        ? ext.hear_source : null,
+                    hear_source_raw:
+                      typeof ext?.hear_source_raw === 'string'
+                        ? ext.hear_source_raw : null,
+                  },
+                }
+                const attributionSignal = honeybookCsvToNormalizedSignal({
+                  row: attributionRow,
+                  weddingId,
+                  importRowId: provenanceDecision.importRowId,
+                  mode: 'attribution',
+                })
+                pendingHoneybookSignals.push({
+                  signal: attributionSignal,
+                  rowSourceId: row.source_id ?? null,
+                  weddingId,
+                  sortKey: attributionSignal.signal_tier === 'high' ? 2
+                    : attributionSignal.signal_tier === 'medium' ? 1
+                    : 0,
+                })
+              }
+            } catch (err) {
+              // Signal-build failure is non-fatal — the legacy insert
+              // above committed; this row just doesn't get a cascade
+              // signal for this batch. Surface via warn so the gap is
+              // auditable.
+              console.warn(
+                `[crm-import] H3 honeybook-csv-to-signal build failed ` +
+                  `(wedding=${weddingId}):`,
+                err instanceof Error ? err.message : err,
+              )
+            }
+          }
         }
       }
       if (rowAborted) continue
@@ -1211,6 +1515,69 @@ export async function commitNormalisedRows(args: {
         unrecordTouched(insertedWeddingId)
         insertedWeddingId = null
       }
+    }
+  }
+
+  // H3 flush (PHASE-1-BATCH-2.md §3 phase A H3 + Pbatch2-11, 2026-05-26):
+  // dual-write the accumulated HoneyBook cascade signals through the
+  // Forwards Linker. Runs ONCE per import (post row-loop) so the
+  // judge budget can be sized proportional to the batch — the default
+  // `linkSignalBatch` budget is 25, which a 1000-row CSV with ~100
+  // medium-confidence rows would exhaust by row 25, leaving the
+  // remainder to default to fragments.
+  //
+  // Pbatch2-11 doctrine:
+  //   - judgeBudget = Math.min(rowCount, 200) — proportional to signal
+  //     count, capped at 200 to bound LLM cost per import. For a
+  //     typical Rixey HoneyBook backfill (~70 weddings → ~70-140
+  //     signals once attribution is included), the cap rarely binds;
+  //     for a multi-thousand-row historical archive it caps spend.
+  //   - confidence-sort pre-batch: high-tier signals (booked rows,
+  //     recognised-hear-source attribution rows) first so they get the
+  //     LLM judge when budget IS tight. Lower-tier signals consume
+  //     the deterministic matcher only (no judge call) and the
+  //     fragment-vs-cold-start route handles them.
+  //
+  // Dual-write contract (same as Batch-1 M6/M7): legacy
+  // `interactions.insert` per-row above STAYS source-of-truth; the
+  // cascade write is added in parallel. A flush failure must NOT
+  // throw out of `commitNormalisedRows` — log + continue to the
+  // portal-provisioning block. The Forwards Linker's own emit code
+  // also writes per-signal `tracer_run_events` rows for the dashboard.
+  if (pendingHoneybookSignals.length > 0) {
+    try {
+      const { linkSignalBatch } = await import(
+        '@/lib/services/identity/forwards-linker'
+      )
+      // Confidence-sort: high (2) → medium (1) → low (0). Stable sort
+      // preserves original arrival order within each tier so the
+      // judge sees rows in their natural CSV order (audit-friendly).
+      const sorted = [...pendingHoneybookSignals]
+        .sort((a, b) => b.sortKey - a.sortKey)
+        .map((p) => p.signal)
+      const budget = Math.min(sorted.length, 200)
+      const { summary } = await linkSignalBatch({
+        supabase,
+        venueId,
+        signals: sorted,
+        source: `crm_import:${crmSource}`,
+        judgeBudget: budget,
+      })
+      console.log(
+        `[crm-import] H3 linkSignalBatch flushed: signals=${sorted.length} ` +
+          `budget=${budget} attached=${summary.attached} minted=${summary.minted} ` +
+          `fragment=${summary.fragment} candidate_medium=${summary.candidate_medium} ` +
+          `candidate_low=${summary.candidate_low} duplicate=${summary.duplicate} ` +
+          `cold_start=${summary.cold_start}`,
+      )
+    } catch (err) {
+      // Cascade flush failure is non-fatal — the legacy interactions
+      // rows above are source-of-truth. The Tracer batch sweep will
+      // pick up the same rows on its next pass.
+      result.errors.push(
+        `H3 linkSignalBatch failed (signals=${pendingHoneybookSignals.length}): ` +
+          (err instanceof Error ? err.message : 'unknown'),
+      )
     }
   }
 
