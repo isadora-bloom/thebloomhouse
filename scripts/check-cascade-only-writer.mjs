@@ -8,7 +8,8 @@
  * routes keep their own functions).
  *
  * Companion to §1.6 of CONSOLIDATION-PLAN-PHASED.md, §P4 of
- * PHASE-1-BATCH-1.md, and the `src/lib/spine/cascade.ts` barrel.
+ * PHASE-1-BATCH-1.md, §7 Pbatch2-9 of PHASE-1-BATCH-2.md, and the
+ * `src/lib/spine/cascade.ts` barrel.
  *
  * Guarded tables — split into two sets:
  *
@@ -27,22 +28,27 @@
  *     - wedding_touchpoints
  *     - candidate_identities
  *
- * Allowed-writer surface (NOT a violation):
- *   - Files under `src/lib/services/identity/` (the cascade module —
- *     the chokepoints + their internal helpers live here).
- *   - `src/lib/spine/cascade.ts` (the barrel re-exporting chokepoints).
- *   - The cascade-RPC caller `src/lib/services/identity/mint-couple.ts`
- *     is in that directory, so it's covered.
+ * Allowed-writer surface (NOT a violation): the explicit
+ * CHOKEPOINT_FILES set below. Per Pbatch2-9 (2026-05-26 pressure-test
+ * remediation v2), this guard was previously a directory-prefix
+ * allowlist (`src/lib/services/identity/` + `src/lib/spine/`), which
+ * blanket-exempted anything under `identity/` — including
+ * `calendly-outcomes.ts`, which writes spine `touchpoints` direct
+ * (Calendly C11/C12) and is a genuine cascade-chokepoint violation.
+ * The restructure is from PREFIX-allowlist to FILE-allowlist: only the
+ * explicit chokepoint files may write the guarded tables; any other
+ * `identity/` file gets scanned just like a non-identity file and
+ * either flagged or grandfathered with a one-line justification.
  *
- * Anything outside that surface that does a direct `.insert(...)` /
- * `.upsert(...)` against a guarded table is either:
+ * Anything outside the chokepoint surface that does a direct
+ * `.insert(...)` / `.upsert(...)` against a guarded table is either:
  *   (a) a NEW violation — the guard fails CI, the dev routes through
  *       the cascade barrel (`@/lib/spine/cascade`), OR
  *   (b) a known legacy site — listed in GRANDFATHERED with a one-line
  *       justification, scheduled to be migrated in a later phase.
  *
  * Also scans for `.rpc('lock_and_mint_couple', ...)` calls outside
- * `src/lib/services/identity/` — those bypass the TypeScript
+ * the chokepoint surface — those bypass the TypeScript
  * `lockAndMintCouple` wrapper and would skip the audit /
  * couple_merge_events bookkeeping in the wrapper.
  *
@@ -50,6 +56,8 @@
  *   - String-interpolated table names like `.from(tableName).insert(...)`.
  *     The cascade's writers all use string literals; if a dynamic-table
  *     bypass appears it needs a manual audit.
+ *   - SQL template literals via supabase.rpc('sql', ...) or raw
+ *     postgres clients — out of scope (no current callers).
  *   - Raw `INSERT INTO` SQL in `.sql` files under `supabase/migrations/` —
  *     out of scope (migrations are the schema authority, not application
  *     code). The guard does scan `src/` for stray `INSERT INTO` strings
@@ -93,14 +101,121 @@ const LEGACY_IDENTITY_TABLES = [
 const GUARDED_TABLES = [...SPINE_TABLES, ...LEGACY_IDENTITY_TABLES]
 
 // ---------------------------------------------------------------------------
-// Allowed-writer surface. Files matching any of these path prefixes are
-// permitted to call `.insert` / `.upsert` on guarded tables directly:
-// they ARE the cascade module or its barrel.
+// Chokepoint allowlist — EXPLICIT FILE LIST (post-Pbatch2-9 restructure).
+//
+// Files in this Set are permitted to call `.insert` / `.upsert` on the
+// guarded tables directly. Everything else — including OTHER files
+// under `src/lib/services/identity/` — gets scanned, and either
+// surfaces as a NEW violation or matches a GRANDFATHERED entry below.
+//
+// Each entry's comment justifies WHY this file is a chokepoint (vs a
+// helper that should route through one of the other chokepoints).
+// New chokepoints require an architectural review — adding a file
+// here expands the spine-write surface area; usually the right answer
+// is "route through linkSignal".
 // ---------------------------------------------------------------------------
-const ALLOWED_PATH_PREFIXES = [
-  'src/lib/services/identity/',
-  'src/lib/spine/',
-]
+const CHOKEPOINT_FILES = new Set([
+  // The barrel itself. Re-exports the cascade primitives under one
+  // import path (`@/lib/spine/cascade`). Doesn't insert directly but
+  // its declarations belong in the surface for symmetry.
+  'src/lib/spine/cascade.ts',
+
+  // linkSignal orchestrator — whole-cascade entry (match → judge →
+  // route-by-tier → mint/attach/candidate/fragment). Calls
+  // insertTouchpoint inline at :241.
+  'src/lib/services/identity/forwards-linker.ts',
+
+  // Routes to mint/attach/fragment after the matcher decides tier.
+  // Calls insertTouchpoint at :99 + :129 and insertFragment at :198.
+  'src/lib/services/identity/route-by-tier.ts',
+
+  // couples chokepoint via the `lock_and_mint_couple` RPC (advisory-
+  // locked per migration 359). The ONLY sanctioned caller of that RPC.
+  'src/lib/services/identity/mint-couple.ts',
+
+  // people-table chokepoint. Carries the partner2 enrich-or-skip
+  // invariant (Phase 1 §P2 + migration 367 unique index).
+  'src/lib/services/identity/mint-person.ts',
+
+  // legacy weddings-table chokepoint (adopted 2026-05-12).
+  'src/lib/services/identity/mint-wedding.ts',
+
+  // Owns the spine touchpoint + fragment INSERT helpers
+  // (insertTouchpoint at :324, insertFragment at :356) which the
+  // forwards-linker and route-by-tier chokepoints both call. ALSO
+  // contains the Backwards Tracer batch-walk writers (couples /
+  // touchpoints / fragments / couple_merge_events for fragment_promoted
+  // audit at :805). Both responsibilities are doctrinally cascade-
+  // internal — the Tracer is the historical-arrival counterpart to
+  // linkSignal's live-arrival path.
+  'src/lib/services/identity/tracer.ts',
+
+  // Legacy `wedding_touchpoints` idempotent writer. Pre-336 race-safe
+  // helper used by backtrack.ts. Doesn't write spine tables but lives
+  // here so the Batch-1 P3 contract ("the chokepoint that owns
+  // touchpoint writes for the legacy limb") is in the same surface.
+  'src/lib/services/identity/touchpoints-writer.ts',
+
+  // Phase A `couples` mirror — called from mintWedding's Branch A +
+  // Branch B exits to keep couples in sync with weddings/people.
+  // Doctrine: dual-write hook (IDENTITY-FIRST-ARCHITECTURE.md §8).
+  'src/lib/services/identity/mirror-couple.ts',
+
+  // Ghost-resurrection hook — called from route-by-tier post-attach
+  // (:112 + :175). UPDATEs couples.lifecycle_state + INSERTs a
+  // `couple_merge_events` audit row (resurrection / resurrection_rejected).
+  // Cascade-internal lifecycle helper.
+  'src/lib/services/identity/resurrection.ts',
+
+  // Canonical people/weddings INSERT site — `createPerson` (:795) and
+  // `createWedding` (:1127 + :1139 mig-fallback) are what mintPerson /
+  // mintWedding delegate to. Both sibling guards
+  // (check-no-direct-people-insert.mjs CANONICAL set +
+  // check-no-direct-wedding-insert.mjs CANONICAL set) list this file
+  // as canonical. Keep all three guards in sync.
+  'src/lib/services/identity/resolver.ts',
+
+  // merge-people canonical writer — INSERTs the merged-winner people
+  // row during person-merge cascade (the canonical winner of a merge,
+  // not a fresh identity). Listed in check-no-direct-people-insert
+  // CANONICAL too.
+  'src/lib/services/identity/merge-people.ts',
+
+  // Profile→people projection — keeps the legacy people row in sync
+  // with the forensic profile (the source of truth). 3 INSERT sites
+  // (:210, :758, :885). Listed in check-no-direct-people-insert
+  // CANONICAL too.
+  'src/lib/services/identity/profile-to-people-sync.ts',
+
+  // Stream KK cross-source reconciliation — clones a loser-wedding's
+  // person onto the winner during merge cascade. Continuity-preserving,
+  // not a fresh identity. Listed in check-no-direct-people-insert
+  // CANONICAL too.
+  'src/lib/services/identity/reconciliation.ts',
+
+  // Idempotent attribution_events writer — the canonical writer that
+  // every other path is supposed to route through (per
+  // attribution-events-writer.ts header: "the application-level
+  // cooperator" for migration 336 uniqueness). 2 INSERT sites
+  // (:75 + :99 retry).
+  'src/lib/services/identity/attribution-events-writer.ts',
+
+  // candidate-to-wedding resolver (Phase B/PB.3). Writes one
+  // `wedding_touchpoints` row per linked candidate signal at :631 as
+  // part of the Tier-1 deterministic attach. Cascade-internal — the
+  // candidate resolver is the legacy-side parallel of route-by-tier.
+  'src/lib/services/identity/candidate-resolver.ts',
+
+  // Pbatch2-1 + Pbatch2-10: Calendly→NormalizedSignal builder + the
+  // narrow `tourCancellationFallback` writer (:329). Doctrinally
+  // cascade-internal — owns the cancellation-only fallback path that
+  // exists because linkSignal returns `fragment` for identity-poor
+  // cancellations and D9 cohort funnel reads `tour_cancelled`
+  // touchpoints not fragments. The header docstring explicitly
+  // documents this as a chokepoint-scoped exception. If a SECOND
+  // fallback shape appears, that one needs its own justification.
+  'src/lib/services/identity/calendly-to-signal.ts',
+])
 
 // ---------------------------------------------------------------------------
 // Grandfathered call sites. Each entry is a Map from file-path to a
@@ -200,38 +315,39 @@ const GRANDFATHERED = new Map([
   // canonical attribution-events-writer.ts. ---
   [
     'src/lib/services/discovery-source/capture.ts',
-    'attribution_events.insert for the discovery-self-report capture path (the operator-asked "how did you find us" answer). Bypasses the canonical writer because it is a single low-volume insert with no race window; will route through attribution-events-writer.ts in the cascade-collapse pass.',
+    'attribution_events.insert for the discovery-self-report capture path (the operator-asked "how did you find us" answer). Bypasses the canonical writer because it is a single low-volume insert with no race window; will route through attribution-events-writer.ts in the cascade-collapse pass. Also closed by Pbatch2-6 (linkSignal({action_type:"discovery_self_report"})).',
   ],
   [
     'src/lib/services/intel/referrals/resolve.ts',
-    'attribution_events.insert at intel/referrals/resolve.ts — referral self-report resolution. Same low-volume path as discovery-source/capture.ts; same migration pass.',
+    'attribution_events.insert at intel/referrals/resolve.ts — referral self-report resolution. Same low-volume path as discovery-source/capture.ts; same migration pass. Folded into Pbatch2-6 scope as parallel linkSignal({action_type:"referral_self_report"}).',
   ],
 
-  // --- wedding_touchpoints: two non-canonical writers besides the
-  // canonical touchpoints-writer.ts (which lives in identity/, so it's
-  // already in the allowed surface). ---
+  // --- wedding_touchpoints: writers outside the canonical
+  // touchpoints-writer.ts (which IS a chokepoint). ---
   [
     'src/lib/services/attribution/touchpoints.ts',
     'wedding_touchpoints.insert for status-change touchpoints (e.g. Calendly final_walkthrough auto-promote to booked needs a contract_signed touchpoint to close the funnel). Lives outside identity/ because it is funnel-completion, not identity-cascade.',
   ],
 
   // --- candidate_identities: candidate-clusterer is the upstream
-  // candidate-cluster writer (pre-identity-resolution stage). ---
+  // candidate-cluster writer (pre-identity-resolution stage). Now
+  // surfaced by the Pbatch2-9 restructure (was silently exempted by
+  // the old directory-prefix allowlist). ---
   [
     'src/lib/services/identity/candidate-clusterer.ts',
-    "candidate_identities.insert/upsert in the candidate-clusterer (upstream of mintPerson). IS under src/lib/services/identity/ so already allowed — listed here only for the audit trail.",
+    "candidate_identities.insert/upsert in the candidate-clusterer (upstream of mintPerson). Lives under src/lib/services/identity/ but is NOT a chokepoint file — it writes the pre-resolution candidate-cluster table, not a spine table. Newly visible after Pbatch2-9 restructure; same migration class as data-import.ts (legacy ingestion writer chip-down in Phase 3).",
   ],
 
-  // --- spine: legitimate writers outside the cascade barrel today ---
+  // --- spine: legitimate writers outside the chokepoint surface ---
   // Each entry below covers a SPINE table (couples / touchpoints /
-  // fragments / couple_merge_events) write outside identity/. These
-  // are the highest-priority chip-down list — Phase 1 §P3b explicitly
-  // routes `tracer.ts:730` through `lockAndMintCouple`. The non-
-  // tracer sites are operator-driven admin endpoints where the
-  // cascade chokepoint would actively work against the intent (e.g.
-  // manual unmerge needs to CREATE a couple split off an existing
-  // one; a couple-mint that re-attaches via the resolver is the
-  // wrong shape).
+  // fragments / couple_merge_events) write outside the chokepoint
+  // surface. These are the highest-priority chip-down list — Phase 1
+  // §P3b explicitly routed `tracer.ts:730` through `lockAndMintCouple`
+  // (now done). The non-tracer sites are operator-driven admin
+  // endpoints where the cascade chokepoint would actively work against
+  // the intent (e.g. manual unmerge needs to CREATE a couple split off
+  // an existing one; a couple-mint that re-attaches via the resolver
+  // is the wrong shape).
   [
     'src/app/api/admin/identity/unmerge/route.ts',
     "Operator-driven manual unmerge: inserts a fresh `couples` row, attached `fragments`, and a `couple_merge_events` audit row. The cascade chokepoint would resolve to the existing couple via the matcher; the unmerge intent is to FORCE a split. Legitimate bypass — but the cascade contract should grow an explicit `splitCouple` primitive (Phase 4 follow-up).",
@@ -247,6 +363,20 @@ const GRANDFATHERED = new Map([
   [
     'src/app/api/admin/identity/resolve/route.ts',
     'couple_merge_events.insert for candidate_confirmed / candidate_rejected operator decisions. Audit-only write.',
+  ],
+
+  // --- spine: NEW grandfather entries surfaced by Pbatch2-9
+  // restructure. These files were silently exempted by the old
+  // directory-prefix allowlist for `src/lib/services/identity/` and
+  // are now scanned. Each gets either a legitimate-helper
+  // justification OR an explicit "will be closed by Batch 2" note. ---
+  [
+    'src/lib/services/identity/calendly-outcomes.ts',
+    'touchpoints.upsert (x2: tour_cancelled at :136, tour_attended batch at :343) — Calendly C11/C12 chokepoint violation per PHASE-1-BATCH-2.md §4. WILL BE CLOSED BY BATCH 2 (Pbatch2 phase B step 3+4): replace direct upserts with linkSignal({action_type:"tour_cancelled"}) + linkSignalBatch, with the Pbatch2-10 cancellation-to-fragment fallback for identity-poor cancellations. Newly visible after Pbatch2-9 restructure.',
+  ],
+  [
+    'src/lib/services/identity/tracer-rebind.ts',
+    'touchpoints.upsert in the one-shot mirror-backfilled-couples rebind sweep (admin endpoint /api/admin/identity/tracer-rebind). Not a live-path writer; not a chokepoint. Doctrinally cascade-internal — same Tracer family as tracer.ts. Could be promoted to CHOKEPOINT_FILES if a second admin sweep needs the same write pattern; for now grandfathered as a narrow operator-driven helper. Newly visible after Pbatch2-9 restructure.',
   ],
 ])
 
@@ -272,7 +402,7 @@ const OFFENDERS = []
 const GRANDFATHER_HITS = []
 
 function isAllowed(rel) {
-  return ALLOWED_PATH_PREFIXES.some((p) => rel.startsWith(p))
+  return CHOKEPOINT_FILES.has(rel)
 }
 
 function walk(dir) {
@@ -328,10 +458,10 @@ function scan(file) {
     }
   }
 
-  // RPC bypass: any `.rpc('lock_and_mint_couple', ...)` outside
-  // identity/. Only `src/lib/services/identity/mint-couple.ts` should
-  // hit this — and that's in the allowed surface so it returns early
-  // before this loop runs.
+  // RPC bypass: any `.rpc('lock_and_mint_couple', ...)` outside the
+  // chokepoint surface. Only `src/lib/services/identity/mint-couple.ts`
+  // should hit this — and that's in the chokepoint surface so it
+  // returns early before this loop runs.
   let m
   while ((m = rpcMintCouplePattern.exec(text)) !== null) {
     record(rel, lineOf(text, m.index), 'lock_and_mint_couple', 'rpc')

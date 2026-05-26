@@ -14,7 +14,10 @@
  *   - tour_attended            (channel=calendly, action=tour_attended)
  *   - new_channel_inquiry      (channel=knot/ww/zola/website, action=inquiry*)
  *   - portal_click             (channel=portal, action=portal_click)
- *   - contract_signed          (channel=honeybook, action=contract_signed)
+ *   - contract_signed          (channel=honeybook, action=contract_signed —
+ *                               also fires from CSV path
+ *                               action=crm_imported_booked; one signal
+ *                               class, two ingestion routes)
  *   - inbound_followup         (any inbound reply to an open thread)
  *   - fragment_match_returned  (operator confirms a candidate match)
  *   - inbound_human_request    (couple asks for a human — M9 escalation;
@@ -26,6 +29,48 @@
  *                               row instead of being a quiet downgrade to
  *                               `action_type:'reply'` with the semantic
  *                               buried in raw_payload.escalation.)
+ *   - crm_inquiry              (HoneyBook CSV — channel=honeybook
+ *                               action=crm_imported_inquiry. Distinct
+ *                               from new_channel_inquiry; carries the
+ *                               "imported, not live" provenance for D9
+ *                               cohort math. Added migration 371,
+ *                               Pbatch2-3.)
+ *   - crm_booking              (HoneyBook CSV — channel=honeybook
+ *                               action=crm_imported_booked is mapped to
+ *                               this when the row is a STATUS-row import
+ *                               rather than a SIGNING event. Note: the
+ *                               current mapper routes crm_imported_booked
+ *                               to contract_signed for DRY symmetry with
+ *                               the email-pipeline path; crm_booking is
+ *                               reserved for any future CSV path that
+ *                               needs the status-row distinction
+ *                               explicitly. Reserved-but-routable. Added
+ *                               migration 371, Pbatch2-3.)
+ *   - inbound_sms              (Twilio + OpenPhone — channel=sms
+ *                               action=sms_inbound. Pbatch2-1 builder
+ *                               sms-to-signal.ts produces this.)
+ *   - inbound_call             (OpenPhone — channel=phone
+ *                               action=inbound_call. Pbatch2-1 builder
+ *                               voice-to-signal.ts.)
+ *   - voicemail_received       (OpenPhone — channel=voicemail
+ *                               action=voicemail_received. Same
+ *                               Pbatch2-1 builder as inbound_call.)
+ *   - meeting_completed        (Zoom — channel=zoom
+ *                               action=meeting_completed. Pbatch2-1
+ *                               builder zoom-to-signal.ts. Channel
+ *                               renamed from 'meeting' to 'zoom' per
+ *                               Pbatch2-5 to avoid collision with
+ *                               Calendly batch Tracer filter.)
+ *
+ * NOT progression-eligible (intentionally omitted):
+ *   - tour_cancelled (Calendly C11) — cancellation is REGRESSION, not
+ *     progression. Moving the decay clock forward on a cancellation
+ *     would mis-state lead health. Lives in `touchpoints` (C11's spine
+ *     write covers it) and downstream regression detection reads from
+ *     there. The mapper returns null for channel=calendly
+ *     action=tour_cancelled; the migration 371 CHECK intentionally does
+ *     NOT include `tour_cancelled`. See PHASE-1-BATCH-2.md §2 Pbatch2-3
+ *     "DROPPED — tour_cancelled".
  *
  * Outbound action types and the venue's own sends NEVER write.
  *
@@ -57,6 +102,13 @@ export type ProgressionEventType =
   | 'inbound_followup'
   | 'fragment_match_returned'
   | 'inbound_human_request'
+  // Pbatch2-3 / migration 371 — Batch 2 ingestion channels.
+  | 'crm_inquiry'
+  | 'crm_booking'
+  | 'inbound_sms'
+  | 'inbound_call'
+  | 'voicemail_received'
+  | 'meeting_completed'
 
 /**
  * Map a NormalizedSignal to its progression event type if it qualifies.
@@ -91,6 +143,27 @@ export function progressionEventTypeFor(
   }
   if (channel === 'honeybook') {
     if (action === 'contract_signed' || action === 'booking_signed') return 'contract_signed'
+    // Pbatch2-3 / migration 371 — HoneyBook CSV (H3 batch import).
+    // The CSV writer emits four action_types per
+    // PHASE-1-BATCH-2.md §1 H3:
+    //   - crm_imported_inquiry → crm_inquiry (new progression event;
+    //     distinct from new_channel_inquiry which is for LIVE-channel
+    //     inquiries — CSV is historical / backfill provenance).
+    //   - crm_imported_booked → contract_signed (DRY — one signal class,
+    //     two ingestion routes. The email-pipeline path already maps
+    //     contract_signed/booking_signed to this event_type; reusing
+    //     keeps the cohort funnel reader from having to OR-across
+    //     near-synonyms for "did they sign?").
+    //   - crm_imported_lost → null (terminal/regression state, not
+    //     progression. Loss is read off `weddings.lost_at` /
+    //     `weddings.status`, not the progression log.)
+    //   - crm_attribution → null (synthetic provenance row carrying
+    //     `extracted_identity.hear_source` — it's a discovery-source
+    //     attribution event, not a couple-action progression. The
+    //     discovery-source path has its own progression handling via
+    //     captureDiscoverySource → Pbatch2-6 routing.)
+    if (action === 'crm_imported_inquiry') return 'crm_inquiry'
+    if (action === 'crm_imported_booked') return 'contract_signed'
   }
   if (channel === 'knot' || channel === 'weddingwire' || channel === 'zola') {
     if (action === 'inquiry' || action === 'inquiry_form' || action === 'message') return 'new_channel_inquiry'
@@ -101,6 +174,36 @@ export function progressionEventTypeFor(
   if (channel === 'website') {
     if (action === 'inquiry_form_submitted' || action === 'inquiry') return 'new_channel_inquiry'
   }
+  // Pbatch2-3 / migration 371 — phone-channel progression coverage.
+  // Channel `'sms'` is shared by Twilio webhook + OpenPhone cron
+  // (Pbatch2-1 `sms-to-signal.ts`). Channels `'phone'` + `'voicemail'`
+  // are OpenPhone-only (Pbatch2-1 `voice-to-signal.ts`). The choice of
+  // three separate channels vs one unified `'sms'` is Pbatch2-4
+  // operator decision; this mapper covers both shapes so a Pbatch2-4
+  // re-decision doesn't require a re-edit here.
+  if (channel === 'sms') {
+    if (action === 'sms_inbound') return 'inbound_sms'
+  }
+  if (channel === 'phone') {
+    if (action === 'inbound_call') return 'inbound_call'
+    if (action === 'voicemail_received') return 'voicemail_received'
+  }
+  if (channel === 'voicemail') {
+    if (action === 'voicemail_received') return 'voicemail_received'
+  }
+  // Pbatch2-3 / migration 371 — Zoom meeting progression coverage.
+  // Channel renamed from `'meeting'` to `'zoom'` per Pbatch2-5 (the
+  // old `'meeting'` value collided with the Calendly batch Tracer's
+  // `interactions WHERE type='meeting'` scan at sources/calendly.ts:128).
+  if (channel === 'zoom') {
+    if (action === 'meeting_completed') return 'meeting_completed'
+  }
+  // Calendly tour_cancelled intentionally returns null. The CHECK at
+  // migration 371 does NOT include `tour_cancelled` either — the table
+  // is "Inbound-only PROGRESSION log" and a cancellation is regression,
+  // not progression. C11's spine `touchpoints` write covers the
+  // cancellation; readers detect regression from there. See
+  // PHASE-1-BATCH-2.md §2 Pbatch2-3 "DROPPED — tour_cancelled".
 
   return null
 }
