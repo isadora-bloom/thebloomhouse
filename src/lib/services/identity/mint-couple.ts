@@ -88,6 +88,18 @@ export function computeLockKey(signal: NormalizedSignal): string {
  * OR a real two-token name. A bare phone with no name is NOT enough —
  * it only ever produced a couple literally named "5715551234".
  */
+// PBATCH2-4 DECISION (2026-05-26): Option A — phone-only signals
+// (channel: 'sms' | 'phone' | 'voicemail') with no email AND no
+// two-token name FAIL this gate and drop to a Fragment row, not a
+// Couple. Doctrinally pure (a bare phone is not enough to mint a
+// couple-of-record) but means SMS-primary venues see most cold inbound
+// SMS land as fragments until cross-channel bridging produces a couple.
+// For Rixey-class email/Calendly-primary venues this is fine. Operator
+// must revisit at multi-venue onboarding gate IF a venue's SMS share
+// > 30% — in that case, consider Option B (add a `channel === 'sms'`
+// && intent_class === 'new_inquiry' special-case branch mirroring the
+// existing gmail `author_class === 'couple'` branch). See
+// PHASE-1-BATCH-2.md Pbatch2-4.
 export function hasSufficientIdentity(signal: NormalizedSignal): boolean {
   if (signal.channel === 'gmail') {
     return signal.author_class === 'couple'

@@ -42,6 +42,101 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import type { ReferrerMention } from '@/config/prompts/referral-extractor'
+import type { NormalizedSignal } from '@/lib/services/identity/sources/types'
+
+// ---------------------------------------------------------------------------
+// Pbatch2-6 / I1 — referral-self-report cascade routing.
+//
+// Doctrine anchor: CASCADE-CANONICAL-WRITER.md §4 example 2 + Pbatch2-6
+// in PHASE-1-BATCH-2.md §2. The Wave-14 referral resolver writes an
+// attribution_events row (always — matched / ambiguous / deferred).
+// I1 dual-writes the same forensic claim into the spine as a
+// `linkSignal({action_type:'referral_self_report'})` touchpoint, so the
+// cascade sees referrals alongside discovery captures.
+//
+// Channel choice — 'referral'. Wave-14 referrals are extracted from any
+// channel the LLM processed (typically email body or operator paste);
+// there is no single source channel. NormalizedSignal.channel is free
+// text per sources/types.ts §38, and `'referral'` cleanly labels the
+// signal-class for downstream cohort / attribution readers without
+// claiming a fictitious source channel ('email' / 'web' / etc.).
+//
+// action_type — 'referral_self_report'. NEW value; not in migration
+// 371's progression-event CHECK (intentional: a referral is acquisition
+// attribution, not couple-action progression). `progressionEventTypeFor`
+// returns null for this action_type → no couple_progression_events row,
+// just a touchpoints row (or a fragments row if identity is poor — which
+// it will be on most referrals since the cascade sees the NEW couple's
+// claim about the REFERRER's name, not the referrer themselves).
+//
+// signal_tier — 'high'. The couple told us directly who referred them;
+// this is a Tier-1-quality acquisition signal. Matches Pbatch2-6's
+// discovery-self-report tier choice for symmetry.
+// ---------------------------------------------------------------------------
+
+async function routeReferralToCascade(args: {
+  supabase: SupabaseClient
+  venueId: string
+  newWeddingId: string
+  mention: ReferrerMention
+  referrerWeddingId: string | null
+  attributionEventId: string
+}): Promise<void> {
+  try {
+    const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+    // external_id — synthetic but stable. Wave-14 mentions don't carry
+    // an external source id (they're LLM-extracted from prose), so we
+    // key on (newWeddingId, normalized referrer name, attribution event
+    // id) to keep re-runs of the same extraction collapsing cleanly on
+    // touchpoints' UNIQUE(venue, channel, external_id). The
+    // attributionEventId discriminator ensures a re-extract that
+    // generates a fresh attribution row also generates a fresh
+    // touchpoint row (the legacy attribution row is the source of truth
+    // for "did this mention land yet"; cascade mirrors it 1:1).
+    const normalizedName = args.mention.referrer_name
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, '-')
+      .replace(/^-+|-+$/g, '')
+    const externalId = `referral:${args.newWeddingId}:${normalizedName}:${args.attributionEventId}`
+
+    const signal: NormalizedSignal = {
+      external_id: externalId,
+      channel: 'referral',
+      action_type: 'referral_self_report',
+      occurred_at: new Date().toISOString(),
+      signal_tier: 'high',
+      identity_hint: args.mention.referrer_name,
+      raw_payload: {
+        referrer_name: args.mention.referrer_name,
+        relationship_to_couple: args.mention.relationship_to_couple,
+        evidence_quote: args.mention.evidence_quote,
+        confidence_0_100: args.mention.confidence_0_100,
+        referrer_wedding_id: args.referrerWeddingId,
+        attribution_event_id: args.attributionEventId,
+      },
+      legacy_wedding_id: args.newWeddingId,
+    }
+    const linkResult = await linkSignal({
+      supabase: args.supabase,
+      venueId: args.venueId,
+      signal,
+      source: 'live:referral_self_report',
+    })
+    console.log(
+      `[referral-resolve] cascade_link: action=${linkResult.action} ` +
+        `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+        `touchpoint=${linkResult.touchpoint_id ?? 'none'}`,
+    )
+  } catch (err) {
+    // Load-bearing dual-write — fail-soft. The legacy attribution_events
+    // row written above stays source of truth during dual-write; cascade
+    // failure must NEVER propagate out of resolveReferrer (whose own
+    // contract is "NEVER throws on insert failure", per the file
+    // header). Mirror the captureDiscoverySource fail-soft pattern.
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn('[referral-resolve] cascade_link failed (non-fatal):', msg)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -286,7 +381,22 @@ async function writeAttributionEvent(
       `writeAttributionEvent failed: ${error?.message ?? 'no row returned'}`,
     )
   }
-  return (data as { id: string }).id
+  const attributionEventId = (data as { id: string }).id
+
+  // Pbatch2-6 / I1 — dual-write the same forensic claim to the cascade
+  // spine. Fires for all three resolver outcomes (matched / ambiguous /
+  // deferred) because writeAttributionEvent is the only spot that
+  // unconditionally lands an attribution row. Fail-soft.
+  await routeReferralToCascade({
+    supabase,
+    venueId,
+    newWeddingId,
+    mention,
+    referrerWeddingId,
+    attributionEventId,
+  })
+
+  return attributionEventId
 }
 
 // ---------------------------------------------------------------------------

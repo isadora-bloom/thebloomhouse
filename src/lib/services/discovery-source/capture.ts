@@ -27,6 +27,107 @@ import {
   mapWithRule,
   type CanonicalDiscoverySource,
 } from './canonical'
+import type { NormalizedSignal } from '@/lib/services/identity/sources/types'
+
+// ---------------------------------------------------------------------------
+// Pbatch2-6 — discovery-self-report cascade routing.
+//
+// Doctrine anchor: CASCADE-CANONICAL-WRITER.md §4 example 2 — a couple's
+// "how did you hear about us" self-report is a SIGNAL, not a verdict.
+// It flows through `linkSignal` as a touchpoint alongside the legacy
+// discovery_sources + attribution_events writes (dual-write per Batch 2
+// §0; the legacy writers stay until Phase 4).
+//
+// Channel choice — derived from captureSource. NormalizedSignal.channel
+// is free text (per sources/types.ts §38), but the docstring lists the
+// canonical values: 'gmail' | 'calendly' | 'honeybook' | 'knot' | ...
+// | 'sms' | 'web' | 'phone'. Mapping:
+//   - 'calendly'       → 'calendly'
+//   - 'website_form'   → 'web'
+//   - 'intake_form'    → 'web'
+//   - 'phone'          → 'phone'
+//   - 'brain_dump'     → 'brain_dump'  (operator paste; non-canonical
+//                                       but used by the brain-dump
+//                                       pipeline and accepted by the
+//                                       matcher as a low-tier source)
+//   - anything else    → pass-through (capture_source is venue-defined)
+//
+// action_type — 'discovery_self_report'. NEW value; not in migration
+// 371's progression-event CHECK (intentional: a self-report is
+// attribution, not progression). `progressionEventTypeFor` returns null
+// for this action_type, so no `couple_progression_events` row lands —
+// just a `touchpoints` row (or a `fragments` row if identity is poor).
+//
+// signal_tier — 'high'. The couple told us directly which channel they
+// discovered the venue through; this is a Tier-1-quality acquisition
+// signal. Not 'highest' — that tier is reserved for deterministic
+// identity matches (e.g. external_id collisions). For attribution-class
+// signals the appropriate value is 'high'.
+// ---------------------------------------------------------------------------
+
+function inferCascadeChannel(captureSource: string): string {
+  const s = captureSource.toLowerCase()
+  if (s === 'website_form' || s === 'intake_form' || s === 'web_form') return 'web'
+  // calendly / phone / brain_dump / honeybook / etc. pass through.
+  return s
+}
+
+async function routeDiscoveryToCascade(
+  supabase: SupabaseClient,
+  input: CaptureDiscoverySourceInput,
+  canonical: CanonicalDiscoverySource,
+  ruleMatched: string,
+): Promise<void> {
+  try {
+    const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+    const channel = inferCascadeChannel(input.captureSource)
+    // external_id: prefer captureRef (e.g. Calendly invitee URI) so a
+    // retried webhook collides cleanly on touchpoints' UNIQUE(venue,
+    // channel, external_id). Fall back to a stable synthetic key when no
+    // captureRef is provided so the cascade still has a dedup primitive.
+    const externalId =
+      input.captureRef
+      ?? `discovery:${input.captureSource}:${input.weddingId ?? 'no-wedding'}:` +
+         `${(input.personId ?? 'no-person')}`
+
+    const signal: NormalizedSignal = {
+      external_id: externalId,
+      channel,
+      action_type: 'discovery_self_report',
+      occurred_at: new Date().toISOString(),
+      signal_tier: 'high',
+      identity_hint: null,
+      raw_payload: {
+        question_text: input.questionText ?? null,
+        answer_text: input.answerText,
+        canonical_source: canonical,
+        rule_matched: ruleMatched,
+        capture_source: input.captureSource,
+        capture_ref: input.captureRef ?? null,
+        referrer_name: input.referrerName ?? null,
+      },
+      legacy_wedding_id: input.weddingId ?? null,
+    }
+    const linkResult = await linkSignal({
+      supabase,
+      venueId: input.venueId,
+      signal,
+      source: `live:discovery_self_report:${input.captureSource}`,
+    })
+    console.log(
+      `[discovery-source] cascade_link: action=${linkResult.action} ` +
+        `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+        `touchpoint=${linkResult.touchpoint_id ?? 'none'}`,
+    )
+  } catch (err) {
+    // Load-bearing dual-write — same fail-soft contract as M1/M9 in
+    // pipeline.ts. The legacy discovery_sources + attribution_events
+    // rows above remain source of truth during dual-write; cascade
+    // failure must NEVER throw out of captureDiscoverySource.
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn('[discovery-source] cascade_link failed (non-fatal):', msg)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -143,6 +244,13 @@ export async function captureDiscoverySource(
   }
 
   if (existingId) {
+    // Pbatch2-6 — idempotency-hit path: prior webhook tick already wrote
+    // legacy state. Still fire the cascade — `linkSignal` is itself
+    // idempotent on (venue, channel, external_id), so a re-tick collapses
+    // cleanly. This guarantees the cascade sees the signal even on a
+    // delayed webhook that arrives after a manual operator paste created
+    // the discovery_sources row through another route.
+    await routeDiscoveryToCascade(supabase, input, canonical, rule_matched)
     return {
       ok: true,
       discoverySourceId: existingId,
@@ -249,6 +357,12 @@ export async function captureDiscoverySource(
       console.warn('[discovery-source] attribution_events fan-out threw:', msg)
     }
   }
+
+  // Pbatch2-6 — fresh-insert path: legacy discovery_sources row + (when a
+  // weddingId is present) attribution_events row both written above.
+  // Now fan the same signal to the cascade. Fail-soft: cascade errors
+  // never propagate out of captureDiscoverySource.
+  await routeDiscoveryToCascade(supabase, input, canonical, rule_matched)
 
   return {
     ok: true,

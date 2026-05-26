@@ -58,6 +58,19 @@ export {
   type LinkAction,
 } from '@/lib/services/identity/forwards-linker'
 
+/**
+ * Phase 1 Batch 2 — Pbatch2-8: lifecycle-aware wrapper around linkSignal.
+ *
+ * Optional drop-in replacement that dispatches the matching per-channel
+ * lifecycle helper (recordSmsLifecycleSignal / recordZoomLifecycleSignal)
+ * AFTER linkSignal returns. Bare linkSignal remains the default; Batch-2
+ * SMS / Zoom / OpenPhone flips use this wrapper to keep lifecycle
+ * bookkeeping uniform across adapters. Net-additive primitive — see
+ * `link-with-lifecycle.ts` for the dispatch table + the REVIEW Pbatch2-8
+ * gap on phone/voicemail.
+ */
+export { linkSignalWithLifecycle } from '@/lib/services/identity/link-with-lifecycle'
+
 export {
   lockAndMintCouple,
   computeLockKey,
