@@ -63,6 +63,18 @@ export interface VoiceToSignalInput {
   occurredAt?: string
   venueId: string
   weddingId?: string | null
+  /** body-extract emails from the transcript / summary (closes Q5).
+   *  First is treated as primary, second as partner. Mirrors the
+   *  Zoom builder slot convention. The OpenPhone O4 flip pipes
+   *  `extractIdentityFromEmail(...).emails` here so cascade stages
+   *  6/7/8 fire on first contact instead of waiting for a separate
+   *  follow-up extractor pass. */
+  extractedEmails?: string[] | null
+  /** body-extract phones. First is treated as partner phone (the
+   *  externalPhone is already primary). */
+  extractedPhones?: string[] | null
+  /** body-extract names. First → primary, second → partner. */
+  extractedNames?: string[] | null
 }
 
 export function voiceToNormalizedSignal(input: VoiceToSignalInput): NormalizedSignal {
@@ -77,6 +89,9 @@ export function voiceToNormalizedSignal(input: VoiceToSignalInput): NormalizedSi
     duration = null,
     occurredAt,
     weddingId = null,
+    extractedEmails = null,
+    extractedPhones = null,
+    extractedNames = null,
   } = input
 
   const phones = derivePhoneFields({
@@ -115,19 +130,31 @@ export function voiceToNormalizedSignal(input: VoiceToSignalInput): NormalizedSi
         ? `Call from ${externalPhone ?? 'unknown'}`
         : `Call to ${externalPhone ?? 'unknown'}`
 
+  // Body-extracted identity → structured slots (closes Q5). Same
+  // slot convention as zoom-to-signal.ts + sms-to-signal.ts.
+  const primaryBodyEmail = extractedEmails?.[0] ?? null
+  const partnerBodyEmail = extractedEmails?.[1] ?? null
+  const partnerBodyPhone = extractedPhones?.[0] ?? null
+  const primaryBodyName = extractedNames?.[0] ?? null
+  const partnerBodyName = extractedNames?.[1] ?? null
+
   return {
     external_id: externalId,
     channel,
     action_type: actionType,
     occurred_at: occurredAt ?? new Date().toISOString(),
     signal_tier: signalTier,
-    identity_hint: deriveIdentityHint({ phone: externalPhone }),
-    primary_name: null,
-    primary_email: null,
+    identity_hint: deriveIdentityHint({
+      name: primaryBodyName,
+      email: primaryBodyEmail,
+      phone: externalPhone,
+    }),
+    primary_name: primaryBodyName,
+    primary_email: primaryBodyEmail,
     primary_phone: phones.primary_phone,
-    partner_name: null,
-    partner_email: null,
-    partner_phone: phones.partner_phone,
+    partner_name: partnerBodyName,
+    partner_email: partnerBodyEmail,
+    partner_phone: phones.partner_phone ?? partnerBodyPhone,
     wedding_date: null,
     session_ip: null,
     session_fingerprint: null,
@@ -144,6 +171,9 @@ export function voiceToNormalizedSignal(input: VoiceToSignalInput): NormalizedSi
         transcript: transcript ? transcript.slice(0, 50000) : null,
         summary,
         duration,
+        extracted_emails: extractedEmails ?? null,
+        extracted_phones: extractedPhones ?? null,
+        extracted_names: extractedNames ?? null,
       },
     ),
     legacy_wedding_id: weddingId,

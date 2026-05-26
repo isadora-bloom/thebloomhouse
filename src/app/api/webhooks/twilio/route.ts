@@ -402,31 +402,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Lifecycle + reconstruction enqueue downstream — only fire when we
-    // actually have a wedding to attach the signals to. Existing-couple
-    // weddings (hydrated above) AND newly-minted weddings (just above)
-    // both qualify.
+    // Reconstruction enqueue: mintWedding already enqueues for new
+    // mints (per Step 4 / C2). This explicit enqueue covers the
+    // existing-couple-with-new-signal case where mintWedding wasn't
+    // called. 24h dedupe inside enqueue collapses bursts.
+    //
+    // Pbatch2-8 (2026-05-26): explicit `recordSmsLifecycleSignal` call
+    // REMOVED — `linkSignalWithLifecycle` below dispatches it via the
+    // wrapper's channel='sms' branch. The wrapper passes the same
+    // {supabase, venueId, weddingId, direction, body} fields the explicit
+    // call did (derived from raw_payload.direction + raw_payload.full_body
+    // that sms-to-signal.ts stamps), so removal is byte-equivalent.
     if (weddingId) {
-      void (async () => {
-        try {
-          const { recordSmsLifecycleSignal } = await import(
-            '@/lib/services/lifecycle/state-machine'
-          )
-          await recordSmsLifecycleSignal({
-            supabase,
-            venueId,
-            weddingId: weddingId!,
-            direction: 'inbound',
-            body,
-          })
-        } catch (err) {
-          console.warn('[webhook/twilio] lifecycle signal hook failed (non-fatal):', err)
-        }
-      })()
-      // Reconstruction enqueue: mintWedding already enqueues for new
-      // mints (per Step 4 / C2). This explicit enqueue covers the
-      // existing-couple-with-new-signal case where mintWedding wasn't
-      // called. 24h dedupe inside enqueue collapses bursts.
       void enqueueIdentityReconstruction({
         weddingId,
         venueId,
@@ -435,6 +422,70 @@ export async function POST(request: NextRequest) {
         console.warn('[webhook/twilio] reconstruction enqueue failed (non-fatal):', err),
       )
     }
+  }
+
+  // ---- Phase 1 Batch 2 phase C T2: cascade linker (dual-write) ----
+  // ADD a linkSignal call (via the lifecycle-aware wrapper) AFTER the
+  // legacy interactions.insert. The legacy interactions row above is
+  // STILL source-of-truth — this routes a parallel NormalizedSignal
+  // through the cascade so the spine sees the SMS as a touchpoint.
+  //
+  // Position: trailing, AFTER the inbound classifier+mint block so
+  // `weddingId` reflects any newly-minted wedding (backfill on the
+  // interactions row already happened). For outbound, weddingId is the
+  // hydrated value from the resolver above.
+  //
+  // Pbatch2-8: the `linkSignalWithLifecycle` wrapper dispatches the
+  // matching `recordSmsLifecycleSignal` automatically whenever
+  // channel='sms' AND legacy_wedding_id is set — replaces the explicit
+  // call that previously lived inside the inbound block. The wrapper
+  // reads direction + body from raw_payload (sms-to-signal.ts populates
+  // both), so the dispatch is field-equivalent to the prior explicit
+  // call.
+  //
+  // Webhook MUST return 2xx regardless (Twilio retries on non-2xx) —
+  // fail-soft with console.warn matches Calendly C3 (commit db98555).
+  try {
+    const { linkSignalWithLifecycle } = await import('@/lib/spine/cascade')
+    const { smsToNormalizedSignal } = await import(
+      '@/lib/services/identity/sms-to-signal'
+    )
+    const externalPhone = direction === 'inbound' ? fromPhone : toPhone
+    const venuePhoneSide = direction === 'inbound' ? toPhone : fromPhone
+    const signal = smsToNormalizedSignal({
+      direction,
+      externalPhone,
+      venuePhone: venuePhoneSide,
+      messageSid,
+      body,
+      mediaCount: Number.isFinite(numMedia) ? numMedia : 0,
+      occurredAt: timestampIso,
+      venueId,
+      weddingId,
+    })
+    const linkResult = await linkSignalWithLifecycle({
+      supabase,
+      venueId,
+      signal,
+      source: 'live:twilio_sms',
+      correlationId,
+    })
+    console.log(
+      `[webhook/twilio] cascade link action=${linkResult.action} ` +
+        `tier=${linkResult.tier ?? 'n/a'} ` +
+        `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+        `duplicate=${linkResult.duplicate}`,
+    )
+  } catch (linkErr) {
+    // Fail-soft: the linker emits its own structured logEvent +
+    // tracer_run_events failed row. Legacy interactions row above is
+    // load-bearing under dual-write. Webhook MUST return 2xx — Twilio
+    // retries on non-2xx, which would compound the failure. Surfacing
+    // the message here closes any silent-catch.
+    console.warn(
+      '[webhook/twilio] cascade_link failed:',
+      linkErr instanceof Error ? linkErr.message : linkErr,
+    )
   }
 
   console.log('[webhook/twilio] processed', {

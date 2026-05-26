@@ -1216,6 +1216,137 @@ async function persistRow(
   }
 
   // ---------------------------------------------------------------------------
+  // Phase 1 Batch 2 phase C O4 — Forwards Linker dual-write.
+  // ---------------------------------------------------------------------------
+  // Legacy interactions.insert above STAYS source-of-truth (file is
+  // grandfathered in check-cascade-only-writer.mjs for `interactions`
+  // — Phase-3 limb-migration territory). This block adds a parallel
+  // NormalizedSignal through `linkSignalWithLifecycle` so the spine
+  // sees every SMS / voicemail / call as a touchpoint and lifecycle
+  // bookkeeping (recordSmsLifecycleSignal) fires for SMS rows —
+  // closes the O12 OpenPhone-doesn't-call-lifecycle gap from the
+  // worklist.
+  //
+  // Per-row-kind builder choice (Pbatch2-4 three-channel split):
+  //   sms          → smsToNormalizedSignal   (channel='sms')
+  //   voicemail    → voiceToNormalizedSignal (channel='voicemail')
+  //   call_summary → voiceToNormalizedSignal (channel='phone')
+  //
+  // Body-extracted identity passthrough: the `voiceExtractedIdentity`
+  // computed at ~line 957 is piped into the builder's extractedEmails /
+  // extractedPhones / extractedNames slots so the cascade's stages
+  // 6/7/8 (body cross-reference, paired-name corroborator, family-name
+  // + date) fire on first contact. Closes Q5 from Batch 1.
+  //
+  // Lifecycle dispatch (Pbatch2-8): the wrapper auto-fires
+  // recordSmsLifecycleSignal when channel='sms' AND legacy_wedding_id
+  // is set. Phone / voicemail SKIP lifecycle dispatch — documented
+  // Pbatch2-8 gap (no recordVoiceLifecycleSignal helper exists yet).
+  //
+  // Position: AFTER the inbound classifier+mint block so `weddingId`
+  // reflects any newly-minted wedding (mirrors the Twilio T2 pattern,
+  // commit 091d7dc → present). For outbound / non-couple-intent
+  // inbound, weddingId stays null and the signal lands as fragment /
+  // candidate per cascade rules.
+  //
+  // Per-row try/catch — the outer syncMessages loop already catches
+  // per-row exceptions via persistRow's return value, but the cascade
+  // call gets its own guard so a linker hiccup never undoes the
+  // legacy persistence done above.
+  try {
+    const { linkSignalWithLifecycle } = await import('@/lib/spine/cascade')
+    const externalPhoneSide = externalNumber
+    const venuePhoneSide =
+      row.direction === 'inbound' ? row.to_number : row.from_number
+    let signal:
+      | import('@/lib/services/identity/sources/types').NormalizedSignal
+      | null = null
+    if (row.channel === 'sms') {
+      const { smsToNormalizedSignal } = await import(
+        '@/lib/services/identity/sms-to-signal'
+      )
+      signal = smsToNormalizedSignal({
+        direction: row.direction,
+        externalPhone: externalPhoneSide,
+        venuePhone: venuePhoneSide,
+        messageSid: row.openphone_message_id,
+        body: row.body_text,
+        occurredAt: row.occurred_at ?? undefined,
+        venueId,
+        weddingId,
+        extractedEmails: voiceExtractedIdentity.emails,
+        extractedPhones: voiceExtractedIdentity.phones,
+        extractedNames: voiceExtractedIdentity.names,
+      })
+    } else if (row.channel === 'voicemail') {
+      const { voiceToNormalizedSignal } = await import(
+        '@/lib/services/identity/voice-to-signal'
+      )
+      signal = voiceToNormalizedSignal({
+        kind: 'voicemail',
+        direction: row.direction,
+        externalPhone: externalPhoneSide,
+        venuePhone: venuePhoneSide,
+        externalId: row.openphone_message_id,
+        transcript: row.body_text,
+        occurredAt: row.occurred_at ?? undefined,
+        venueId,
+        weddingId,
+        extractedEmails: voiceExtractedIdentity.emails,
+        extractedPhones: voiceExtractedIdentity.phones,
+        extractedNames: voiceExtractedIdentity.names,
+      })
+    } else if (row.channel === 'call_summary') {
+      const { voiceToNormalizedSignal } = await import(
+        '@/lib/services/identity/voice-to-signal'
+      )
+      // For call rows, the body_text is the merged summary+transcript
+      // string (with "[Call]" prefix or placeholder). Pass it as
+      // transcript — voice-to-signal slices into raw_payload.transcript
+      // and uses it for body_preview / signal_tier.
+      signal = voiceToNormalizedSignal({
+        kind: 'call',
+        direction: row.direction,
+        externalPhone: externalPhoneSide,
+        venuePhone: venuePhoneSide,
+        externalId: row.openphone_message_id,
+        transcript: row.body_text,
+        summary: null,
+        duration: null,
+        occurredAt: row.occurred_at ?? undefined,
+        venueId,
+        weddingId,
+        extractedEmails: voiceExtractedIdentity.emails,
+        extractedPhones: voiceExtractedIdentity.phones,
+        extractedNames: voiceExtractedIdentity.names,
+      })
+    }
+    if (signal) {
+      const linkResult = await linkSignalWithLifecycle({
+        supabase,
+        venueId,
+        signal,
+        source: `cron:openphone_poll`,
+      })
+      console.log(
+        `[openphone] cascade link (${row.channel}) action=${linkResult.action} ` +
+          `tier=${linkResult.tier ?? 'n/a'} ` +
+          `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+          `duplicate=${linkResult.duplicate}`,
+      )
+    }
+  } catch (linkErr) {
+    // Fail-soft: cron iterates per-row via persistRow; a cascade
+    // hiccup must not undo the legacy interactions persistence above
+    // OR take down the whole cron tick. linker emits its own
+    // tracer_run_events failed row + structured logEvent.
+    console.warn(
+      `[openphone] cascade_link failed (${row.openphone_message_id}):`,
+      linkErr instanceof Error ? linkErr.message : linkErr,
+    )
+  }
+
+  // ---------------------------------------------------------------------------
   // Pattern 9: voice-channel parity hooks (mig 318)
   // ---------------------------------------------------------------------------
   // The next three blocks run on every SMS write (lifecycle folder) +

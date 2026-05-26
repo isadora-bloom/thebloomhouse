@@ -46,6 +46,12 @@ interface BodyEmailMatchInput {
   supabase: SupabaseClient
   venueId: string
   body: string
+  /** Couple-side phone, passed through from the outer tryMatchSmsByName
+   *  input. Used to populate the O7 cascade signal's primary_phone slot
+   *  so the spine sees the cross-channel binding (phone + body-extracted
+   *  email = strong identity evidence). Null when the upstream caller
+   *  didn't have one (e.g. an admin backfill route). */
+  fromPhone?: string | null
   correlationId?: string
 }
 
@@ -60,7 +66,7 @@ interface BodyEmailMatchInput {
 async function tryMatchByBodyEmail(
   input: BodyEmailMatchInput,
 ): Promise<MatchByNameResult | null> {
-  const { supabase, venueId, body, correlationId } = input
+  const { supabase, venueId, body, fromPhone = null, correlationId } = input
   const emails = findBodyEmails(body)
   if (emails.length === 0) return null
 
@@ -102,6 +108,78 @@ async function tryMatchByBodyEmail(
           correlationId,
         },
       )
+
+      // Phase 1 Batch 2 phase C O7 — parallel cascade signal.
+      // Legacy `resolveIdentity` above STAYS source-of-truth for the
+      // person/wedding mint OR match. This block ADDS a parallel
+      // NormalizedSignal through bare `linkSignal` (NOT
+      // linkSignalWithLifecycle — sms-name-match is a follow-on
+      // enrichment, not the primary inbound signal; the primary
+      // inbound already routed through linkSignalWithLifecycle via
+      // O4 in openphone.ts).
+      //
+      // Closes the body-stages-dead-on-live-path Q5 gap from Batch 1:
+      // the body-extracted email IS strong identity evidence (per
+      // resolver.ts match-chain ordering) and must reach the spine
+      // so cascade stages 1 (email) + 6 (body cross-reference) can
+      // bind it to an existing couple even when no other channel
+      // signal has yet.
+      //
+      // mode='body_extracted_email' selects action_type +
+      // signal_tier='high' inside the builder; external_id is
+      // synthesised from venue + email so a re-fire of the same
+      // body-email is idempotent under the
+      // UNIQUE(venue, channel, external_id) primitive.
+      //
+      // Fire-and-forget — a cascade hiccup must never undo the
+      // legacy resolveIdentity result the caller already received.
+      void (async () => {
+        try {
+          const { linkSignal } = await import(
+            '@/lib/services/identity/forwards-linker'
+          )
+          const { smsToNormalizedSignal } = await import(
+            '@/lib/services/identity/sms-to-signal'
+          )
+          const signal = smsToNormalizedSignal({
+            mode: 'body_extracted_email',
+            direction: 'inbound',
+            externalPhone: fromPhone,
+            venuePhone: null,
+            // No native message id in this enrichment path. Synthesize
+            // a stable id from venue + body-email so re-fires of the
+            // same body-extracted email no-op via the spine's
+            // UNIQUE(venue, channel, external_id) idempotency.
+            messageSid: `sms_body_email:${venueId}:${email}`,
+            body,
+            occurredAt: new Date().toISOString(),
+            venueId,
+            weddingId: resolved.weddingId,
+            extractedEmails: [email],
+            extractedNames: [partner1Name, partner2Name].filter(
+              (n): n is string => !!n,
+            ),
+          })
+          // Override primary_name + fullName-shape in raw_payload via
+          // signal slots — smsToNormalizedSignal already mapped
+          // extractedNames[0]→primary_name and [1]→partner_name, so
+          // the joint-handle case ('Justin & Sandy') populates both
+          // partner_name slots automatically. The single-name case
+          // populates primary_name only.
+          await linkSignal({
+            supabase,
+            venueId,
+            signal,
+            source: 'cron:sms_name_match',
+            correlationId,
+          })
+        } catch (err) {
+          console.warn(
+            '[sms-name-match] O7 cascade body_extracted_email failed (non-fatal):',
+            err instanceof Error ? err.message : err,
+          )
+        }
+      })()
 
       // Fire the identity-discovery cascade in the background. Whether
       // the resolver attached us to an existing wedding or minted a
@@ -216,6 +294,7 @@ export async function tryMatchSmsByName(
     supabase,
     venueId,
     body,
+    fromPhone,
     correlationId,
   })
   if (bodyEmailMatch) return bodyEmailMatch

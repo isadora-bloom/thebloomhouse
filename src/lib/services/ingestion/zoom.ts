@@ -27,6 +27,11 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
+import {
+  linkSignal,
+  linkSignalWithLifecycle,
+} from '@/lib/spine/cascade'
+import { zoomToNormalizedSignal } from '@/lib/services/identity/zoom-to-signal'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -691,6 +696,61 @@ export async function syncMeetings(
         // Don't bump errors — dedup already happened, transcript is stored.
       }
 
+      // Phase 1 Batch 2 — Z5 flip (PHASE-1-BATCH-2.md §3 phase C step 4).
+      // Add the cascade signal alongside the legacy interactions insert.
+      // DUAL-WRITE: the legacy interactions row above STAYS (Phase-3-limb-
+      // migration owns the `type='meeting'` column rename); this call
+      // adds the spine touchpoint/fragment so cascade stages 6/7/8 fire
+      // on body-extracted identifiers (closes Batch-1 Q5 for Zoom).
+      //
+      // linkSignalWithLifecycle (NOT bare linkSignal) so the wrapper
+      // dispatches `recordZoomLifecycleSignal` when channel='zoom' +
+      // legacy_wedding_id present. This is the FIRST caller of that
+      // helper — Pbatch2-8 noted it was "defined but never called."
+      // Per a1365a5 pattern (recordSmsLifecycleSignal was found to have
+      // a column-shape mismatch the first time it was wired up): the
+      // wrapper still invokes correctly + the warn-log inside the helper
+      // catches any column-shape failure without poisoning the sync.
+      //
+      // Fail-soft: wrap in try/catch so a cascade-side throw never bumps
+      // result.errors (dedup already happened, transcript is stored,
+      // legacy interaction row was written). Cron-safe (per-venue
+      // try/catch in pollZoomAllVenues catches anything that does
+      // escape, but this is the inner belt).
+      try {
+        const zoomSignal = zoomToNormalizedSignal({
+          meetingId: meeting.meetingId,
+          topic: meeting.topic ?? null,
+          startTime: meeting.startTime ?? null,
+          duration:
+            meeting.durationMinutes != null
+              ? meeting.durationMinutes * 60
+              : null,
+          transcript: transcriptForExtract,
+          participantNames: topicNames,
+          extractedEmails: zoomExtractedIdentity.emails ?? [],
+          extractedPhones: zoomExtractedIdentity.phones ?? [],
+          matchedWeddingId,
+        })
+        const zoomLink = await linkSignalWithLifecycle({
+          supabase,
+          venueId,
+          signal: zoomSignal,
+          source: 'cron:zoom_poll',
+        })
+        console.log(
+          `[zoom] cascade link action=${zoomLink.action} ` +
+            `tier=${zoomLink.tier ?? 'n/a'} ` +
+            `couple=${zoomLink.matched_couple_id ?? 'none'} ` +
+            `duplicate=${zoomLink.duplicate}`,
+        )
+      } catch (linkErr) {
+        console.warn(
+          '[zoom] cascade_link failed (non-fatal):',
+          linkErr instanceof Error ? linkErr.message : linkErr,
+        )
+      }
+
       // F8 (2026-05-12): post-extract identity dispatch. Transcripts
       // often surface emails/phones the platform never had ("yeah email
       // me at sarah@gmail.com"). Hand each non-venue signal to the
@@ -744,6 +804,77 @@ export async function syncMeetings(
               signals.push({ kind: 'phone', value: p })
             }
             for (const s of signals) {
+              // Phase 1 Batch 2 — Z6 flip (PHASE-1-BATCH-2.md §3 phase C
+              // step 5). For each body-extracted email/phone, fire a
+              // parallel cascade signal so the spine matcher sees this
+              // identifier as a follow-up touchpoint. Z5 already fired
+              // the primary meeting signal; Z6 is enrichment fan-out
+              // (one signal per identifier, distinct external_id) so the
+              // matcher's stages 6/7/8 see each body-mentioned email/
+              // phone independently. Bare linkSignal (not the lifecycle
+              // wrapper) because Z5 already routed the primary record
+              // through linkSignalWithLifecycle — re-firing the
+              // lifecycle helper per body-extracted identifier would
+              // double-bump weddings.first_response_at / re-insert
+              // duplicate wedding_lifecycle_events rows.
+              //
+              // Distinct external_id per identifier (suffix the kind+
+              // value) so dedup on (venue, channel, external_id) does
+              // not collide with the Z5 meeting-level row.
+              try {
+                // Build the signal via the canonical zoom-to-signal
+                // builder, then override action_type for the body-
+                // extracted enrichment path (the builder defaults to
+                // 'meeting_completed' for the primary record; body-
+                // extracted identifiers ride a different action_type
+                // so consumers can distinguish primary vs follow-up).
+                const baseSignal = zoomToNormalizedSignal({
+                  meetingId: `${meeting.meetingId}:body:${s.kind}:${s.value}`,
+                  topic: meeting.topic ?? null,
+                  startTime: meeting.startTime ?? null,
+                  duration:
+                    meeting.durationMinutes != null
+                      ? meeting.durationMinutes * 60
+                      : null,
+                  transcript: null,
+                  participantNames: null,
+                  extractedEmails: s.kind === 'email' ? [s.value] : [],
+                  extractedPhones: s.kind === 'phone' ? [s.value] : [],
+                  matchedWeddingId,
+                })
+                const bodySignal = {
+                  ...baseSignal,
+                  action_type: 'body_extracted_email',
+                }
+                const bodyLink = await linkSignal({
+                  supabase,
+                  venueId,
+                  signal: bodySignal,
+                  source: 'cron:zoom_body_extract',
+                })
+                logEvent({
+                  level: 'info',
+                  msg: 'zoom.body-extract.cascade-linked',
+                  event_type: 'identity.body_extract.cascade',
+                  outcome: 'ok',
+                  venueId,
+                  actor: 'zoom_sync',
+                  data: {
+                    zoom_meeting_id: meeting.meetingId,
+                    signal_kind: s.kind,
+                    action: bodyLink.action,
+                    tier: bodyLink.tier,
+                    matched_couple_id: bodyLink.matched_couple_id,
+                    duplicate: bodyLink.duplicate,
+                  },
+                })
+              } catch (cascadeErr) {
+                console.warn(
+                  '[zoom] body-extract cascade linkSignal failed (non-fatal):',
+                  cascadeErr instanceof Error ? cascadeErr.message : cascadeErr,
+                )
+              }
+
               try {
                 const resolved = await resolveIdentity(
                   venueId,
