@@ -424,43 +424,55 @@ export async function POST(request: NextRequest) {
       console.error('[webhook/calendly] Q&A preserve failed:', qaErr)
     }
 
-    // Phase C Forwards Linker — shadow-mode parallel write. The legacy
-    // weddings / engagement_events / tours path above is untouched;
-    // this writes a touchpoint into the new identity schema so the
-    // Phase B couples graph stays current without nightly Tracer.
+    // Phase 1 Batch 2 phase B C3 — Forwards Linker promotion.
+    // Was: shadow-mode parallel write with inline NormalizedSignal
+    // literal + empty catch (result discarded, errors swallowed).
+    // Now: signal constructed via the chokepoint
+    // `calendlyToNormalizedSignal({event:'invitee_created', ...})`
+    // builder (Pbatch2-1), result captured, errors logged. The legacy
+    // weddings / engagement_events / tours path above remains untouched
+    // — this is a dual-write under Batch 2 §0 doctrine. Position kept
+    // trailing because the legacy path doesn't depend on the binding,
+    // and the webhook must return 2xx regardless (Calendly retries on
+    // non-2xx). Byte-identity vs the prior literal: equal for every
+    // field, plus two intentional supersets — `raw_payload.external_url`
+    // (Pbatch2-2 shared snippet slot) + partner_email / partner_name
+    // when Calendly Q&A populates them. Passing `email: inviteeEmail`
+    // into the payload override preserves the lowercase normalization
+    // the live literal performed.
     try {
       const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
-      await linkSignal({
+      const { calendlyToNormalizedSignal } = await import(
+        '@/lib/services/identity/calendly-to-signal'
+      )
+      const signal = calendlyToNormalizedSignal({
+        event: 'invitee_created',
+        payload: { ...payload, email: inviteeEmail },
+        weddingId,
+      })
+      const linkResult = await linkSignal({
         supabase,
         venueId,
-        signal: {
-          external_id: (payload.uri as string) ?? `calendly:${weddingId}:${startTime ?? Date.now()}`,
-          channel: 'calendly',
-          action_type: 'tour_booked',
-          occurred_at: startTime || new Date().toISOString(),
-          signal_tier: 'high',
-          identity_hint: inviteeName ?? inviteeEmail ?? null,
-          primary_name: inviteeName ?? null,
-          primary_email: inviteeEmail ?? null,
-          primary_phone: null,
-          partner_name: null,
-          partner_email: null,
-          partner_phone: null,
-          wedding_date: null,
-          session_ip: null,
-          session_fingerprint: null,
-          raw_payload: {
-            calendly_uri: (payload.uri as string) ?? null,
-            scheduled_at: startTime ?? null,
-          },
-          legacy_wedding_id: weddingId,
-        },
+        signal,
         source: 'live:calendly',
       })
-    } catch {
-      // Linker emits structured logEvent + tracer_run_events failed
-      // row on its own; legacy webhook path must not break on a
-      // linker hiccup.
+      console.log(
+        `[webhook/calendly] cascade link action=${linkResult.action} ` +
+          `tier=${linkResult.tier ?? 'n/a'} ` +
+          `couple=${linkResult.matched_couple_id ?? 'none'} ` +
+          `duplicate=${linkResult.duplicate}`,
+      )
+    } catch (linkErr) {
+      // Fail-soft: the linker emits its own structured logEvent +
+      // tracer_run_events failed row, and the legacy webhook path
+      // (engagement_events / tours / mintWedding) is the load-bearing
+      // source of truth under dual-write. Webhook MUST return 2xx —
+      // Calendly retries on non-2xx, which would compound the failure.
+      // Surfacing the message here closes the prior empty-catch silence.
+      console.warn(
+        '[webhook/calendly] cascade_link failed:',
+        linkErr instanceof Error ? linkErr.message : linkErr,
+      )
     }
 
     // Track tour_booked in consultant_metrics

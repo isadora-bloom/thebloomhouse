@@ -370,10 +370,11 @@ const GRANDFATHERED = new Map([
   // directory-prefix allowlist for `src/lib/services/identity/` and
   // are now scanned. Each gets either a legitimate-helper
   // justification OR an explicit "will be closed by Batch 2" note. ---
-  [
-    'src/lib/services/identity/calendly-outcomes.ts',
-    'touchpoints.upsert (x2: tour_cancelled at :136, tour_attended batch at :343) — Calendly C11/C12 chokepoint violation per PHASE-1-BATCH-2.md §4. WILL BE CLOSED BY BATCH 2 (Pbatch2 phase B step 3+4): replace direct upserts with linkSignal({action_type:"tour_cancelled"}) + linkSignalBatch, with the Pbatch2-10 cancellation-to-fragment fallback for identity-poor cancellations. Newly visible after Pbatch2-9 restructure.',
-  ],
+  // calendly-outcomes.ts grandfather REMOVED 2026-05-26 — Pbatch2
+  // phase B steps 3+4 (C11 + C12 flips) routed both direct upsert
+  // sites through linkSignal / linkSignalBatch, with the Pbatch2-10
+  // cancellation-fallback (in calendly-to-signal.ts) covering the
+  // identity-poor path. The file is now scan-clean.
   [
     'src/lib/services/identity/tracer-rebind.ts',
     'touchpoints.upsert in the one-shot mirror-backfilled-couples rebind sweep (admin endpoint /api/admin/identity/tracer-rebind). Not a live-path writer; not a chokepoint. Doctrinally cascade-internal — same Tracer family as tracer.ts. Could be promoted to CHOKEPOINT_FILES if a second admin sweep needs the same write pattern; for now grandfathered as a narrow operator-driven helper. Newly visible after Pbatch2-9 restructure.',
