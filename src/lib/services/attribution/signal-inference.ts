@@ -667,6 +667,32 @@ export async function applySignalInference(
         source: derivedSource ?? legacyFallbackSource,
         medium: 'signal_inference',
       })
+      // Data-bridge hook (2026-05-26): re-mirror the couples row on
+      // booked-class transitions so the legacy-fast-path in linkSignal
+      // resolves for every booked/completed wedding. The mintWedding
+      // mirror only fires at initial mint, leaving the 47% bridge gap
+      // pressure-tested 2026-05-26. Mirror is idempotent + skips merged-
+      // away weddings. Fire-and-forget.
+      if (
+        targetStatus === 'booked' ||
+        targetStatus === 'completed' ||
+        targetStatus === 'tour_completed'
+      ) {
+        void (async () => {
+          try {
+            const { mirrorCoupleFromWedding } = await import(
+              '@/lib/services/identity/mirror-couple'
+            )
+            await mirrorCoupleFromWedding({
+              venueId,
+              weddingId,
+              supabase: sb,
+            })
+          } catch {
+            // Mirror never throws (its contract). Belt-and-braces.
+          }
+        })()
+      }
     } catch (err) {
       console.warn('[signal-inference] status-change touchpoint failed:', err)
     }

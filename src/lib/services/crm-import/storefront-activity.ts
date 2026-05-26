@@ -377,10 +377,18 @@ async function commitStorefrontActivity(args: {
   rows: NormalisedLeadRow[]
   storefrontSignals?: StorefrontSignalRow[]
   storefrontProvider?: StorefrontProvider
+  /** §7 OPERATOR-BLOCK item 4 dry-run pass-through. Storefront rows
+   *  do not run through commitNormalisedRows (no per-couple identity
+   *  to mint), so the per-row preview decisions are minimal — every
+   *  row is `new` since storefront signals carry no external_id
+   *  fingerprint at this layer. The honest preview answer is still
+   *  "no writes performed; would write N tangential_signals". */
+  preview?: boolean
 }): Promise<CommitResult> {
   const { supabase, venueId } = args
   const signals = args.storefrontSignals ?? []
   const provider = args.storefrontProvider ?? 'the_knot'
+  const isDryRun = args.preview === true
 
   const result: CommitResult = {
     ok: true,
@@ -390,6 +398,20 @@ async function commitStorefrontActivity(args: {
     lostDealsInserted: 0,
     errors: [],
     touchedWeddingIds: [],
+  }
+  if (isDryRun) {
+    result.preview = true
+    // Storefront rows do not run through commitNormalisedRows. The
+    // per-row dedup picture for tangential_signals is not available
+    // at this layer (no external_id partition), so the operator
+    // sees the count delta but no per-row breakdown.
+    result.previewDecisions = signals.map((_, idx) => ({
+      rowIndex: idx,
+      willInsert: 'new' as const,
+      reason: 'storefront tangential_signal — commit would write a low-confidence funnel row',
+    }))
+    result.interactionsInserted = 0
+    return result
   }
 
   if (signals.length === 0) return result

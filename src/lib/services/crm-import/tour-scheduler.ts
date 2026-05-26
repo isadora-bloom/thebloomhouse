@@ -1136,6 +1136,8 @@ async function commitTourScheduler(args: {
   supabase: SupabaseClient
   venueId: string
   rows: NormalisedLeadRow[]
+  /** §7 OPERATOR-BLOCK item 4 dry-run pass-through (flows via ...args). */
+  preview?: boolean
 }): Promise<CommitResult> {
   // Use 'generic_csv' as crm_source — adding a dedicated 'tour_scheduler'
   // value to the migration-178 CHECK enum requires its own migration,

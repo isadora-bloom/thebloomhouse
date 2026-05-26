@@ -128,6 +128,25 @@ export async function mergePeople(args: MergePeopleArgs): Promise<MergePeopleRes
       } catch (err) {
         console.warn('[merge-people] status-change touchpoint failed:', err)
       }
+      // Data-bridge hook (2026-05-26): re-mirror the kept couple so the
+      // legacy fast-path reflects the merge-promoted status. Required
+      // for the same reason as the pipeline + signal-inference hooks —
+      // the mintWedding mirror only fires at initial mint. Mirror is
+      // idempotent + skips merged-away weddings. Fire-and-forget.
+      if (ms === 'booked' || ms === 'completed' || ms === 'tour_completed') {
+        void (async () => {
+          try {
+            const { mirrorCoupleFromWedding } = await import('./mirror-couple')
+            await mirrorCoupleFromWedding({
+              venueId,
+              weddingId: keptWeddingId,
+              supabase,
+            })
+          } catch {
+            // Mirror never throws (its contract). Belt-and-braces.
+          }
+        })()
+      }
     }
   }
 

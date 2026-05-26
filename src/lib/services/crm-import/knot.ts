@@ -604,6 +604,8 @@ async function commitKnot(args: {
   supabase: SupabaseClient
   venueId: string
   rows: NormalisedLeadRow[]
+  /** §7 OPERATOR-BLOCK item 4 dry-run pass-through (flows via ...args). */
+  preview?: boolean
 }): Promise<CommitResult> {
   // crmSource = 'generic_csv' per the catch-all in the migration-178
   // CHECK enum. Adding a dedicated 'knot' enum value to weddings.crm_source

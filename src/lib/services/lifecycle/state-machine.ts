@@ -982,14 +982,48 @@ export async function recordSmsLifecycleSignal(
     // wedding_lifecycle_events may not exist on this checkout, in which
     // case PostgREST returns 404 and we swallow it (interactions remains
     // the canonical source of truth).
-    await supabase.from('wedding_lifecycle_events').insert({
-      wedding_id: weddingId,
-      venue_id: venueId,
-      kind: 'sms_received',
-      direction,
-      evidence: { source: 'twilio', body_preview: body.slice(0, 200) },
-      occurred_at: new Date().toISOString(),
-    })
+    //
+    // Schema (migration 246): { signal text NOT NULL, status_from text,
+    // status_to text, reason text, detected_by text NOT NULL CHECK IN
+    // ('ai'|'pipeline'|'coordinator'|'webhook'|'cron'|'backfill'),
+    // source_interaction_id uuid, confidence numeric }.
+    //
+    // status_from/status_to are NULL because this helper records evidence
+    // only — it does NOT compute a transition (see file header lines
+    // 921-927: the next computeLifecycleStage call recomputes stage from
+    // the bumped first_response_at + interactions). detected_by='pipeline'
+    // matches the cascade convention (on-lost-mark.ts:75) — the helper is
+    // dispatched via linkSignalWithLifecycle from twilio webhooks +
+    // openphone cron, but the single-value default keeps signatures
+    // unchanged for callers.
+    const signal = direction === 'inbound' ? 'sms_received' : 'sms_sent'
+    const reason =
+      `source=twilio direction=${direction}` +
+      (body ? ` body_preview="${body.slice(0, 160).replace(/"/g, "'")}"` : '')
+    const { error: evtErr } = await supabase
+      .from('wedding_lifecycle_events')
+      .insert({
+        wedding_id: weddingId,
+        venue_id: venueId,
+        signal,
+        status_from: null,
+        status_to: null,
+        reason,
+        detected_by: 'pipeline',
+        source_interaction_id: null,
+        confidence: null,
+      })
+    if (evtErr) {
+      // Schema mismatch / RLS / FK failure all land here. Pre-Pbatch2-8
+      // this swallow was implicit (await would throw on a 4xx and the
+      // outer catch absorbed it); now we surface the message so the next
+      // schema drift is debuggable from logs without changing fail-soft
+      // semantics.
+      console.warn(
+        '[lifecycle/state-machine] recordSmsLifecycleSignal insert failed:',
+        evtErr.message,
+      )
+    }
   } catch (err) {
     console.warn(
       '[lifecycle/state-machine] recordSmsLifecycleSignal best-effort failed:',
@@ -1049,18 +1083,32 @@ export async function recordZoomLifecycleSignal(
         .in('outcome', ['pending'])
     }
 
-    await supabase.from('wedding_lifecycle_events').insert({
-      wedding_id: weddingId,
-      venue_id: venueId,
-      kind: 'zoom_meeting_transcript_received',
-      direction: 'inbound',
-      evidence: {
-        source: 'zoom',
-        meeting_start_time: meetingStartTime,
-        pending_tours_matched: pendings.length,
-      },
-      occurred_at: new Date().toISOString(),
-    })
+    // Schema (migration 246): see recordSmsLifecycleSignal above for the
+    // full column doc. Same shape applies: status_from/status_to NULL
+    // (evidence-only — the next computeLifecycleStage will see
+    // tours.outcome='completed' if we set it above and recompute stage),
+    // detected_by='pipeline'.
+    const reason =
+      `source=zoom meeting_start_time=${meetingStartTime} pending_tours_matched=${pendings.length}`
+    const { error: evtErr } = await supabase
+      .from('wedding_lifecycle_events')
+      .insert({
+        wedding_id: weddingId,
+        venue_id: venueId,
+        signal: 'zoom_meeting_transcript_received',
+        status_from: null,
+        status_to: null,
+        reason,
+        detected_by: 'pipeline',
+        source_interaction_id: null,
+        confidence: null,
+      })
+    if (evtErr) {
+      console.warn(
+        '[lifecycle/state-machine] recordZoomLifecycleSignal insert failed:',
+        evtErr.message,
+      )
+    }
   } catch (err) {
     console.warn(
       '[lifecycle/state-machine] recordZoomLifecycleSignal best-effort failed:',

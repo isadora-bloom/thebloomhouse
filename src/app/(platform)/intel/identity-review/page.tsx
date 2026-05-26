@@ -17,11 +17,12 @@
  */
 
 import { useState } from 'react'
-import { GitBranch, Layers } from 'lucide-react'
+import { GitBranch, Layers, Undo2 } from 'lucide-react'
 import ReviewQueueTab from './review-queue-tab'
 import IdentityReportTab from './identity-report-tab'
+import RecentMergesTab from './recent-merges-tab'
 
-type Tab = 'queue' | 'report'
+type Tab = 'queue' | 'recent' | 'report'
 
 export default function IdentityReviewPage() {
   const [tab, setTab] = useState<Tab>('queue')
@@ -44,6 +45,12 @@ export default function IdentityReviewPage() {
           label="Review queue"
         />
         <TabButton
+          active={tab === 'recent'}
+          onClick={() => setTab('recent')}
+          icon={<Undo2 className="w-4 h-4" />}
+          label="Recent merges"
+        />
+        <TabButton
           active={tab === 'report'}
           onClick={() => setTab('report')}
           icon={<Layers className="w-4 h-4" />}
@@ -51,7 +58,9 @@ export default function IdentityReviewPage() {
         />
       </div>
 
-      {tab === 'queue' ? <ReviewQueueTab /> : <IdentityReportTab />}
+      {tab === 'queue' && <ReviewQueueTab />}
+      {tab === 'recent' && <RecentMergesTab />}
+      {tab === 'report' && <IdentityReportTab />}
     </div>
   )
 }

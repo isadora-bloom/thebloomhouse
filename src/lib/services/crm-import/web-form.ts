@@ -966,8 +966,14 @@ async function commitWebForm(args: {
   supabase: SupabaseClient
   venueId: string
   rows: NormalisedLeadRow[]
+  /** §7 OPERATOR-BLOCK item 4 dry-run pass-through. The web-form
+   *  adapter does extra work after commitNormalisedRows (tangential_
+   *  signals insert + post-extract identity dispatch) — both are
+   *  side-effecting writes that MUST be skipped in dry-run. */
+  preview?: boolean
 }): Promise<CommitResult> {
   const { supabase, venueId, rows } = args
+  const isDryRun = args.preview === true
 
   // Pre-stamp source_provenance on each row's notes side-channel by
   // patching weddings post-insert. commitNormalisedRows() doesn't know
@@ -988,9 +994,13 @@ async function commitWebForm(args: {
     // Highest non-coordinator NameSource (95) — the picker should beat
     // anything but a contract signer or coordinator override.
     chokepointNameSource: 'calculator_form',
+    ...(isDryRun ? { preview: true } : {}),
   })
 
   if (!baseResult.ok) return baseResult
+  // Dry-run: skip the tangential_signals insert + the F8 post-extract
+  // identity dispatch (both side-effecting writes).
+  if (isDryRun) return baseResult
 
   // Write one tangential_signals row per submission. We don't need to
   // join back to the inserted wedding — the per-row identity payload is

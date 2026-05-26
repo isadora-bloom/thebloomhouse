@@ -43,6 +43,7 @@ import { JourneyRibbon } from '@/components/identity/JourneyRibbon'
 import { JourneyActionChip } from '@/components/identity/JourneyActionChip'
 import { UnmergeModal } from '@/components/identity/UnmergeModal'
 import { ResurrectionBanner } from '@/components/identity/ResurrectionBanner'
+import { humanActionLabel } from '@/lib/services/identity/action-labels'
 
 type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
 
@@ -143,10 +144,6 @@ function channelDotColor(channel: string): string {
   if (c === 'sms' || c === 'phone') return '#047857'
   if (c === 'website') return '#059669'
   return '#57534e'
-}
-
-function humanAction(action: string): string {
-  return (action ?? '').replace(/_/g, ' ')
 }
 
 export default function CoupleDetailPage() {
@@ -465,7 +462,7 @@ export default function CoupleDetailPage() {
           <p className="mt-1 text-sm text-stone-700">
             <strong>{channelLabel(touchpoints[0]!.channel)}</strong>
             {' · '}
-            {humanAction(touchpoints[0]!.action_type)}
+            {humanActionLabel(touchpoints[0]!.channel, touchpoints[0]!.action_type)}
             {' · '}
             {new Date(touchpoints[0]!.occurred_at).toLocaleDateString(undefined, {
               year: 'numeric',
@@ -634,7 +631,7 @@ export default function CoupleDetailPage() {
                 <span className="w-24 shrink-0 text-xs text-stone-500">
                   {channelLabel(t.channel)}
                 </span>
-                <span className="text-stone-800">{humanAction(t.action_type)}</span>
+                <span className="text-stone-800">{humanActionLabel(t.channel, t.action_type)}</span>
               </li>
             ))}
           </ul>

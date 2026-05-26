@@ -8,10 +8,22 @@
  *     json?: string,
  *     columnMapping?: Record<string, string>,
  *     preview?: boolean,
+ *     dryRun?: boolean,
  *   }
  *
- *   preview=true → parse + return rows for coordinator review (no inserts)
- *   preview=false → parse + commit to weddings/interactions/tours/lost_deals
+ *   preview=true → parse + return rows for coordinator review (no inserts).
+ *                  Returns the first 50 normalised rows in tabular shape so
+ *                  the operator can sanity-check the parse before committing.
+ *   dryRun=true  → parse + run the FULL commit decision tree (identity
+ *                  resolver lookup + crm_import_rows fingerprint check)
+ *                  but skip every write. Returns per-row `previewDecisions`
+ *                  so the operator UI can show "X new couples, Y already
+ *                  in Bloom, Z dedup-skipped" BEFORE the Commit button is
+ *                  activated. This is the §7 OPERATOR-BLOCK item 4 fix:
+ *                  HoneyBook re-import now surfaces "we've seen this file
+ *                  before" before damage is done. Also accepted via query
+ *                  string: `?dryRun=true`.
+ *   neither      → parse + commit to weddings/interactions/tours/lost_deals.
  *
  * Auth: getPlatformAuth — coordinator-only.
  *
@@ -57,6 +69,13 @@ interface RequestBody {
    *  and builds rows deterministically. */
   confirmedMapping?: Record<string, string>
   preview?: boolean
+  /** §7 OPERATOR-BLOCK item 4 (2026-05-26): when true, run the full
+   *  commit decision tree (identity resolver + crm_import_rows
+   *  fingerprint check) but skip every write. Returns
+   *  `preview_decisions` so the operator UI shows "we've seen this
+   *  file before — Y of Z rows will be skipped" BEFORE damage is
+   *  done. Independent of `preview` (which shows parsed rows). */
+  dryRun?: boolean
   /** T5-Rixey-II: provider hint for the tour-scheduler adapter
    *  ('calendly' | 'acuity' | 'square_appointments' | 'generic_ical' |
    *  'custom'). Other adapters ignore this field. */
@@ -272,6 +291,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'invalid_json' }, { status: 400 })
   }
 
+  // §7 OPERATOR-BLOCK item 4 (2026-05-26): dryRun can also ride on
+  // the query string for callers that want to issue the same body
+  // twice (once for preview, once for commit) without rebuilding it.
+  // Query-string value wins ONLY when explicitly 'true' — `?dryRun`
+  // alone is NOT enough, the param must equal the string 'true' so
+  // a stray `?dryRun=false` cannot accidentally enable it.
+  const queryDryRun = request.nextUrl.searchParams.get('dryRun') === 'true'
+  const isDryRun = body.dryRun === true || queryDryRun
+
   const adapter = findAdapter(body.adapter ?? '')
   if (!adapter) {
     return NextResponse.json({ error: `unknown adapter: ${body.adapter}` }, { status: 400 })
@@ -395,6 +423,10 @@ export async function POST(request: NextRequest) {
           venueId: auth.venueId,
           rows: validRows,
           ...outOfBand,
+          // §7 OPERATOR-BLOCK item 4: thread the dry-run flag through
+          // so the adapter's commitNormalisedRows call returns
+          // `previewDecisions` instead of writing.
+          ...(isDryRun ? { preview: true } : {}),
         } as Parameters<typeof adapter.commit>[0])
       : {
           ok: true,
@@ -405,6 +437,45 @@ export async function POST(request: NextRequest) {
           errors: [] as string[],
           touchedWeddingIds: [] as string[],
         }
+
+  // Dry-run short-circuit: skip the import_runs audit row + the
+  // reconstruction enqueue (both would create real DB side effects)
+  // and return a pre-flight diff the operator can act on.
+  if (isDryRun) {
+    const decisions = commitResult.previewDecisions ?? []
+    const counts = {
+      total: parsed.rows.length,
+      valid_rows: validRows.length,
+      skipped_invalid: skippedInvalid.length,
+      new: decisions.filter((d) => d.willInsert === 'new').length,
+      matched_existing: decisions.filter((d) => d.willInsert === 'matched_existing_wedding').length,
+      dedup_skip: decisions.filter((d) => d.willInsert === 'dedup_skip').length,
+      partial_dedup_skip: decisions.filter((d) => d.willInsert === 'partial_dedup_skip').length,
+      failed: decisions.filter((d) => d.willInsert === 'failed').length,
+    }
+    // "We've seen this file before" banner threshold: when ≥ 50% of
+    // rows are pure dedup-skips, the operator is almost certainly
+    // re-uploading a file Bloom already ingested. Below 50% the
+    // delta is interesting (weekly Knot export with new leads on
+    // top of last week's). The threshold is intentionally simple
+    // and operator-visible — the UI surfaces the raw counts and
+    // the banner, not a hidden heuristic.
+    const seenBefore =
+      counts.total > 0 && (counts.dedup_skip / counts.total) >= 0.5
+
+    return NextResponse.json({
+      ok: commitResult.ok && skippedInvalid.length === 0,
+      adapter: adapter.name,
+      dry_run: true,
+      total_rows: parsed.rows.length,
+      counts,
+      seen_before: seenBefore,
+      preview_decisions: decisions,
+      skipped_invalid: skippedInvalid,
+      errors: commitResult.errors,
+      warnings: parsed.warnings,
+    }, { status: 200 })
+  }
 
   // Wave 4 Phase 4c: raw-source persistence + import_runs audit row.
   // The existing endpoint already does the right adapter dispatch; we

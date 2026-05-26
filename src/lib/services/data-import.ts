@@ -310,6 +310,24 @@ export async function importClientList(
       }
       if (Object.keys(backfill).length > 0) {
         await supabase.from('weddings').update(backfill).eq('id', resolvedWeddingId)
+        // Data-bridge hook (2026-05-26): a status flip to 'completed'
+        // on a past-dated import is a booked-class transition. Re-mirror
+        // so the couples bridge stays consistent. Idempotent + skips
+        // merged-away weddings. Fire-and-forget.
+        if (backfill.status === 'completed') {
+          void (async () => {
+            try {
+              const { mirrorCoupleFromWedding } = await import('./identity/mirror-couple')
+              await mirrorCoupleFromWedding({
+                venueId,
+                weddingId: resolvedWeddingId,
+                supabase,
+              })
+            } catch {
+              // Mirror never throws (its contract). Belt-and-braces.
+            }
+          })()
+        }
       }
 
       // Partner2: insert if not already present (the resolver only

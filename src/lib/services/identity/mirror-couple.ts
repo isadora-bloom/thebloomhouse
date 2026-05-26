@@ -74,9 +74,17 @@ export async function mirrorCoupleFromWedding(
 
   try {
     // Pull the weddings row + partner1/partner2 from people.
+    // Include merged_into_id so we can skip tombstoned (merged-away)
+    // weddings. Mirroring a merged-away wedding would mint/refresh a
+    // couples row pointing at a dead weddings.id, which then becomes the
+    // legacy-fast-path target in `linkSignal.findCoupleForLegacyWedding`
+    // for any straggler signal still keyed on that wedding — wrong-
+    // attaching to a couple the doctrine says is the LOSER half of the
+    // merge. See bloom-data-bridge-2026-05-26 audit + IDENTITY-FIRST-
+    // ARCHITECTURE.md §A.1 (merged_into_id is the spine tombstone).
     const { data: wedding, error: wErr } = await supabase
       .from('weddings')
-      .select('id, venue_id, status, wedding_date, inquiry_date, updated_at')
+      .select('id, venue_id, status, wedding_date, inquiry_date, updated_at, merged_into_id')
       .eq('id', weddingId)
       .single()
 
@@ -90,6 +98,30 @@ export async function mirrorCoupleFromWedding(
         event_type: 'identity.mirror_couple',
         outcome: 'fail',
         data: { wedding_id: weddingId, error: wErr?.message ?? 'not found' },
+      })
+      return { isNew: false, coupleId: null }
+    }
+
+    // Refuse to mirror a tombstoned (merged-away) wedding. The canonical
+    // wedding (merged_into_id target) is the right mirror anchor; this
+    // duplicate would just race the canonical and break the legacy fast
+    // path. Logged at info — this is expected during a merge cascade, not
+    // an error condition. A caller that genuinely wants the canonical
+    // couple should pass the canonical wedding id (resolver.mergeWeddings
+    // is responsible for that re-mirror after the tombstone UPDATE lands).
+    if ((wedding as { merged_into_id?: string | null }).merged_into_id) {
+      logEvent({
+        level: 'info',
+        msg: 'identity.mirror_couple.skipped_merged_away',
+        venueId,
+        correlationId: correlationId ?? null,
+        actor: 'system',
+        event_type: 'identity.mirror_couple',
+        outcome: 'ok',
+        data: {
+          wedding_id: weddingId,
+          merged_into_id: (wedding as { merged_into_id?: string | null }).merged_into_id,
+        },
       })
       return { isNew: false, coupleId: null }
     }

@@ -31,6 +31,7 @@
  */
 
 import { useMemo, useRef, useState } from 'react'
+import { humanActionLabel } from '@/lib/services/identity/action-labels'
 
 export interface JourneyTouchpoint {
   id: string
@@ -125,10 +126,6 @@ function formatDuration(ms: number): string {
   if (months < 12) return `${months} months`
   const years = (days / 365).toFixed(1)
   return `${years} years`
-}
-
-function actionLabel(action: string): string {
-  return action.replace(/_/g, ' ')
 }
 
 /**
@@ -423,7 +420,7 @@ export function JourneyRibbon({
           }}
         >
           <div className="font-medium text-stone-800">
-            {actionLabel(hover.tp.action_type)}
+            {humanActionLabel(hover.tp.channel, hover.tp.action_type)}
           </div>
           <div className="text-stone-500">
             {hover.tp.channel} · {new Date(hover.tp.occurred_at).toLocaleDateString()}
@@ -480,7 +477,7 @@ export function JourneyRibbon({
                   style={{ backgroundColor: channelColor(m.channel) }}
                 />
                 <span className="font-medium text-stone-800">
-                  {actionLabel(m.action_type)}
+                  {humanActionLabel(m.channel, m.action_type)}
                 </span>
                 <span className="text-stone-500">{m.channel}</span>
                 <span className="ml-auto text-stone-400">

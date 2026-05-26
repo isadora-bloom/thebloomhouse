@@ -542,10 +542,17 @@ async function commitSiteVisitors(args: {
   rows: NormalisedLeadRow[]
   anonymousVisitors?: ParsedVisitor[]
   orphanPageviews?: ParsedPageview[]
+  /** §7 OPERATOR-BLOCK item 4 dry-run pass-through. Identified
+   *  visitors flow through commitNormalisedRows so their preview
+   *  decisions are produced by the shared helper. Anonymous visitors
+   *  + orphan pageviews are skipped (no per-row identity to dedup;
+   *  they are aggregate funnel data). */
+  preview?: boolean
 }): Promise<CommitResult> {
   const { supabase, venueId, rows } = args
   const anonymous = args.anonymousVisitors ?? []
   const orphanPageviews = args.orphanPageviews ?? []
+  const isDryRun = args.preview === true
 
   // Identified visitors - standard shared commit. confidence_flag
   // 'imported_medium': a pixel-identified email is good but not as
@@ -565,6 +572,7 @@ async function commitSiteVisitors(args: {
       // Synthetic provenance rows belong on the lead-detail timeline,
       // not /agent/inbox.
       defaultSurface: 'crm_attribution',
+      ...(isDryRun ? { preview: true } : {}),
     })
   } else {
     result = {
@@ -576,7 +584,15 @@ async function commitSiteVisitors(args: {
       errors: [],
       touchedWeddingIds: [],
     }
+    if (isDryRun) {
+      result.preview = true
+      result.previewDecisions = []
+    }
   }
+
+  // Dry-run: skip the anonymous/orphan tangential_signals writes
+  // entirely (no identity to dedup), return the rows-level preview.
+  if (isDryRun) return result
 
   // Anonymous visitors -> one tangential_signals row each. They carry
   // the visitor_id so a later identified signal with the same

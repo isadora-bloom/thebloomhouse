@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { humanActionLabel } from '@/lib/services/identity/action-labels'
 import {
   AlertCircle,
   Check,
@@ -174,7 +175,7 @@ export default function ReviewQueueTab() {
       map.set(row.id, {
         id: row.id,
         kind: 'touchpoint',
-        label: `${row.channel} ${row.action_type.replace(/_/g, ' ')}`,
+        label: humanActionLabel(row.channel, row.action_type),
         detail:
           (subject ? `"${subject}" · ` : '') + new Date(row.occurred_at).toLocaleString(),
       })

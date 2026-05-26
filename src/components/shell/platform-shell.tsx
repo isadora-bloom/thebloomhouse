@@ -9,6 +9,7 @@ import { ScopeIndicator } from './scope-indicator'
 import { UserMenu } from './user-menu'
 import { FloatingBrainDump } from './floating-brain-dump'
 import { NotificationBell } from './notification-bell'
+import { ConsolidationChip } from './consolidation-chip'
 import { useVenueScope } from '@/lib/contexts/venue-scope-context'
 
 /**
@@ -67,6 +68,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         >
           <ModeStrip />
           <div className="flex items-center gap-1 lg:gap-2 shrink-0">
+            <ConsolidationChip />
             <ScopeIndicator />
             <NotificationBell venueId={venueId} />
             <GearMenu scopeLevel={scopeLevel} />

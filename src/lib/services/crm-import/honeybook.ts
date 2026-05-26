@@ -802,6 +802,8 @@ async function commitHoneybook(args: {
   supabase: SupabaseClient
   venueId: string
   rows: NormalisedLeadRow[]
+  /** §7 OPERATOR-BLOCK item 4 dry-run pass-through (flows via ...args). */
+  preview?: boolean
 }): Promise<CommitResult> {
   // T5-Rixey-BBB: HoneyBook is a CRM (not an acquisition channel).
   // Default per-row interaction class is 'crm'. The synthetic

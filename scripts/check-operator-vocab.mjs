@@ -31,10 +31,15 @@ const SCAN_DIRS = [
 
 // Subpaths under the scan dirs that house engineering surfaces. Vocab
 // is allowed here because only platform-team / org-admin reach them
-// (gated by /admin/layout.tsx + /super-admin/layout.tsx).
+// (gated by /admin/layout.tsx + /super-admin/layout.tsx + /system/layout.tsx).
 const SKIP_SUBPATHS = [
   'src/app/(platform)/admin/',
   'src/app/(platform)/super-admin/',
+  // /system/ houses operator-trust surfaces (e.g. consolidation-status)
+  // gated by /system/layout.tsx — same role check as /admin/. Engineering
+  // vocabulary (mintWedding, mintPerson, table names) is the point of the
+  // surface for admins who need to verify what shipped.
+  'src/app/(platform)/system/',
 ]
 
 // Banned vocabulary. Each entry: pattern + plain-English suggestion.

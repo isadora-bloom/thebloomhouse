@@ -39,6 +39,39 @@ interface PreviewRow {
   booking_value?: number | null
 }
 
+/**
+ * §7 OPERATOR-BLOCK item 4 (2026-05-26): pre-flight dry-run shape
+ * returned by `POST /api/onboarding/crm-import` with `dryRun:true`.
+ * Renders as a "X new, Y already in Bloom, Z dedup-skipped" summary +
+ * collapsible row-by-row table BEFORE the operator confirms commit.
+ */
+interface DryRunDecision {
+  rowIndex: number
+  willInsert: 'new' | 'matched_existing_wedding' | 'dedup_skip' | 'partial_dedup_skip' | 'failed'
+  reason: string
+  partner1?: string | null
+  partner2?: string | null
+  weddingDate?: string | null
+  status?: string | null
+  resolvedWeddingId?: string | null
+}
+
+interface DryRunResult {
+  total: number
+  counts: {
+    total: number
+    valid_rows: number
+    skipped_invalid: number
+    new: number
+    matched_existing: number
+    dedup_skip: number
+    partial_dedup_skip: number
+    failed: number
+  }
+  seen_before: boolean
+  decisions: DryRunDecision[]
+}
+
 interface ProposedMappingDetail {
   bloom_field: string
   csv_header: string
@@ -113,6 +146,12 @@ export default function CrmImportPage() {
   >([])
   const [schemaHint, setSchemaHint] = useState<string | null>(null)
 
+  // §7 OPERATOR-BLOCK item 4: pre-flight dry-run state. When set,
+  // the Commit button is unlocked and the operator sees a summary +
+  // a row-by-row table BEFORE any write fires.
+  const [dryRun, setDryRun] = useState<DryRunResult | null>(null)
+  const [showDryRunRows, setShowDryRunRows] = useState(false)
+
   useEffect(() => {
     fetch('/api/onboarding/crm-import')
       .then((r) => r.json())
@@ -144,6 +183,8 @@ export default function CrmImportPage() {
     setSkippedRows([])
     setWriteErrors([])
     setSchemaHint(null)
+    setDryRun(null)
+    setShowDryRunRows(false)
   }
 
   function resetForAdapterChange(name: string) {
@@ -155,13 +196,30 @@ export default function CrmImportPage() {
   }
 
   /**
-   * action: 'preview' | 'import' | 'propose' | 'commit-confirmed'.
+   * action: 'preview' | 'dry-run' | 'import' | 'propose' | 'commit-confirmed'.
    *   propose          - AI-mapped: ask the server for a column mapping.
    *   commit-confirmed - AI-mapped: import using the confirmed mapping.
-   *   preview / import - every other adapter.
+   *   preview          - parse + return parsed rows table (no decision tree).
+   *   dry-run          - §7 OPERATOR-BLOCK item 4: parse + run the FULL
+   *                      commit decision tree (resolver + crm_import_rows
+   *                      fingerprint check) but skip every write. Returns
+   *                      per-row diff so the operator sees what commit
+   *                      would do BEFORE damage is done.
+   *   import           - actually commit.
    */
-  async function submit(action: 'preview' | 'import' | 'propose' | 'commit-confirmed') {
-    clearMessages()
+  async function submit(action: 'preview' | 'dry-run' | 'import' | 'propose' | 'commit-confirmed') {
+    // Preserve dry-run state across an 'import' action so the user can
+    // see the pre-flight diff while the import is running. Only clear
+    // dry-run on dry-run or preview.
+    if (action !== 'import' && action !== 'commit-confirmed') {
+      clearMessages()
+    } else {
+      setErrors([])
+      setSuccess(null)
+      setSkippedRows([])
+      setWriteErrors([])
+      setSchemaHint(null)
+    }
     if (!csv.trim() && !(isSiteVisitors && visitsCsv.trim())) {
       setErrors(['csv content is empty'])
       return
@@ -185,11 +243,13 @@ export default function CrmImportPage() {
       csv,
       columnMapping,
       preview: action === 'preview',
+      dryRun: action === 'dry-run',
     }
     if (isSiteVisitors && visitsCsv.trim()) body.visitsCsvText = visitsCsv
     if (action === 'commit-confirmed') {
       body.confirmedMapping = confirmedMapping
       body.preview = false
+      body.dryRun = false
     }
 
     setBusy(true)
@@ -222,6 +282,25 @@ export default function CrmImportPage() {
         return
       }
       if (Array.isArray(data.warnings)) setWarnings(data.warnings)
+
+      // §7 OPERATOR-BLOCK item 4: dry-run response. Render the
+      // summary banner + collapsible row-by-row table. Commit button
+      // unlocks once dryRun is set.
+      if (data.dry_run) {
+        setDryRun({
+          total: data.total_rows ?? 0,
+          counts: data.counts ?? {
+            total: 0, valid_rows: 0, skipped_invalid: 0,
+            new: 0, matched_existing: 0,
+            dedup_skip: 0, partial_dedup_skip: 0, failed: 0,
+          },
+          seen_before: data.seen_before === true,
+          decisions: (data.preview_decisions ?? []) as DryRunDecision[],
+        })
+        setSkippedRows(Array.isArray(data.skipped_invalid) ? data.skipped_invalid : [])
+        setPreview(null)
+        return
+      }
 
       if (data.preview) {
         setPreview(data.rows ?? [])
@@ -488,16 +567,50 @@ export default function CrmImportPage() {
                 Analyse file with AI
               </button>
             )
-          ) : !preview ? (
-            <button
-              type="button"
-              onClick={() => submit('preview')}
-              disabled={busy || !adapter?.ready}
-              className="inline-flex items-center gap-1.5 rounded border border-sage-200 hover:bg-sage-50 text-sage-700 text-sm font-medium px-3 py-2 disabled:opacity-50"
-            >
-              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-              Preview
-            </button>
+          ) : !preview && !dryRun ? (
+            <>
+              <button
+                type="button"
+                onClick={() => submit('preview')}
+                disabled={busy || !adapter?.ready}
+                className="inline-flex items-center gap-1.5 rounded border border-sage-200 hover:bg-sage-50 text-sage-700 text-sm font-medium px-3 py-2 disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                Preview rows
+              </button>
+              {/* §7 OPERATOR-BLOCK item 4: pre-flight dry-run. Runs the
+                  full commit decision tree against the database so the
+                  operator sees "X new, Y already in Bloom, Z dedup-
+                  skipped" BEFORE pressing Import. */}
+              <button
+                type="button"
+                onClick={() => submit('dry-run')}
+                disabled={busy || !adapter?.ready}
+                className="inline-flex items-center gap-1.5 rounded border border-sage-300 hover:bg-sage-100 text-sage-800 text-sm font-medium px-3 py-2 disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                Check before import
+              </button>
+            </>
+          ) : dryRun ? (
+            <>
+              <button
+                type="button"
+                onClick={() => { setDryRun(null); setShowDryRunRows(false) }}
+                className="text-sm text-sage-700 hover:bg-sage-50 px-3 py-2 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => submit('import')}
+                disabled={busy || dryRun.counts.total === 0}
+                className="inline-flex items-center gap-1.5 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-sm font-medium px-3 py-2"
+              >
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                Confirm &amp; import
+              </button>
+            </>
           ) : (
             <>
               <button
@@ -608,6 +721,124 @@ export default function CrmImportPage() {
                 {proposedMapping.unmapped_headers.join(', ')}
               </p>
             )}
+          </div>
+        )}
+
+        {/* §7 OPERATOR-BLOCK item 4: dry-run pre-flight diff. Shows
+            "X new, Y already in Bloom, Z dedup-skipped" + a banner
+            when ≥50% of rows look like a re-upload. Operator hits
+            "Confirm & import" to commit. */}
+        {dryRun && (
+          <div className="border border-sage-300 rounded-lg p-3 bg-sage-50/60 space-y-3">
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-sage-900">
+                Pre-flight diff — no rows imported yet
+              </p>
+              <p className="text-[11px] text-sage-600">
+                Bloom ran the full commit decision tree against your database. Nothing has been
+                saved. Review the breakdown below, then press <strong>Confirm &amp; import</strong>.
+              </p>
+            </div>
+
+            {dryRun.seen_before && (
+              <div className="bg-amber-50 border border-amber-300 rounded p-2 text-[11px] text-amber-900 flex items-start gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>
+                  <strong>We&apos;ve seen this file before.</strong> {dryRun.counts.dedup_skip} of {dryRun.counts.total} rows
+                  exactly match rows you already imported. The import will skip those and write only
+                  what&apos;s new or changed.
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+              <div className="bg-white border border-sage-200 rounded p-2">
+                <p className="text-[10px] text-sage-500 uppercase tracking-wide">Total rows</p>
+                <p className="text-sm font-semibold text-sage-900">{dryRun.counts.total}</p>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded p-2">
+                <p className="text-[10px] text-emerald-700 uppercase tracking-wide">New couples</p>
+                <p className="text-sm font-semibold text-emerald-900">{dryRun.counts.new}</p>
+              </div>
+              <div className="bg-sage-100 border border-sage-200 rounded p-2">
+                <p className="text-[10px] text-sage-700 uppercase tracking-wide">Already in Bloom</p>
+                <p className="text-sm font-semibold text-sage-900">{dryRun.counts.matched_existing}</p>
+                <p className="text-[10px] text-sage-500">commit will backfill</p>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded p-2">
+                <p className="text-[10px] text-amber-700 uppercase tracking-wide">Dedup-skipped</p>
+                <p className="text-sm font-semibold text-amber-900">
+                  {dryRun.counts.dedup_skip}
+                  {dryRun.counts.partial_dedup_skip > 0 && (
+                    <span className="text-[10px] font-normal text-amber-700"> (+{dryRun.counts.partial_dedup_skip} partial)</span>
+                  )}
+                </p>
+                <p className="text-[10px] text-amber-700">commit will skip</p>
+              </div>
+              <div className={`border rounded p-2 ${dryRun.counts.failed > 0 || dryRun.counts.skipped_invalid > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-sage-200'}`}>
+                <p className="text-[10px] uppercase tracking-wide text-sage-500">Problems</p>
+                <p className={`text-sm font-semibold ${dryRun.counts.failed > 0 || dryRun.counts.skipped_invalid > 0 ? 'text-red-900' : 'text-sage-900'}`}>
+                  {dryRun.counts.failed + dryRun.counts.skipped_invalid}
+                </p>
+                <p className="text-[10px] text-sage-500">
+                  {dryRun.counts.skipped_invalid} invalid · {dryRun.counts.failed} failed
+                </p>
+              </div>
+            </div>
+
+            <details
+              open={showDryRunRows}
+              onToggle={(e) => setShowDryRunRows((e.target as HTMLDetailsElement).open)}
+              className="text-xs"
+            >
+              <summary className="cursor-pointer text-sage-700 hover:text-sage-900">
+                Show row-by-row breakdown
+              </summary>
+              <div className="mt-2 max-h-80 overflow-auto border border-sage-200 rounded bg-white">
+                <table className="w-full text-[11px]">
+                  <thead className="sticky top-0 bg-sage-50 text-left text-sage-600">
+                    <tr>
+                      <th className="font-medium py-1 px-2">Row</th>
+                      <th className="font-medium py-1 px-2">Couple</th>
+                      <th className="font-medium py-1 px-2">Wedding date</th>
+                      <th className="font-medium py-1 px-2">Status</th>
+                      <th className="font-medium py-1 px-2">Verdict</th>
+                      <th className="font-medium py-1 px-2">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dryRun.decisions.map((d) => (
+                      <tr key={d.rowIndex} className="border-t border-sage-100">
+                        <td className="py-1 px-2 font-mono text-sage-500">{d.rowIndex + 1}</td>
+                        <td className="py-1 px-2">
+                          {[d.partner1, d.partner2].filter(Boolean).join(' & ') || '—'}
+                        </td>
+                        <td className="py-1 px-2">{d.weddingDate ?? '—'}</td>
+                        <td className="py-1 px-2">{d.status ?? '—'}</td>
+                        <td className="py-1 px-2">
+                          <span
+                            className={
+                              d.willInsert === 'new'
+                                ? 'inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded text-[10px] font-medium'
+                                : d.willInsert === 'matched_existing_wedding'
+                                  ? 'inline-block bg-sage-200 text-sage-800 px-1.5 py-0.5 rounded text-[10px] font-medium'
+                                  : d.willInsert === 'dedup_skip'
+                                    ? 'inline-block bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded text-[10px] font-medium'
+                                    : d.willInsert === 'partial_dedup_skip'
+                                      ? 'inline-block bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[10px] font-medium'
+                                      : 'inline-block bg-red-100 text-red-800 px-1.5 py-0.5 rounded text-[10px] font-medium'
+                            }
+                          >
+                            {d.willInsert.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="py-1 px-2 text-sage-600">{d.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
           </div>
         )}
 

@@ -88,6 +88,53 @@
  * older event must never roll the clock backward).
  */
 
+// ---------------------------------------------------------------------------
+// HOW TO ADD A NEW ACTION_TYPE
+// ---------------------------------------------------------------------------
+// Adding a new `action_type` literal (in a signal builder, a pipeline
+// override, or this mapper) requires the migration + mapper + builder
+// to land as ONE deploy unit. The CI guard
+// `scripts/check-mig-deploy-unit.mjs` enforces this — see §7
+// OPERATOR-BLOCK item 5 in `PHASE-1-BATCH-2.md`.
+//
+//   1. Decide whether the new action_type is PROGRESSION-eligible:
+//      - Inbound, couple-initiated, moves the lead forward          → YES
+//      - Outbound venue activity, terminal/regression, admin signal → NO
+//        Add it explicitly to the `INTENTIONALLY_UNMAPPED` set in the
+//        guard script with a one-line justification. (The mapper's
+//        default fall-through is also `return null`, but the guard
+//        treats unmapped action_types as failures so the intent is
+//        recorded in source rather than inferred from silence.)
+//
+//   2. If YES, choose a progression `event_type`:
+//      - Reuse an existing one when semantically equivalent (e.g.
+//        HoneyBook CSV `crm_imported_booked` reuses `contract_signed`
+//        at progression.ts:166 — one signal class, two ingestion routes).
+//      - Coin a new one when distinct — naming pattern: verb-noun,
+//        `inbound_` prefix when direction would otherwise be ambiguous.
+//
+//   3. If you coined a new event_type, create a new migration
+//      `supabase/migrations/NNN_progression_event_<short>.sql` that
+//      DROP-then-ADDs `couple_progression_events_event_type_check`
+//      with the extended value list. Pattern: see migration 368 (one
+//      new value) or 371/372 (six new values).
+//
+//   4. Add the mapper branch in `progressionEventTypeFor` below mapping
+//      (channel, action_type) → new event_type.
+//
+//   5. Add the action_type literal in the builder file
+//      (`src/lib/services/identity/<channel>-to-signal.ts`).
+//
+//   6. Run `node scripts/check-mig-deploy-unit.mjs` to verify.
+//
+//   7. Commit (3) + (4) + (5) together. CI fails if any of the three
+//      drift — that's the entire point of the guard. Without it, a
+//      code-before-migration deploy silently swallows `23514` CHECK
+//      failures in `recordProgressionIfEligible` below (the catch at
+//      line ~245 only treats `23505` as success; every other error
+//      returns `{recorded:false}` without throwing).
+// ---------------------------------------------------------------------------
+
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NormalizedSignal } from './sources/types'
 

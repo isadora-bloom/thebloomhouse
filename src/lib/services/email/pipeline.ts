@@ -3903,6 +3903,35 @@ export async function processIncomingEmail(
           } catch (err) {
             console.warn('[pipeline] status-change touchpoint failed:', err)
           }
+          // Data-bridge hook (2026-05-26): the mintWedding fire-and-
+          // forget mirror only runs on the initial mint. When a wedding
+          // later progresses INTO a booked-class status, the couples row
+          // either (a) doesn't exist (pre-mirror weddings — 47% gap on
+          // prod) or (b) carries the stale lifecycle_state. Re-fire the
+          // mirror so the couples bridge stays consistent with the
+          // weddings.status ladder. Mirror is idempotent + skips merged-
+          // away weddings; safe to fire-and-forget.
+          if (
+            targetStatus === 'booked' ||
+            targetStatus === 'completed' ||
+            targetStatus === 'tour_completed'
+          ) {
+            void (async () => {
+              try {
+                const { mirrorCoupleFromWedding } = await import(
+                  '@/lib/services/identity/mirror-couple'
+                )
+                await mirrorCoupleFromWedding({
+                  venueId,
+                  weddingId,
+                  supabase,
+                  correlationId,
+                })
+              } catch {
+                // Mirror never throws (its contract). Belt-and-braces.
+              }
+            })()
+          }
         }
       }
 

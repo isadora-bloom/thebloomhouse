@@ -289,6 +289,67 @@ export interface PreviewResult {
   warnings: string[]
 }
 
+/**
+ * Per-row outcome the commit step would produce. Populated only when
+ * `commitNormalisedRows` runs in dry-run mode (`preview:true`). The
+ * operator-facing pre-flight UI renders this as a table BEFORE the
+ * coordinator confirms the commit, so they can see at a glance how
+ * many rows are net-new vs already-known.
+ *
+ * Outcomes — chosen to be at the per-ROW granularity the operator
+ * thinks in (one CSV row = one couple, one decision):
+ *   - 'new'                       — no fingerprint match in
+ *                                   crm_import_rows AND no identity
+ *                                   match in weddings/people; commit
+ *                                   would mint a fresh wedding.
+ *   - 'matched_existing_wedding'  — identity resolver attached to a
+ *                                   wedding already in Bloom (email
+ *                                   backfill / earlier CSV / etc.);
+ *                                   commit would BACKFILL fields onto
+ *                                   the existing wedding.
+ *   - 'dedup_skip'                — every interaction this row carries
+ *                                   has an external_id that already
+ *                                   landed via a prior upload with the
+ *                                   same content_hash; commit would
+ *                                   write nothing. THIS is the "we've
+ *                                   seen this row before" verdict.
+ *   - 'partial_dedup_skip'        — some interactions in this row are
+ *                                   dedup-skips, others are net-new or
+ *                                   state-changed. Commit would write
+ *                                   the new/changed ones only.
+ *   - 'failed'                    — preview-mode lookup or row
+ *                                   resolution failed. Commit would
+ *                                   either skip the row or error.
+ */
+export interface PreviewDecision {
+  rowIndex: number
+  willInsert:
+    | 'new'
+    | 'matched_existing_wedding'
+    | 'dedup_skip'
+    | 'partial_dedup_skip'
+    | 'failed'
+  /** Human-readable explanation suitable for tooltip / row detail. */
+  reason: string
+  partner1?: string | null
+  partner2?: string | null
+  weddingDate?: string | null
+  status?: string | null
+  /** When the row is `matched_existing_wedding` or `partial_dedup_skip`,
+   *  this is the existing wedding id the commit would attach to. */
+  resolvedWeddingId?: string | null
+  /** Per-interaction breakdown (when row.interactions is non-empty
+   *  AND any of them carry external_id). 'dedup_unchanged' = same
+   *  content_hash, 'dedup_state_changed' = fingerprint exists but
+   *  content differs (commit would write a touchpoint diff). */
+  interactionDecisions?: Array<{
+    occurredAt: string
+    type: string
+    externalId: string | null
+    state: 'new' | 'dedup_unchanged' | 'dedup_state_changed' | 'no_external_id'
+  }>
+}
+
 export interface CommitResult {
   ok: boolean
   weddingsInserted: number
@@ -325,6 +386,13 @@ export interface CommitResult {
    *  Optional for back-compat; the existing /onboarding/crm-import
    *  endpoint ignores it. */
   touchedWeddingIds?: string[]
+  /** Dry-run pre-flight diff. Populated ONLY when the caller passes
+   *  `preview:true` to `commitNormalisedRows`. The list is row-aligned
+   *  with the input `rows` so the UI can render a row-by-row table.
+   *  When `preview` is unset (default), this field is absent — every
+   *  existing caller continues to see byte-identical output. */
+  preview?: true
+  previewDecisions?: PreviewDecision[]
 }
 
 /** Optional config the adapter may consume — only generic_csv currently
@@ -385,6 +453,16 @@ export interface CrmAdapter {
     supabase: SupabaseClient
     venueId: string
     rows: NormalisedLeadRow[]
+    /** Dry-run pre-flight diff. When true, the commit runs the parse
+     *  + decision logic (resolveIdentity lookup, crm_import_rows
+     *  fingerprint lookup) but performs ZERO writes — no weddings,
+     *  no people, no interactions, no tours, no lost_deals, no
+     *  linkSignal, no pendingHoneybookSignals push. Returns
+     *  CommitResult.previewDecisions populated so the operator UI
+     *  can show "X new, Y already in Bloom, Z dedup-skipped" BEFORE
+     *  the coordinator confirms. Optional — adapters that ignore
+     *  it MUST behave as if `preview:false` (the default). */
+    preview?: boolean
   }): Promise<CommitResult>
 }
 
@@ -454,6 +532,19 @@ export async function commitNormalisedRows(args: {
    *  (see honeybook.ts) and override this default. Regular CRM-recorded
    *  conversations stay 'inbox' so they show up in /agent/inbox. */
   defaultSurface?: Surface
+  /** 2026-05-26 §7 operator pre-flight: dry-run mode. When true, this
+   *  function runs the parse + decision logic (identity resolver
+   *  lookup + crm_import_rows fingerprint check) BUT performs ZERO
+   *  database writes — no weddings.insert, no people.insert, no
+   *  interactions.insert, no linkSignal, no pendingHoneybookSignals
+   *  push, no portal provisioning. Returns CommitResult with
+   *  `preview:true` + `previewDecisions[]` populated so the operator
+   *  UI can show a pre-flight diff ("X new couples, Y already in
+   *  Bloom") before the coordinator confirms the commit.
+   *
+   *  Backward-compat contract: when omitted/false, this function
+   *  behaves byte-identically to the pre-flag implementation. */
+  preview?: boolean
 }): Promise<CommitResult> {
   const { supabase, venueId, rows, crmSource } = args
   const confidenceFlag = args.confidenceFlag ?? 'imported_medium'
@@ -461,6 +552,7 @@ export async function commitNormalisedRows(args: {
   const defaultInteractionSignalClass = args.defaultInteractionSignalClass ?? 'unclassified'
   const chokepointNameSourceOverride = args.chokepointNameSource ?? null
   const defaultSurface: Surface = args.defaultSurface ?? 'inbox'
+  const isDryRun = args.preview === true
   const result: CommitResult = {
     ok: true,
     weddingsInserted: 0,
@@ -469,6 +561,10 @@ export async function commitNormalisedRows(args: {
     lostDealsInserted: 0,
     errors: [],
     touchedWeddingIds: [],
+  }
+  if (isDryRun) {
+    result.preview = true
+    result.previewDecisions = []
   }
 
   // H3 cascade-signal accumulator (PHASE-1-BATCH-2.md §3 phase A H3,
@@ -497,6 +593,233 @@ export async function commitNormalisedRows(args: {
     sortKey: number
   }
   const pendingHoneybookSignals: PendingHoneybookSignal[] = []
+
+  // ---------------------------------------------------------------------
+  // Dry-run / pre-flight diff path.
+  // ---------------------------------------------------------------------
+  // The operator UI calls this before activating the Commit button so
+  // they can see "X new couples, Y already in Bloom, Z dedup-skipped"
+  // BEFORE damage is done. We mirror the commit-path's decision tree
+  // (identity resolver lookup → crm_import_rows fingerprint lookup)
+  // but skip every .insert / .update / .delete and skip the H3
+  // cascade flush. The branches must stay in lock-step with the
+  // commit path — a divergence would mean the operator sees a preview
+  // that doesn't match reality, worse than no preview at all.
+  if (isDryRun) {
+    let importRowsModule: typeof import('./import-rows') | null = null
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex]!
+      const decision: PreviewDecision = {
+        rowIndex,
+        willInsert: 'new',
+        reason: 'no identity match in Bloom',
+        partner1: [row.partner1_first_name, row.partner1_last_name]
+          .filter(Boolean).join(' ') || null,
+        partner2: [row.partner2_first_name, row.partner2_last_name]
+          .filter(Boolean).join(' ') || null,
+        weddingDate: row.wedding_date ?? null,
+        status: row.status ?? null,
+        resolvedWeddingId: null,
+      }
+
+      // (1) Identity-resolver dry-run. resolveIdentity has a side-
+      //     effect-free read path when called with the same signals
+      //     the commit path uses — but to be safe we mirror the
+      //     commit-path's gate (only call when email or phone is
+      //     present) and we DO NOT pass `supabase` writes through.
+      //     The resolver itself MAY mint persons on the commit path
+      //     (Branch C below), so for dry-run we only call it to
+      //     check for an EXISTING match — if no match, we fall
+      //     through to 'new' without invoking the minting branch.
+      let resolvedWeddingId: string | null = null
+      if (row.partner1_email || row.partner1_phone) {
+        try {
+          // Read-only lookup: query weddings by email/phone directly
+          // rather than calling resolveIdentity (which mints persons
+          // as a side effect on the no-match path via its Branch C).
+          // This is the at-write-time half of the identity-resolver
+          // contract: the commit path ALWAYS hits resolveIdentity
+          // first and only mints when it returns null. We replicate
+          // the "did it match?" half without the "mint on miss" half.
+          if (row.partner1_email) {
+            const { data: byEmail } = await supabase
+              .from('people')
+              .select('wedding_id')
+              .eq('venue_id', venueId)
+              .eq('email', row.partner1_email)
+              .not('wedding_id', 'is', null)
+              .limit(1)
+              .maybeSingle()
+            if (byEmail?.wedding_id) {
+              resolvedWeddingId = byEmail.wedding_id as string
+            }
+          }
+          if (!resolvedWeddingId && row.partner1_phone) {
+            const { data: byPhone } = await supabase
+              .from('people')
+              .select('wedding_id')
+              .eq('venue_id', venueId)
+              .eq('phone', row.partner1_phone)
+              .not('wedding_id', 'is', null)
+              .limit(1)
+              .maybeSingle()
+            if (byPhone?.wedding_id) {
+              resolvedWeddingId = byPhone.wedding_id as string
+            }
+          }
+        } catch (err) {
+          decision.willInsert = 'failed'
+          decision.reason = `identity lookup failed: ${err instanceof Error ? err.message : 'unknown'}`
+          result.previewDecisions!.push(decision)
+          continue
+        }
+      }
+
+      if (resolvedWeddingId) {
+        decision.willInsert = 'matched_existing_wedding'
+        decision.reason = 'partner1 email/phone matches a wedding already in Bloom; commit would backfill fields onto the existing couple'
+        decision.resolvedWeddingId = resolvedWeddingId
+      }
+
+      // (2) crm_import_rows fingerprint lookup per interaction —
+      //     mirrors the commit-path's classifyImportRow call. We
+      //     classifyImportRow has an INSERT side-effect on the 'new'
+      //     branch (it stamps a placeholder row), which we MUST NOT
+      //     execute in dry-run. Instead we replicate just the
+      //     fingerprint+content-hash compute and read crm_import_rows
+      //     directly. This is the only divergence point between
+      //     preview and commit — the read shape is identical, but
+      //     commit-path also writes the placeholder. The result of
+      //     "would this insert?" is identical either way.
+      const interactionDecisions: NonNullable<PreviewDecision['interactionDecisions']> = []
+      let totalInteractionsWithId = 0
+      let unchangedCount = 0
+      let stateChangedCount = 0
+      let newCount = 0
+      if (row.interactions?.length) {
+        if (!importRowsModule) {
+          importRowsModule = await import('./import-rows')
+        }
+        for (const i of row.interactions) {
+          if (!i.external_id) {
+            interactionDecisions.push({
+              occurredAt: i.occurred_at,
+              type: i.type,
+              externalId: null,
+              state: 'no_external_id',
+            })
+            continue
+          }
+          totalInteractionsWithId += 1
+          try {
+            // Compute the fingerprint + content_hash the same way
+            // classifyImportRow does and read crm_import_rows directly.
+            // The two compute functions are exported from import-rows.
+            const fingerprint = importRowsModule.computeRowFingerprint(
+              crmSource as Parameters<typeof importRowsModule.computeRowFingerprint>[0],
+              {
+                externalId: i.external_id,
+                email: row.partner1_email ?? null,
+                phone: row.partner1_phone ?? null,
+                fullName: [row.partner1_first_name, row.partner1_last_name]
+                  .filter(Boolean).join(' ') || null,
+                inquiryDate: row.inquiry_date ?? i.occurred_at,
+                weddingDate: row.wedding_date ?? null,
+              },
+            )
+            const contentHash = importRowsModule.computeContentHash({
+              status: row.status ?? null,
+              weddingDate: row.wedding_date ?? null,
+              guestCount: row.guest_count_estimate ?? null,
+              tourScheduledFor: i.type === 'meeting' ? i.occurred_at : null,
+              canceled: (i.subject ?? '').includes('[cancelled')
+                || (i.subject ?? '').includes('[rescheduled')
+                || row.status === 'cancelled',
+              extras: { subject: i.subject ?? null },
+            })
+            const { data: existing } = await supabase
+              .from('crm_import_rows')
+              .select('id, content_hash')
+              .eq('venue_id', venueId)
+              .eq('source', crmSource)
+              .eq('row_fingerprint', fingerprint)
+              .maybeSingle()
+            if (!existing) {
+              newCount += 1
+              interactionDecisions.push({
+                occurredAt: i.occurred_at,
+                type: i.type,
+                externalId: i.external_id,
+                state: 'new',
+              })
+            } else if ((existing.content_hash as string | null) === contentHash) {
+              unchangedCount += 1
+              interactionDecisions.push({
+                occurredAt: i.occurred_at,
+                type: i.type,
+                externalId: i.external_id,
+                state: 'dedup_unchanged',
+              })
+            } else {
+              stateChangedCount += 1
+              interactionDecisions.push({
+                occurredAt: i.occurred_at,
+                type: i.type,
+                externalId: i.external_id,
+                state: 'dedup_state_changed',
+              })
+            }
+          } catch (err) {
+            // Failed dedup lookup should NOT mark the whole row as
+            // failed — the commit path also gracefully falls through
+            // to insert. We classify the interaction as 'new' (worst-
+            // case, the operator will see the count slightly inflated
+            // but never under-counted) and surface the error on the
+            // row's reason.
+            newCount += 1
+            interactionDecisions.push({
+              occurredAt: i.occurred_at,
+              type: i.type,
+              externalId: i.external_id,
+              state: 'new',
+            })
+            decision.reason +=
+              `; dedup lookup failed (${err instanceof Error ? err.message : 'unknown'}), assuming new`
+          }
+        }
+        decision.interactionDecisions = interactionDecisions
+      }
+
+      // (3) Roll the per-interaction dedup picture up to a per-row
+      //     verdict. The H3 dedup gate (PART C) also uses this rule.
+      if (totalInteractionsWithId > 0 && newCount === 0 && stateChangedCount === 0) {
+        // Every interaction with an external_id is unchanged —
+        // commit would write nothing for this row. This is the
+        // "we've seen this file before" verdict.
+        decision.willInsert = 'dedup_skip'
+        decision.reason = `all ${unchangedCount} interaction(s) on this row already imported with the same content; commit would write nothing`
+      } else if (totalInteractionsWithId > 0 && unchangedCount > 0) {
+        // Some unchanged, some new/state_changed. The existing
+        // verdict (new / matched_existing_wedding) is correct for
+        // the wedding-level decision; tag the row so the operator
+        // sees the partial.
+        if (decision.willInsert === 'new' || decision.willInsert === 'matched_existing_wedding') {
+          decision.reason +=
+            `; partial dedup — ${unchangedCount} of ${totalInteractionsWithId} interaction(s) already imported`
+        } else {
+          decision.willInsert = 'partial_dedup_skip'
+          decision.reason = `${unchangedCount} of ${totalInteractionsWithId} interaction(s) already imported, rest are new/changed`
+        }
+      }
+
+      result.previewDecisions!.push(decision)
+    }
+    // Dry-run flush is skipped — no pending signals to write, no
+    // portal provisioning, no recordResolution side-effect. Return
+    // the decisions verbatim. Counters stay at zero because we did
+    // not perform any write.
+    return result
+  }
 
   for (const row of rows) {
     // #88 (Stream PPP, 2026-05-03): per-row client-side rollback. The
@@ -1265,11 +1588,33 @@ export async function commitNormalisedRows(args: {
           // booked/completed rows are 'high'; everything else is
           // 'medium'. We tag a numeric sortKey now and sort in the flush.
           //
+          // PART C dedup gate (2026-05-26): when every interaction
+          // on this row was dedup-skipped (re-upload of an already-
+          // imported HoneyBook row with the same content_hash), the
+          // legacy interactions insert wrote zero rows AND the spine
+          // already has the matching signal from the first upload's
+          // H3 push. Pushing here again would: (a) waste an LLM judge
+          // cycle from the Pbatch2-11 budget on a row whose attached
+          // signal is byte-identical to one already in tracer_run_events,
+          // (b) increment UNIQUE-collision noise in
+          // tracer_run_events for the same `(venue_id, source_hash)`
+          // tuple. UNIQUE catches it so there is no double-count, but
+          // we should not pay the cost. Gate: skip H3 push when there
+          // are interactions with external_id AND every one of them
+          // was dedup-skipped (insertDecisions.length === 0 AND
+          // skippedCount > 0 means "row had external_id'd interactions
+          // and all were dedup-skipped"). Rows without external_id
+          // (legacy generic_csv path) still emit H3 because the spine
+          // has no other way to know the row was seen.
+          const allInteractionsDedupSkipped =
+            decisions.length > 0
+            && insertDecisions.length === 0
+            && skippedCount === decisions.length
           // try/catch wrapper: linkSignal builder failures must never
           // throw out of `commitNormalisedRows`. The legacy interactions
           // insert above is the source of truth; a cascade-build failure
           // is auditable via the warn but never blocks the import.
-          if (isHoneybookImport) {
+          if (isHoneybookImport && !allInteractionsDedupSkipped) {
             try {
               const { honeybookCsvToNormalizedSignal } = await import(
                 '@/lib/services/identity/honeybook-csv-to-signal'
