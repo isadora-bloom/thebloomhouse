@@ -23,6 +23,43 @@ two disagree, the answer is "edit both," not "delete one."
 
 ---
 
+## 2026-05-27 — Phase 1 closeout: scripts run against prod + new reclass CLI
+
+After committing the inbox-misclassification fix (4b05c44) and the
+script batch (522f675), ran the four data-mutating scripts against
+prod (jsxxgwprxuqgcauzlxcb) under explicit operator authorization:
+
+| Script | Result |
+|---|---|
+| `backfill-couples-bridge.ts` | 195/195 mirrored. 0 failed. Closes the 47% bridge gap (was 449 bridged, now 644). |
+| `sync-couple-lifecycle-from-weddings.ts` | 181/181 lifecycle_state updated. 0 race-lost. After bridge, total bridged = 671 (476 → 671). Verified post-run: 0 real divergences remain (27 merged-away + 2 unknown-status flagged for operator). |
+| `backfill-knot-orphan-candidate-matches.ts` | 295 orphans scored. 115 candidate proposals + 213 sentinels written = 328 candidate_matches rows. Knot orphans now visible in /intel/identity-review. |
+| `reclass-folders.ts` (new) | Rixey candidate pool 497 (355 advertiser + 95 vendor + 47 other). Run in progress. |
+
+Also fixed a latent chunking issue in `sync-couple-lifecycle-from-weddings.ts` and `verify-cohort-divergence.ts` — the `.in('id', ...)` lookup chunk was 500, which exceeds PostgREST URI limits on prod (Undici fetch failure). Reduced to 100.
+
+### New script: `scripts/reclass-folders.ts`
+
+CLI wrapper around the historical reclass loop in `/api/admin/reclass-folders-ai/route.ts`. The endpoint requires browser session auth (`getPlatformAuth`); this script does the same work via service-role so an operator can fire it from the CLI without spinning up the Next.js server.
+
+- Requires `--venue-id <uuid>` (no silent fan-out across venues).
+- Default source folders: `vendor,advertiser,other` (where the form-relay misclassification bug deposited new inquiries).
+- Default max-rows 500, batch-size 10. Time-budgeted 4m40s.
+- Refuse-by-default for prod ref unless `--allow-prod`. Dry-run by default unless `--apply`.
+
+### What changes for the operator
+
+- Bridge-gap repaired: every live (non-merged) wedding now has a `couples` bridge row, so `linkSignal` legacy-fast-path resolves on first touch.
+- 181 couples that had drifted `lifecycle_state` (mostly tour-stage → still 'ghost', or wedding-date-passed booked → still 'booked') now reflect their wedding's actual status. Cohort dashboards stabilise.
+- Knot orphan touchpoints (295 rows from before mig 360's CHECK extension) surface in the identity-review queue.
+- Mis-bucketed Rixey inbox rows (~500) get correctly-classified intent + correctly-derived folder via the reclass run.
+
+### Operator actions queued
+
+- Apply migration 374 via Supabase dashboard (`supabase/migrations/374_couple_merge_events_reattach_type.sql`).
+- After mig 374: run `scripts/reattach-couple-author-orphans.ts --apply --allow-prod` to auto-bind 19 Tier-1 + queue 4 Tier-2 couple-author orphan gmail touchpoints.
+- Merge `consolidation` → `master` so the inbox fix lands in prod. Until then, NEW inquiries via form-relays will keep landing in wrong folders even though the historical tail is now repaired.
+
 ## 2026-05-27 — Inbox misclassification fix: form-relay leads no longer land in Vendor/Advertiser
 
 Operator reported real new inquiries landing in the Vendor folder. Root cause was three compounding defects:

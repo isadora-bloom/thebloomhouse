@@ -49,7 +49,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 const ALLOW_PROD = process.argv.includes('--allow-prod')
 const VENUE_SCOPE = process.env.SYNC_VENUE_ID || null
 const PAGE = 1000
-const CHUNK = 500
+const CHUNK = 100
 const PROD_REF = 'jsxxgwprxuqgcauzlxcb'
 
 // ---------------------------------------------------------------------------

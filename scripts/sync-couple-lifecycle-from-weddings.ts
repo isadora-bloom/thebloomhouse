@@ -129,7 +129,7 @@ const LIMIT = process.env.SYNC_LIMIT
 const PAGE = 1000
 
 /** Chunk size for IN() lookups (PostgREST caps at 1000). */
-const CHUNK = 500
+const CHUNK = 100
 
 /** Known production project ref. Refuse-by-default unless --allow-prod. */
 const PROD_REF = 'jsxxgwprxuqgcauzlxcb'
