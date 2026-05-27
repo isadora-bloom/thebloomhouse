@@ -165,6 +165,7 @@ export default function CrmImportPage() {
   const isStorefront = selectedAdapter === 'storefront_activity'
   const isSiteVisitors = selectedAdapter === 'site_visitors'
   const isHoneybook = selectedAdapter === 'honeybook'
+  const isKnotVisitorActivity = selectedAdapter === 'knot_visitor_activity'
 
   // Headers from the loaded CSV - used to populate the AI-mapped
   // confirm/correct table's per-field column picker.
@@ -427,6 +428,26 @@ export default function CrmImportPage() {
               so rows become discovery-funnel signals, not couples. <strong>Messages</strong> are
               flagged as real inquiries. For the leads export (couples who actually inquired),
               use the The Knot adapter.
+            </p>
+          </div>
+        )}
+
+        {isKnotVisitorActivity && (
+          <div className="rounded-lg bg-sage-50/60 border border-sage-200 p-3 text-[11px] text-sage-700 space-y-1">
+            <p className="font-medium text-sage-900">Knot visitor activity (per-row history)</p>
+            <p>
+              Upload your Knot <code className="bg-white px-1 rounded">visitor-activities</code>{' '}
+              CSV (Action Taken / Visitor Name / Date of Visit / City / State). One row per
+              action lands in <code className="bg-white px-1 rounded">knot_visitor_activity</code>,
+              idempotent on re-upload. Bloom then tries to bind each row to a known person by
+              first name + last initial; visitors who messaged or saved without a match become
+              ghost records via the cascade. <strong>Verification visits</strong> — couples
+              already in your pipeline coming back to view the profile — emit a heat signal
+              you did not have before.
+            </p>
+            <p className="text-sage-600">
+              Sibling to the <em>Storefront activity</em> adapter (which aggregates the same
+              file into funnel rollups). Both can be run; they write to different tables.
             </p>
           </div>
         )}

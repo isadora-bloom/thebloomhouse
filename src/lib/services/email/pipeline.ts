@@ -1858,6 +1858,77 @@ export async function processIncomingEmail(
     }
   }
 
+  // Step 2.5 — Calendly custom-questions source enrichment (2026-05-27).
+  // When a Calendly notification carries a canonical source answer in its
+  // Questions block ("Where did you first hear about us? → Google"), that
+  // signal is STRONGER than whatever the LLM inferred from the body shape
+  // (the LLM tends to attribute these to source='calendly' or null because
+  // the body looks like a system notification, not a couple-typed inquiry).
+  // We patch the unified verdict's signals.source + extracted_facts.
+  // source_mentioned so when stampInboundVerdict runs after the row insert,
+  // the canonical source lands on interactions.extracted_facts and the
+  // downstream attribution surfaces (touchpoints, source_attribution
+  // rollups, /intel/sources) see the Knot/Google/etc. instead of treating
+  // every Calendly-direct couple as direct/unknown.
+  //
+  // Strict additive — only patches when the parser extracted a canonical
+  // source AND the verdict didn't already carry one. Never overwrites.
+  if (
+    schedulingEvent?.source === 'calendly' &&
+    schedulingEvent.extras?.sourceCanonical &&
+    unifiedVerdict
+  ) {
+    const canonical = schedulingEvent.extras.sourceCanonical
+    const literal = schedulingEvent.extras.source ?? canonical
+    // Patch signals.source
+    if (!unifiedVerdict.signals.source || unifiedVerdict.signals.source === 'calendly') {
+      unifiedVerdict = {
+        ...unifiedVerdict,
+        signals: { ...unifiedVerdict.signals, source: canonical },
+      }
+    }
+    // Patch extracted_facts.source_mentioned (literal answer)
+    if (unifiedVerdict.extracted_facts) {
+      if (!unifiedVerdict.extracted_facts.source_mentioned) {
+        unifiedVerdict = {
+          ...unifiedVerdict,
+          extracted_facts: {
+            ...unifiedVerdict.extracted_facts,
+            source_mentioned: literal,
+          },
+        }
+      }
+    } else {
+      // Synthesize a minimal extracted_facts payload so the source
+      // attribution gets persisted even when the LLM returned null facts.
+      unifiedVerdict = {
+        ...unifiedVerdict,
+        extracted_facts: {
+          names: [],
+          wedding_date: null,
+          guest_count: null,
+          phone: null,
+          email: null,
+          source_mentioned: literal,
+          budget_signal: null,
+        },
+      }
+    }
+    // Also propagate to classification.extractedData.source so synchronous
+    // consumers (heat scoring, draft routing) read the canonical key.
+    if (classification.extractedData) {
+      if (
+        !classification.extractedData.source ||
+        classification.extractedData.source === 'calendly'
+      ) {
+        classification = {
+          ...classification,
+          extractedData: { ...classification.extractedData, source: canonical },
+        }
+      }
+    }
+  }
+
   // Step 3: Find or create contact (skip for spam/ignore)
   let personId: string | null = null
   let weddingId: string | null = null
@@ -3605,11 +3676,23 @@ export async function processIncomingEmail(
         // NOT overwrite — coordinator-set state wins.
         if (mintedSchedIsNew) {
           try {
+            // 2026-05-27 — when the Calendly Questions block carried a
+            // canonical source ("Where did you first hear about us? →
+            // Google" → 'google'), prefer that over the channel name
+            // ('calendly'). The channel name is the WORST attribution
+            // signal because every Calendly booking would otherwise be
+            // logged as direct/unknown. Falls back to the channel name
+            // when no canonical source was extracted.
+            const formCanonicalSource =
+              (schedulingEvent.source === 'calendly' &&
+                schedulingEvent.extras?.sourceCanonical) ||
+              null
+            const sourceToStamp = formCanonicalSource ?? schedulingEvent.source
             await supabase
               .from('weddings')
               .update({
                 status: targetStatus,
-                source: schedulingEvent.source,
+                source: sourceToStamp,
                 tour_date: parseEventTime(schedulingEvent.eventDatetime),
               })
               .eq('id', weddingId)
@@ -3744,10 +3827,26 @@ export async function processIncomingEmail(
         // this a Calendly-only couple sits at heat=0 until a reply arrives.
         // Direction: inbound — couple booked the tour via the scheduling
         // tool, that's a couple-side action.
+        //
+        // 2026-05-27: when the Questions block surfaced a canonical
+        // source, attribute the initial_inquiry to that (Google / Knot /
+        // etc.) rather than the channel name ('calendly'). Carries both
+        // for forensic completeness.
+        const initialSourceCanonical =
+          schedulingEvent.extras?.sourceCanonical ?? null
         await recordEngagementEventsBatch(
           venueId,
           weddingId,
-          [{ eventType: 'initial_inquiry', metadata: { source: schedulingEvent.source, via: 'scheduling_tool' } }],
+          [{
+            eventType: 'initial_inquiry',
+            metadata: {
+              source: initialSourceCanonical ?? schedulingEvent.source,
+              via: 'scheduling_tool',
+              channel: schedulingEvent.source,
+              source_literal: schedulingEvent.extras?.source ?? null,
+              source_from_calendly_questions: Boolean(initialSourceCanonical),
+            },
+          }],
           'inbound',
           email.date,
           correlationId

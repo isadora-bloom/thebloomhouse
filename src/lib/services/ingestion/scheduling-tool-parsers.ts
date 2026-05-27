@@ -82,10 +82,25 @@ export interface SchedulingEvent {
     partnerEmail?: string | null
     phone?: string | null
     guestCount?: string | null
+    /** LITERAL source answer as the couple wrote it ("Google", "The Knot",
+     *  "a friend of ours"). Preserved for forensic audit. Distinct from
+     *  `sourceCanonical` which is normalized to the CRM source vocabulary. */
     source?: string | null
+    /** Canonical source key derived from the literal answer via the
+     *  Calendly questions parser. Aligns with the `signals.source`
+     *  vocabulary on `IntentVerdict` ('the_knot', 'google', 'instagram',
+     *  etc.). 2026-05-27: this is the fix for "Calendly-direct couples
+     *  showing as source=direct/unknown even when they wrote Google or
+     *  The Knot in the form". null when no source question was present
+     *  OR the answer couldn't be canonicalized. */
+    sourceCanonical?: string | null
     packageInterest?: string | null
     weddingDateHint?: string | null
     additionalGuestEmails?: string[]
+    /** Whether the couple ticked "Yes" on "Have you built a package on
+     *  our pricing calculator?". Surfaced for the calculator-bridge
+     *  cohort analysis (booked-via-Calendly vs first-built-calculator). */
+    builtCalculator?: boolean | null
   }
 }
 
@@ -113,6 +128,10 @@ const EMAIL_RE = /[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
 // Rixey corruption fix relies on (the original regex tightening was
 // hoisted into htmlToText itself).
 import { htmlToText as stripHtml } from '@/lib/utils/html-text'
+import {
+  extractCalendlyQuestions,
+  type CalendlyCanonicalSource,
+} from './calendly-questions-parser'
 
 /** Extract the first plausible non-sender email from a body. `excludeDomains`
  *  are sender/tool domains we know aren't the invitee. */
@@ -416,6 +435,39 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
   // else: default 'tour_scheduled' covers "Rixey Manor Venue Tour",
   // "Pre-Tour Phone Call" — both still in the tour-funnel stage.
 
+  // 2026-05-27 — HTML-first questions parser. The legacy plain-text
+  // extractLabelled path above works for most fields but (a) returns the
+  // LITERAL source answer rather than the canonical key, and (b) is
+  // brittle to Calendly markup changes that re-shape the Questions block.
+  // We run the HTML parser as a defense-in-depth backstop: it reads the
+  // raw HTML body directly, normalizes labels with fuzzy matching, and
+  // canonicalizes the source answer to the same vocabulary the unified
+  // classifier uses. Fields here OVERRIDE the plain-text extractions ONLY
+  // when the plain-text path returned null — additive, never destructive.
+  const htmlQuestions = extractCalendlyQuestions(body)
+  let sourceCanonical: CalendlyCanonicalSource | null = null
+  let builtCalculator: boolean | null = null
+  let finalHearSource = hearSource
+  let finalPartnerName = partnerName
+  let finalPartnerEmail = partnerEmail
+  let finalPhone = phone
+  let finalGuestCount = guestCount
+  let finalPackageInterest = packageInterest
+  let finalWeddingDateHint = weddingDateHint
+  if (htmlQuestions) {
+    sourceCanonical = htmlQuestions.source
+    builtCalculator = htmlQuestions.builtCalculator
+    finalHearSource = finalHearSource ?? htmlQuestions.sourceLiteral
+    finalPartnerName = finalPartnerName ?? htmlQuestions.partnerName
+    finalPartnerEmail = finalPartnerEmail ?? htmlQuestions.partnerEmail
+    finalPhone = finalPhone ?? htmlQuestions.phone
+    finalGuestCount =
+      finalGuestCount ??
+      (htmlQuestions.guestCount !== null ? String(htmlQuestions.guestCount) : null)
+    finalPackageInterest = finalPackageInterest ?? htmlQuestions.packageInterest
+    finalWeddingDateHint = finalWeddingDateHint ?? htmlQuestions.eventDate
+  }
+
   return {
     source: 'calendly',
     kind,
@@ -425,14 +477,16 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
     eventTypeName: eventTypeName ?? null,
     matchedFrom: from,
     extras: {
-      partnerName: partnerName ?? partnerFromInvitee ?? null,
-      partnerEmail: partnerEmail ?? null,
-      phone: phone ?? null,
-      guestCount: guestCount ?? null,
-      source: hearSource ?? null,
-      packageInterest: packageInterest ?? null,
-      weddingDateHint: weddingDateHint ?? null,
+      partnerName: finalPartnerName ?? partnerFromInvitee ?? null,
+      partnerEmail: finalPartnerEmail ?? null,
+      phone: finalPhone ?? null,
+      guestCount: finalGuestCount ?? null,
+      source: finalHearSource ?? null,
+      sourceCanonical,
+      packageInterest: finalPackageInterest ?? null,
+      weddingDateHint: finalWeddingDateHint ?? null,
       additionalGuestEmails,
+      builtCalculator,
     },
   }
 }

@@ -410,6 +410,10 @@ export async function POST(request: NextRequest) {
     'storefrontProvider',
     'anonymousVisitors',
     'orphanPageviews',
+    // knot-visitor-activity adapter carries per-row visitor history on
+    // this field. Commit re-runs the importer with the real venue_id so
+    // row fingerprints land correctly.
+    'knotVisitorRows',
   ]) {
     const v = (parsed as unknown as Record<string, unknown>)[key]
     if (v !== undefined) outOfBand[key] = v

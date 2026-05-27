@@ -23,6 +23,225 @@ two disagree, the answer is "edit both," not "delete one."
 
 ---
 
+## 2026-05-27 — Calendly custom-questions parser (source attribution fix)
+
+Operator-reported 2026-05-27: Calendly tour-booking notifications arrive
+at `info@rixeymanor.com` from `notifications@calendly.com` carrying a
+structured Questions block in the HTML body. Rixey's Calendly form asks
+six custom questions including **"Where did you first hear about us?"** —
+the single most valuable per-couple source signal available for
+Calendly-direct bookings. Bloom ingested the notifications but did not
+extract the Questions block, so every Calendly-direct couple landed as
+`source=direct/unknown` or `source=calendly` even when they wrote
+"Google" or "The Knot" in the form.
+
+Verified examples from Isadora's Gmail:
+- Glascow/Minette → "Google" (logged as direct)
+- Jennifer Nguyen → "The Knot" — bypassed the Knot inquiry flow and
+  booked Calendly directly (logged as direct, losing Knot attribution)
+- Erin B → "Google" (logged as direct)
+
+This is a systematic blind spot: a meaningful chunk of "direct"
+attribution is actually Knot/Google/Instagram/etc. that came through
+Calendly.
+
+### What landed
+
+- `src/lib/services/ingestion/calendly-questions-parser.ts` — HTML-first
+  parser for the Questions block. Defensive across three Calendly
+  markup shapes (`<strong>Label</strong><p>Answer</p>`,
+  `<strong>Label</strong><br>Answer<br>`, plain-text
+  `Label\nAnswer`). Returns `{}` on parse failure, never throws.
+  Typed accessors with fuzzy label matching:
+  `getCalendlyPartnerName / PartnerEmail / Phone / EventDate /
+  GuestCount / Source / SourceRaw / PackageInterest /
+  BuiltCalculator`. Source canonicalizes to the same vocabulary as
+  `IntentVerdict.signals.source` (`the_knot`, `wedding_wire`,
+  `google`, `instagram`, `pinterest`, `facebook`, `tiktok`, `zola`,
+  `here_comes_the_guide`, `referral`, `website`, `walk_in`,
+  `calendly`, `wedding_pro`, `other`). One-shot
+  `extractCalendlyQuestions(html)` returns a typed bundle.
+- `src/lib/services/ingestion/scheduling-tool-parsers.ts` — wired the
+  HTML parser as a defense-in-depth backstop. The plain-text path stays
+  load-bearing; HTML extraction fills `extras.sourceCanonical` /
+  `extras.builtCalculator` and fills any field the plain-text path
+  returned null for. Strict additive, never destructive.
+- `src/lib/services/identity/calendly-to-signal.ts` — Q&A scan now
+  extracts the source answer, and an HTML-body fallback runs the parser
+  when `payload.html_body` / `body` / `notification_html` is present.
+  Canonical source + literal source land in
+  `raw_payload.source_canonical` / `source_literal` so the Tracer-side
+  signal carries the attribution forward.
+- `src/lib/services/email/pipeline.ts` — three patch sites:
+  - Step 2.5: when a Calendly scheduling event carries
+    `extras.sourceCanonical`, patch `unifiedVerdict.signals.source` +
+    `extracted_facts.source_mentioned` + `classification.extractedData.
+    source` (only when current value is null OR equals `'calendly'`).
+  - `weddings.update({source: ...})` — prefer the form canonical over
+    the channel name `'calendly'`.
+  - `recordEngagementEventsBatch` initial_inquiry metadata — same
+    preference, carries channel + source_literal +
+    `source_from_calendly_questions: true` flag for forensics.
+- `src/lib/services/ingestion/__tests__/calendly-questions-parser.
+  test.ts` — 32 tests covering the three operator-verified fixtures
+  (Glascow/Google, Jennifer Nguyen/The Knot, Erin B/Google) plus edge
+  cases (multi-paragraph answers, HTML entities, missing block, unknown
+  free-text → 'other', plain-text fallback, reworded question variants,
+  guest-range midpoint, date-format variants, malformed input no-throw).
+  All 32 pass.
+- `scripts/backfill-calendly-source.ts` — backfill script. Loads
+  Calendly notifications in the venue's last N days (default 60), runs
+  the parser, plans patches:
+  - `interactions.extracted_facts.source_mentioned` (literal)
+  - `interactions.extracted_facts.signals.source` (canonical)
+  - `weddings.source` (only when null OR placeholder:
+    `calendly`/`direct`/`other`/`unknown`)
+  - `couples.source` mirror (same placeholder rule)
+  Strict additive — never overwrites a real attribution. `--venue-id`
+  REQUIRED. `--apply` required to write. `--allow-prod` required when
+  the URL points at the prod ref. Same `BRANCH_URL` / `BRANCH_KEY` env
+  pattern as the other scripts.
+
+### What changes for the operator
+
+The day a new Calendly tour booking arrives where the couple answered
+"Where did you first hear about us?", the canonical source lands on
+the wedding / couple / interaction row at ingest time. The /intel/
+sources rollups and source attribution surfaces will credit Knot /
+Google / Instagram / etc. instead of grouping every Calendly-direct
+booking under direct/unknown.
+
+### Operator actions queued
+
+- After the next batch of real Calendly bookings flows in, run the
+  backfill in dry-run mode to confirm the parser picked up the
+  Questions block, then `--apply` to land the canonical source on the
+  existing rows.
+- Dry-run against prod 2026-05-27 found 0 backfillable rows because the
+  Rixey wipe on 2026-05-14 cleared historical Calendly bookings — the
+  4 notifications in the last year are all verification-code emails or
+  developer surveys, no real bookings yet. The parser is verified
+  working via the test fixtures.
+
+---
+
+## 2026-05-27 — Knot visitor-activity ingestion + verification-visit signal
+
+Operator-shared 2026-05-27: The Knot exports a CSV called
+`<Venue>-visitor-activities (N).csv` with five columns
+(Action Taken / Visitor Name / Date of Visit / City / State) covering
+every Storefront View, Save, Message, Click to Website, and Click to
+Social. Rixey's last 12 months: 697 distinct visitors, 361 messagers,
+~104 save-but-never-message, ~54 click-to-website. Bloom today only
+sees the messagers (because Knot only forwards Message actions as
+relay emails — and even some of those land only in the Knot dashboard
+inbox, never in Gmail). Saves, views, and website clicks were
+invisible.
+
+The architectural insight: Knot is not just a lead **source**, it is
+a **verification layer**. ~70% of Knot messagers viewed the profile
+first. Couples already in the pipeline come back to view Knot to
+verify — a heat signal Bloom never had visibility into.
+
+Doug L. is the operator-named canary: 13 Knot actions including a
+Message in April, but no email anywhere in Rixey's pipeline. The CSV
+import + cascade promotes him to a record at least.
+
+### What landed
+
+- `supabase/migrations/377_knot_visitor_activity.sql` — new
+  `knot_visitor_activity` table (one row per action, idempotent on
+  `row_fingerprint = sha256(venue|name|action|when|city|state)`).
+  Backreferences `person_id` + `couple_id` populated by the matcher
+  sweep. Standard venue-scoped RLS + demo-anon read. Five indexes
+  cover the live read patterns. **NOT applied — operator applies via
+  Supabase dashboard.**
+- `src/lib/services/crm-import/knot-visitor-activity.ts` — CSV
+  importer. Parses the five columns, classifies the Action Taken
+  string to the canonical enum, computes `row_fingerprint`, bulk
+  upserts with `onConflict: 'venue_id,row_fingerprint',
+  ignoreDuplicates: true`. Re-uploading the same export is a no-op.
+- `src/lib/services/crm-import/knot-visitor-activity-adapter.ts` —
+  CrmAdapter wrapper so the operator can hit it from
+  `/onboarding/crm-import`. Follows the same out-of-band-payload
+  pattern as the sibling `storefront-activity` adapter (parse returns
+  `rows:[]` + the real payload on `knotVisitorRows`). Commit re-runs
+  the importer with the real venue id and triggers the matcher sweep.
+- `src/lib/services/identity/knot-visitor-match.ts` — identity
+  matcher. For every unbound row, searches `people` by first name +
+  last initial (Knot redacts surnames to one letter). Scores
+  candidates by temporal proximity (±24mo around wedding_date) +
+  existing source attribution (`source='the_knot'` adds +30).
+  Exactly-one strong candidate → bind directly. Multiple strong
+  candidates → write `candidate_matches` rows (medium tier) for
+  operator review in `/intel/identity-review`. No candidate + action
+  is `message` / `storefront_save` → promote via `linkSignal`
+  (cascade barrel — CI-guard-compliant). View / click without a
+  candidate → leave unbound (low-intent).
+- **Verification-visit signal emitter** (also in
+  knot-visitor-match.ts). After a bind, if the bound couple's
+  wedding is in `inquiry` / `tour_scheduled` / `tour_completed` /
+  `proposal_sent` AND `action_at` is AFTER the wedding's
+  `inquiry_date`, emit `engagement_events.event_type =
+  'knot_verification_visit'` with 3 points + metadata
+  (`knot_action_taken`, `days_since_first_inquiry`,
+  `knot_visitor_activity_id`). Idempotent on the
+  `knot_visitor_activity_id` metadata field.
+  `engagement_events.event_type` is free text (no CHECK constraint
+  per mig 002) so this is a non-breaking string addition.
+- `getVisitorJourneyMetrics({ venueId, personId })` — read-only
+  helper returning total visits / total messages / first view /
+  first message / days view→message. Intelligence-ready; UI surface
+  deferred.
+- Operator UI: added `knot_visitor_activity` adapter card to
+  `/onboarding/crm-import` with explainer copy. The existing CSV
+  auto-detector keeps routing the file to the sibling
+  `storefront-activity` adapter by default (funnel rollup); the
+  per-row matcher path is opt-in via the provider grid. Both
+  adapters can be run on the same file — they write to different
+  tables and are complementary.
+- Unit tests:
+  `src/lib/services/crm-import/__tests__/knot-visitor-activity.test.ts`
+  — 32 tests covering action classification, date parsing, name
+  splitting, fingerprint stability, in-file dedup, missing columns,
+  the Doug L. canary recognition.
+
+Verification: `npx tsc --noEmit` clean. `check-cascade-only-writer`
+clean (no new offenders — pre-existing
+`undo-merge/route.ts:201` failure unrelated). `check-no-direct-
+people-insert` + `check-no-direct-wedding-insert` clean. Unit tests
+32/32 passing.
+
+### What changes for the operator
+
+- Upload your Knot visitor-activities CSV at
+  `/onboarding/crm-import` → choose **Knot visitor activity
+  (per-row history)**. ~95% of weekly re-uploads short-circuit on
+  the row fingerprint — no duplicate signals.
+- Visitors who messaged or saved without an identifiable contact
+  become ghost couples via the cascade — searchable, journey-
+  traceable, ready to merge in when the same identity later arrives
+  via email or Calendly.
+- Couples already in your pipeline who come back to view Knot now
+  emit a 3-point `knot_verification_visit` engagement event,
+  feeding the heat score.
+- Doug L. (canary): the import surfaces him in
+  `knot_visitor_activity`; the cascade promotes him via
+  `linkSignal`. The operator UI flags his per-row trace in the
+  import warnings so you can verify the path on first run.
+
+### Operator actions queued
+
+- Apply migration 377 via Supabase dashboard
+  (`supabase/migrations/377_knot_visitor_activity.sql`).
+- First run on Rixey: upload the latest
+  `RixeyManor-visitor-activities (N).csv` to
+  `/onboarding/crm-import` → **Knot visitor activity (per-row
+  history)**. Watch the import summary for the Doug L. trace.
+- After the matcher sweep, eyeball
+  `/intel/identity-review` for any new medium-tier
+  `knot_visitor_activity` candidates (the multi-candidate branch).
+
 ## 2026-05-27 — Phase 1 closeout: scripts run against prod + new reclass CLI
 
 After committing the inbox-misclassification fix (4b05c44) and the

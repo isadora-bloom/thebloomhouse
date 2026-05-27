@@ -436,6 +436,12 @@ export type AdapterName =
   // tangential_signals + attribution-grade visitor history. See
   // site-visitors.ts.
   | 'site_visitors'
+  // Per-row Knot visitor-activity history (`<Venue>-visitor-activities (N).csv`).
+  // Writes knot_visitor_activity (mig 377) + runs the identity matcher
+  // (knot-visitor-match.ts) to bind / ghost / emit verification-visit
+  // heat signals. Sibling to storefront-activity (which aggregates the
+  // funnel into tangential_signals). See knot-visitor-activity.ts.
+  | 'knot_visitor_activity'
 
 export interface CrmAdapter {
   /** Stable identifier exposed to the UI provider-picker. */
@@ -476,6 +482,7 @@ import { tourSchedulerAdapter } from './tour-scheduler'
 import { knotAdapter } from './knot'
 import { storefrontActivityAdapter } from './storefront-activity'
 import { siteVisitorsAdapter } from './site-visitors'
+import { knotVisitorActivityAdapter } from './knot-visitor-activity-adapter'
 
 export const ADAPTERS: ReadonlyArray<CrmAdapter> = [
   genericCsvAdapter,
@@ -488,6 +495,7 @@ export const ADAPTERS: ReadonlyArray<CrmAdapter> = [
   knotAdapter,
   storefrontActivityAdapter,
   siteVisitorsAdapter,
+  knotVisitorActivityAdapter,
 ]
 
 export function findAdapter(name: string): CrmAdapter | null {

@@ -36,6 +36,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NormalizedSignal } from './sources/types'
 import { deriveIdentityHint } from './signal-helpers/identity-hint'
 import { mergeRawPayload } from './signal-helpers/raw-payload'
+import {
+  extractCalendlyQuestions,
+  type CalendlyCanonicalSource,
+} from '@/lib/services/ingestion/calendly-questions-parser'
 
 export type CalendlyEventMode =
   | 'invitee_created'
@@ -67,6 +71,14 @@ interface CalendlyPayloadProbe {
   cancelReason: string | null
   partnerEmail: string | null
   partnerName: string | null
+  /** 2026-05-27 — canonical source extracted from the Calendly Questions
+   *  block ("Where did you first hear about us? → Google" → 'google').
+   *  Populated when payload.html_body is present OR when the webhook
+   *  Q&A contains a source question. null when no source-shaped
+   *  question/answer present. */
+  sourceCanonical: CalendlyCanonicalSource | null
+  /** Literal source answer for forensic audit. */
+  sourceLiteral: string | null
 }
 
 function asString(v: unknown): string | null {
@@ -103,6 +115,8 @@ function probePayload(payload: Record<string, unknown>): CalendlyPayloadProbe {
   // permissive; per-venue label variations are common).
   let partnerEmail: string | null = null
   let partnerName: string | null = null
+  let sourceCanonical: CalendlyCanonicalSource | null = null
+  let sourceLiteral: string | null = null
   const qaCandidates: unknown[] = []
   const directQa = payload.questions_and_answers
   if (Array.isArray(directQa)) qaCandidates.push(...directQa)
@@ -123,6 +137,46 @@ function probePayload(payload: Record<string, unknown>): CalendlyPayloadProbe {
     if (!partnerName && q.includes('partner') && q.includes('name')) {
       if (!a.includes('@')) partnerName = a
     }
+    // 2026-05-27 — source extraction from Q&A.
+    if (
+      !sourceLiteral &&
+      ((q.includes('where') && q.includes('hear')) ||
+        (q.includes('how') && q.includes('hear')) ||
+        (q.includes('how') && q.includes('find')) ||
+        (q.includes('where') && q.includes('find')))
+    ) {
+      sourceLiteral = a
+    }
+  }
+
+  // 2026-05-27 — HTML-body fallback. When the webhook didn't pass
+  // structured Q&A but the payload carries a Calendly HTML body
+  // (`html_body` / `body` / `notification_html`), run the parser to
+  // extract the source answer. Most webhook adapters today don't carry
+  // HTML, but the email-driven path (re-processed Calendly notifications)
+  // does — and this keeps the Tracer-side signal honest.
+  const htmlBody =
+    asString(payload.html_body) ??
+    asString(payload.body) ??
+    asString(payload.notification_html) ??
+    null
+  if (htmlBody && !sourceLiteral) {
+    const bundle = extractCalendlyQuestions(htmlBody)
+    if (bundle) {
+      if (!sourceLiteral) sourceLiteral = bundle.sourceLiteral
+      if (!sourceCanonical) sourceCanonical = bundle.source
+      if (!partnerEmail && bundle.partnerEmail) partnerEmail = bundle.partnerEmail
+      if (!partnerName && bundle.partnerName) partnerName = bundle.partnerName
+    }
+  }
+
+  // Canonicalize source from the literal answer when not already set
+  // (Q&A path landed only the literal; HTML path landed both).
+  if (sourceLiteral && !sourceCanonical) {
+    const bundle = extractCalendlyQuestions(
+      `<strong>where did you first hear about us</strong><p>${sourceLiteral}</p>`,
+    )
+    if (bundle?.source) sourceCanonical = bundle.source
   }
 
   return {
@@ -134,6 +188,8 @@ function probePayload(payload: Record<string, unknown>): CalendlyPayloadProbe {
     cancelReason,
     partnerEmail,
     partnerName,
+    sourceCanonical,
+    sourceLiteral,
   }
 }
 
@@ -184,6 +240,13 @@ export function calendlyToNormalizedSignal(
         {
           calendly_uri: probe.inviteeUri,
           scheduled_at: probe.scheduledStart,
+          // 2026-05-27 — Calendly custom-questions source attribution.
+          // Carried in raw_payload so downstream readers (touchpoint
+          // analysis, source-attribution rollups) can credit the right
+          // origin instead of stamping every Calendly-direct booking as
+          // direct/unknown.
+          source_canonical: probe.sourceCanonical,
+          source_literal: probe.sourceLiteral,
         },
       ),
       legacy_wedding_id: weddingId,
