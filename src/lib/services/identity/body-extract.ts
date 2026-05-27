@@ -276,12 +276,28 @@ export function extractIdentityFromEmail(
   const names = dedup(rawNames)
 
   // Primary email — first email that's not venue-owned and not a
-  // known relay. This is what the pipeline uses as a fallback for
-  // contact resolution when no platform parser matched.
+  // shared/non-routable relay. This is what the pipeline uses as a
+  // fallback for contact resolution when no platform parser matched.
+  //
+  // Per-prospect relays (Knot `<first>.<last>(.<seq>)?.<venueId>@member.
+  // theknot.com`, Zola `connect-{uuid}@vmkt-message.zola.com`, WW
+  // `user-{token}@reply.weddingwire.com`) ARE valid candidates — they
+  // route back to a real person and are the canonical reply target.
+  // Only SHARED relays (weddingvendors@zola.com, leads@theknot.com,
+  // messages@weddingwire.com) get filtered out, because those collide
+  // across prospects and replying to them sends mail to the platform
+  // operator instead of the couple.
+  //
+  // Pre-fix (2026-05-27): the filter rejected ALL relays including
+  // per-prospect ones. When the form-relay parser didn't fire (or its
+  // deploy lagged the body-extract deploy — the actual 73-lost-Zola-
+  // leads case), primary_email collapsed to null and the pipeline fell
+  // back to rawFromEmail = the shared relay. Replies went to the
+  // platform notification address instead of the couple.
   let primaryEmail: string | null = null
   for (const e of emails) {
     if (ownEmails.has(e)) continue
-    if (isRelayAddress(e)) continue
+    if (isRelayAddress(e) && !isPerProspectRelay(e)) continue
     primaryEmail = e
     break
   }
