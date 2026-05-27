@@ -90,11 +90,67 @@ export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.6'
  * exactly when it may say "this {DOW}" vs "next {DOW}" vs the full
  * absolute date.
  */
+/**
+ * Parse a tour datetime from any of the shapes scheduling-tool-parsers.ts
+ * extracts: ISO 8601, RFC-2822, the "long date" regex output ("Friday,
+ * June 5, 2026, 1:15 PM"), or — critically — the raw Calendly format
+ * that the parser stores verbatim:
+ *
+ *   "01:15pm - Friday, June 5, 2026 (Eastern Time - US & Canada)"
+ *
+ * Date.parse() returns NaN on the third shape, which is exactly what
+ * silently neutered the first cut of formatTourDateGuidance. We try
+ * Date.parse first (handles ISO + RFC-2822), then regex-extract the
+ * month/day/year (and time, if present) and reconstruct.
+ *
+ * Returns a Date in the runtime's local zone. For day-bucket math this
+ * is fine — Calendly's tour times are daytime hours so a UTC-vs-ET
+ * shift never crosses midnight.
+ */
+function parseFlexibleTourDatetime(value: string | null | undefined): Date | null {
+  if (!value) return null
+  // Fast path — ISO 8601 / RFC-2822 / "Friday, June 5, 2026, 1:15 PM"
+  // are all handled by the platform parser.
+  const direct = new Date(value)
+  if (!isNaN(direct.getTime())) return direct
+  // Slow path — pluck month name + day + year (+ optional HH:MM AM/PM)
+  // out of human strings like Calendly's "01:15pm - Friday, June 5,
+  // 2026 (Eastern Time - US & Canada)".
+  const MONTHS = [
+    'january','february','march','april','may','june',
+    'july','august','september','october','november','december',
+  ]
+  const monthAlt = MONTHS.join('|')
+  const rx = new RegExp(
+    // optional leading time + dash:  "01:15pm - "
+    `(?:(\\d{1,2}):(\\d{2})\\s*(am|pm)?\\s*[-\\u2013\\u2014]?\\s*)?` +
+    // optional weekday prefix: "Friday, "
+    `(?:[A-Za-z]+,?\\s+)?` +
+    // month day, year
+    `(${monthAlt})\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})`,
+    'i',
+  )
+  const m = value.match(rx)
+  if (!m) return null
+  const [, hourS, minS, ampm, monthName, dayS, yearS] = m
+  const monthIdx = MONTHS.indexOf(monthName.toLowerCase())
+  if (monthIdx < 0) return null
+  let hour = hourS ? parseInt(hourS, 10) : 12
+  const minute = minS ? parseInt(minS, 10) : 0
+  if (ampm) {
+    const isPm = ampm.toLowerCase() === 'pm'
+    if (isPm && hour < 12) hour += 12
+    if (!isPm && hour === 12) hour = 0
+  }
+  const day = parseInt(dayS, 10)
+  const year = parseInt(yearS, 10)
+  const out = new Date(year, monthIdx, day, hour, minute)
+  return isNaN(out.getTime()) ? null : out
+}
+
 function formatTourDateGuidance(eventDatetimeIso: string | null): string | null {
-  if (!eventDatetimeIso) return null
-  const ms = Date.parse(eventDatetimeIso)
-  if (!Number.isFinite(ms)) return null
-  const tourDate = new Date(ms)
+  const tourDate = parseFlexibleTourDatetime(eventDatetimeIso)
+  if (!tourDate) return null
   const today = new Date()
   // Compare on local-date midnight floors so a tour later TODAY still
   // counts as "today" and a tour tomorrow morning is "+1 day", not
