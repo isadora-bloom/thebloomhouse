@@ -262,10 +262,19 @@ export async function classifyTourOutcomesAllVenues(
 ): Promise<Response> {
   const sb = supabase ?? createServiceClient()
 
+  // 2026-05-27 bug fix: the venues table has a `status` text column
+  // ('active' | 'paused' | 'churned'), NOT an `is_active` boolean. The
+  // prior .eq('is_active', true) errored with PostgreSQL 42703 on every
+  // cron run, returning an error before reaching ANY venue. Result:
+  // tour_outcome_classifier had been a silent no-op since deploy — at
+  // Rixey, 53 past-due 'pending' tours sat unclassified over 60+ days,
+  // 0% conversion shown on Tour Tracking. Same fix mirrored in
+  // lifecycle/sweep.ts. Prefer the centralised `filterActiveVenues`
+  // helper for new code.
   const { data: venues, error } = await sb
     .from('venues')
     .select('id, name')
-    .eq('is_active', true)
+    .eq('status', 'active')
 
   if (error) {
     return Response.json(

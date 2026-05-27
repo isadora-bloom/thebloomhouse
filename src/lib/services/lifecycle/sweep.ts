@@ -127,10 +127,13 @@ export async function runLifecycleSweep(
     venueIds = [args.venueId]
   } else {
     try {
+      // 2026-05-27 bug fix: venues table has a `status` text column
+      // ('active' | 'paused' | 'churned'), NOT an `is_active` boolean.
+      // Same fix as tour/outcome-classifier.ts.
       const { data, error } = await supabase
         .from('venues')
         .select('id')
-        .eq('is_active', true)
+        .eq('status', 'active')
       if (error) {
         result.errors.push('venues fetch failed: ' + error.message)
         return result

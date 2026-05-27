@@ -23,6 +23,37 @@ two disagree, the answer is "edit both," not "delete one."
 
 ---
 
+## 2026-05-27 — Tour outcome classifier silent-failure fix
+
+Two-line bug, big impact. Both `src/lib/services/tour/outcome-classifier.ts` and `src/lib/services/lifecycle/sweep.ts` queried `venues` with `.eq('is_active', true)` — but the `venues` table has a `status` column ('active' | 'paused' | 'churned'), not an `is_active` boolean. Every cron run errored at the preflight venue lookup with PostgreSQL `42703: column "venues.is_active" does not exist` and returned an error response before touching a single tour.
+
+**Operator-visible impact at Rixey**: 53 past-due 'pending' tours sat unclassified across 60+ days. Tour Tracking dashboard showed near-0% conversion. Same shape would hit every venue onboarded with backfill tour data going forward.
+
+### What landed
+
+- `src/lib/services/tour/outcome-classifier.ts` — `.eq('is_active', true)` → `.eq('status', 'active')`.
+- `src/lib/services/lifecycle/sweep.ts` — same fix.
+
+Both files keep a comment pointing at `filterActiveVenues` in `cost-ceiling.ts` as the preferred centralised helper for new code.
+
+### Verification against prod (2026-05-27)
+
+Ran `classifyTourOutcomes(supabase, rixey)` directly with the fix in place:
+- Scanned: 331 past-due 'pending' tours
+- **Completed: 329** (the bulk — past-due tours where no cancel/no-show evidence was found)
+- Cancelled: 2 (cancellation walk caught explicit signals)
+- No show: 0
+- Skipped: 0
+- Errors: []
+
+Tour Tracking will now reflect actual conversion numbers for the first time at Rixey. The post-tour sequence cron only picks up tours from the last 14 days, so this catch-up doesn't trigger email spam — only the 7 already-seeded couples will get T+24h thank-yous on the next hourly tick.
+
+### What changes for the operator
+
+- The daily `tour_outcome_classifier` cron (06:00 UTC) starts working for the first time on the next tick.
+- Tour Tracking dashboard suddenly displays real conversion rates. May feel like a jump — it's actually the corrected baseline.
+- Every other venue onboarded with HoneyBook/Calendly backfill will get the same backfill catch-up on their next cron run.
+
 ## 2026-05-27 — Calendly custom-questions parser (source attribution fix)
 
 Operator-reported 2026-05-27: Calendly tour-booking notifications arrive
