@@ -13,28 +13,52 @@ import {
 } from '../knot-sender-id'
 
 describe('extractKnotPersonId', () => {
-  it('extracts the trailing personId from a standard Knot relay', () => {
+  it('extracts the full localpart-prefix from a standard Knot relay', () => {
     expect(
       extractKnotPersonId('tara.simpson.2.772357@member.theknot.com'),
-    ).toBe('772357')
+    ).toBe('tara.simpson.2.772357')
   })
 
-  it('extracts the personId from the reminder variant', () => {
+  it('extracts the same prefix from the reminder variant (initial == reminder for dedup)', () => {
     expect(
       extractKnotPersonId('tara.simpson.2.772357.reminder@member.theknot.com'),
-    ).toBe('772357')
+    ).toBe('tara.simpson.2.772357')
+  })
+
+  it('returns DIFFERENT keys for two prospects sharing the same venueKnotId', () => {
+    // Critical contract — the v1 cut returned the trailing number and
+    // collapsed distinct couples. Both addresses below share 772357 (the
+    // Rixey venueKnotId) but represent two distinct inquirers.
+    const megan = extractKnotPersonId('megan.wesley.2.772357@member.theknot.com')
+    const tara = extractKnotPersonId('tara.simpson.2.772357@member.theknot.com')
+    expect(megan).toBe('megan.wesley.2.772357')
+    expect(tara).toBe('tara.simpson.2.772357')
+    expect(megan).not.toBe(tara)
   })
 
   it('is case-insensitive (uppercase domain + name)', () => {
     expect(
       extractKnotPersonId('Tara.Simpson.2.772357@MEMBER.THEKNOT.COM'),
-    ).toBe('772357')
+    ).toBe('tara.simpson.2.772357')
   })
 
   it('handles hyphenated last names', () => {
     expect(
       extractKnotPersonId('mary-jane.olsen-smith.1.555@member.theknot.com'),
-    ).toBe('555')
+    ).toBe('mary-jane.olsen-smith.1.555')
+  })
+
+  it('handles the no-seq form Knot also emits (live sample 2026-05-27)', () => {
+    // Knot omits the .<seq>. middle token on some inquiries — observed
+    // in production on abby.tebbenhoff / cynthia.johanson / tayliah.thomas
+    // / lauren.airey. The regex must accept both `.<seq>.<venueId>` and
+    // bare `.<venueId>`.
+    expect(
+      extractKnotPersonId('abby.tebbenhoff.772357@member.theknot.com'),
+    ).toBe('abby.tebbenhoff.772357')
+    expect(
+      extractKnotPersonId('lauren.airey.772357.reminder@member.theknot.com'),
+    ).toBe('lauren.airey.772357')
   })
 
   it('returns null for the shared bareword theknot relay', () => {
@@ -182,7 +206,7 @@ describe('cascade integration — stage 1b (knot_person_id_match)', () => {
 })
 
 describe('knotPersonIdsFromEmails', () => {
-  it('collects every distinct Knot personId from a mixed list', () => {
+  it('collects every distinct Knot per-prospect key from a mixed list (initial + reminder collapse to one key)', () => {
     const ids = knotPersonIdsFromEmails([
       'tara.simpson.2.772357@member.theknot.com',
       'tara.simpson.2.772357.reminder@member.theknot.com',
@@ -191,7 +215,7 @@ describe('knotPersonIdsFromEmails', () => {
       undefined,
     ])
     expect(ids.size).toBe(1)
-    expect(ids.has('772357')).toBe(true)
+    expect(ids.has('tara.simpson.2.772357')).toBe(true)
   })
 
   it('returns an empty set when no Knot relays are present', () => {
@@ -203,13 +227,16 @@ describe('knotPersonIdsFromEmails', () => {
     expect(ids.size).toBe(0)
   })
 
-  it('handles two distinct prospects on the same list', () => {
+  it('handles two distinct prospects on the same list (regression: 2026-05-27 venueKnotId collision)', () => {
+    // Both addresses share the trailing venueKnotId 772357 — the v1 cut
+    // collapsed these to one key. The corrected contract returns two
+    // distinct per-prospect prefixes.
     const ids = knotPersonIdsFromEmails([
+      'megan.wesley.2.772357@member.theknot.com',
       'tara.simpson.2.772357@member.theknot.com',
-      'lauren.airey.1.888@member.theknot.com',
     ])
     expect(ids.size).toBe(2)
-    expect(ids.has('772357')).toBe(true)
-    expect(ids.has('888')).toBe(true)
+    expect(ids.has('megan.wesley.2.772357')).toBe(true)
+    expect(ids.has('tara.simpson.2.772357')).toBe(true)
   })
 })

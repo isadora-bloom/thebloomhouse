@@ -5,9 +5,9 @@
  * per inquiry, each landing in its own Gmail thread but sharing a
  * stable per-prospect identifier inside the From address:
  *
- *   1. "<firstname>.<lastname>.<seq>.<personId>@member.theknot.com"
+ *   1. "<firstname>.<lastname>.<seq>.<venueKnotId>@member.theknot.com"
  *        — initial "X sent you a new message"
- *   2. "<firstname>.<lastname>.<seq>.<personId>.reminder@member.theknot.com"
+ *   2. "<firstname>.<lastname>.<seq>.<venueKnotId>.reminder@member.theknot.com"
  *        — "X is waiting to hear back from you!"
  *   3. Sometimes a third follow-up nudge
  *
@@ -17,12 +17,26 @@
  * operator sees their inbox flooded with multiple replies to what is
  * one prospect contacting them through one channel.
  *
- * The personId (the trailing numeric token before the optional
- * `.reminder` suffix) is the per-prospect KEY. Two addresses that share
- * it MUST resolve to the same person. This file is the single source of
- * truth for that extraction. Anywhere in the codebase that needs to
- * "are these two Knot relays the same prospect?" should call
- * `extractKnotPersonId` on both sides and compare the strings.
+ * Cut-1 doctrine error (corrected 2026-05-27, same day): the v1 cut of
+ * this file claimed the trailing numeric token was the per-prospect ID.
+ * It is NOT — that number is the VENUE'S Knot vendor listing ID and is
+ * SHARED across every prospect who messages that venue. The Rixey audit
+ * post-2cdb74f surfaced four distinct couples (Megan Wesley / Andy Hall
+ * / Madison Fitzpatrick / Tara Simpson) all sharing 772357. Returning
+ * the trailing number collapses different prospects under one key and
+ * the draft-suppression gate would skip legitimate fresh replies (and
+ * the operator-facing collapse script would reject real distinct
+ * inquiries as "duplicates"). HARD revert: the per-prospect key is the
+ * FULL localpart prefix `<firstname>.<lastname>.<seq>.<venueKnotId>`
+ * (lower-cased, with the optional trailing `.reminder` suffix stripped).
+ * That prefix is stable across the initial + reminder + nudge variants
+ * sent for ONE inquiry, but differs across distinct inquirers — exactly
+ * the dedup contract the suppression gate needs.
+ *
+ * Anywhere in the codebase that needs to "are these two Knot relays the
+ * same prospect?" should call `extractKnotPersonId` on both sides and
+ * compare the strings. The return value is opaque — do NOT split, slice,
+ * or interpret it; treat it as a black-box equality key.
  *
  * Doctrine fit:
  *   - `[[bloom-identity-first-doctrine]]` — the couple is the unit; a
@@ -46,8 +60,16 @@
 
 /**
  * Capture groups:
- *   [1] full localpart-prefix (`<firstname>.<lastname>.<seq>.<personId>`)
- *   [2] trailing numeric personId — the canonical per-prospect identifier
+ *   [1] full localpart-prefix (`<firstname>.<lastname>.<seq>.<venueKnotId>`)
+ *       — the canonical per-prospect key. STABLE across the initial +
+ *       reminder + nudge variants for ONE inquiry; DIFFERS across
+ *       distinct inquirers messaging the same venue. This is what we
+ *       return.
+ *   [2] trailing numeric venueKnotId — Knot's listing ID for the
+ *       VENUE, shared across every prospect who messages that venue.
+ *       Captured for diagnostic logging but never returned as a dedup
+ *       key (see file-header doctrine note: the v1 cut returned this
+ *       value and collapsed distinct couples under one key).
  *   [3] optional `.reminder` suffix (present on reminder/nudge variants)
  *
  * The first/last/seq tokens are captured opaquely (no name semantics) so
@@ -57,7 +79,12 @@
  * relay (`leads@theknot.com`), which would collide across prospects.
  */
 const KNOT_RELAY_RE =
-  /^([a-z0-9][a-z0-9._-]*\.[a-z0-9._-]+\.\d+\.(\d+))(\.reminder)?@member\.theknot\.com$/i
+  // Live samples (Rixey 2026-05-27): Knot emits BOTH shapes —
+  //   <first>.<last>.<seq>.<venueId>@member.theknot.com   (e.g. megan.wesley.2.772357@…)
+  //   <first>.<last>.<venueId>@member.theknot.com         (e.g. abby.tebbenhoff.772357@…)
+  // The `.<seq>` middle token is optional. Names use letters / digits /
+  // hyphens; multi-part names are hyphen-collapsed (mary-jane.olsen-smith).
+  /^([a-z][a-z0-9-]*\.[a-z][a-z0-9-]*(?:\.\d+)?\.(\d+))(\.reminder)?@member\.theknot\.com$/i
 
 /** The platform-alias domain we recognise. Other Knot domains
  *  (`leads@theknot.com`, `theknotww.com`, etc.) are NOT covered — those
@@ -70,15 +97,22 @@ export const KNOT_RELAY_DOMAIN = 'member.theknot.com'
 // ---------------------------------------------------------------------------
 
 /**
- * Extract the canonical per-prospect personId from a Knot member-inbox
+ * Extract the canonical per-prospect key from a Knot member-inbox
  * relay address. Returns null for everything that isn't a recognised
  * per-prospect Knot relay.
+ *
+ * The returned string is the full localpart prefix:
+ * `<firstname>.<lastname>.<seq>.<venueKnotId>` (lower-cased, with the
+ * optional trailing `.reminder` suffix stripped). It is opaque — treat
+ * it as a black-box equality key. Do NOT split or interpret it.
  *
  * Idempotent + pure. Safe to call on garbage strings.
  *
  * Examples:
- *   "tara.simpson.2.772357@member.theknot.com"          → "772357"
- *   "tara.simpson.2.772357.reminder@member.theknot.com" → "772357"
+ *   "tara.simpson.2.772357@member.theknot.com"          → "tara.simpson.2.772357"
+ *   "Tara.Simpson.2.772357.reminder@member.theknot.com" → "tara.simpson.2.772357"
+ *   "megan.wesley.2.772357@member.theknot.com"          → "megan.wesley.2.772357"
+ *      (different prospect even though venueKnotId 772357 matches)
  *   "noreply@theknot.com"                               → null
  *   "leads@theknot.com"                                 → null
  *   "tim@bloggs.com"                                    → null
@@ -93,7 +127,7 @@ export function extractKnotPersonId(
   if (!trimmed) return null
   const m = KNOT_RELAY_RE.exec(trimmed)
   if (!m) return null
-  return m[2] ?? null
+  return m[1] ?? null
 }
 
 /**
