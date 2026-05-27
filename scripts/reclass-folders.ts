@@ -68,7 +68,9 @@ const MAX_ROWS = parseInt(getFlag('max-rows') ?? '500', 10)
 const BATCH_SIZE = parseInt(getFlag('batch-size') ?? '10', 10)
 
 const PROD_REF = 'jsxxgwprxuqgcauzlxcb'
-const TIME_BUDGET_MS = 280_000 // 4m40s — matches the endpoint's budget
+// CLI has no Vercel maxDuration constraint — bump to 10min so a single
+// sweep covers the full 500-row Rixey backlog without leaving a tail.
+const TIME_BUDGET_MS = 600_000
 
 // ---------------------------------------------------------------------------
 // Env validation

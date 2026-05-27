@@ -34,7 +34,7 @@ prod (jsxxgwprxuqgcauzlxcb) under explicit operator authorization:
 | `backfill-couples-bridge.ts` | 195/195 mirrored. 0 failed. Closes the 47% bridge gap (was 449 bridged, now 644). |
 | `sync-couple-lifecycle-from-weddings.ts` | 181/181 lifecycle_state updated. 0 race-lost. After bridge, total bridged = 671 (476 → 671). Verified post-run: 0 real divergences remain (27 merged-away + 2 unknown-status flagged for operator). |
 | `backfill-knot-orphan-candidate-matches.ts` | 295 orphans scored. 115 candidate proposals + 213 sentinels written = 328 candidate_matches rows. Knot orphans now visible in /intel/identity-review. |
-| `reclass-folders.ts` (new) | Rixey candidate pool 497 (355 advertiser + 95 vendor + 47 other). Run in progress. |
+| `reclass-folders.ts` (new) | Rixey: 495 reclassified, **340 folder changes**, 0 errors. Transitions: 288 advertiser→new_inquiry, 21 vendor→new_inquiry, 17 advertiser→potential_client, 5 vendor→client, 4 vendor→potential_client, 3 vendor→other, 1 each other→vendor/other→new_inquiry. Time-budget bumped 280s→600s (CLI not Vercel-constrained) so single sweep finishes the backlog. |
 
 Also fixed a latent chunking issue in `sync-couple-lifecycle-from-weddings.ts` and `verify-cohort-divergence.ts` — the `.in('id', ...)` lookup chunk was 500, which exceeds PostgREST URI limits on prod (Undici fetch failure). Reduced to 100.
 
