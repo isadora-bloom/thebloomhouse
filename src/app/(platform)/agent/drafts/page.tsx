@@ -335,7 +335,6 @@ function RejectModal({
 function DraftCard({
   draft,
   onApprove,
-  onApproveAndSend,
   onEdit,
   onReject,
   onSend,
@@ -345,7 +344,6 @@ function DraftCard({
 }: {
   draft: Draft
   onApprove: (id: string) => void
-  onApproveAndSend: (id: string) => void
   onEdit: (draft: Draft) => void
   onReject: (draft: Draft) => void
   onSend: (draft: Draft) => void
@@ -491,29 +489,20 @@ function DraftCard({
           <button
             onClick={() => onApprove(draft.id)}
             disabled={isProcessing}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Mark approved. Won't send until you click Send from the Approved tab."
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Approve and send immediately. (If you want to edit first, use 'Edit & Approve' next to this — that queues without sending so you can review.)"
           >
-            <CheckCircle className="w-4 h-4" />
+            <Send className="w-4 h-4" />
             Approve
           </button>
           <button
             onClick={() => onEdit(draft)}
             disabled={isProcessing}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Edit the draft, then mark approved (no send)."
+            title="Edit the draft, then queue it as approved (no auto-send — review your edit in the Approved tab, then click Send there)."
           >
             <Pencil className="w-4 h-4" />
             Edit & Approve
-          </button>
-          <button
-            onClick={() => onApproveAndSend(draft.id)}
-            disabled={isProcessing}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Approve and send immediately."
-          >
-            <Send className="w-4 h-4" />
-            Approve & Send
           </button>
           <button
             onClick={() => onRegenerate(draft.id)}
@@ -771,35 +760,25 @@ export default function ApprovalQueuePage() {
     fetchDrafts(activeTab)
   }, [fetchDrafts, activeTab])
 
-  // ---- Approve only (queue, do not send) ----
+  // ---- Approve — sends immediately (2026-05-27) ----
+  //
+  // History: previously this only flipped status='approved' and left
+  // the draft in a queue tab for a separate Send click. The operator-
+  // surfaced bug 2026-05-27 was that 5 drafts had sat approved-but-
+  // unsent for up to 9 days because nobody knew the second click was
+  // required ("ones that are approved are not sowing"). Single-click
+  // approve was the operator's mental model all along.
+  //
+  // Auto-FLAG-never-AUTO-EXECUTE (Wave 6D) still applies — the OPERATOR
+  // is making both decisions here; the difference is the system no
+  // longer demands two distinct clicks for them. "Approve" is now the
+  // affirmative consent for both decisions in one motion. Sage's own
+  // auto-sends still gate on auto_send_rules separately.
+  //
+  // "Edit & Approve" remains the no-send variant on purpose — operators
+  // who edit may want a beat to review the diff before sending.
   const handleApprove = async (id: string) => {
-    setProcessingId(id)
-    try {
-      const draftRow = drafts.find((d) => d.id === id)
-      const { error: updateError } = await supabase
-        .from('drafts')
-        .update({
-          status: 'approved',
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', id)
-
-      if (updateError) throw updateError
-
-      await supabase.from('draft_feedback').insert({
-        venue_id: draftRow?.venue_id,
-        draft_id: id,
-        action: 'approved',
-      })
-
-      // No send — draft sits in the Approved tab until someone sends it.
-      setDrafts((prev) => prev.filter((d) => d.id !== id))
-    } catch (err) {
-      console.error('Failed to approve draft:', err)
-      setError('Failed to approve draft')
-    } finally {
-      setProcessingId(null)
-    }
+    return handleApproveAndSend(id)
   }
 
   // ---- Regenerate the draft body ----
@@ -1155,7 +1134,6 @@ export default function ApprovalQueuePage() {
               key={draft.id}
               draft={draft}
               onApprove={handleApprove}
-              onApproveAndSend={handleApproveAndSend}
               onEdit={setEditingDraft}
               onReject={setRejectingDraft}
               onSend={setSendingDraft}
