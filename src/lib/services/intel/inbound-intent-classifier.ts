@@ -233,6 +233,77 @@ const FALLBACK: IntentVerdict = {
   signals: { ...FALLBACK_SIGNALS },
 }
 
+/**
+ * Synthesize an IntentVerdict for a form-relay lead (Knot / WW / Zola /
+ * HoneyBook / calculator-parsed inbound) WITHOUT calling Haiku.
+ *
+ * Why this exists (2026-05-27, dispose-inbox-misclassification fix):
+ * The pipeline's form-lead branch (pipeline.ts:1783) used to set
+ * `classification` but leave `unifiedVerdict` null. That meant
+ * `updateThreadLifecycleFolder` received `intentClassOverride=null` and
+ * fell through to the structural fallback in `decideLifecycleFolder`,
+ * which routed `member.theknot.com` / `*@zola.com` to the Advertiser
+ * folder via the advertiser-domain allow-list. Real new inquiries
+ * disappeared into the wrong folder.
+ *
+ * Form-relay parsers have already done the work of identifying the
+ * envelope as a structured intake form for a couple. We KNOW this is
+ * 'new_inquiry'. Synthesize the verdict so the folder writer + heat
+ * scorer + admin reclass surfaces all read the right value.
+ *
+ * High confidence (95) because the parser's deterministic signal is
+ * stronger than the Haiku judge's hedged verdict.
+ */
+export interface SynthVerdictInput {
+  /** Sender name from the form-relay parser. */
+  senderName?: string | null
+  /** Partner name extracted by the parser. */
+  partnerName?: string | null
+  /** Wedding/event date extracted by the parser. */
+  eventDate?: string | null
+  /** Guest count extracted by the parser. */
+  guestCount?: number | null
+  /** Canonical CRM source key the parser identified. */
+  source?: string | null
+  /** Questions extracted from the note (B-19). */
+  questions?: string[]
+}
+
+export function synthVerdictForFormLead(
+  input: SynthVerdictInput,
+): IntentVerdict {
+  return {
+    intent_class: 'new_inquiry',
+    referenced_couple_name: null,
+    note: 'synthesized from form-relay parser',
+    confidence: 95,
+    extracted_facts: {
+      names: [input.senderName, input.partnerName].filter(
+        (n): n is string => typeof n === 'string' && n.trim().length > 0,
+      ),
+      wedding_date: input.eventDate ?? null,
+      guest_count: input.guestCount ?? null,
+      phone: null,
+      email: null,
+      source_mentioned: input.source ?? null,
+      budget_signal: null,
+    },
+    signals: {
+      ...FALLBACK_SIGNALS,
+      questions: input.questions ?? [],
+      urgency_level: 'medium',
+      sentiment: 'positive',
+      commitment_level: 'considering',
+      specificity_score: 0.5,
+      source: input.source ?? null,
+      sender_name: input.senderName ?? null,
+      partner_name: input.partnerName ?? null,
+      event_date: input.eventDate ?? null,
+      guest_count: input.guestCount ?? null,
+    },
+  }
+}
+
 const SYSTEM_PROMPT = `You are a forensic classifier reading one inbound communication to a wedding venue. Your job is to identify WHAT the inbound is, surface any structured facts the body carries, AND emit the per-inbound signals the draft pipeline needs (urgency, sentiment, commitment, specificity, tour-request mention, family mention, source, sender/partner names, wedding date, guest count).
 
 This output replaces TWO classifier round trips with one — there is no second Haiku call to fill in signals downstream.

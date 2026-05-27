@@ -23,6 +23,36 @@ two disagree, the answer is "edit both," not "delete one."
 
 ---
 
+## 2026-05-27 — Inbox misclassification fix: form-relay leads no longer land in Vendor/Advertiser
+
+Operator reported real new inquiries landing in the Vendor folder. Root cause was three compounding defects:
+
+1. **`synthClassificationFromFormLead` never set `unifiedVerdict`.** The pipeline's form-relay branch (Knot / WW / Zola / HoneyBook / calculator) built a synthesized 7-class `classification` but left `unifiedVerdict` null. That meant `updateThreadLifecycleFolder` got `intentClassOverride=null` and fell through to the structural fallback in `decideLifecycleFolder`. The fallback routed `member.theknot.com` → Advertiser (via `isAdvertiserDomain`) and HoneyBook "New estimate" → Vendor (via `senderRole`/allow-list).
+2. **`decideLifecycleFolder` had no channel short-circuit.** Migrations 329 + 330 (May 12) documented a "deterministic channel-level short-circuit pinning form-relay senders to inquiry-stage folder" — but the code companion was never written. Real prospects coming through the highest-volume channels relied entirely on the fallible classifier; when it missed, they went to the wrong folder.
+3. **`inbound_intent_drain` cron not scheduled.** The handler exists at `src/app/api/cron/route.ts:1218`, idempotent and ready, but `vercel.json` never scheduled it. Result on Rixey prod, last 30 days: **137 of 296 inbound emails (46%) had `intent_class IS NULL`** because the fire-and-forget classifier missed and nothing caught up. Same gap for `inbound_haiku_drain`.
+
+**Fixes shipped (code-only, no migration):**
+
+- `src/lib/services/intel/inbound-intent-classifier.ts` — new `synthVerdictForFormLead` helper. Returns a high-confidence (95) `new_inquiry` verdict built from parser-extracted fields, no LLM call.
+- `src/lib/services/email/pipeline.ts` — form-relay branch now calls `synthVerdictForFormLead` and sets `unifiedVerdict`. Downstream stamp + folder override + heat scorer all read the right value.
+- `src/lib/services/inbox/lifecycle.ts` — new `FORM_RELAY_AND_SCHEDULING_DOMAINS` const + `isFormRelayOrSchedulingDomain` helper + short-circuit at the top of `decideLifecycleFolder` (above the existing structural floor but below `booked`/`completed`). Pre-empts the advertiser/vendor fallback for known relay senders.
+- `vercel.json` — added two cron entries: `inbound_intent_drain` (*/5) + `inbound_haiku_drain` (*/5). Catches the 46% miss rate at ~$0.0003/row.
+
+### What changes for the operator
+
+- Real new inquiries via Knot Pro Inbox, WeddingWire, Zola, HoneyBook estimate handoffs, and Calendly tour bookings now land in **New Inquiries** instead of Advertisers/Vendors.
+- Drain crons run every 5 minutes — previously-missed rows get an intent_class within minutes, not never.
+- An LLM-verdict of `spam_outreach` / `vendor_outreach` on a Knot domain (e.g. Knot pitching the venue, not relaying a couple) STILL routes through the intent-driven branch and lands in advertiser/other. The short-circuit only fires when the LLM has not spoken.
+
+### Operator actions queued
+
+- Run the existing `/api/admin/reclass-folders-ai` endpoint to re-walk the historical tail. Rough scope: ~46 demonstrably mis-bucketed rows on Rixey in the last 30 days, plus the ~137 NULL-intent rows that will land in the right folder once the drain catches up.
+- Merge `consolidation` → `master` to put this fix in front of customers. Until then, prod still routes new inquiries to Vendor/Advertiser folders.
+
+## 2026-05-26 — Orphan-touchpoint diagnosis fix #3: reattach couple-author orphans
+
+New `scripts/reattach-couple-author-orphans.ts` sweep + migration `374_couple_merge_events_reattach_type.sql` (adds `'reattach'` event_type). Dry-run on prod: 25 orphan gmail touchpoints with `author_class='couple'`, dispositions 19 Tier 1 (auto-bind via cascade `exact_full_name` × 18 + `exact_email` × 1), 4 Tier 2 (queue candidate_match — Katie OBrien vs O'Brien apostrophe race), 2 Tier 0 (no match: Madison Blaine + Phil Anstee — operator review required). Refuse-by-default for prod (`--allow-prod` opt-in), default dry-run, idempotent.
+
 ## 2026-05-26 — Phase 1 consolidation: Batch 1 + Batch 2 on `consolidation` branch
 
 > ⚠️ **Not in production.** The work below sits on the `consolidation`

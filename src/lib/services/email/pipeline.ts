@@ -22,6 +22,7 @@ import {
   classifyInboundRaw,
   intentToEmailClassification,
   stampInboundVerdict,
+  synthVerdictForFormLead,
   type IntentVerdict,
 } from '@/lib/services/intel/inbound-intent-classifier'
 import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/inquiry'
@@ -1782,6 +1783,26 @@ export async function processIncomingEmail(
     }
   } else if (formLead) {
     classification = synthClassificationFromFormLead(formLead)
+    // 2026-05-27 — also synthesize the IntentVerdict so the row gets
+    // intent_class='new_inquiry' stamped + the folder writer routes to
+    // New Inquiries instead of falling through to the advertiser-domain
+    // fallback (which was sending Knot/WW/Zola/HoneyBook leads to
+    // Advertisers/Vendors). Before this line, formLead branch left
+    // unifiedVerdict null → intentClassOverride was null → folder writer
+    // hit `isAdvertiserDomain(senderDomain)` → wrong bucket.
+    let guestCount: number | undefined
+    if (formLead.guestCount) {
+      const m = formLead.guestCount.match(/\d+/)
+      if (m) guestCount = parseInt(m[0], 10)
+    }
+    unifiedVerdict = synthVerdictForFormLead({
+      senderName: formLead.leadName ?? null,
+      partnerName: formLead.partnerName ?? null,
+      eventDate: formLead.eventDate ?? null,
+      guestCount: guestCount ?? null,
+      source: normalizeSource(formLead.source) ?? null,
+      questions: extractQuestionsFromNote(formLead.note),
+    })
   } else {
     // 2026-05-12 — unified classifier path. classifyInboundRaw returns the
     // full IntentVerdict (intent_class, extracted_facts, signals,

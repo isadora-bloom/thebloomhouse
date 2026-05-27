@@ -146,6 +146,73 @@ const ADVERTISER_DOMAIN_SET: ReadonlySet<string> = new Set(
   ADVERTISER_DOMAINS.map((d) => d.toLowerCase()),
 )
 
+// ---------------------------------------------------------------------------
+// Form-relay + scheduling-tool senders.
+// ---------------------------------------------------------------------------
+//
+// 2026-05-27 — closes the doctrine gap migrations 329 + 330 documented but
+// never shipped. These domains forward COUPLE intake-form submissions to
+// the venue's inbox; the envelope sender is the platform but the message
+// is from a real prospect. When intent_class is NULL (drain hasn't caught
+// up / classifier failed / parser short-circuited it), the structural
+// fallback used to hit `isAdvertiserDomain` and bucket these as Advertiser
+// — which is wrong. Real prospects coming through Knot Pro Inbox,
+// WeddingWire intake, Zola relay, HoneyBook estimate handoff, or a
+// Calendly tour booking are by definition new inquiries.
+//
+// Overlaps with ADVERTISER_DOMAINS on purpose: the relay short-circuit
+// runs FIRST in decideLifecycleFolder so a Knot RELAY (couple intake)
+// becomes new_inquiry, while a Knot BROADCAST (intent_class='spam_outreach'
+// from the LLM) still routes to advertiser via the intent-driven branch.
+// The split between relay and broadcast is the LLM's job; this list only
+// fires when the LLM hasn't spoken yet.
+export const FORM_RELAY_AND_SCHEDULING_DOMAINS: readonly string[] = [
+  // Wedding-platform intake relays.
+  'theknot.com',
+  'mail.theknot.com',
+  'member.theknot.com',
+  'auth.theknot.com',
+  'weddingwire.com',
+  'mail.weddingwire.com',
+  'authsolic.com',
+  'zola.com',
+  'mail.zola.com',
+  'vmkt-message.zola.com',
+  'herecomestheguide.com',
+  'wedj.com',
+  'weddingspot.com',
+  // CRM intake handoffs (HoneyBook estimate / inquiry notification).
+  'honeybook.com',
+  'pm-inbound.honeybook.com',
+  'em.honeybook.com',
+  // Scheduling tools (tour-booking confirmations forward to the venue).
+  'calendly.com',
+  'acuityscheduling.com',
+  'squarespacescheduling.com',
+] as const
+
+const FORM_RELAY_SET: ReadonlySet<string> = new Set(
+  FORM_RELAY_AND_SCHEDULING_DOMAINS.map((d) => d.toLowerCase()),
+)
+
+/**
+ * True if the sender domain belongs to a form-relay or scheduling-tool
+ * that forwards COUPLE intake forms / tour bookings to the venue. Suffix
+ * match handles `notifications.mail.theknot.com` → `mail.theknot.com`.
+ */
+export function isFormRelayOrSchedulingDomain(
+  domain: string | null | undefined,
+): boolean {
+  if (!domain) return false
+  const d = domain.toLowerCase().trim()
+  if (!d) return false
+  if (FORM_RELAY_SET.has(d)) return true
+  for (const dom of FORM_RELAY_SET) {
+    if (d.endsWith(`.${dom}`)) return true
+  }
+  return false
+}
+
 /**
  * True if `domain` (or its parent suffix) matches the advertiser
  * allow-list. Matches `mail.theknot.com` against `theknot.com`, etc.
@@ -275,6 +342,30 @@ export function decideLifecycleFolder(
     !!bookedAt
   ) {
     return 'client'
+  }
+
+  // ----- FORM-RELAY / SCHEDULING SHORT-CIRCUIT -----
+  //
+  // 2026-05-27 — closes migs 329/330 doctrine gap. When the sender is a
+  // known form-relay/scheduling-tool domain AND CRM state is pre-tour,
+  // route to the inquiry-stage folder directly. This pre-empts the
+  // null-intent fallback below — which used to send these to Advertiser
+  // via the advertiser-domain allow-list (real bug, real customer hit).
+  //
+  // The LLM is still the source of truth when it has run: an intent_class
+  // of 'spam_outreach' / 'vendor_outreach' on a Knot domain (e.g. Knot
+  // pitching the venue, not relaying a couple) routes through the
+  // intent-driven branch below and lands in advertiser/other. This
+  // short-circuit only fires when the model HASN'T spoken — which on
+  // prod is ~46% of recent inbound (drain cron unscheduled, fire-and-
+  // forget missed).
+  if (
+    senderDomain &&
+    isFormRelayOrSchedulingDomain(senderDomain) &&
+    !hasTourEvent
+  ) {
+    if (inboundCount >= 2 || outboundCount >= 1) return 'potential_client'
+    return 'new_inquiry'
   }
 
   if (
