@@ -10,6 +10,11 @@
  *   Day 14 → Final follow-up, leave the door open
  *
  * Designed to run as a cron job via processAllVenueFollowUps().
+ *
+ * Post-tour nurture sequence (mig 376, 2026-05-27) piggybacks on the
+ * same hourly cron — see processAllVenuePostTourSequences. Both
+ * sequences share cost-ceiling gating and the same auto-send
+ * eligibility chokepoint.
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
@@ -17,6 +22,7 @@ import { generateFollowUp, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION 
 import { checkAutoSendEligible } from './autonomous-sender'
 import { createNotification } from '../admin-notifications'
 import { detectNoShow, detectContractOverdue } from '../lifecycle/state-machine'
+import { processAllVenuePostTourSequences } from './post-tour-sequence'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1187,6 +1193,26 @@ export async function processAllVenueFollowUps(): Promise<
       console.error(`[follow-ups] Failed for venue ${name}:`, err)
       results[id] = 0
     }
+  }
+
+  // Post-tour nurture sequence (mig 376). Runs on the same hourly cron
+  // tick as the inquiry follow-up loop — vercel.json is at the Pro
+  // 40-cron cap, so piggybacking is the right call. Wrapped in
+  // try/catch so a regression in the post-tour runner cannot regress
+  // the long-shipped inquiry follow-up flow above.
+  try {
+    const postTourCounts = await processAllVenuePostTourSequences()
+    const totalPostTourDrafted = Object.values(postTourCounts).reduce(
+      (sum, c) => sum + (c?.drafted ?? 0),
+      0,
+    )
+    if (totalPostTourDrafted > 0) {
+      console.log(
+        `[follow-ups] Post-tour sequence drafted ${totalPostTourDrafted} email(s) across ${Object.keys(postTourCounts).length} venue(s)`,
+      )
+    }
+  } catch (err) {
+    console.error('[follow-ups] post-tour sequence orchestrator failed:', err)
   }
 
   return results

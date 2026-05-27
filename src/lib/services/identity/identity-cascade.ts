@@ -8,9 +8,15 @@
  * deterministic rule first, exiting on the first hit, and only falling
  * through to the fuzzy scorer when nothing deterministic matched.
  *
- * The 10 stages, in order:
+ * The 11 stages, in order:
  *
  *   1. Exact primary email match
+ *   1b. Knot per-prospect personId match (2026-05-27, Tara Simpson +
+ *       operator-reported flood). The Knot sends 3+ separate emails per
+ *       inquiry from `<name>.<seq>.<personId>(.reminder)?@member.theknot.
+ *       com`. The trailing personId is the stable per-prospect token;
+ *       deterministic equality on it is the same evidence tier as
+ *       email_exact and short-circuits before any name-based stage.
  *   2. Exact full first + last name match (case-insensitive)
  *   2b. Partner-side exact full first + last name match. Mirror of stage
  *       2 against the signal's partner_first/partner_last slot. Carries
@@ -55,6 +61,7 @@
 import { canonicaliseEmail, normalizePhone } from './resolver'
 import { nicknameEquivalent } from './nicknames'
 import { logicalLocalpartMatch, localpartOf } from './email-localpart'
+import { extractKnotPersonId, knotPersonIdsFromEmails } from './knot-sender-id'
 
 // ---------------------------------------------------------------------------
 // Inputs
@@ -102,6 +109,21 @@ export interface CascadeSignal {
  * Each candidate carries its people rows (so the cascade can compare
  * against partner names + alternate identifiers) and its wedding_date.
  */
+
+/**
+ * The candidate couples to match against. The cascade compares the
+ * signal against every candidate in order and returns the first match.
+ *
+ * Each candidate carries its people rows (so the cascade can compare
+ * against partner names + alternate identifiers) and its wedding_date.
+ *
+ * `aliasEmails` is an optional per-person bag of additional addresses
+ * the same human has been seen under (alternate inbox, platform-relay
+ * variant, etc.). Stage 1b (knot_person_id_match) reads it alongside
+ * `email` to map a person to every Knot per-prospect personId they have
+ * ever appeared under. Callers that don't carry alias data simply leave
+ * it undefined and the stage falls back to the primary `email` alone.
+ */
 export interface CascadeCandidate {
   coupleId: string
   weddingDate: string | null
@@ -110,11 +132,13 @@ export interface CascadeCandidate {
     lastName: string | null
     email: string | null
     phone: string | null
+    aliasEmails?: string[] | null
   }>
 }
 
 export type CascadeStageId =
   | 'exact_email'
+  | 'knot_person_id_match'
   | 'exact_full_name'
   | 'partner_full_name'
   | 'nickname_plus_last_name'
@@ -188,6 +212,66 @@ function stage1ExactEmail(
           coupleId: c.coupleId,
           stage: 'exact_email',
           evidence: `email_exact:${sigEmail}`,
+        }
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Stage 1b — Knot per-prospect personId match.
+ *
+ * Operator-reported bug (2026-05-27, Tara Simpson + 6 others): The Knot
+ * sends 3+ separate emails per inquiry, each in its own Gmail thread,
+ * from addresses that look like:
+ *
+ *   <firstname>.<lastname>.<seq>.<personId>@member.theknot.com
+ *   <firstname>.<lastname>.<seq>.<personId>.reminder@member.theknot.com
+ *
+ * Each address is a different string at the email level, so stage 1
+ * (exact_email) misses, and the cascade falls through to fuzzy scoring
+ * which then mints a duplicate person — and the live pipeline drafts a
+ * second Sage reply. The trailing numeric personId is STABLE across all
+ * variants of the same prospect, so deterministic equality on that
+ * extracted token IS the same tier of evidence as email_exact.
+ *
+ * Why this lives BEFORE stage 2 (exact_full_name):
+ *   - The Knot relay localpart starts with the prospect's name, so
+ *     stage 3 (nickname+last) and stage 5 (localpart logical) would
+ *     also fire — but they're weaker (last name match can co-occur
+ *     across distinct prospects). The personId is the platform's own
+ *     authoritative per-prospect identifier; if it matches, no other
+ *     stage's evidence can outvote it.
+ *   - Email tier (1) and identifier tier (1b) both deserve to short-
+ *     circuit before any name-based stage so deterministic platform
+ *     evidence always wins over name evidence.
+ *
+ * Multi-venue safe — no Rixey-specific clauses. Fires for any venue
+ * that receives Knot member-inbox notifications.
+ */
+function stage1bKnotPersonIdMatch(
+  signal: CascadeSignal,
+  candidates: CascadeCandidate[],
+): CascadeMatch | null {
+  const sigPersonId = extractKnotPersonId(signal.primaryEmail ?? null)
+  if (!sigPersonId) return null
+  for (const c of candidates) {
+    for (const p of c.people) {
+      // Compute every Knot personId visible across the candidate
+      // person's primary email + alias_emails set. The post-hoc
+      // people-merge-aliases sweep collapses Knot relay rows into a
+      // canonical real-email row whose `alias_emails` carries the
+      // original Knot address(es), so once a couple has had ANY Knot
+      // contact processed, subsequent variants land here.
+      const aliasList = Array.isArray(p.aliasEmails) ? p.aliasEmails : []
+      const candidateIds = knotPersonIdsFromEmails([p.email, ...aliasList])
+      if (candidateIds.has(sigPersonId)) {
+        return {
+          matched: true,
+          coupleId: c.coupleId,
+          stage: 'knot_person_id_match',
+          evidence: `knot_person_id:${sigPersonId}`,
         }
       }
     }
@@ -637,6 +721,7 @@ function stage8FamilyNamePlusDate(
 
 const STAGES: Array<(s: CascadeSignal, c: CascadeCandidate[]) => CascadeMatch | null> = [
   stage1ExactEmail,
+  stage1bKnotPersonIdMatch,
   stage2ExactFullName,
   stage2bPartnerFullName,
   stage3NicknamePlusLastName,
@@ -678,6 +763,8 @@ export function describeMatch(m: CascadeMatch): string {
   switch (m.stage) {
     case 'exact_email':
       return `exact email match (${m.evidence})`
+    case 'knot_person_id_match':
+      return `Knot per-prospect personId match (${m.evidence})`
     case 'exact_full_name':
       return `exact full-name match (${m.evidence})`
     case 'partner_full_name':

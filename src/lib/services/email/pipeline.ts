@@ -44,6 +44,7 @@ import {
   type SchedulingEventKind,
 } from '@/lib/services/ingestion/scheduling-tool-parsers'
 import { findIdentityMatches } from '@/lib/services/identity/resolution'
+import { extractKnotPersonId } from '@/lib/services/identity/knot-sender-id'
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/attribution/signal-inference'
@@ -4484,6 +4485,90 @@ export async function processIncomingEmail(
       draftId: null,
       classification: emailClassification,
       autoSent: false,
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Knot per-prospect personId draft-suppression gate (2026-05-27).
+  // ---------------------------------------------------------------------
+  //
+  // Operator-reported (Tara Simpson + 6 others): The Knot sends 3+
+  // separate emails per inquiry, each in its own Gmail thread, from
+  //   <name>.<seq>.<personId>(.reminder)?@member.theknot.com
+  // The personId is stable across all variants of the same prospect.
+  // The identity cascade now stage-1b-matches on that token, but in
+  // practice some Knot reminders still arrive before the legacy people
+  // row has been alias-merged (the merge sweep runs on cron), and the
+  // pipeline would otherwise generate a fresh draft for every variant
+  // — flooding the operator inbox with duplicate Sage replies.
+  //
+  // Suppress: if the inbound is from a recognised Knot per-prospect
+  // relay, AND we already have a draft (pending / approved / sent /
+  // auto-send-pending) to THIS personId in the last 7 days, skip the
+  // brain call. The first draft from the initial inquiry is the one
+  // the operator acts on; the reminders are platform-side noise that
+  // should not earn additional Sage replies.
+  //
+  // The 7-day window is shorter than `OPERATOR_HANDLING_WINDOW_DAYS`
+  // (also 7d in draft-skip-gates.ts) on purpose: Knot reminders trail
+  // the initial inquiry by 2-5 days; anything beyond a week probably
+  // IS a fresh prospect inquiry from the same person and deserves a
+  // fresh reply.
+  const knotPersonId = extractKnotPersonId(rawFromEmail)
+  if (knotPersonId) {
+    try {
+      const sevenDaysAgoIso = new Date(
+        Date.now() - 7 * 24 * 60 * 60 * 1000,
+      ).toISOString()
+      const { data: knotPriorDrafts } = await supabase
+        .from('drafts')
+        .select('id, to_email, status, created_at')
+        .eq('venue_id', venueId)
+        .in('status', ['pending', 'approved', 'auto_send_pending', 'sent'])
+        .gte('created_at', sevenDaysAgoIso)
+        .or(
+          // Knot relay variants end in @member.theknot.com. Filter at
+          // the DB layer to keep the candidate set tiny; the personId
+          // equality is enforced in-process below.
+          `to_email.like.%@member.theknot.com,to_email.like.%.${knotPersonId}@member.theknot.com,to_email.like.%.${knotPersonId}.reminder@member.theknot.com`,
+        )
+        .limit(50)
+      const samePersonDraft = (knotPriorDrafts ?? []).find((row) => {
+        const toEmail = (row.to_email as string | null) ?? null
+        return extractKnotPersonId(toEmail) === knotPersonId
+      })
+      if (samePersonDraft) {
+        log.info('pipeline.draft_suppressed_knot_person_id', {
+          event_type: 'draft_gate',
+          outcome: 'skip',
+          data: {
+            interactionId,
+            weddingId,
+            knotPersonId,
+            sender: rawFromEmail,
+            priorDraftId: (samePersonDraft as { id: string }).id,
+            priorDraftStatus:
+              (samePersonDraft as { status: string }).status,
+            priorDraftCreatedAt:
+              (samePersonDraft as { created_at: string }).created_at,
+            reason:
+              'Knot per-prospect personId already has a recent draft; suppressing duplicate Sage reply on a Knot reminder/nudge variant.',
+          },
+        })
+        return {
+          interactionId,
+          draftId: null,
+          classification: emailClassification,
+          autoSent: false,
+        }
+      }
+    } catch (err) {
+      // Non-fatal: a query failure must not block the legitimate draft
+      // path for non-Knot prospects. Log and fall through.
+      console.warn(
+        '[pipeline] knot person-id dedup check failed (non-fatal):',
+        err instanceof Error ? err.message : err,
+      )
     }
   }
 

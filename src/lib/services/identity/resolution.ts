@@ -179,6 +179,11 @@ export type PersonRow = {
   email: string | null
   phone: string | null
   external_ids: Record<string, unknown> | null
+  /** Folded-in addresses from people-merge-aliases (mig 194). Carries
+   *  Knot relay variants once a real-email canonical has been merged
+   *  with the relay row, so the cascade Knot personId stage can fire
+   *  on subsequent reminder/nudge variants of the same prospect. */
+  alias_emails?: string[] | null
   created_at: string
   role: string | null
   wedding_date?: string | null // hydrated via join
@@ -207,7 +212,7 @@ async function loadCandidatePeople(
   // query narrows to recent-created + window-based.
   let q = supabase
     .from('people')
-    .select('id, venue_id, wedding_id, first_name, last_name, email, phone, external_ids, created_at, role, weddings(wedding_date)')
+    .select('id, venue_id, wedding_id, first_name, last_name, email, phone, external_ids, alias_emails, created_at, role, weddings(wedding_date)')
     .eq('venue_id', venueId)
   if (excludePersonId) q = q.neq('id', excludePersonId)
   const { data, error } = await q
@@ -516,6 +521,7 @@ function runCascadeAgainstPeople(
         lastName: p.last_name ?? null,
         email: p.email ?? null,
         phone: p.phone ?? null,
+        aliasEmails: p.alias_emails ?? null,
       })),
     })
   }
@@ -529,6 +535,7 @@ function runCascadeAgainstPeople(
           lastName: p.last_name ?? null,
           email: p.email ?? null,
           phone: p.phone ?? null,
+          aliasEmails: p.alias_emails ?? null,
         },
       ],
     })

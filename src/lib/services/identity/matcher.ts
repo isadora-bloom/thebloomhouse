@@ -65,6 +65,14 @@ export interface MatchableRecord {
   primary_phone?: string | null
   partner_email?: string | null
   partner_phone?: string | null
+  /** Additional addresses the same humans have been seen under (Knot
+   *  relay variants, alternate inboxes, post-merge folded aliases).
+   *  Threaded into the cascade so stage 1b (knot_person_id_match) can
+   *  recognise a Knot prospect across `<name>.<id>@member.theknot.com`
+   *  and `<name>.<id>.reminder@member.theknot.com` variants. Callers
+   *  that don't carry alias data leave these undefined. */
+  primary_alias_emails?: string[] | null
+  partner_alias_emails?: string[] | null
   primary_name?: string | null
   partner_name?: string | null
   wedding_date?: string | null
@@ -368,12 +376,14 @@ function asCascadeCandidate(r: MatchableRecord): CascadeCandidate {
         lastName: split.lastName,
         email: r.primary_email ?? null,
         phone: r.primary_phone ?? null,
+        aliasEmails: r.primary_alias_emails ?? null,
       },
       {
         firstName: partnerSplit.firstName,
         lastName: partnerSplit.lastName,
         email: r.partner_email ?? null,
         phone: r.partner_phone ?? null,
+        aliasEmails: r.partner_alias_emails ?? null,
       },
     ].filter((p) => p.firstName || p.email || p.phone),
   }
