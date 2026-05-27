@@ -116,13 +116,7 @@ CREATE TABLE IF NOT EXISTS public.post_tour_sequence (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE public.post_tour_sequence IS
-  'Migration 376 (2026-05-27). State per wedding for the 3-email '
-  'post-tour nurture sequence (T+24h / T+3d / T+7d). Runner lives at '
-  'src/lib/services/email/post-tour-sequence.ts; folded into the '
-  'hourly follow_up_sequences cron. Reuses generatePostTourFollowUp '
-  '(post-tour-sage.ts) for email_1; lighter inline prompts for emails '
-  '2 and 3. Falls into checkAutoSendEligible like every other follow-up.';
+COMMENT ON TABLE public.post_tour_sequence IS 'Migration 376 (2026-05-27). State per wedding for the 3-email post-tour nurture sequence (T+24h / T+3d / T+7d). Runner at src/lib/services/email/post-tour-sequence.ts; folded into hourly follow_up_sequences cron. Reuses generatePostTourFollowUp (post-tour-sage.ts) for email_1; lighter inline prompts for emails 2 and 3. Falls into checkAutoSendEligible like every other follow-up.';
 
 -- One sequence per wedding. If a wedding had a previous tour cycle and
 -- now has a re-tour, the cron skips re-upsert (sequence_completed_at
