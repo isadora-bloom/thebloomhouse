@@ -42,8 +42,19 @@ import { pickSource, type EvidenceEntry } from '@/lib/services/identity/pick-fro
  * to the loader at the same time so both call sites share one
  * formatter. Universal-rules SOFT-CONTEXT NOTES POLICY now governs
  * verbatim-quote handling for both paths.
+ *
+ * v1.6 (2026-05-27): temporal anchoring. Caitlin Mayer's Calendly
+ * tour-welcome draft said "this Friday" for a Friday June 5 tour
+ * sent on Wednesday May 27 (9 days out). The CURRENT TOUR STATE
+ * block now carries the tour's ACTUAL event_datetime (was: row
+ * created_at) with explicit relative-phrasing guidance derived from
+ * the day-delta + same-calendar-week check; both the new_inquiry and
+ * follow-up paths now lead with a TODAY anchor so the brain has
+ * deterministic ground truth for resolving any "Friday" / "next week"
+ * token in the inbound body. See `formatTourDateGuidance` for the
+ * per-tour rule and the `## TODAY:` block injection sites.
  */
-export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.5'
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.6'
 
 /**
  * 2026-05-12 — Tour-state awareness.
@@ -59,6 +70,76 @@ export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.5'
  * draft prompt. Caller appends to contextBlock. Returns null when no
  * tour signals exist (greenfield inquiry — keep the default tour CTA).
  */
+/**
+ * Format a tour datetime with day-of-week + absolute date + relative
+ * distance from today, plus explicit anti-"this {weekday}" guidance.
+ *
+ * Caitlin Mayer (2026-05-27): the inquiry-brain v1.5 path produced
+ * "I'm so excited that you'll get to see everything in person this
+ * Friday!" for a Calendly booking dated Friday June 5 — NINE days out
+ * from a Wednesday May 27 send. Two compounding defects:
+ *   1) The prior `loadTourStateLine` selected only `created_at`, so the
+ *      "(booked YYYY-MM-DD)" snippet showed the row insert time, not
+ *      the actual tour datetime. The model never saw the real date.
+ *   2) No "today" anchor was passed to the brain anywhere, so the LLM
+ *      latched onto the day-of-week token "Friday" in the synthetic
+ *      Calendly body and resolved it to "this Friday" with no grounding.
+ *
+ * `engagement_events.metadata.event_datetime` is the authoritative
+ * tour datetime; this helper renders ground truth + tells the model
+ * exactly when it may say "this {DOW}" vs "next {DOW}" vs the full
+ * absolute date.
+ */
+function formatTourDateGuidance(eventDatetimeIso: string | null): string | null {
+  if (!eventDatetimeIso) return null
+  const ms = Date.parse(eventDatetimeIso)
+  if (!Number.isFinite(ms)) return null
+  const tourDate = new Date(ms)
+  const today = new Date()
+  // Compare on local-date midnight floors so a tour later TODAY still
+  // counts as "today" and a tour tomorrow morning is "+1 day", not
+  // sub-day fractional drift.
+  const floor = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const daysFromToday = Math.round((floor(tourDate) - floor(today)) / 86_400_000)
+  const absolute = tourDate.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  const todayAbsolute = today.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  // Compute whether the tour falls in the SAME calendar week as today
+  // (week starts Monday). Only when same-week may the model say
+  // "this {weekday}". Anything in the following Mon-Sun bucket is
+  // "next {weekday}". Anything beyond that must use the absolute date.
+  const isoDayOfWeek = (d: Date) => ((d.getDay() + 6) % 7) // Mon=0..Sun=6
+  const startOfThisWeek = floor(today) - isoDayOfWeek(today) * 86_400_000
+  const startOfNextWeek = startOfThisWeek + 7 * 86_400_000
+  const startOfWeekAfter = startOfNextWeek + 7 * 86_400_000
+  const tourFloor = floor(tourDate)
+  let phrasingRule: string
+  if (daysFromToday < 0) {
+    phrasingRule = `Refer to it by the absolute date "${absolute}" (this tour is in the past).`
+  } else if (daysFromToday === 0) {
+    phrasingRule = `Refer to it as "today" or the absolute date "${absolute}".`
+  } else if (daysFromToday === 1) {
+    phrasingRule = `Refer to it as "tomorrow" or the absolute date "${absolute}".`
+  } else if (tourFloor < startOfNextWeek) {
+    phrasingRule = `Refer to it as "this ${tourDate.toLocaleDateString('en-US', { weekday: 'long' })}" or the absolute date "${absolute}".`
+  } else if (tourFloor < startOfWeekAfter) {
+    phrasingRule = `Refer to it as "next ${tourDate.toLocaleDateString('en-US', { weekday: 'long' })}" or the absolute date "${absolute}". DO NOT call it "this ${tourDate.toLocaleDateString('en-US', { weekday: 'long' })}" — it falls in the following calendar week, not this one.`
+  } else {
+    phrasingRule = `Refer to it as "${absolute}". DO NOT use "this ${tourDate.toLocaleDateString('en-US', { weekday: 'long' })}" or "next ${tourDate.toLocaleDateString('en-US', { weekday: 'long' })}" — the tour is ${daysFromToday} days away, beyond next week, so a relative-weekday phrasing would mislead the couple about when they are visiting.`
+  }
+  return `${absolute} (${daysFromToday} day${daysFromToday === 1 ? '' : 's'} from today, ${todayAbsolute}). ${phrasingRule}`
+}
+
 async function loadTourStateLine(
   supabase: ReturnType<typeof createServiceClient>,
   weddingId: string,
@@ -66,7 +147,7 @@ async function loadTourStateLine(
   try {
     const { data: events } = await supabase
       .from('engagement_events')
-      .select('event_type, created_at')
+      .select('event_type, created_at, occurred_at, metadata')
       .eq('wedding_id', weddingId)
       .in('event_type', ['tour_scheduled', 'tour_cancelled', 'tour_completed', 'tour_rescheduled'])
       .order('created_at', { ascending: false })
@@ -78,14 +159,24 @@ async function loadTourStateLine(
     // an older tour_scheduled doesn't override a newer cancel.
     const latest = events[0]
     const latestType = latest.event_type as string
-    const latestDate = (() => {
+    // metadata.event_datetime is the actual tour datetime; created_at /
+    // occurred_at are the row-write timestamp. Prefer the former so the
+    // model talks about the tour day, not the booking day. Fall back to
+    // occurred_at then created_at (legacy events with no metadata).
+    const latestMeta = (latest.metadata ?? {}) as Record<string, unknown>
+    const latestEventDt =
+      (typeof latestMeta.event_datetime === 'string' && latestMeta.event_datetime) ||
+      (latest.occurred_at as string | null) ||
+      (latest.created_at as string | null)
+    const latestRowDate = (() => {
       try { return new Date(latest.created_at as string).toISOString().slice(0, 10) }
       catch { return null }
     })()
 
     if (latestType === 'tour_completed') {
+      const guidance = formatTourDateGuidance(latestEventDt)
       return '- TOUR STATUS: Already toured Rixey Manor' +
-        (latestDate ? ` on ${latestDate}` : '') +
+        (guidance ? ` on ${guidance}` : latestRowDate ? ` on ${latestRowDate}` : '') +
         '. Do NOT push the tour CTA or suggest scheduling another tour. Reference the in-person visit naturally.'
     }
     if (latestType === 'tour_cancelled') {
@@ -96,22 +187,39 @@ async function loadTourStateLine(
           (e.event_type === 'tour_scheduled' || e.event_type === 'tour_rescheduled') &&
           (e.created_at as string) < (latest.created_at as string),
       )
-      const scheduledDate = priorScheduled
-        ? (() => {
-            try { return new Date(priorScheduled.created_at as string).toISOString().slice(0, 10) }
-            catch { return null }
-          })()
+      const priorMeta = (priorScheduled?.metadata ?? {}) as Record<string, unknown>
+      const priorEventDt =
+        (typeof priorMeta.event_datetime === 'string' && priorMeta.event_datetime) ||
+        (priorScheduled?.occurred_at as string | null | undefined) ||
+        (priorScheduled?.created_at as string | null | undefined) ||
+        null
+      const priorAbsolute = priorEventDt
+        ? new Date(priorEventDt).toLocaleDateString('en-US', {
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+          })
         : null
+      const cancelAbsolute = latestEventDt
+        ? new Date(latestEventDt).toLocaleDateString('en-US', {
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+          })
+        : latestRowDate
       return '- TOUR STATUS: A tour was scheduled' +
-        (scheduledDate ? ` (originally for ${scheduledDate})` : '') +
+        (priorAbsolute ? ` (originally for ${priorAbsolute})` : '') +
         ' and then CANCELLED' +
-        (latestDate ? ` on ${latestDate}` : '') +
+        (cancelAbsolute ? ` on ${cancelAbsolute}` : '') +
         '. Acknowledge the cancellation warmly and offer to reschedule when their plans firm up — do NOT draft as if this is first contact or suggest "booking a tour" as if no tour ever existed.'
     }
     if (latestType === 'tour_scheduled' || latestType === 'tour_rescheduled') {
-      return '- TOUR STATUS: A tour is currently scheduled' +
-        (latestDate ? ` (booked ${latestDate})` : '') +
-        '. Reference the upcoming tour rather than inviting them to book one. If they ask logistics questions, anchor your answer to the scheduled visit.'
+      const guidance = formatTourDateGuidance(latestEventDt)
+      return '- TOUR STATUS: A tour is currently scheduled for ' +
+        (guidance ?? (latestRowDate ? `(booked ${latestRowDate})` : 'an upcoming date')) +
+        ' Reference the upcoming tour rather than inviting them to book one. If they ask logistics questions, anchor your answer to that scheduled visit.'
     }
     return null
   } catch {
@@ -660,7 +768,25 @@ export async function generateInquiryDraft(
     'inquiry_body',
   ).wrapped
 
-  let contextBlock = `\n\n## INCOMING EMAIL:\n\nFrom: ${inquiry.from}\nSubject: ${subjectSanitized.content}\n\n${wrappedBody}`
+  // 2026-05-27 (v1.6): explicit "today" anchor. Without it the brain
+  // resolves any "Friday" / "next week" token in the inbound body to
+  // whatever feels natural — Caitlin Mayer's Calendly notification
+  // mentioned "Fri, Jun 5" (9 days out from a Wed May 27 send) and the
+  // model wrote "this Friday" three times. Pairs with the
+  // formatTourDateGuidance() block in loadTourStateLine: the tour-state
+  // line carries the SPECIFIC anti-"this Friday" rule per booking; this
+  // anchor handles every other relative-date reference the brain might
+  // emit (e.g. "looking forward to this weekend" for a Saturday wedding
+  // that's actually 3 months away).
+  const todayLine = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  let contextBlock = `\n\n## TODAY:\nToday is ${todayLine}. Whenever you reference a future date in the draft, anchor to this. Do not use "this {weekday}" for any date more than 6 days away or in a later calendar week; prefer "next {weekday}" or the absolute date (e.g. "Friday, June 5") for those. Match the date phrasing to what the couple actually told you — never invent dates that aren't in the source.`
+
+  contextBlock += `\n\n## INCOMING EMAIL:\n\nFrom: ${inquiry.from}\nSubject: ${subjectSanitized.content}\n\n${wrappedBody}`
 
   // Telemetry — both injection signals and the lower-severity
   // strip events. Round-3+4 audits flagged the strip flags as ghost
@@ -1147,8 +1273,18 @@ export async function generateFollowUp(
     .limit(1)
     .maybeSingle()
 
-  // Build context
-  let contextBlock = `\n\n## FOLLOW-UP CONTEXT:\n- Days since last contact: ${daysSinceLastContact}`
+  // Build context. TODAY anchor mirrors the new_inquiry path (v1.6,
+  // 2026-05-27) — follow-ups talk about tours and wedding dates too, so
+  // the same relative-phrasing trap applies.
+  const todayLine = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  let contextBlock = `\n\n## TODAY:\nToday is ${todayLine}. Whenever you reference a future date in the draft, anchor to this. Do not use "this {weekday}" for any date more than 6 days away or in a later calendar week; prefer "next {weekday}" or the absolute date (e.g. "Friday, June 5") for those.`
+
+  contextBlock += `\n\n## FOLLOW-UP CONTEXT:\n- Days since last contact: ${daysSinceLastContact}`
   if (daysSinceLastContact >= 14) {
     contextBlock += '\n- This is the FINAL follow-up. Be warm and leave the door open.'
   } else if (daysSinceLastContact >= 7) {

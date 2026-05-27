@@ -11,6 +11,64 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-27 (Inquiry brain temporal anchoring — v1.5 → v1.6)
+
+Bumped `inquiry-brain.prompt.v1.5` → `v1.6`
+(`src/lib/services/brain/inquiry.ts`).
+
+Caitlin Mayer's Calendly tour-welcome draft (mayercaitlinann@gmail.com)
+told her "I'm so excited that you'll get to see everything in person
+this Friday!" for a tour booked Friday **June 5, 2026** — sent on
+Wednesday **May 27, 2026**, NINE days out. The draft used "this Friday"
+three times. Two compounding defects in the v1.5 prompt scaffolding:
+
+1. `loadTourStateLine` selected only `engagement_events.created_at`,
+   never `metadata.event_datetime`. The "(booked YYYY-MM-DD)" snippet
+   the model saw was the row insert time, not the actual tour day —
+   the model never received the real tour date in any form.
+2. No "today" anchor was passed anywhere in the inquiry brain prompt
+   (the only `Today is {{today}}` pattern in the codebase lived in
+   `task-prompts-intel.ts`). The brain latched onto the "Friday" /
+   "Fri, Jun 5" tokens in the synthetic Calendly body and produced
+   the most-confident relative phrasing it could without a calendar
+   anchor — "this Friday".
+
+Changes:
+
+- New helper `formatTourDateGuidance(eventDatetimeIso)`: renders the
+  tour as a full weekday/month/day/year string, computes day-delta
+  from today on local-date midnight floors, and emits an explicit
+  phrasing rule based on a same-calendar-week check. Rules:
+    - 0 days → "today"
+    - 1 day → "tomorrow"
+    - same Mon-Sun bucket as today → "this {weekday}"
+    - next Mon-Sun bucket → "next {weekday}" + explicit "DO NOT say
+      'this {weekday}'" guard
+    - beyond next week → absolute date only, with both relative-
+      weekday forms blocked
+- `loadTourStateLine` now selects `metadata, occurred_at` too, prefers
+  `metadata.event_datetime` over `occurred_at` over `created_at`, and
+  feeds the chosen datetime through `formatTourDateGuidance` for the
+  scheduled / completed / cancelled branches.
+- Both `generateInquiryDraft` (new-inquiry path) and `generateFollowUp`
+  (follow-up path) now lead their `contextBlock` with a `## TODAY:`
+  block carrying today's full weekday/month/day/year + the same
+  "no relative weekday for dates more than 6 days away or in a later
+  calendar week" rule. Belt-and-suspenders against relative-date
+  hallucination from any other date token in the inbound body (the
+  tour-state line handles the tour itself; the TODAY block handles
+  wedding-date phrasings, "this weekend", etc.).
+- `BRAIN_PROMPT_VERSION` bumped to `inquiry-brain.prompt.v1.6`. Logged
+  to `api_costs.prompt_version` + `drafts.prompt_version_used` so a
+  draft can be traced back to the exact prompt revision that produced
+  it.
+
+Scope note: only the inquiry brain bumped. Client-brain (T8 portal
+voice) and post-tour-sequence brains were inspected — they do NOT
+currently emit relative-weekday phrasings without their own anchors,
+so they stay on v1.5. Worth re-checking if a similar bug appears
+there.
+
 ## 2026-05-15 (Whole-email directive across email-reading prompts)
 
 Extends the v3->v4 inbound-intent change to every other prompt that
