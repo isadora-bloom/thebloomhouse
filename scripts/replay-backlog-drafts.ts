@@ -218,6 +218,18 @@ interface CliArgs {
   apply: boolean
   allowProd: boolean
   venueId: string
+  /**
+   * Operator-supplied disambiguation map: label → interaction_id.
+   * Bypasses the matcher for that label and uses the given interaction
+   * directly. Set via repeated `--pick "<label>=<uuid>"` flags.
+   * Lookup is case-insensitive on label.
+   */
+  picks: Record<string, string>
+  /**
+   * If true, only process entries that have a --pick override. Lets the
+   * operator replay just the disambiguated rows without touching the rest.
+   */
+  picksOnly: boolean
 }
 
 interface InteractionRow {
@@ -287,11 +299,32 @@ function parseArgs(): CliArgs {
     console.error(`ERROR: --venue-id must be a UUID (got "${venueArg}")`)
     process.exit(1)
   }
+  // --pick "Label=<uuid>" — may be repeated
+  const picks: Record<string, string> = {}
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== '--pick') continue
+    const val = argv[i + 1] ?? ''
+    const eq = val.indexOf('=')
+    if (eq === -1) {
+      console.error(`ERROR: --pick expects "<label>=<uuid>" (got "${val}")`)
+      process.exit(1)
+    }
+    const label = val.slice(0, eq).trim()
+    const id = val.slice(eq + 1).trim()
+    if (!label || !/^[0-9a-f-]{36}$/i.test(id)) {
+      console.error(`ERROR: --pick "${val}" is malformed (need label=uuid)`)
+      process.exit(1)
+    }
+    picks[label.toLowerCase()] = id
+  }
+
   return {
     cohort: cohortArg,
     apply: argv.includes('--apply'),
     allowProd: argv.includes('--allow-prod'),
     venueId: venueArg,
+    picks,
+    picksOnly: argv.includes('--picks-only'),
   }
 }
 
@@ -705,17 +738,43 @@ async function main(): Promise<void> {
   const unfoundList: CohortEntry[] = []
 
   for (const entry of entries) {
+    const pickedId = args.picks[entry.label.toLowerCase()]
+    if (args.picksOnly && !pickedId) continue
+
     console.log(`--- [${entry.cohort}] ${entry.label} (anchor ${entry.anchorDate}) ---`)
     if (entry.note) console.log(`  note: ${entry.note}`)
 
     let resolution: ResolveOutcome
-    try {
-      resolution = await resolveEntry(supabase, args.venueId, entry)
-    } catch (err) {
-      console.error(`  resolve failed: ${err instanceof Error ? err.message : err}`)
-      stats.errored++
-      console.log('')
-      continue
+    if (pickedId) {
+      // Operator-supplied disambiguation — fetch that exact interaction.
+      const { data, error } = await supabase
+        .from('interactions')
+        .select(
+          'id, venue_id, wedding_id, direction, type, subject, from_email, from_name, ' +
+            'full_body, body_preview, timestamp, gmail_thread_id, gmail_connection_id, intent_class',
+        )
+        .eq('id', pickedId)
+        .eq('venue_id', args.venueId)
+        .maybeSingle()
+      if (error || !data) {
+        console.error(
+          `  PICK ERROR — interaction ${pickedId} not found on venue (${error?.message ?? 'no row'})`,
+        )
+        stats.errored++
+        console.log('')
+        continue
+      }
+      console.log(`  PICK — using operator-supplied interaction ${pickedId}`)
+      resolution = { kind: 'matched', interaction: data as unknown as InteractionRow, candidates: 1 }
+    } else {
+      try {
+        resolution = await resolveEntry(supabase, args.venueId, entry)
+      } catch (err) {
+        console.error(`  resolve failed: ${err instanceof Error ? err.message : err}`)
+        stats.errored++
+        console.log('')
+        continue
+      }
     }
 
     if (resolution.kind === 'unfound') {
