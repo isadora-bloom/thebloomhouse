@@ -171,6 +171,30 @@ export function isUnsendableAddress(email: string | null | undefined): boolean {
     return true
   }
 
+  // Known non-routable platform notification relays. These are addresses
+  // the platforms send FROM but never deliver replies TO — replies bounce
+  // into the platform's read-only queue and the couple never receives
+  // them.
+  //
+  // 2026-05-28 operator-flagged: drafts had been routed to
+  // tara.simpson.2.772357.reminder@member.theknot.com,
+  // abby.tebbenhoff.772357.reminder@member.theknot.com, etc. The
+  // .reminder suffix is Knot's reminder-email notification relay — the
+  // initial per-prospect address (tara.simpson.2.772357@member.theknot.com,
+  // without .reminder) IS routable; the .reminder variant is not. Three
+  // such drafts had already been SENT and were silently lost.
+  //
+  // Shared support relays (weddingvendors@zola.com, leads@theknot.com,
+  // messages@weddingwire.com) — covered by the existing form-relay
+  // parser fallback chain when the body carries a per-prospect address,
+  // but when the parser misses, drafts can end up here. Refuse send.
+  if (/\.reminder@member\.theknot\.com$/i.test(lower)) return true
+  if (lower === 'weddingvendors@zola.com') return true
+  if (lower === 'leads@theknot.com') return true
+  if (lower === 'noreply@theknot.com') return true
+  if (lower === 'messages@weddingwire.com') return true
+  if (lower === 'notifications@weddingwire.com') return true
+
   return false
 }
 
