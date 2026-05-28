@@ -1270,6 +1270,7 @@ export async function sendEmail(
   threadId?: string,
   connectionId?: string,
   attachments?: EmailAttachment[],
+  cc?: string[] | null,
 ): Promise<string | null> {
   // 2026-05-11 live-customer fix: universal send-time refusal. Covers:
   //   - RFC-2606 reserved TLDs (.invalid / .test / .example / .localhost)
@@ -1277,6 +1278,9 @@ export async function sendEmail(
   //   - no-reply / system-only local parts (noreply, postmaster,
   //     mailer-daemon, bounces, unsubscribe, do-not-reply, …)
   //   - malformed / empty addresses
+  //   - 2026-05-28: known non-routable platform notification relays
+  //     (*.reminder@member.theknot.com, weddingvendors@zola.com,
+  //     messages@weddingwire.com, etc.)
   // Refusing at the chokepoint means every caller (manual /agent/send,
   // /agent/reply, autonomous-sender, follow-up sequences, daily digest)
   // gets the same protection without each having to remember to check.
@@ -1286,6 +1290,26 @@ export async function sendEmail(
   if (isUnsendableAddress(to)) {
     console.warn(`[gmail] Refusing to send to unsendable address: ${to}`)
     return null
+  }
+
+  // Cc list filter (mig 378, 2026-05-28): drop any address the chokepoint
+  // refuses + any duplicate of the primary recipient. The send proceeds
+  // with whatever is left; an empty filtered Cc just yields a single-To
+  // send rather than failing the whole reply.
+  let filteredCc: string[] = []
+  if (cc && cc.length > 0) {
+    const toLower = to.toLowerCase()
+    const seen = new Set<string>([toLower])
+    for (const c of cc) {
+      const cl = c.trim().toLowerCase()
+      if (!cl || seen.has(cl)) continue
+      if (isUnsendableAddress(cl)) {
+        console.warn(`[gmail] Dropping unsendable Cc: ${cl}`)
+        continue
+      }
+      seen.add(cl)
+      filteredCc.push(cl)
+    }
   }
 
   const gmail = await getGmailClient(venueId, connectionId)
@@ -1310,6 +1334,7 @@ export async function sendEmail(
     const messageHeaders = [
       `From: ${fromEmail}`,
       `To: ${to}`,
+      ...(filteredCc.length > 0 ? [`Cc: ${filteredCc.join(', ')}`] : []),
       `Subject: ${subject}`,
       'MIME-Version: 1.0',
       'Content-Type: text/plain; charset="UTF-8"',

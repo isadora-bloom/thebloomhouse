@@ -35,6 +35,7 @@ interface Draft {
   wedding_id: string | null
   interaction_id: string | null
   to_email: string | null
+  cc_emails: string[] | null
   subject: string | null
   draft_body: string
   status: 'pending' | 'approved' | 'rejected' | 'sent'
@@ -204,10 +205,17 @@ function EditModal({
         </div>
 
         <div className="px-6 pb-6 space-y-4">
-          {/* To / Subject */}
+          {/* To / Cc / Subject */}
           <div className="text-sm text-sage-600">
             <span className="font-medium text-sage-800">To:</span>{' '}
             {draft.to_email || 'Unknown'}
+            {draft.cc_emails && draft.cc_emails.length > 0 && (
+              <>
+                <br />
+                <span className="font-medium text-sage-800" title="Carbon-copy recipients — additional addresses the reply will also land at (e.g. the platform per-prospect relay so the conversation surfaces in the platform dashboard too).">Cc:</span>{' '}
+                {draft.cc_emails.join(', ')}
+              </>
+            )}
             {draft.subject && (
               <>
                 <br />
@@ -702,6 +710,7 @@ export default function ApprovalQueuePage() {
             wedding_id,
             interaction_id,
             to_email,
+            cc_emails,
             subject,
             draft_body,
             status,

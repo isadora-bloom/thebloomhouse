@@ -4789,6 +4789,16 @@ export async function processIncomingEmail(
 
     const promptVersionUsed =
       brainUsed === 'client' ? CLIENT_BRAIN_PROMPT_VERSION : INQUIRY_BRAIN_PROMPT_VERSION
+    // Dual-route Cc (mig 378, 2026-05-28): form-relay parsers may surface
+    // BOTH a personal email and a per-prospect platform relay (Knot is the
+    // primary case — body carries "Personal email:" alongside the
+    // <prospect>.<slug>@member.theknot.com From). The primary recipient
+    // (to_email) is the personal email when known, and the relay rides
+    // on cc_emails so the conversation also lands in the platform's
+    // dashboard inbox for the couple.
+    const ccEmailsForInsert: string[] | null =
+      formLead?.ccEmails && formLead.ccEmails.length > 0 ? formLead.ccEmails : null
+
     const { data: draft } = await supabase
       .from('drafts')
       .insert({
@@ -4796,6 +4806,7 @@ export async function processIncomingEmail(
         wedding_id: weddingId,
         interaction_id: interactionId,
         to_email: replyTargetEmail,
+        cc_emails: ccEmailsForInsert,
         subject: draftSubject,
         draft_body: draftBody,
         // Wave 26 (mig 292): preserve the LLM's first-pass output so a
@@ -5830,7 +5841,7 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
   // Fetch the draft
   const { data: draft, error: fetchError } = await supabase
     .from('drafts')
-    .select('id, venue_id, to_email, subject, draft_body, status, interaction_id')
+    .select('id, venue_id, to_email, cc_emails, subject, draft_body, status, interaction_id')
     .eq('id', draftId)
     .single()
 
@@ -5928,6 +5939,17 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     throw new Error(`Draft ${draftId} has an unroutable address; flagged for operator review`)
   }
 
+  // Cc routing (mig 378, 2026-05-28): when the draft carries cc_emails
+  // (form-relay parser surfaced BOTH personal email + per-prospect
+  // platform relay), include them on the outbound so the reply lands in
+  // the prospect's direct inbox AND surfaces in the platform dashboard.
+  // The gmail chokepoint filters any unsendable Ccs and dedups against
+  // the To.
+  const ccList =
+    Array.isArray(draft.cc_emails) && draft.cc_emails.length > 0
+      ? (draft.cc_emails as string[])
+      : null
+
   const sentMessageId = await sendEmail(
     draft.venue_id as string,
     draft.to_email as string,
@@ -5936,6 +5958,7 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     threadId,
     inboundConnectionId,
     attachments.length > 0 ? attachments : undefined,
+    ccList,
   )
 
   if (!sentMessageId) {

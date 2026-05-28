@@ -52,6 +52,12 @@ export interface FormRelayLead {
    *  that actually routes back to the prospect (Knot inbox, Zola connect-*,
    *  or the prospect's personal email for venue calculators). */
   replyToEmail: string
+  /** Additional routable addresses to CC on the outbound reply. Populated
+   *  when both a personal email AND a per-prospect platform relay are
+   *  known + distinct — sending to both maximises the chance the couple
+   *  actually reads the reply (direct inbox) AND keeps the conversation
+   *  visible on the platform dashboard (Knot WeddingPro inbox, Zola). */
+  ccEmails?: string[]
   /** The raw From header we matched on, kept for audit + for logging the
    *  original relay that introduced the lead. */
   matchedRelayFrom: string
@@ -133,16 +139,32 @@ function extractDisplayName(from: string): string | null {
 
 function parseTheKnot(from: string, body: string): FormRelayLead | null {
   const fromAddr = extractEmailAddress(from)
-  const isKnot =
+  const isKnotByDomain =
     /@(member\.)?theknot\.com$/i.test(fromAddr) ||
     /theknot\.com/i.test(fromAddr)
-  if (!isKnot) return null
+  // Body-signature detection for Knot reminders forwarded from the
+  // prospect's personal email (Knot's modern reminder format sends FROM
+  // the prospect's Gmail/Yahoo so "reply directly to this email" routes
+  // to them). The body retains the unmistakable "The Knot Pro Network"
+  // header + the "The Knot inbox:" + "Personal email:" labelled fields.
+  // Without this fallback, the parser misses these reminders and the
+  // pipeline falls through to single-recipient routing (and the Knot
+  // dashboard never sees the conversation).
+  const isKnotByBody =
+    /The Knot Pro Network/i.test(body) &&
+    /The Knot inbox\s*[:\r\n]/i.test(body)
+  if (!isKnotByDomain && !isKnotByBody) return null
 
   const displayName = extractDisplayName(from)
   const personalEmail = fieldAfter(body, 'Personal email')
   const weddingDate = fieldAfter(body, 'Wedding date')
   const guestCount = fieldAfter(body, 'Guest count')
   const budget = fieldAfter(body, 'Budget')
+  // When the body carries an explicit "The Knot inbox:" field, that's
+  // the canonical per-prospect Knot relay. Prefer it over fromAddr for
+  // the relay candidate — fromAddr in the body-signature path is the
+  // prospect's personal email, NOT a Knot relay.
+  const knotInboxFromBody = fieldAfter(body, 'The Knot inbox')
 
   // Prefer the personal email — durable contact. When the personal
   // line is redacted (Knot sometimes does this until the first reply),
@@ -157,6 +179,11 @@ function parseTheKnot(from: string, body: string): FormRelayLead | null {
     leadEmail = personalEmail.toLowerCase()
   } else if (isPerProspectRelay(fromAddr)) {
     leadEmail = fromAddr
+  } else if (knotInboxFromBody && isPerProspectRelay(knotInboxFromBody.toLowerCase())) {
+    // Body-signature path with no personal email + body-stated Knot inbox.
+    // Use the body-stated relay as the canonical lead key so the cascade
+    // can still bind future Knot touchpoints from the same prospect.
+    leadEmail = knotInboxFromBody.toLowerCase()
   } else {
     console.warn(
       '[parseTheKnot] no personal email + fromAddr is not per-prospect, skipping to avoid collision. From:',
@@ -165,6 +192,59 @@ function parseTheKnot(from: string, body: string): FormRelayLead | null {
     return null
   }
 
+  // Dual-route: when we have BOTH the personal email AND the per-prospect
+  // Knot relay, route the outbound primary to the personal email (most
+  // reliable; lands in the prospect's inbox directly) AND CC the Knot
+  // relay so the conversation ALSO surfaces in the couple's WeddingPro
+  // inbox. Two channels, one send. The legacy single-recipient path
+  // (relay only) lost replies entirely when Knot's reminder relay
+  // happened to be in the chain — see 2026-05-28 operator report on
+  // tara.simpson / abby.tebbenhoff / andy.hall (5 drafts to
+  // .reminder@member.theknot.com, 3 already shipped to the void).
+  //
+  // Strip the .reminder variant from the CC — that one is Knot's
+  // notification queue, not a routable inbox. Sending TO it does nothing
+  // but it makes outbound headers look ugly + the isUnsendableAddress
+  // chokepoint refuses it (newly added 2026-05-28). The non-.reminder
+  // form of the same per-prospect address (tara.simpson.2.772357@...) IS
+  // routable; if we can derive it from the .reminder variant we use that.
+  const normaliseKnotRelay = (addr: string): string | null => {
+    const m = addr.match(/^(.+?)(?:\.reminder)?@member\.theknot\.com$/i)
+    return m ? `${m[1]}@member.theknot.com` : null
+  }
+  // Build the relay candidate set: From-header (if Knot per-prospect),
+  // body-stated "The Knot inbox:" field (when set), and the normalised
+  // non-.reminder variant of either. First routable wins.
+  const relayCandidates: string[] = []
+  if (isPerProspectRelay(fromAddr)) relayCandidates.push(fromAddr)
+  const fromNormalised = normaliseKnotRelay(fromAddr)
+  if (fromNormalised && isPerProspectRelay(fromNormalised) && !relayCandidates.includes(fromNormalised)) {
+    relayCandidates.push(fromNormalised)
+  }
+  if (knotInboxFromBody) {
+    const bodyRelayLower = knotInboxFromBody.toLowerCase()
+    if (isPerProspectRelay(bodyRelayLower) && !relayCandidates.includes(bodyRelayLower)) {
+      relayCandidates.push(bodyRelayLower)
+    }
+    const bodyNormalised = normaliseKnotRelay(bodyRelayLower)
+    if (bodyNormalised && isPerProspectRelay(bodyNormalised) && !relayCandidates.includes(bodyNormalised)) {
+      relayCandidates.push(bodyNormalised)
+    }
+  }
+  let ccEmails: string[] | undefined
+  if (personalEmail && personalEmail.includes('@')) {
+    const personalLower = personalEmail.toLowerCase()
+    const relay = relayCandidates.find((r) => r.toLowerCase() !== personalLower) ?? null
+    if (relay) ccEmails = [relay]
+  }
+
+  // Primary reply target: prefer personal email (direct → most reliable);
+  // fall back to the relay only when personal is missing. CC carries the
+  // platform relay when both are known.
+  const primaryReplyTo = (personalEmail && personalEmail.includes('@'))
+    ? personalEmail.toLowerCase()
+    : fromAddr
+
   return {
     source: 'the_knot',
     leadEmail,
@@ -172,9 +252,8 @@ function parseTheKnot(from: string, body: string): FormRelayLead | null {
     eventDate: weddingDate,
     guestCount,
     budget,
-    // Reply via the Knot relay so The Knot can route it back through
-    // WeddingPro — that's how the prospect actually sees it.
-    replyToEmail: fromAddr,
+    replyToEmail: primaryReplyTo,
+    ccEmails,
     matchedRelayFrom: fromAddr,
   }
 }
