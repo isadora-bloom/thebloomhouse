@@ -2303,6 +2303,14 @@ export default function InboxPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <Link
+            href="/agent/cohort"
+            className="flex items-center gap-2 px-4 py-2.5 bg-warm-50 hover:bg-warm-100 border border-warm-200 text-warm-800 text-sm font-medium rounded-lg transition-colors"
+            title="Ask in plain English — 'everyone I had a tour with this weekend' — and bulk-draft follow-ups with a state-aware skip on anyone already followed up."
+          >
+            <Search className="w-4 h-4" />
+            Ask Bloom
+          </Link>
           <button
             onClick={() => setShowCompose(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors"
