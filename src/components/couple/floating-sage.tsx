@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { MessageCircle, X, Send, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
+import { getSectionFromPath } from '@/lib/services/sage/portal-sections'
 
 const INTERACTED_KEY = 'bloom_sage_pill_interacted'
 
@@ -44,12 +45,29 @@ export function FloatingSage({ venueSlug }: { venueSlug: string }) {
   const chatPath = `/couple/${venueSlug}/chat`
   if (pathname === chatPath || pathname === chatPath + '/') return null
 
+  // R1#1 (2026-03-29): when the floating button opens from a specific
+  // section, forward the slug to chat so Sage knows which surface the
+  // couple was on AND the quick-prompt chips are tailored to it.
+  const currentSection = getSectionFromPath(pathname)
+  const sectionParam = currentSection ? `&section=${currentSection.slug}` : ''
+
+  // Quick-ask chips. Default to the generic three; when on a section
+  // page, swap in the section's example questions so the first thing
+  // the couple sees relates to what's on their screen.
+  const quickQuestions = currentSection
+    ? currentSection.examples.slice(0, 3)
+    : [
+        'What should I be working on right now?',
+        'Help me with my timeline',
+        'What vendors do you recommend?',
+      ]
+
   async function handleQuickSend() {
     if (!message.trim() || sending) return
     setSending(true)
     // Navigate to chat with the question pre-filled via query param
     const encoded = encodeURIComponent(message.trim())
-    router.push(`${chatPath}?q=${encoded}`)
+    router.push(`${chatPath}?q=${encoded}${sectionParam}`)
   }
 
   return (
@@ -86,19 +104,17 @@ export function FloatingSage({ venueSlug }: { venueSlug: string }) {
             <p className="font-semibold text-sm" style={{ fontFamily: 'var(--couple-font-heading)' }}>
               Ask {aiName} anything
             </p>
-            <p className="text-xs opacity-80 mt-0.5">Your AI planning assistant</p>
+            <p className="text-xs opacity-80 mt-0.5">
+              {currentSection ? `About ${currentSection.label}` : 'Your AI planning assistant'}
+            </p>
           </div>
           <div className="p-4">
             <div className="space-y-2 mb-3">
-              {[
-                'What should I be working on right now?',
-                'Help me with my timeline',
-                'What vendors do you recommend?',
-              ].map((q) => (
+              {quickQuestions.map((q) => (
                 <button
                   key={q}
                   onClick={() => {
-                    router.push(`${chatPath}?q=${encodeURIComponent(q)}`)
+                    router.push(`${chatPath}?q=${encodeURIComponent(q)}${sectionParam}`)
                   }}
                   className="w-full text-left text-xs px-3 py-2 rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors"
                 >

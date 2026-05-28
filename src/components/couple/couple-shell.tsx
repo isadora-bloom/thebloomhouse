@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { CoupleTopBar } from './couple-top-bar'
 import { CoupleSidebar } from './couple-sidebar'
+import { MarkSectionCompleteBar } from './mark-section-complete'
 
 interface CoupleShellProps {
   venueName: string
@@ -47,7 +48,13 @@ export function CoupleShell({ venueName, logoUrl, base, clientCode, weddingDate,
 
       {/* Main content — offset for fixed top bar (16) and desktop sidebar (64) */}
       <main className="pt-16 lg:pl-64">
-        <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">{children}</div>
+        <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
+          {children}
+          {/* 2026-05-26 — auto-detects the current section from pathname
+              and renders a "Mark complete" footer when actionable.
+              Renders nothing on read-only / meta pages. */}
+          <MarkSectionCompleteBar />
+        </div>
       </main>
     </>
   )

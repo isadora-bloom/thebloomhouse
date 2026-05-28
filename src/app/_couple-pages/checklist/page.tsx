@@ -28,7 +28,9 @@ import {
   Clock,
   UserCheck,
   MoreHorizontal,
+  Store,
 } from 'lucide-react'
+import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { AssignedToPicker } from '@/components/couple/assigned-to-picker'
 
@@ -49,6 +51,10 @@ interface ChecklistItem {
   // inline "Assign" pill on each row. ~24 chars displayed; longer
   // values are stored as-is and truncated only at render.
   assigned_to: string | null
+  // R1#2 (2026-03-29) — optional vendor-category key matching the
+  // Vendors page presets (mig 369). When set, the row renders an
+  // "Open in Vendors" deep-link.
+  vendor_type: string | null
 }
 
 interface ChecklistFormData {
@@ -56,6 +62,7 @@ interface ChecklistFormData {
   category: string
   due_date: string
   description: string
+  vendor_type: string
 }
 
 // ---------------------------------------------------------------------------
@@ -84,19 +91,43 @@ const CATEGORY_ICONS: Record<Category, React.ReactNode> = {
   Other: <MoreHorizontal className="w-4 h-4" />,
 }
 
-const DEFAULT_TASKS: { title: string; category: Category; sort_order: number }[] = [
+// R1#2 — vendor-type keys must mirror the keys the Vendors page uses
+// for `booked_vendors.vendor_type`. Kept in sync by hand for now;
+// when R2#1 ships custom categories, a couple's bespoke type still
+// works because both columns are free text (no FK / no enum).
+const VENDOR_TYPE_OPTIONS = [
+  { key: 'photographer', label: 'Photographer' },
+  { key: 'videographer', label: 'Videographer' },
+  { key: 'caterer', label: 'Caterer' },
+  { key: 'florist', label: 'Florist' },
+  { key: 'dj', label: 'DJ' },
+  { key: 'band', label: 'Band' },
+  { key: 'officiant', label: 'Officiant' },
+  { key: 'cake', label: 'Cake / Dessert' },
+  { key: 'hair', label: 'Hair' },
+  { key: 'makeup', label: 'Makeup' },
+  { key: 'coordinator', label: 'Coordinator' },
+  { key: 'rentals', label: 'Rentals' },
+  { key: 'transportation', label: 'Transportation' },
+] as const
+
+const VENDOR_TYPE_LABELS = Object.fromEntries(
+  VENDOR_TYPE_OPTIONS.map((v) => [v.key, v.label])
+) as Record<string, string>
+
+const DEFAULT_TASKS: { title: string; category: Category; sort_order: number; vendor_type?: string }[] = [
   // Venue (1-2)
   { title: 'Set your budget', category: 'Venue', sort_order: 1 },
   { title: 'Complete alignment worksheets', category: 'Venue', sort_order: 2 },
   // Vendors (3-13)
-  { title: 'Book photographer', category: 'Vendors', sort_order: 3 },
-  { title: 'Book videographer', category: 'Vendors', sort_order: 4 },
-  { title: 'Book DJ or band', category: 'Vendors', sort_order: 5 },
-  { title: 'Book hair & makeup', category: 'Vendors', sort_order: 6 },
-  { title: 'Book officiant', category: 'Vendors', sort_order: 7 },
-  { title: 'Hire florist', category: 'Vendors', sort_order: 8 },
-  { title: 'Choose caterer and menu', category: 'Vendors', sort_order: 9 },
-  { title: 'Schedule engagement photos', category: 'Vendors', sort_order: 10 },
+  { title: 'Book photographer', category: 'Vendors', sort_order: 3, vendor_type: 'photographer' },
+  { title: 'Book videographer', category: 'Vendors', sort_order: 4, vendor_type: 'videographer' },
+  { title: 'Book DJ or band', category: 'Vendors', sort_order: 5, vendor_type: 'dj' },
+  { title: 'Book hair & makeup', category: 'Vendors', sort_order: 6, vendor_type: 'hair' },
+  { title: 'Book officiant', category: 'Vendors', sort_order: 7, vendor_type: 'officiant' },
+  { title: 'Hire florist', category: 'Vendors', sort_order: 8, vendor_type: 'florist' },
+  { title: 'Choose caterer and menu', category: 'Vendors', sort_order: 9, vendor_type: 'caterer' },
+  { title: 'Schedule engagement photos', category: 'Vendors', sort_order: 10, vendor_type: 'photographer' },
   { title: 'Confirm with all vendors (times/locations)', category: 'Vendors', sort_order: 11 },
   // Attire & Beauty (12-16)
   { title: 'Find wedding dress/attire', category: 'Attire & Beauty', sort_order: 12 },
@@ -105,8 +136,8 @@ const DEFAULT_TASKS: { title: string; category: Category; sort_order: number }[]
   { title: 'Buy wedding rings', category: 'Attire & Beauty', sort_order: 15 },
   { title: 'Final dress fitting', category: 'Attire & Beauty', sort_order: 16 },
   // Decor (17-19)
-  { title: 'Plan big rentals', category: 'Decor', sort_order: 17 },
-  { title: 'Arrange smaller rentals and decor', category: 'Decor', sort_order: 18 },
+  { title: 'Plan big rentals', category: 'Decor', sort_order: 17, vendor_type: 'rentals' },
+  { title: 'Arrange smaller rentals and decor', category: 'Decor', sort_order: 18, vendor_type: 'rentals' },
   { title: 'Pack decor items (labeled by area)', category: 'Decor', sort_order: 19 },
   // Timeline (20-22)
   { title: 'Draft guest list', category: 'Timeline', sort_order: 20 },
@@ -123,7 +154,7 @@ const DEFAULT_TASKS: { title: string; category: Category; sort_order: number }[]
   { title: 'Create seating chart', category: 'Guests', sort_order: 30 },
   { title: 'Reserve hotel room block', category: 'Guests', sort_order: 31 },
   // Other (32-41)
-  { title: 'Arrange transportation', category: 'Other', sort_order: 32 },
+  { title: 'Arrange transportation', category: 'Other', sort_order: 32, vendor_type: 'transportation' },
   { title: 'Plan rehearsal dinner', category: 'Other', sort_order: 33 },
   { title: 'Obtain marriage license', category: 'Other', sort_order: 34 },
   { title: 'Prepare tips and final payment envelopes', category: 'Other', sort_order: 35 },
@@ -139,6 +170,7 @@ const EMPTY_FORM: ChecklistFormData = {
   category: '',
   due_date: '',
   description: '',
+  vendor_type: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +279,7 @@ export default function ChecklistPage() {
           is_completed: false,
           sort_order: t.sort_order,
           description: null,
+          vendor_type: t.vendor_type ?? null,
         }))
 
     await supabase.from('checklist_items').insert(rows)
@@ -398,6 +431,7 @@ export default function ChecklistPage() {
       category: item.category || '',
       due_date: item.due_date || '',
       description: item.description || '',
+      vendor_type: item.vendor_type || '',
     })
     setEditingId(item.id)
     setShowModal(true)
@@ -413,6 +447,7 @@ export default function ChecklistPage() {
       category: form.category || 'Other',
       due_date: form.due_date || null,
       description: form.description.trim() || null,
+      vendor_type: form.vendor_type || null,
       sort_order: editingId
         ? items.find((i) => i.id === editingId)?.sort_order || 100
         : items.length + 1,
@@ -828,6 +863,21 @@ export default function ChecklistPage() {
                                   isCompleted={item.is_completed}
                                   onChange={(next) => void handleSetAssignedTo(item.id, next ?? '')}
                                 />
+
+                                {/* R1#2 vendor deep-link. Only renders when a
+                                    vendor_type is attached. Unknown keys still
+                                    link — the Vendors page silently falls back
+                                    to the top of the list if nothing matches. */}
+                                {item.vendor_type && slug && (
+                                  <Link
+                                    href={`/couple/${slug}/vendors?vendor=${encodeURIComponent(item.vendor_type)}`}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+                                    title={`Open ${VENDOR_TYPE_LABELS[item.vendor_type] ?? item.vendor_type} in Vendors`}
+                                  >
+                                    <Store className="w-3 h-3" />
+                                    {VENDOR_TYPE_LABELS[item.vendor_type] ?? item.vendor_type}
+                                  </Link>
+                                )}
                               </div>
                             </div>
 
@@ -967,6 +1017,29 @@ export default function ChecklistPage() {
                     style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
                   />
                 </div>
+              </div>
+
+              {/* Vendor link — R1#2. Optional. When set, the row renders a
+                  deep-link into /vendors?vendor=<type> so couples can jump
+                  from "Book photographer" to their Photographer card. */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <Store className="w-3.5 h-3.5 inline mr-1" />
+                  Link to vendor (optional)
+                </label>
+                <select
+                  value={form.vendor_type}
+                  onChange={(e) => setForm({ ...form, vendor_type: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                >
+                  <option value="">No vendor link</option>
+                  {VENDOR_TYPE_OPTIONS.map((v) => (
+                    <option key={v.key} value={v.key}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Notes */}

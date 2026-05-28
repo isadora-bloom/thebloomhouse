@@ -465,6 +465,9 @@ export default function ContractsPage() {
   const [dragOver, setDragOver] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  // R1#5 — last analyze run reports how many draft budget items were
+  // created. Shown as a dismissible banner pointing at /budget.
+  const [extractedBudgetCount, setExtractedBudgetCount] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const supabase = createClient()
@@ -610,6 +613,12 @@ export default function ContractsPage() {
       if (data.error) {
         console.error('Analysis error:', data.error)
         setError(`Analysis failed: ${data.error}`)
+      }
+
+      // R1#5 — surface the budget-extraction count so couples know
+      // there are draft payments to review in the Budget section.
+      if (typeof data.budgetItemsCount === 'number' && data.budgetItemsCount > 0) {
+        setExtractedBudgetCount(data.budgetItemsCount)
       }
 
       fetchContracts()
@@ -819,6 +828,33 @@ export default function ContractsPage() {
           <AlertCircle className="w-4 h-4 shrink-0" />
           {error}
           <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* R1#5 — extraction summary banner. Surfaces after a successful
+          analyze run that produced budget rows. Dismissable. The link
+          deep-jumps the couple to Budget where the pending-review
+          banner takes over. */}
+      {extractedBudgetCount !== null && extractedBudgetCount > 0 && (
+        <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-800">
+          <FileText className="w-4 h-4 shrink-0" />
+          <p className="flex-1">
+            Found <span className="font-semibold">{extractedBudgetCount}</span> payment{extractedBudgetCount === 1 ? '' : 's'} in this contract.{' '}
+            {slug && (
+              <a
+                href={`/couple/${slug}/budget`}
+                className="font-medium underline underline-offset-2 hover:opacity-80"
+              >
+                Review in Budget
+              </a>
+            )}
+          </p>
+          <button
+            onClick={() => setExtractedBudgetCount(null)}
+            className="text-emerald-500 hover:text-emerald-700 shrink-0"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
@@ -295,6 +296,14 @@ export default function VendorsPage() {
   const [customTypeName, setCustomTypeName] = useState('')
   const [error, setError] = useState<string | null>(null)
 
+  // R1#2 — deep-link from checklist. `?vendor=photographer` pre-expands
+  // the matching type section, scrolls to it, and briefly highlights.
+  // Unknown vendor types degrade silently (no scroll, no error).
+  const searchParams = useSearchParams()
+  const requestedVendor = searchParams.get('vendor')
+  const [highlightedType, setHighlightedType] = useState<string | null>(null)
+  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
   const supabase = createClient()
 
   // ---- Fetch vendors ----
@@ -320,6 +329,33 @@ export default function VendorsPage() {
     if (!weddingId) return
     fetchVendors()
   }, [weddingId, fetchVendors])
+
+  // R1#2 — checklist deep-link. Expand the requested type immediately
+  // so the section header is in the DOM, then scroll + highlight after
+  // the vendors fetch resolves (so the cards are mounted too).
+  useEffect(() => {
+    if (!requestedVendor) return
+    // Pre-expand so the user lands on a usable view even before the
+    // fetch returns (no jarring collapse-then-expand flash).
+    setExpandedTypes((prev) => {
+      const next = new Set(prev)
+      next.add(requestedVendor)
+      return next
+    })
+  }, [requestedVendor])
+
+  useEffect(() => {
+    if (!requestedVendor || loading) return
+    const el = sectionRefs.current[requestedVendor]
+    if (!el) return
+    // Defer to next paint so layout has the expanded cards.
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    setHighlightedType(requestedVendor)
+    const t = setTimeout(() => setHighlightedType(null), 1800)
+    return () => clearTimeout(t)
+  }, [requestedVendor, loading, vendors.length])
 
   // ---- Add / Edit vendor ----
   async function handleSubmit(e: React.FormEvent) {
@@ -562,6 +598,16 @@ export default function VendorsPage() {
     vendorsByType[v.vendor_type].push(v)
   }
 
+  // R2#1 — couples can pick "Other / Custom..." in the form and type a
+  // free-text vendor type. Before this fix the page accepted the type
+  // server-side but never iterated it on the client, so custom vendors
+  // were saved-but-invisible. Surface them in their own group after the
+  // 13 presets so they aren't lost.
+  const presetTypeKeys = new Set<string>(VENDOR_TYPES.map((vt) => vt.key))
+  const customTypes = Object.keys(vendorsByType)
+    .filter((key) => !presetTypeKeys.has(key))
+    .sort()
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -761,9 +807,17 @@ export default function VendorsPage() {
             const hasVendors = typeVendors.length > 0
             const isExpanded = expandedTypes.has(vt.key) || hasVendors
             const bookedInType = typeVendors.filter(v => v.is_booked).length
+            const isHighlighted = highlightedType === vt.key
 
             return (
-              <div key={vt.key} className="space-y-2">
+              <div
+                key={vt.key}
+                ref={(el) => { sectionRefs.current[vt.key] = el }}
+                className={cn(
+                  'space-y-2 rounded-xl transition-shadow',
+                  isHighlighted && 'ring-2 ring-amber-400 ring-offset-2'
+                )}
+              >
                 {/* Type header */}
                 <button
                   onClick={() => toggleType(vt.key)}
@@ -839,6 +893,82 @@ export default function VendorsPage() {
               </div>
             )
           })}
+
+          {/* R2#1 — custom vendor types couples added via "Other / Custom..."
+              Rendered with a neutral grey marker and no preset color, since
+              we don't know the brand context. Label is the raw stored key,
+              which is whatever the couple typed. Cards still drag-edit /
+              delete via the same VendorCard component. */}
+          {customTypes.length > 0 && (
+            <div className="pt-2 mt-2 border-t border-dashed border-gray-200">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 px-1 mb-2">
+                Custom categories
+              </p>
+              {customTypes.map((typeKey) => {
+                const typeVendors = vendorsByType[typeKey] || []
+                const hasVendors = typeVendors.length > 0
+                const isExpanded = expandedTypes.has(typeKey) || hasVendors
+                const bookedInType = typeVendors.filter(v => v.is_booked).length
+                const isHighlighted = highlightedType === typeKey
+                const label = typeKey
+                  .replace(/[-_]+/g, ' ')
+                  .replace(/\b\w/g, (c) => c.toUpperCase())
+
+                return (
+                  <div
+                    key={typeKey}
+                    ref={(el) => { sectionRefs.current[typeKey] = el }}
+                    className={cn(
+                      'space-y-2 rounded-xl transition-shadow mb-2',
+                      isHighlighted && 'ring-2 ring-amber-400 ring-offset-2'
+                    )}
+                  >
+                    <button
+                      onClick={() => toggleType(typeKey)}
+                      className="w-full flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="w-3 h-3 rounded-full shrink-0 bg-gray-400" />
+                      <span
+                        className="text-sm font-semibold flex-1 text-left"
+                        style={{ color: 'var(--couple-primary)' }}
+                      >
+                        {label}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400">
+                          {typeVendors.length} vendor{typeVendors.length !== 1 ? 's' : ''}
+                        </span>
+                        {bookedInType > 0 && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700">
+                            <Check className="w-2 h-2" />
+                            {bookedInType} booked
+                          </span>
+                        )}
+                      </div>
+                      {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                    </button>
+
+                    {isExpanded && (
+                      <div className="pl-6 space-y-3">
+                        {typeVendors.map((vendor) => (
+                          <VendorCard
+                            key={vendor.id}
+                            vendor={vendor}
+                            onEdit={() => handleEdit(vendor)}
+                            onDelete={() => handleDelete(vendor.id)}
+                            onUploadContract={(file) => handleContractUpload(vendor.id, file)}
+                            onViewContract={() => handleViewContract(vendor)}
+                            onRemoveContract={() => handleRemoveContract(vendor.id)}
+                            isUploading={uploadingId === vendor.id}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 

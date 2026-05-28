@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, usePathname } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { Send, Sparkles, AlertCircle, Loader2, RotateCcw, FileText, Brain, Paperclip, X, File as FileIcon } from 'lucide-react'
+import { getSectionBySlug } from '@/lib/services/sage/portal-sections'
 
 // TODO: Derive venue_id from wedding or session
 // ---------------------------------------------------------------------------
@@ -95,6 +97,62 @@ function buildSuggestedQuestions(state: WeddingState): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Markdown link rendering for Sage messages
+// ---------------------------------------------------------------------------
+//
+// 2026-05-26-late. Sage's prompt instructs her to write
+// `[Label](/slug)` Markdown links when pointing couples to portal
+// sections. This helper detects those patterns and renders clickable
+// Next/Link elements, prepending the venue base path (e.g.
+// `/couple/hawthorne-manor`).
+//
+// Defensive: only paths whose first slug is in the PORTAL_SECTIONS
+// registry get linkified. Anything else (external URLs, off-registry
+// slugs, malformed) renders as literal text. Stops Sage from being
+// able to invent a path the renderer would treat as authoritative.
+
+const MARKDOWN_LINK_RE = /\[([^\]\n]{1,80})\]\((\/[a-z0-9-]+(?:\/[a-z0-9-]+)*(\?[^)\s]{0,200})?)\)/g
+
+function renderInlineLinks(line: string, base: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  // Reset regex state between calls — exec maintains lastIndex on the
+  // RegExp object itself.
+  MARKDOWN_LINK_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = MARKDOWN_LINK_RE.exec(line)) !== null) {
+    const [whole, text, path] = match
+    if (match.index > lastIndex) {
+      parts.push(line.slice(lastIndex, match.index))
+    }
+    // path looks like `/bar` or `/bar?foo=1`; first segment after `/`
+    // is the slug to validate.
+    const firstSlug = path.replace(/^\/+/, '').split(/[/?]/)[0]
+    if (getSectionBySlug(firstSlug)) {
+      parts.push(
+        <Link
+          key={`link-${match.index}-${firstSlug}`}
+          href={`${base}${path}`}
+          className="underline underline-offset-2 hover:opacity-80 font-medium"
+          style={{ color: 'var(--couple-primary)' }}
+        >
+          {text}
+        </Link>
+      )
+    } else {
+      // Unknown slug — fall through to literal text so Sage can't
+      // hand the couple a broken link.
+      parts.push(whole)
+    }
+    lastIndex = match.index + whole.length
+  }
+  if (lastIndex < line.length) {
+    parts.push(line.slice(lastIndex))
+  }
+  return parts.length > 0 ? parts : [line]
+}
+
+// ---------------------------------------------------------------------------
 // Contract mention detector
 // ---------------------------------------------------------------------------
 
@@ -155,6 +213,19 @@ export default function SageChatPage() {
   const contractLoadedRef = useRef(false)
 
   const searchParams = useSearchParams()
+  const pathname = usePathname()
+  // Venue-scoped base path for clickable section links Sage emits.
+  // /couple/<slug>/chat → /couple/<slug>
+  const venueBasePath = pathname
+    ? pathname.split('/').slice(0, 3).join('/')
+    : ''
+
+  // Section context — the floating Sage button forwards the section the
+  // couple was on (e.g. `?section=bar`) so chat can both (a) ask Sage
+  // questions framed to that page and (b) seed suggested questions
+  // local to the section. R1#1 (2026-03-29).
+  const currentSection = searchParams.get('section')
+  const currentSectionMeta = currentSection ? getSectionBySlug(currentSection) : null
 
   // Load wedding state for context-aware suggestions
   useEffect(() => {
@@ -459,6 +530,9 @@ export default function SageChatPage() {
             message: text.trim(),
             fileUrl,
             fileContext,
+            // R1#1: tells Sage which portal section the couple was on
+            // when they opened chat, so she can anticipate intent.
+            currentSection: currentSection || undefined,
           }),
         })
 
@@ -518,7 +592,7 @@ export default function SageChatPage() {
         inputRef.current?.focus()
       }
     },
-    [sending, attachedFile, contractContext, contractBannerDismissed, venueId, weddingId]
+    [sending, attachedFile, contractContext, contractBannerDismissed, venueId, weddingId, currentSection]
   )
 
   // Handle retry for failed messages
@@ -623,11 +697,14 @@ export default function SageChatPage() {
               Hi there! I am {aiName}.
             </h3>
             <p className="text-gray-500 max-w-md mx-auto text-sm">
-              I know all about your venue and can help with planning questions, logistics,
-              vendor suggestions, and more. What is on your mind?
+              {currentSectionMeta
+                ? `You were just on ${currentSectionMeta.label}. ${currentSectionMeta.whatToDo} What can I help with?`
+                : 'I know all about your venue and can help with planning questions, logistics, vendor suggestions, and more. What is on your mind?'}
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-2">
-              {(weddingStateLoaded ? suggestedQuestions : [
+              {(currentSectionMeta
+                ? currentSectionMeta.examples
+                : weddingStateLoaded ? suggestedQuestions : [
                 'What time should we start the ceremony?',
                 'Do you have a preferred caterer list?',
                 'What happens if it rains?',
@@ -725,11 +802,16 @@ export default function SageChatPage() {
                         : undefined
                     }
                   >
-                    {/* Render multi-line content */}
-                    {msg.content.split('\n').map((line, i) => (
+                    {/* Render multi-line content. Assistant messages
+                        get Markdown-link parsing so [Label](/slug)
+                        renders as a clickable section link (R1#1
+                        followup). User messages render as plain text. */}
+                    {msg.content.split('\n').map((line, i, arr) => (
                       <span key={i}>
-                        {line}
-                        {i < msg.content.split('\n').length - 1 && <br />}
+                        {msg.role === 'assistant'
+                          ? renderInlineLinks(line, venueBasePath)
+                          : line}
+                        {i < arr.length - 1 && <br />}
                       </span>
                     ))}
                   </div>

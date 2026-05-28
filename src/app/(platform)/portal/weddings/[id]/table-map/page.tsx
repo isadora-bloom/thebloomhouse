@@ -3,7 +3,7 @@
 // Admin table map editor: place tables on venue floor plan
 // Reads floor plan from venue_config, saves elements to table_map_layouts
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Stage, Layer, Image as KonvaImage, Circle, Rect, Text, Group } from 'react-konva'
 import { createClient } from '@/lib/supabase/client'
 import { useParams } from 'next/navigation'
@@ -11,7 +11,7 @@ import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import {
   ArrowLeft, ZoomIn, ZoomOut, Maximize, RotateCw, Download, Save,
-  Check, Trash2, Loader2, Plus,
+  Check, Trash2, Loader2, Plus, MousePointer2, BoxSelect, Armchair,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -53,9 +53,15 @@ const BLOCK_TYPES = [
 // Table element renderer
 // ---------------------------------------------------------------------------
 
-function TableEl({ el, pxPerFt, isSelected, onSelect, onMove }: {
+function TableEl({ el, pxPerFt, isSelected, onSelect, onMove, onGroupDrag, onGroupDragEnd }: {
   el: MapElement; pxPerFt: number; isSelected: boolean
-  onSelect: (id: string) => void; onMove: (id: string, x: number, y: number) => void
+  onSelect: (id: string, shiftKey: boolean) => void
+  onMove: (id: string, x: number, y: number) => void
+  /** Called during drag of a selected element so the group can follow.
+   *  Receives the absolute new x/y of THIS element so the parent can
+   *  derive a delta from the pre-drag position. */
+  onGroupDrag?: (id: string, x: number, y: number) => void
+  onGroupDragEnd?: (id: string, x: number, y: number) => void
 }) {
   const ft = (f: number) => f * pxPerFt
   const w = ft(el.feetW), h = ft(el.feetH)
@@ -68,8 +74,22 @@ function TableEl({ el, pxPerFt, isSelected, onSelect, onMove }: {
 
   return (
     <Group x={el.x} y={el.y} rotation={el.rotation || 0} draggable
-      onClick={() => onSelect(el.id)} onTap={() => onSelect(el.id)}
-      onDragEnd={e => { e.cancelBubble = true; onMove(el.id, e.target.x(), e.target.y()) }}
+      onClick={(e: { evt: MouseEvent }) => onSelect(el.id, e.evt.shiftKey)}
+      onTap={() => onSelect(el.id, false)}
+      onDragMove={e => {
+        e.cancelBubble = true
+        if (isSelected && onGroupDrag) {
+          onGroupDrag(el.id, e.target.x(), e.target.y())
+        }
+      }}
+      onDragEnd={e => {
+        e.cancelBubble = true
+        if (isSelected && onGroupDragEnd) {
+          onGroupDragEnd(el.id, e.target.x(), e.target.y())
+        } else {
+          onMove(el.id, e.target.x(), e.target.y())
+        }
+      }}
     >
       {isTable && el.type === 'round' && (
         <Circle radius={w/2+haloExtra} fill="rgba(96,165,250,0.10)" stroke="#93C5FD" strokeWidth={ft(0.05)} listening={false} />
@@ -158,13 +178,27 @@ export default function AdminTableMapEditor() {
   const [planRotation, setPlanRotation] = useState(0)
 
   const [elements, setElements] = useState<MapElement[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Task #11 — multi-select. Set replaces the prior single-id state.
+  // Most code paths treat size===1 the same as the legacy single-select
+  // (still shows the edit-props panel, delete button, etc.).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   const [showRectPicker, setShowRectPicker] = useState(false)
   const [blockPrompt, setBlockPrompt] = useState<typeof BLOCK_TYPES[0] | null>(null)
+
+  // Task #11 — marquee selection. When `selectMode` is on, dragging on
+  // empty canvas creates a selection rectangle; clicking a table toggles
+  // it in/out of the selection. When off, behaviour matches the original
+  // single-select editor (drag = pan, click = select one).
+  const [selectMode, setSelectMode] = useState(false)
+  const [marquee, setMarquee] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+  const marqueeStart = useRef<{ x: number; y: number } | null>(null)
+  // Group drag: snapshot positions at drag start so deltas can be
+  // applied across the selection without compounding rounding errors.
+  const dragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
 
   // Load wedding -> venue -> floor plan config
   useEffect(() => {
@@ -236,14 +270,86 @@ export default function AdminTableMapEditor() {
     setBlockPrompt(null)
   }
 
+  // Single-selection helpers — only meaningful when exactly one item
+  // is in the set. The edit-props panel and updateSelected work off
+  // this derived id.
+  const singleSelectedId = selectedIds.size === 1 ? [...selectedIds][0] : null
+
   const updateSelected = (changes: Partial<MapElement>) => {
-    setElements(prev => prev.map(el => el.id === selectedId ? { ...el, ...changes } : el))
+    if (!singleSelectedId) return
+    setElements(prev => prev.map(el => el.id === singleSelectedId ? { ...el, ...changes } : el))
   }
 
-  const deleteSelected = () => { setElements(prev => prev.filter(el => el.id !== selectedId)); setSelectedId(null) }
+  // Task #11 — deletes EVERY selected element. Backwards-compatible
+  // with the legacy single-select case (set size 1).
+  const deleteSelected = () => {
+    if (selectedIds.size === 0) return
+    setElements(prev => prev.filter(el => !selectedIds.has(el.id)))
+    setSelectedIds(new Set())
+  }
 
   const moveElement = (id: string, x: number, y: number) => {
     setElements(prev => prev.map(el => el.id === id ? { ...el, x, y } : el))
+  }
+
+  // Task #11 — toggle id into the selection. Shift-click extends/
+  // toggles; plain click replaces the selection with just this id.
+  const toggleSelection = (id: string, shiftKey: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (shiftKey) {
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+      } else {
+        next.clear()
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  // Task #11 — group drag. When a selected table is dragged with
+  // others selected, compute the delta from the snapshot taken at
+  // drag start and apply it to every other selected element. Konva
+  // already moves the dragged element itself; this updates the rest
+  // of the group to match.
+  const handleGroupDrag = (id: string, newX: number, newY: number) => {
+    if (selectedIds.size <= 1) return
+    if (!dragSnapshot.current) {
+      // First DragMove tick — snapshot all selected positions so
+      // subsequent deltas don't compound.
+      const snap = new Map<string, { x: number; y: number }>()
+      for (const el of elements) {
+        if (selectedIds.has(el.id)) snap.set(el.id, { x: el.x, y: el.y })
+      }
+      dragSnapshot.current = snap
+    }
+    const anchor = dragSnapshot.current.get(id)
+    if (!anchor) return
+    const dx = newX - anchor.x
+    const dy = newY - anchor.y
+    setElements(prev =>
+      prev.map(el => {
+        if (!selectedIds.has(el.id)) return el
+        if (el.id === id) return el // konva already moved this one
+        const snap = dragSnapshot.current!.get(el.id)
+        if (!snap) return el
+        return { ...el, x: snap.x + dx, y: snap.y + dy }
+      })
+    )
+  }
+
+  const handleGroupDragEnd = (id: string, newX: number, newY: number) => {
+    if (selectedIds.size <= 1) {
+      moveElement(id, newX, newY)
+      dragSnapshot.current = null
+      return
+    }
+    // Commit final delta (in case DragMove never fired, e.g. tiny drag)
+    handleGroupDrag(id, newX, newY)
+    // Also ensure the dragged element's own position is reflected
+    setElements(prev => prev.map(el => el.id === id ? { ...el, x: newX, y: newY } : el))
+    dragSnapshot.current = null
   }
 
   const handleWheel = useCallback((e: { evt: WheelEvent }) => {
@@ -251,6 +357,93 @@ export default function AdminTableMapEditor() {
     const factor = e.evt.deltaY < 0 ? 1.1 : 0.909
     setZoom(z => Math.min(fitScale * 10, Math.max(fitScale * 0.5, (z ?? fitScale) * factor)))
   }, [fitScale])
+
+  // Task #11 — transform an element's local (x, y) into Stage-relative
+  // coords, accounting for the inner Group's offset + planRotation +
+  // translate. Used by the marquee intersection test.
+  const elCentreInStageCoords = useCallback((el: MapElement) => {
+    const dx = el.x - imgW / 2
+    const dy = el.y - imgH / 2
+    const rad = (planRotation * Math.PI) / 180
+    const cos = Math.cos(rad), sin = Math.sin(rad)
+    return {
+      x: dx * cos - dy * sin + effectiveW / 2,
+      y: dx * sin + dy * cos + effectiveH / 2,
+    }
+  }, [imgW, imgH, planRotation, effectiveW, effectiveH])
+
+  // Task #11 — marquee handlers. Only active when selectMode is on AND
+  // the pointer-down hit the Stage itself (not a child node). Stage
+  // panning is disabled in selectMode (Stage `draggable={!selectMode}`).
+  type KonvaPointerEvt = {
+    target: { getStage: () => unknown }
+    evt: MouseEvent
+  }
+  const handleMarqueeDown = (e: KonvaPointerEvt) => {
+    if (!selectMode) return
+    if (e.target !== e.target.getStage()) return
+    const stage = stageRef.current as unknown as { getRelativePointerPosition: () => { x: number; y: number } } | null
+    if (!stage) return
+    const p = stage.getRelativePointerPosition()
+    marqueeStart.current = p
+    setMarquee({ x: p.x, y: p.y, width: 0, height: 0 })
+  }
+  const handleMarqueeMove = () => {
+    if (!selectMode || !marqueeStart.current) return
+    const stage = stageRef.current as unknown as { getRelativePointerPosition: () => { x: number; y: number } } | null
+    if (!stage) return
+    const p = stage.getRelativePointerPosition()
+    const s = marqueeStart.current
+    setMarquee({
+      x: Math.min(s.x, p.x),
+      y: Math.min(s.y, p.y),
+      width: Math.abs(p.x - s.x),
+      height: Math.abs(p.y - s.y),
+    })
+  }
+  const handleMarqueeUp = (e: KonvaPointerEvt) => {
+    if (!selectMode || !marqueeStart.current) return
+    const rect = marquee
+    marqueeStart.current = null
+    setMarquee(null)
+    if (!rect || rect.width < 3 || rect.height < 3) {
+      // Treat as a stage click — clear selection unless shift held.
+      if (!e.evt.shiftKey) setSelectedIds(new Set())
+      return
+    }
+    const hits = new Set<string>()
+    if (e.evt.shiftKey) {
+      selectedIds.forEach(id => hits.add(id))
+    }
+    for (const el of elements) {
+      const c = elCentreInStageCoords(el)
+      if (
+        c.x >= rect.x && c.x <= rect.x + rect.width &&
+        c.y >= rect.y && c.y <= rect.y + rect.height
+      ) {
+        hits.add(el.id)
+      }
+    }
+    setSelectedIds(hits)
+  }
+
+  // Task #11 — Delete/Backspace shortcut. Only fires when the active
+  // element isn't a form input (so editing the props panel doesn't
+  // accidentally nuke the layout).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return
+      if (selectedIds.size === 0) return
+      e.preventDefault()
+      deleteSelected()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIds])
 
   const handleSave = async () => {
     setSaving(true)
@@ -271,7 +464,19 @@ export default function AdminTableMapEditor() {
   const fitToScreen = () => { setZoom(fitScale); setPos({ x: 0, y: 0 }) }
   const rotatePlan = () => setPlanRotation(r => (r + 90) % 360)
 
-  const selectedEl = elements.find(e => e.id === selectedId)
+  const selectedEl = singleSelectedId ? elements.find(e => e.id === singleSelectedId) ?? null : null
+
+  // Task #10 — auto-sum seats across all seating elements. Blocks
+  // (Dance Floor / Bar / Stage / etc.) don't contribute since their
+  // capacity is 0. Memoised so it doesn't recompute on pan/zoom.
+  const totalSeats = useMemo(
+    () => elements.reduce((sum, el) => sum + (el.type === 'block' ? 0 : (el.capacity || 0)), 0),
+    [elements]
+  )
+  const tableCount = useMemo(
+    () => elements.filter(el => el.type !== 'block').length,
+    [elements]
+  )
 
   if (loading) return <div className="text-muted-foreground text-center py-16">Loading table map editor...</div>
 
@@ -293,7 +498,22 @@ export default function AdminTableMapEditor() {
         </Link>
         <div className="flex-1">
           <h1 className="text-lg font-semibold">Table Map Editor</h1>
-          <p className="text-xs text-muted-foreground">{elements.length} element{elements.length !== 1 ? 's' : ''} placed</p>
+          <p className="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
+            <span>{elements.length} element{elements.length !== 1 ? 's' : ''} placed</span>
+            {/* Task #10 — live seat total. Hidden when no tables exist
+                yet so the empty editor stays clean. */}
+            {tableCount > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <Armchair className="w-3 h-3" />
+                {totalSeats} seat{totalSeats === 1 ? '' : 's'} across {tableCount} table{tableCount === 1 ? '' : 's'}
+              </span>
+            )}
+            {selectedIds.size > 1 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                {selectedIds.size} selected
+              </span>
+            )}
+          </p>
         </div>
         <button onClick={handleSave} disabled={saving}
           className={cn('inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition',
@@ -347,10 +567,27 @@ export default function AdminTableMapEditor() {
         <button onClick={() => setZoom(z => Math.min(fitScale*10, (z??fitScale)*1.25))} className="text-xs px-2 py-1.5 rounded-lg border hover:bg-muted/50 transition"><ZoomIn className="w-3 h-3" /></button>
         <button onClick={() => setZoom(z => Math.max(fitScale*0.5, (z??fitScale)*0.8))} className="text-xs px-2 py-1.5 rounded-lg border hover:bg-muted/50 transition"><ZoomOut className="w-3 h-3" /></button>
         <span className="text-xs text-muted-foreground">{Math.round(currentZoom / fitScale * 100)}%</span>
+        {/* Task #11 — select-mode toggle. When ON, dragging on empty
+            canvas creates a marquee; click+shift extends the selection.
+            When OFF, drag pans (legacy behaviour). */}
+        <button
+          onClick={() => { setSelectMode(m => !m); setMarquee(null); marqueeStart.current = null }}
+          className={cn(
+            'text-xs px-3 py-1.5 rounded-lg border transition inline-flex items-center gap-1.5',
+            selectMode
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'hover:bg-muted/50'
+          )}
+          title={selectMode ? 'Switch back to pan' : 'Drag to multi-select'}
+        >
+          {selectMode ? <BoxSelect className="w-3 h-3" /> : <MousePointer2 className="w-3 h-3" />}
+          {selectMode ? 'Select mode' : 'Multi-select'}
+        </button>
         <div className="ml-auto flex gap-2">
-          {selectedId && (
+          {selectedIds.size > 0 && (
             <button onClick={deleteSelected} className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition">
-              <Trash2 className="w-3 h-3 inline mr-1" /> Delete
+              <Trash2 className="w-3 h-3 inline mr-1" />
+              {selectedIds.size > 1 ? `Delete ${selectedIds.size}` : 'Delete'}
             </button>
           )}
           <button onClick={exportPng} className="text-xs px-3 py-1.5 rounded-lg border hover:bg-muted/50 transition">
@@ -393,21 +630,34 @@ export default function AdminTableMapEditor() {
             <input type="number" className="border rounded-lg px-2 py-1 text-sm w-16 focus:outline-none focus:ring-1 focus:ring-ring"
               value={selectedEl.rotation || 0} onChange={e => updateSelected({ rotation: parseInt(e.target.value) || 0 })} />
           </div>
-          <button onClick={() => setSelectedId(null)} className="text-xs text-muted-foreground hover:text-foreground pb-1">Done</button>
+          <button onClick={() => setSelectedIds(new Set())} className="text-xs text-muted-foreground hover:text-foreground pb-1">Done</button>
         </div>
       )}
 
       {/* Canvas */}
-      <div ref={containerRef} className="border rounded-xl overflow-hidden bg-muted/20 cursor-grab active:cursor-grabbing select-none">
+      <div ref={containerRef} className={cn(
+        'border rounded-xl overflow-hidden bg-muted/20 select-none',
+        selectMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+      )}>
         <Stage
           ref={stageRef as React.RefObject<never>}
           width={stageW} height={stageH}
           scaleX={currentZoom} scaleY={currentZoom}
           x={pos.x} y={pos.y}
-          draggable
+          // Task #11 — disable pan-by-drag when selectMode is on so the
+          // marquee can claim mouse events.
+          draggable={!selectMode}
           onWheel={handleWheel}
           onDragEnd={(e: { target: { x: () => number; y: () => number } }) => setPos({ x: e.target.x(), y: e.target.y() })}
-          onClick={(e: { target: { getStage: () => unknown } }) => { if (e.target === e.target.getStage()) setSelectedId(null) }}
+          onMouseDown={handleMarqueeDown}
+          onMouseMove={handleMarqueeMove}
+          onMouseUp={handleMarqueeUp}
+          onClick={(e: { target: { getStage: () => unknown }; evt: MouseEvent }) => {
+            // Only clear via plain click when NOT in selectMode (marquee
+            // up handles that). Shift+click on empty preserves selection.
+            if (selectMode) return
+            if (e.target === e.target.getStage() && !e.evt.shiftKey) setSelectedIds(new Set())
+          }}
         >
           <Layer>
             <Group rotation={planRotation} offsetX={imgW/2} offsetY={imgH/2} x={effectiveW/2} y={effectiveH/2}>
@@ -417,11 +667,37 @@ export default function AdminTableMapEditor() {
           <Layer>
             <Group rotation={planRotation} offsetX={imgW/2} offsetY={imgH/2} x={effectiveW/2} y={effectiveH/2}>
               {elements.map(el => (
-                <TableEl key={el.id} el={el} pxPerFt={pxPerFt} isSelected={selectedId === el.id}
-                  onSelect={setSelectedId} onMove={moveElement} />
+                <TableEl
+                  key={el.id}
+                  el={el}
+                  pxPerFt={pxPerFt}
+                  isSelected={selectedIds.has(el.id)}
+                  onSelect={toggleSelection}
+                  onMove={moveElement}
+                  onGroupDrag={handleGroupDrag}
+                  onGroupDragEnd={handleGroupDragEnd}
+                />
               ))}
             </Group>
           </Layer>
+          {/* Task #11 — marquee overlay. Sits in the same Stage-relative
+              space as the marquee coordinates (NOT inside the rotated
+              Group), so it visually tracks the cursor regardless of plan
+              rotation. */}
+          {marquee && (
+            <Layer listening={false}>
+              <Rect
+                x={marquee.x}
+                y={marquee.y}
+                width={marquee.width}
+                height={marquee.height}
+                fill="rgba(96, 165, 250, 0.12)"
+                stroke="#3B82F6"
+                strokeWidth={1 / currentZoom}
+                dash={[6 / currentZoom, 4 / currentZoom]}
+              />
+            </Layer>
+          )}
         </Stage>
       </div>
 

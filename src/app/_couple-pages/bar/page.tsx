@@ -631,6 +631,10 @@ export default function BarPlannerPage() {
 
   // Venue admin config (notes, packages, bar_mode)
   const [venueBarConfig, setVenueBarConfig] = useState<VenueBarConfig>(EMPTY_BAR_CONFIG)
+  // R2#6 — which venue-defined package the couple has selected when the
+  // venue runs in bar_mode='package'. Null until they pick one. Persisted
+  // on bar_planning.selected_package_id (mig 371).
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null)
 
   const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const supabase = createClient()
@@ -656,6 +660,7 @@ export default function BarPlannerPage() {
           notes_calculator?: string
           notes_list?: string
           notes_recipes?: string
+          selected_package_id?: string | null
         }
         if (p.guest_count) setGuests(p.guest_count)
         if (p.event_duration_hours) setHours(p.event_duration_hours)
@@ -664,6 +669,7 @@ export default function BarPlannerPage() {
           list: p.notes_list || '',
           recipes: p.notes_recipes || '',
         })
+        if (p.selected_package_id) setSelectedPackageId(p.selected_package_id)
       }
       // Apply venue admin config
       setVenueBarConfig(barConfig)
@@ -688,6 +694,28 @@ export default function BarPlannerPage() {
     if (!weddingId || !venueId) return
     loadData()
   }, [weddingId, venueId, loadData])
+
+  // R2#6 — persist the couple's package selection. Toggling off (passing
+  // null) deselects. Upserts the bar_planning row keyed by wedding_id.
+  const selectPackage = useCallback(
+    async (packageId: string | null) => {
+      if (!weddingId || !venueId) return
+      setSelectedPackageId(packageId)
+      try {
+        await supabase.from('bar_planning').upsert(
+          {
+            venue_id: venueId,
+            wedding_id: weddingId,
+            selected_package_id: packageId,
+          },
+          { onConflict: 'wedding_id' }
+        )
+      } catch (err) {
+        console.error('[BarPlanner] Package select error:', err)
+      }
+    },
+    [supabase, venueId, weddingId]
+  )
 
   // ── Recalculate preview when inputs change ────────────────────────────────
 
@@ -1053,8 +1081,12 @@ export default function BarPlannerPage() {
         </div>
       )}
 
-      {/* Venue-defined bar packages — shown when admin set bar_mode to 'package' */}
-      {venueBarConfig.bar_mode === 'package' && venueBarConfig.packages.length > 0 && (
+      {/* Venue-defined bar packages — shown when admin set bar_mode to
+          'package' or 'hybrid'. R2#6: in 'package' mode this is the
+          ONLY interaction surface (calculator/list/recipes hidden
+          below); in 'hybrid' it sits above the calculator. */}
+      {(venueBarConfig.bar_mode === 'package' || venueBarConfig.bar_mode === 'hybrid') &&
+       venueBarConfig.packages.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-4">
           <div>
             <h2
@@ -1062,43 +1094,85 @@ export default function BarPlannerPage() {
               style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
             >
               <Wine className="w-4 h-4" />
-              Available Bar Packages
+              {venueBarConfig.bar_mode === 'package' ? 'Choose Your Bar Package' : 'Available Bar Packages'}
             </h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              Your venue offers these pre-configured bar packages. Talk to your coordinator to select one.
+              {venueBarConfig.bar_mode === 'package'
+                ? 'Your venue runs pre-approved bar packages. Pick the one that fits your wedding — your coordinator will confirm.'
+                : 'Your venue offers these pre-configured bar packages. Pick one, or skip and build a custom list below.'}
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            {venueBarConfig.packages.map((pkg) => (
-              <div key={pkg.id} className="border border-gray-100 rounded-lg p-3">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="font-medium text-gray-800">{pkg.name}</p>
-                  {typeof pkg.price_per_guest === 'number' && (
-                    <p className="text-sm tabular-nums text-gray-700">
-                      ${pkg.price_per_guest}/guest
-                    </p>
+            {venueBarConfig.packages.map((pkg) => {
+              const isSelected = selectedPackageId === pkg.id
+              return (
+                <div
+                  key={pkg.id}
+                  className={cn(
+                    'border rounded-lg p-3 transition-colors',
+                    isSelected
+                      ? 'border-transparent ring-2 ring-emerald-400 bg-emerald-50/50'
+                      : 'border-gray-100'
                   )}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="font-medium text-gray-800">{pkg.name}</p>
+                    {typeof pkg.price_per_guest === 'number' && (
+                      <p className="text-sm tabular-nums text-gray-700">
+                        ${pkg.price_per_guest}/guest
+                      </p>
+                    )}
+                  </div>
+                  {pkg.description && (
+                    <p className="text-sm text-gray-600 mt-1">{pkg.description}</p>
+                  )}
+                  {pkg.inclusions && pkg.inclusions.length > 0 && (
+                    <ul className="text-xs text-gray-500 mt-2 space-y-0.5">
+                      {pkg.inclusions.map((inc, i) => (
+                        <li key={i} className="flex items-start gap-1">
+                          <Check className="w-3 h-3 mt-0.5 shrink-0" />
+                          <span>{inc}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    onClick={() => selectPackage(isSelected ? null : pkg.id)}
+                    className={cn(
+                      'mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
+                      isSelected
+                        ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                        : 'border border-gray-200 text-gray-700 hover:bg-gray-50'
+                    )}
+                  >
+                    {isSelected ? (
+                      <>
+                        <Check className="w-3 h-3" />
+                        Selected — Click to change
+                      </>
+                    ) : (
+                      'Pick this package'
+                    )}
+                  </button>
                 </div>
-                {pkg.description && (
-                  <p className="text-sm text-gray-600 mt-1">{pkg.description}</p>
-                )}
-                {pkg.inclusions && pkg.inclusions.length > 0 && (
-                  <ul className="text-xs text-gray-500 mt-2 space-y-0.5">
-                    {pkg.inclusions.map((inc, i) => (
-                      <li key={i} className="flex items-start gap-1">
-                        <Check className="w-3 h-3 mt-0.5 shrink-0" />
-                        <span>{inc}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* Tabs */}
+      {/* R2#6 package-mode short-circuit. When the venue runs pure
+          package mode, hide the calculator/list/recipes tabs below —
+          couples don't need them. The package section above is the
+          full surface. */}
+      {venueBarConfig.bar_mode === 'package' && venueBarConfig.packages.length > 0 && (
+        <div className="text-xs text-gray-400 text-center pt-2">
+          The full bar calculator is hidden because your venue runs pre-approved packages. Need a custom plan? Message your coordinator.
+        </div>
+      )}
+
+      {/* Tabs — hidden when the venue runs package-only mode. */}
+      {!(venueBarConfig.bar_mode === 'package' && venueBarConfig.packages.length > 0) && (
       <div className="flex gap-1 border-b border-gray-200">
         {(
           [
@@ -1121,11 +1195,12 @@ export default function BarPlannerPage() {
           </button>
         ))}
       </div>
+      )}
 
       {/* ════════════════════════════════════════════════════════════════════════
          TAB 1: QUANTITY CALCULATOR
          ════════════════════════════════════════════════════════════════════════ */}
-      {tab === 'calculator' && (
+      {!(venueBarConfig.bar_mode === 'package' && venueBarConfig.packages.length > 0) && tab === 'calculator' && (
         <div className="space-y-6">
           {/* Info banner */}
           <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
@@ -1482,7 +1557,7 @@ export default function BarPlannerPage() {
       {/* ════════════════════════════════════════════════════════════════════════
          TAB 2: SHOPPING LIST
          ════════════════════════════════════════════════════════════════════════ */}
-      {tab === 'list' && (
+      {!(venueBarConfig.bar_mode === 'package' && venueBarConfig.packages.length > 0) && tab === 'list' && (
         <div className="space-y-4">
           {/* Header row */}
           <div className="flex items-center justify-between">
@@ -1655,7 +1730,7 @@ export default function BarPlannerPage() {
       {/* ════════════════════════════════════════════════════════════════════════
          TAB 3: COCKTAIL RECIPES
          ════════════════════════════════════════════════════════════════════════ */}
-      {tab === 'recipes' && (
+      {!(venueBarConfig.bar_mode === 'package' && venueBarConfig.packages.length > 0) && tab === 'recipes' && (
         <div className="space-y-5">
           {/* ── Pull a recipe (AI extraction) ──────────────────────────── */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">

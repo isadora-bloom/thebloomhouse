@@ -48,6 +48,9 @@ import { VendorChecklistSection } from './_components/vendor-checklist-section'
 import { InternalNotesFeed } from './_components/internal-notes-feed'
 import { LifecycleHistory } from './_components/lifecycle-history'
 import { WeddingAddressesSection } from '@/components/portal/wedding-addresses-section'
+import { WeddingPrioritiesWidget } from '@/components/portal/wedding-priorities-widget'
+import { WeddingFinalisationsWidget } from '@/components/portal/wedding-finalisations-widget'
+import { WeddingExtractionSummary } from '@/components/portal/wedding-extraction-summary'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -524,6 +527,19 @@ function OverviewTab({
       {/* B2 (2026-05-08): couple + family addresses captured at
           /couple/[slug]/addresses. Read-only here for the coordinator. */}
       <WeddingAddressesSection weddingId={wedding.id} />
+
+      {/* 2026-05-26 — coordinator priorities. Surfaces filled-amber
+          stars on the couple's sidebar for the flagged sections. */}
+      <WeddingPrioritiesWidget weddingId={wedding.id} />
+
+      {/* 2026-05-26 — per-section sign-off. Coordinator confirms
+          sections alongside the couple's own Mark Complete. */}
+      <WeddingFinalisationsWidget weddingId={wedding.id} />
+
+      {/* 2026-05-26 — pending contract→budget extractions. Hidden
+          when the couple has no drafts; otherwise surfaces the count
+          and the most recent items. */}
+      <WeddingExtractionSummary weddingId={wedding.id} />
     </div>
   )
 }

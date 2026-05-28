@@ -1,8 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   CheckSquare, Clock, DollarSign, FileText,
@@ -13,6 +15,14 @@ import {
   Globe, Download, FileDown, CalendarPlus, ClipboardList, FileSignature,
   MessagesSquare, ChevronDown, X, CalendarRange, ShieldCheck,
 } from 'lucide-react'
+import {
+  loadSectionStatuses,
+  loadCoordinatorPriorities,
+  getRecommendedSectionSlugs,
+  type SectionStatus,
+  type CoordinatorPriority,
+} from '@/lib/services/couple/section-status'
+import { SECTION_STATUS_CHANGED_EVENT } from './mark-section-complete'
 
 // ---------------------------------------------------------------------------
 // Nav structure - grouped sections per couple portal spec
@@ -40,20 +50,46 @@ export function buildCoupleSidebarSections(
   opts: { showDayOf?: boolean; showAfterWedding?: boolean } = {},
 ): NavSection[] {
   const { showDayOf = false, showAfterWedding = false } = opts
+  // 2026-05-26 reorg. 5 named buckets + Account, replacing the old
+  // 8-group structure. Rationale: couples kept hunting between
+  // "Plan / Day-of / Logistics" for items that should live together.
+  // Day-of items split between General (timeline / ceremony /
+  // rehearsal — overall flow) and Vendors (bar / beauty / decor /
+  // photos / transport / staffing — vendor-driven). Seating moves to
+  // Guests where the data-source actually lives.
   return [
     {
-      title: 'Plan',
+      title: 'General',
       items: [
-        // Tier-D #197: bookmark-able "what's next" landing. Surfaces the
-        // 3-5 most-actionable items (overdue, soon-due, payment due,
-        // recent venue message). Top of the sidebar so it's the natural
-        // tab-back-to surface.
+        // Tier-D #197: bookmark-able "what's next" landing.
         { label: "What's next", href: `${base}/whats-next`, icon: Lightbulb },
-        { label: 'Availability', href: `${base}/availability`, icon: CalendarRange },
         { label: 'Checklist', href: `${base}/checklist`, icon: CheckSquare },
-        { label: 'Timeline', href: `${base}/timeline`, icon: Clock },
+        { label: 'Wedding Details', href: `${base}/wedding-details`, icon: Heart },
+        // B2 starting cut (2026-05-08): couple + family addresses.
+        { label: 'Addresses', href: `${base}/addresses`, icon: MapPin },
         { label: 'Budget', href: `${base}/budget`, icon: DollarSign },
-        { label: 'Worksheets', href: `${base}/worksheets`, icon: FileText },
+        { label: 'Booking', href: `${base}/booking`, icon: CalendarPlus },
+        { label: 'Availability', href: `${base}/availability`, icon: CalendarRange },
+        { label: 'Venue Info', href: `${base}/venue-info`, icon: MapPin },
+        { label: 'Timeline', href: `${base}/timeline`, icon: Clock },
+        { label: 'Ceremony', href: `${base}/ceremony`, icon: BookOpen },
+        { label: 'Ceremony Chairs', href: `${base}/ceremony-chairs`, icon: Armchair },
+        { label: 'Rehearsal', href: `${base}/rehearsal`, icon: UtensilsCrossed },
+        { label: 'Final Review', href: `${base}/final-review`, icon: ClipboardList },
+      ],
+    },
+    {
+      title: 'Vendors',
+      items: [
+        { label: 'Vendors', href: `${base}/vendors`, icon: Store },
+        { label: 'Preferred Vendors', href: `${base}/preferred-vendors`, icon: Star },
+        { label: 'Contracts', href: `${base}/contracts`, icon: FileSignature },
+        { label: 'Bar', href: `${base}/bar`, icon: Wine },
+        { label: 'Beauty', href: `${base}/beauty`, icon: Sparkles },
+        { label: 'Decor', href: `${base}/decor`, icon: Flower2 },
+        { label: 'Photos', href: `${base}/photos`, icon: Camera },
+        { label: 'Transportation', href: `${base}/transportation`, icon: Car },
+        { label: 'Staffing', href: `${base}/staffing`, icon: HardHat },
       ],
     },
     {
@@ -61,62 +97,33 @@ export function buildCoupleSidebarSections(
       items: [
         { label: 'Guest List', href: `${base}/guests`, icon: Users },
         { label: 'RSVP Settings', href: `${base}/rsvp-settings`, icon: ClipboardCheck },
-        { label: 'Seating', href: `${base}/seating`, icon: Armchair },
-        { label: 'Floor Plan', href: `${base}/table-map`, icon: Table2 },
-        { label: 'Table Sizes', href: `${base}/tables`, icon: Table2 },
         { label: 'Wedding Party', href: `${base}/party`, icon: UsersRound },
         { label: 'Allergies', href: `${base}/allergies`, icon: ShieldAlert },
         { label: 'Guest Care', href: `${base}/guest-care`, icon: HeartHandshake },
-      ],
-    },
-    {
-      title: 'Day-of',
-      items: [
-        { label: 'Ceremony', href: `${base}/ceremony`, icon: BookOpen },
-        { label: 'Ceremony Chairs', href: `${base}/ceremony-chairs`, icon: Armchair },
-        { label: 'Rehearsal', href: `${base}/rehearsal`, icon: UtensilsCrossed },
-        { label: 'Bar', href: `${base}/bar`, icon: Wine },
-        { label: 'Decor', href: `${base}/decor`, icon: Flower2 },
-        { label: 'Photos', href: `${base}/photos`, icon: Camera },
-        { label: 'Beauty', href: `${base}/beauty`, icon: Sparkles },
-        { label: 'Inspiration', href: `${base}/inspo`, icon: Lightbulb },
-      ],
-    },
-    {
-      title: 'Logistics',
-      items: [
-        { label: 'Venue Info', href: `${base}/venue-info`, icon: MapPin },
-        { label: 'Vendors', href: `${base}/vendors`, icon: Store },
-        { label: 'Preferred Vendors', href: `${base}/preferred-vendors`, icon: Star },
         { label: 'Rooms', href: `${base}/rooms`, icon: BedDouble },
         { label: 'Stays', href: `${base}/stays`, icon: Hotel },
-        { label: 'Transportation', href: `${base}/transportation`, icon: Car },
-        { label: 'Staffing', href: `${base}/staffing`, icon: HardHat },
+        { label: 'Seating', href: `${base}/seating`, icon: Armchair },
+        { label: 'Floor Plan', href: `${base}/table-map`, icon: Table2 },
+        { label: 'Table Sizes', href: `${base}/tables`, icon: Table2 },
       ],
     },
     {
-      title: 'Wedding Details',
+      // 2026-05-26-late — Venue Inclusions ("what you can borrow from
+      // the venue") and Recommended Buys (curated shopping list) are
+      // the most-searched-for items in this group. Pinned to the top
+      // so clients don't hunt. Group stays open by default — see
+      // DEFAULT_COLLAPSED below.
+      title: 'Inclusions & Resources',
       items: [
-        { label: 'Wedding Details', href: `${base}/wedding-details`, icon: Heart },
-        // B2 starting cut (2026-05-08): couple + family addresses for
-        // thank-you cards, hotel block math, and identity-graph signals.
-        { label: 'Addresses', href: `${base}/addresses`, icon: MapPin },
         { label: 'Venue Inclusions', href: `${base}/venue-inventory`, icon: Package },
         { label: 'Recommended Buys', href: `${base}/picks`, icon: ShoppingBag },
-      ],
-    },
-    {
-      title: 'Documents & Booking',
-      items: [
-        { label: 'Contracts', href: `${base}/contracts`, icon: FileSignature },
-        { label: 'Booking', href: `${base}/booking`, icon: CalendarPlus },
-        { label: 'Final Review', href: `${base}/final-review`, icon: ClipboardList },
-        { label: 'Wedding Website', href: `${base}/website`, icon: Globe },
-        { label: 'Downloads', href: `${base}/downloads`, icon: Download },
+        { label: 'Inspiration', href: `${base}/inspo`, icon: Lightbulb },
+        { label: 'Worksheets', href: `${base}/worksheets`, icon: FileText },
         // Resources page (rebuilt 2026-05-08) reads brand_assets where
-        // couple_facing = true. Watercolors, floor plans, favor templates,
-        // programs - whatever the venue has flagged for couples.
+        // couple_facing = true. Watercolors, floor plans, favor templates.
         { label: 'Resources', href: `${base}/resources`, icon: FileDown },
+        { label: 'Downloads', href: `${base}/downloads`, icon: Download },
+        { label: 'Wedding Website', href: `${base}/website`, icon: Globe },
       ],
     },
     {
@@ -125,9 +132,7 @@ export function buildCoupleSidebarSections(
         { label: 'Messages', href: `${base}/messages`, icon: MessagesSquare },
       ],
     },
-    // Tier-B #59A - surface the day-of view ONLY in the final week.
-    // Outside that window the page itself renders a placeholder so a
-    // direct URL still resolves; this gate keeps the sidebar focused.
+    // Tier-B #59A — Day-of view only surfaces in the final week.
     ...(showDayOf
       ? [{
           title: 'This week',
@@ -136,10 +141,7 @@ export function buildCoupleSidebarSections(
           ],
         }]
       : []),
-    // Tier-D #190 (2026-05-08): "After Your Wedding" section gated to
-    // post-wedding window only. Pre-wedding the page would render empty
-    // and confuse couples; the launch-plan note for 0a0b6f1 claimed
-    // this was already gated but the section was unconditional. Fixed.
+    // Tier-D #190 — "After Your Wedding" gated to post-wedding.
     ...(showAfterWedding
       ? [{
           title: 'After Your Wedding',
@@ -158,14 +160,13 @@ export function buildCoupleSidebarSections(
 }
 
 /**
- * Sections that should be collapsed by default for new couples.
- * Sarah's first-impression audit (#38): 37 links across 8 sections
- * with all opened was overwhelming. Most-used-early sections stay
- * open; far-future sections collapse until expanded.
+ * Sections collapsed by default. Only "After Your Wedding" since it's
+ * post-event noise during planning. 2026-05-26-late: previously also
+ * collapsed "Inspo & Resources" but a real client couldn't find Venue
+ * Inclusions (the "borrow" stuff). Opening the group + putting
+ * Inclusions/Buys at the top fixes the discoverability.
  */
 const DEFAULT_COLLAPSED = new Set([
-  'Day-of',
-  'Wedding Details',
   'After Your Wedding',
 ])
 
@@ -186,9 +187,52 @@ interface CoupleSidebarProps {
 
 export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: CoupleSidebarProps) {
   const pathname = usePathname()
+  // 2026-05-26 — pulls the authoritative weddingId from CoupleContext
+  // rather than from the layout, which only has a demo-mode proxy.
+  const { weddingId } = useCoupleContext()
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
     () => new Set(DEFAULT_COLLAPSED),
   )
+
+  // 2026-05-26 — per-section status dots. Loads on mount + on
+  // wedding-id change + when MarkSectionCompleteBar dispatches the
+  // status-changed event. Stale across in-tab data writes but
+  // refreshed via the event bus.
+  const [statuses, setStatuses] = useState<Record<string, SectionStatus>>({})
+  useEffect(() => {
+    if (!weddingId) return
+    let cancelled = false
+    const supabase = createClient()
+
+    const fetch = () => {
+      loadSectionStatuses(supabase, weddingId)
+        .then((s) => { if (!cancelled) setStatuses(s) })
+        .catch((err) => console.warn('[CoupleSidebar] status load failed:', err))
+    }
+    fetch()
+
+    const onChange = () => fetch()
+    window.addEventListener(SECTION_STATUS_CHANGED_EVENT, onChange)
+    return () => {
+      cancelled = true
+      window.removeEventListener(SECTION_STATUS_CHANGED_EVENT, onChange)
+    }
+  }, [weddingId])
+
+  // Coordinator priorities — separate effect because it's a single
+  // query (cheap) and we want it refreshed on every page nav so the
+  // couple sees coordinator updates within-session without reloading.
+  // Status fetch (25 HEAD queries) stays gated to mount/event only.
+  const [coordinatorPriorities, setCoordinatorPriorities] = useState<CoordinatorPriority[]>([])
+  useEffect(() => {
+    if (!weddingId) return
+    let cancelled = false
+    const supabase = createClient()
+    loadCoordinatorPriorities(supabase, weddingId)
+      .then((p) => { if (!cancelled) setCoordinatorPriorities(p) })
+      .catch((err) => console.warn('[CoupleSidebar] priorities load failed:', err))
+    return () => { cancelled = true }
+  }, [weddingId, pathname])
   // Days-until-wedding shared by Final Review badge + post-wedding
   // section gating. Sarah-portal Tier-B #62: pre-fix the "After Your
   // Wedding" section was visible for every couple, including those
@@ -261,6 +305,26 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
     })
   }
 
+  // 2026-05-26 — "Now" recommendations. Two sources, coordinator wins:
+  //   1. wedding_priorities (coordinator-flagged) → filled star + note
+  //   2. time-aware default → outlined star
+  // When priorities exist, the time-aware band is replaced; when no
+  // priorities exist, the time-aware band drives the stars.
+  const coordinatorPrioritySlugs = new Set(coordinatorPriorities.map((p) => p.section_slug))
+  const coordinatorNoteBySlug = new Map(coordinatorPriorities.map((p) => [p.section_slug, p.note]))
+  const recommendedSlugs = coordinatorPrioritySlugs.size > 0
+    ? coordinatorPrioritySlugs
+    : getRecommendedSectionSlugs(daysUntilWedding)
+
+  // Slug derivation: every nav href is `${base}/<slug>` so the last
+  // segment is the section slug. Used by both the status dot and the
+  // recommendation star.
+  const slugFromHref = (href: string): string => {
+    const cleaned = href.replace(/\/+$/, '')
+    const last = cleaned.split('/').pop() || ''
+    return last
+  }
+
   const nav = (
     <nav className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto py-4 px-3 space-y-4">
@@ -296,12 +360,24 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
                 <ul className="space-y-0.5">
                   {section.items.map((item) => {
                     const active = isActive(item.href)
+                    const slug = slugFromHref(item.href)
+                    const status = statuses[slug]
+                    const isRecommended = recommendedSlugs.has(slug)
+                    const isCoordinatorFlag = coordinatorPrioritySlugs.has(slug)
+                    const coordinatorNote = coordinatorNoteBySlug.get(slug)
+                    // Tooltip on the link itself surfaces the coordinator
+                    // note (when present) so the hover reveals context.
+                    const linkTitle = isCoordinatorFlag && coordinatorNote
+                      ? `Coordinator priority: ${coordinatorNote}`
+                      : isCoordinatorFlag
+                        ? 'Your coordinator flagged this as a priority'
+                        : item.tooltip
                     return (
                       <li key={item.href}>
                         <Link
                           href={item.href}
                           onClick={onMobileClose}
-                          title={item.tooltip}
+                          title={linkTitle}
                           className={cn(
                             'flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-colors',
                             active
@@ -312,6 +388,56 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
                         >
                           <item.icon className="w-4 h-4 shrink-0" />
                           <span className="flex-1">{item.label}</span>
+
+                          {/* "Now" recommendation star — wins over status dot.
+                              Filled when coordinator-flagged (priority), faded
+                              when just time-aware. Shown before the dot so
+                              the eye lands on the priority signal first. */}
+                          {isRecommended && (
+                            <Star
+                              className={cn(
+                                'w-3.5 h-3.5 shrink-0',
+                                active
+                                  ? 'fill-white text-white'
+                                  : isCoordinatorFlag
+                                    ? 'fill-amber-500 text-amber-500'
+                                    : 'fill-amber-300 text-amber-400'
+                              )}
+                              aria-label={isCoordinatorFlag ? 'Coordinator priority' : 'Recommended now'}
+                            />
+                          )}
+
+                          {/* Status dot:
+                                amber     = started, not yet signed off
+                                green     = couple signed off
+                                confirmed = couple AND coordinator both signed
+                                            (dot gets an emerald outer ring) */}
+                          {status && (
+                            <span
+                              className={cn(
+                                'w-2 h-2 rounded-full shrink-0',
+                                status === 'amber' && 'bg-amber-400',
+                                (status === 'green' || status === 'confirmed') && 'bg-emerald-500',
+                                status === 'confirmed' && !active && 'ring-2 ring-emerald-200 ring-offset-1 ring-offset-white',
+                                active && 'ring-1 ring-white/60'
+                              )}
+                              aria-label={
+                                status === 'confirmed'
+                                  ? 'Coordinator confirmed'
+                                  : status === 'green'
+                                    ? 'Marked done'
+                                    : 'In progress'
+                              }
+                              title={
+                                status === 'confirmed'
+                                  ? 'Coordinator confirmed'
+                                  : status === 'green'
+                                    ? 'Marked done — awaiting coordinator review'
+                                    : 'In progress'
+                              }
+                            />
+                          )}
+
                           {item.badge && (
                             <span
                               className={cn(

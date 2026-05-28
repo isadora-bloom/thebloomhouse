@@ -453,13 +453,135 @@ Return 5-15 items. Be specific and factual.`,
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Step 7: Extract draft budget items (R1#5).
+  //
+  // Asks the model for a strict JSON array of payment rows. Each row is
+  // inserted with auto_extracted=true + source_contract_id so the
+  // Budget page can badge them as drafts the couple must approve. The
+  // extraction is idempotent per contract — re-running analyze deletes
+  // any prior unconfirmed rows for this contract before re-inserting,
+  // so a re-run doesn't double-create. Already-confirmed rows are
+  // never touched.
+  // -----------------------------------------------------------------------
+  let budgetItemsCount = 0
+
+  try {
+    const budgetBuilt = await buildCouplePrompt({
+      venueId: auth.venueId,
+      weddingId: auth.weddingId,
+      fileContext: extractedText.slice(0, 8000),
+      task: 'contract_question',
+      taskInstructions: `Extract every payment line from the contract above as a JSON array.
+
+Each object MUST have:
+- "item_name": short label (e.g. "Photography retainer", "Catering final payment")
+- "category": one of "Venue", "Photography", "Videography", "Catering", "Florist", "DJ/Band", "Hair & Makeup", "Officiant", "Cake", "Rentals", "Transportation", "Other"
+- "budgeted": number — dollar amount of this payment (no currency symbol, no commas)
+- "payment_due_date": ISO date "YYYY-MM-DD" if the contract states one, otherwise null
+- "payment_source": null (couples set this themselves later)
+- "notes": optional one-line note (e.g. "Non-refundable retainer", "Due 30 days before event")
+
+Rules:
+- Only return rows you can find a concrete dollar amount for. No estimates.
+- One row per payment (retainer + balance = two rows, not one combined).
+- If the same payment is described twice in the contract, dedupe.
+- Skip line items that are 0, refunds, or hypothetical examples.
+- Return [] if there are no clear payment terms.
+
+Return ONLY the JSON array, no commentary.`,
+    })
+
+    type ExtractedBudgetItem = {
+      item_name: string
+      category: string
+      budgeted: number
+      payment_due_date: string | null
+      payment_source: string | null
+      notes: string | null
+    }
+
+    const extractedItems = await callAIJson<ExtractedBudgetItem[]>({
+      systemPrompt: budgetBuilt.systemPrompt,
+      userPrompt: 'Return the JSON array of payment line items extracted from the contract above.',
+      maxTokens: 1500,
+      venueId: auth.venueId,
+      taskType: 'contract_budget_extraction',
+      contentTier: budgetBuilt.contentTier,
+      promptVersion: budgetBuilt.promptVersion,
+    })
+
+    const cleanedItems = (Array.isArray(extractedItems) ? extractedItems : [])
+      .filter((row) => row && typeof row.item_name === 'string' && Number.isFinite(row.budgeted) && row.budgeted > 0)
+      // Defensive caps so an LLM hallucination can't blow out the budget table.
+      .slice(0, 30)
+      .map((row) => ({
+        venue_id: auth.venueId,
+        wedding_id: auth.weddingId,
+        category: typeof row.category === 'string' && row.category.trim().length > 0 ? row.category.trim() : 'Other',
+        item_name: row.item_name.trim().slice(0, 200),
+        budgeted: Math.min(Math.max(row.budgeted, 0), 1_000_000),
+        committed: 0,
+        paid: 0,
+        payment_due_date: validIsoDate(row.payment_due_date),
+        // The model can sometimes return non-string here (object,
+        // number, boolean). Coerce to null unless it's a non-empty
+        // string. Couples set this themselves via the budget UI later.
+        payment_source: typeof row.payment_source === 'string' && row.payment_source.trim().length > 0
+          ? row.payment_source.trim().slice(0, 80)
+          : null,
+        vendor_name: contract.vendor_name ?? null,
+        notes: typeof row.notes === 'string' ? row.notes.trim().slice(0, 500) : null,
+        source_contract_id: contractId,
+        auto_extracted: true,
+        extraction_confirmed_at: null,
+      }))
+
+    if (cleanedItems.length > 0) {
+      // Wipe any prior unconfirmed rows from THIS contract first, so a
+      // re-analyze doesn't double the draft list. Confirmed rows are
+      // preserved.
+      await supabase
+        .from('budget_items')
+        .delete()
+        .eq('wedding_id', auth.weddingId)
+        .eq('source_contract_id', contractId)
+        .is('extraction_confirmed_at', null)
+
+      const { error: insertErr } = await supabase
+        .from('budget_items')
+        .insert(cleanedItems)
+
+      if (!insertErr) {
+        budgetItemsCount = cleanedItems.length
+      } else {
+        console.warn('[contracts/analyze] budget extraction insert failed:', insertErr)
+      }
+    }
+  } catch (err) {
+    console.warn('[contracts/analyze] budget extraction failed (non-fatal):', err)
+  }
+
   return NextResponse.json({
     success: true,
     analysis: analysisResult.text,
     keyTerms: foundTerms,
     extractedText: extractedText.slice(0, 500) + (extractedText.length > 500 ? '...' : ''),
     planningNotesCount: planningNotes.length,
+    budgetItemsCount,
   })
+}
+
+// ---------------------------------------------------------------------------
+// Validate that a string is a YYYY-MM-DD date the DB can accept.
+// Returns the string if valid, null otherwise.
+// ---------------------------------------------------------------------------
+function validIsoDate(input: unknown): string | null {
+  if (typeof input !== 'string') return null
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input)) return null
+  const d = new Date(input)
+  if (isNaN(d.getTime())) return null
+  return input
 }
 
 // ---------------------------------------------------------------------------

@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
     // venueId is resolved below — body value is only trusted for authenticated
     // (non-demo) callers. Demo callers have their venueId bound to the signed
     // token payload so a starter-tier coordinator cannot pass their real venue.
-    const { weddingId, message, fileUrl, fileContext } = body
+    const { weddingId, message, fileUrl, fileContext, currentSection } = body
 
     if (!message) {
       return NextResponse.json(
@@ -415,12 +415,21 @@ export async function POST(request: NextRequest) {
     // 4. Generate response via sage-brain (all 4 prompt layers + KB + context)
     // -----------------------------------------------------------------------
 
+    // Sanitize currentSection — accept only a short slug, never trust
+    // the body blindly. The brain looks it up against the static
+    // registry, so an unknown slug just degrades to "no section context".
+    const safeSection =
+      typeof currentSection === 'string' && /^[a-z0-9-]{1,40}$/.test(currentSection)
+        ? currentSection
+        : null
+
     const sageResult = await generateSageResponse({
       venueId,
       weddingId: weddingId || venueId, // fallback for non-wedding queries
       message,
       conversationHistory,
       fileContext: resolvedFileContext || undefined,
+      currentSection: safeSection,
     })
 
     const { confidence, aiName, coupleFirstName } = sageResult

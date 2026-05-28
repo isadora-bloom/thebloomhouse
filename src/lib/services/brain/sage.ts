@@ -37,6 +37,15 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { getSageTaskPrompt } from '@/config/prompts/task-prompts-sage'
 import { formatBrainBlock, type AutoContextNote } from '@/lib/services/identity/auto-context-loader'
+import {
+  buildSectionsDirectoryBlock,
+  buildCurrentSectionBlock,
+  getSectionBySlug,
+} from '@/lib/services/sage/portal-sections'
+import {
+  getContractsLibrary,
+  formatContractsLibraryBlock,
+} from '@/lib/services/sage/contracts-library'
 
 // ---------------------------------------------------------------------------
 // Stream EEEE: human-escalation detection + chat sign-off
@@ -169,6 +178,10 @@ export interface SageResponseOptions {
   taskType?: string
   /** Optional file context (extracted text or description) injected into the prompt */
   fileContext?: string
+  /** Slug of the couple-portal section the user is currently viewing
+   *  (e.g. "bar", "seating"). When provided, Sage gets a "you are here"
+   *  block so she can anticipate intent local to that page. */
+  currentSection?: string | null
 }
 
 export interface SageResponse {
@@ -519,15 +532,19 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
 export async function generateSageResponse(
   options: SageResponseOptions
 ): Promise<SageResponse> {
-  const { venueId, weddingId, message, conversationHistory, taskType, fileContext } = options
+  const { venueId, weddingId, message, conversationHistory, taskType, fileContext, currentSection } = options
 
   // Load all context in parallel
-  const [personalityData, intelligenceContext, kbResults, weddingContext] =
+  const [personalityData, intelligenceContext, kbResults, weddingContext, contractsLibrary] =
     await Promise.all([
       loadPersonalityData(venueId),
       buildSageIntelligenceContext(venueId),
       searchKnowledgeBase(venueId, message),
       getWeddingContext(weddingId),
+      // R1#7 — couple's contracts library for cross-contract Q&A and
+      // policy comparison. Lite summaries only; full text stays at the
+      // /contracts page + handleAsk single-contract path.
+      getContractsLibrary(weddingId),
     ])
 
   // Extract aiName up-front so the task prompt's {AI_NAME} substitution
@@ -672,6 +689,48 @@ export async function generateSageResponse(
     fileContextBlock = `\n--- ATTACHED FILE CONTEXT ---\nThe user has attached a file or is asking about a specific contract. Here is the content:\n\n${fileContext}\n\nAnswer questions about this file in the context of their wedding planning. Be specific about dates, amounts, and terms you find in the document.\n--- END FILE CONTEXT ---\n`
   }
 
+  // Portal sections directory — gives Sage omniscient knowledge of every
+  // section a couple can land on, so she can route them ("the bar
+  // planner is at /bar") instead of saying "I don't know about that."
+  // R1#1 feedback (2026-03-29): Sage needs knowledge of every portal
+  // section — what it does, how to use it.
+  //
+  // 2026-05-26-late: when sending the couple to a section, ALWAYS
+  // write a Markdown link in the form [Label](/slug). The chat
+  // renderer auto-prepends the venue base path so the link is
+  // clickable. Pointing to two sections in one message? Two separate
+  // links. Don't write the bare slug "/bar" in the body — it won't
+  // be a link.
+  const portalSectionsBlock =
+    `\n--- PORTAL SECTIONS GUIDE ---\n` +
+    `The couple portal contains the following sections. When a couple asks ` +
+    `how to do something, point them to the right page using a Markdown link ` +
+    `with the format \`[Section Label](/slug)\` — the chat renders it as a ` +
+    `clickable link they can tap. Example: "Head to your [Bar Planner](/bar) ` +
+    `to set drink levels." Don't invent sections that aren't listed below. ` +
+    `Don't write bare slugs like "/bar" in prose — only the bracketed Markdown ` +
+    `form renders as a link.\n\n` +
+    buildSectionsDirectoryBlock() +
+    `\n--- END PORTAL SECTIONS ---\n`
+
+  // "You are here" block — only when the caller passes a known section.
+  // Lets Sage tailor "what should I work on?" to the current page.
+  let currentSectionBlock = ''
+  if (currentSection) {
+    const section = getSectionBySlug(currentSection)
+    if (section) {
+      currentSectionBlock =
+        `\n--- COUPLE'S CURRENT VIEW ---\n` +
+        buildCurrentSectionBlock(section) +
+        `\n--- END CURRENT VIEW ---\n`
+    }
+  }
+
+  // R1#7 — contracts library + policy-comparison directive. Empty
+  // string when the couple has no analysed contracts; the assembler's
+  // .filter(Boolean) drops it cleanly in that case.
+  const contractsLibraryBlock = formatContractsLibraryBlock(contractsLibrary)
+
   // Assemble full system prompt: assembler floor + chat-specific context.
   const systemPrompt = [
     built.systemPrompt,
@@ -680,6 +739,9 @@ export async function generateSageResponse(
     reviewsBlock,
     kbContext,
     intelligenceContext,
+    portalSectionsBlock,
+    currentSectionBlock,
+    contractsLibraryBlock,
     fileContextBlock,
   ]
     .filter(Boolean)

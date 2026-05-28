@@ -28,6 +28,7 @@ import {
   Users,
   MoreHorizontal,
   Download,
+  FileText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { exportToCsv } from '@/lib/utils/csv-export'
@@ -58,6 +59,12 @@ interface BudgetItem {
   vendor_name: string | null
   sort_order: number
   payments?: PaymentRecord[]
+  // R1#5 — set when the row was auto-extracted from a contract. Until
+  // extraction_confirmed_at is set, the row renders as a draft pending
+  // the couple's approval.
+  source_contract_id: string | null
+  auto_extracted: boolean
+  extraction_confirmed_at: string | null
 }
 
 interface BudgetFormData {
@@ -237,6 +244,9 @@ export default function BudgetPage() {
           vendor_name: (d.vendor_name as string | null) ?? null,
           sort_order: (d.sort_order as number) || 0,
           payments,
+          source_contract_id: (d.source_contract_id as string | null) ?? null,
+          auto_extracted: Boolean(d.auto_extracted),
+          extraction_confirmed_at: (d.extraction_confirmed_at as string | null) ?? null,
         }
       })
       setItems(mapped)
@@ -291,6 +301,12 @@ export default function BudgetPage() {
     const underBudget = totalBudget > 0 && committed <= totalBudget
     return { budgeted, committed, paid, remaining, overBudget, underBudget }
   }, [items, totalBudget])
+
+  // R1#5 — pending count drives the extraction banner.
+  const pendingExtractionCount = useMemo(
+    () => items.filter((i) => i.auto_extracted && !i.extraction_confirmed_at).length,
+    [items]
+  )
 
   // ---- Group by category ----
   const groupedItems = useMemo(() => {
@@ -394,7 +410,16 @@ export default function BudgetPage() {
     // Note: `is_custom_category` is tracked client-side via DEFAULT_CATEGORIES
     // membership; the DB schema (migration 017) has no such column, so we
     // must NOT include it in the insert payload or the write will fail.
-    const payload = {
+    //
+    // R1#5 audit fix: if the couple is editing an auto-extracted draft
+    // row, treat the edit as implicit approval. Otherwise a re-analyze
+    // of the source contract would wipe their edit (extraction wipes
+    // any rows still flagged unconfirmed for that contract_id).
+    const editingItem = editingId ? items.find((i) => i.id === editingId) : null
+    const shouldConfirmExtraction =
+      editingItem != null && editingItem.auto_extracted && !editingItem.extraction_confirmed_at
+
+    const payload: Record<string, unknown> = {
       venue_id: venueId,
       wedding_id: weddingId,
       category: form.category,
@@ -407,6 +432,9 @@ export default function BudgetPage() {
       sort_order: editingId
         ? items.find((i) => i.id === editingId)?.sort_order || items.length + 1
         : items.length + 1,
+    }
+    if (shouldConfirmExtraction) {
+      payload.extraction_confirmed_at = new Date().toISOString()
     }
 
     if (editingId) {
@@ -438,6 +466,68 @@ export default function BudgetPage() {
     await supabase.from('budget_payments').delete().eq('budget_item_id', id)
     await supabase.from('budget_items').delete().eq('id', id)
     setItems((prev) => prev.filter((i) => i.id !== id))
+  }
+
+  // R1#5 — approve a draft row the contract extraction created. Setting
+  // extraction_confirmed_at flips the row out of "review pending"; the
+  // auto_extracted flag stays so the badge can still mark provenance.
+  async function handleApproveExtraction(id: string) {
+    if (!weddingId) return
+    const confirmedAt = new Date().toISOString()
+    const { error } = await supabase
+      .from('budget_items')
+      .update({ extraction_confirmed_at: confirmedAt })
+      .eq('id', id)
+      .eq('wedding_id', weddingId)
+    if (error) {
+      console.error('[budget] approve extraction failed:', error)
+      alert('Failed to approve: ' + error.message)
+      return
+    }
+    setItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, extraction_confirmed_at: confirmedAt } : i))
+    )
+  }
+
+  // Reject a draft row — same as delete, scoped to drafts so a couple
+  // can quickly clear noise from the extraction.
+  async function handleRejectExtraction(id: string) {
+    if (!weddingId) return
+    if (!confirm('Remove this extracted item from your budget?')) return
+    const { error } = await supabase
+      .from('budget_items')
+      .delete()
+      .eq('id', id)
+      .eq('wedding_id', weddingId)
+    if (error) {
+      console.error('[budget] reject extraction failed:', error)
+      return
+    }
+    setItems((prev) => prev.filter((i) => i.id !== id))
+  }
+
+  // Approve every pending draft at once. Powers the "Approve all"
+  // shortcut on the top-of-page extraction banner.
+  async function handleApproveAllExtractions() {
+    if (!weddingId) return
+    const confirmedAt = new Date().toISOString()
+    const { error } = await supabase
+      .from('budget_items')
+      .update({ extraction_confirmed_at: confirmedAt })
+      .eq('wedding_id', weddingId)
+      .eq('auto_extracted', true)
+      .is('extraction_confirmed_at', null)
+    if (error) {
+      console.error('[budget] approve-all failed:', error)
+      return
+    }
+    setItems((prev) =>
+      prev.map((i) =>
+        i.auto_extracted && !i.extraction_confirmed_at
+          ? { ...i, extraction_confirmed_at: confirmedAt }
+          : i
+      )
+    )
   }
 
   // ---- Payment modal ----
@@ -681,6 +771,30 @@ export default function BudgetPage() {
         )}
       </div>
 
+      {/* R1#5 — contract-extraction draft banner. Surfaces when one or
+          more rows are auto_extracted and unconfirmed. "Approve all" is
+          a single-click shortcut so couples don't have to walk the list
+          one by one when the extraction was clean. */}
+      {pendingExtractionCount > 0 && (
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border border-amber-200 bg-amber-50">
+          <FileText className="w-5 h-5 text-amber-600 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-amber-900">
+              {pendingExtractionCount} payment{pendingExtractionCount === 1 ? '' : 's'} extracted from your contracts
+            </p>
+            <p className="text-xs text-amber-700">
+              Review and approve, or remove anything that doesn&apos;t look right.
+            </p>
+          </div>
+          <button
+            onClick={handleApproveAllExtractions}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg text-white bg-amber-600 hover:bg-amber-700 transition-colors shrink-0"
+          >
+            Approve all
+          </button>
+        </div>
+      )}
+
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -815,6 +929,20 @@ export default function BudgetPage() {
                                     {dueInfo.text}
                                   </span>
                                 )}
+                                {/* R1#5 — extraction provenance + draft state */}
+                                {item.auto_extracted && !item.extraction_confirmed_at && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                                    Pending review
+                                  </span>
+                                )}
+                                {item.auto_extracted && item.extraction_confirmed_at && (
+                                  <span
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600"
+                                    title="Extracted from a contract"
+                                  >
+                                    From contract
+                                  </span>
+                                )}
                               </div>
                               {item.notes && (
                                 <p className="text-xs text-gray-400 mt-0.5 truncate">{item.notes}</p>
@@ -850,33 +978,56 @@ export default function BudgetPage() {
                             </div>
 
                             {/* Actions */}
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                              <button
-                                onClick={() => openRecordPayment(item.id)}
-                                className="p-1.5 rounded-md text-gray-400 hover:text-green-600 hover:bg-green-50"
-                                title="Record payment"
-                              >
-                                <DollarSign className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => togglePayments(item.id)}
-                                className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                                title="View payments"
-                              >
-                                <Receipt className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => openEditItem(item)}
-                                className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteItem(item.id)}
-                                className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {/* R1#5 — extraction draft state. Approve / reject
+                                  are always visible (not hidden behind hover) so
+                                  couples can clear the draft list quickly. */}
+                              {item.auto_extracted && !item.extraction_confirmed_at ? (
+                                <>
+                                  <button
+                                    onClick={() => handleApproveExtraction(item.id)}
+                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                                    title="Approve this extracted payment"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectExtraction(item.id)}
+                                    className="px-2 py-1 rounded-md text-[11px] font-medium text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                    title="Remove this draft"
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              ) : null}
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  onClick={() => openRecordPayment(item.id)}
+                                  className="p-1.5 rounded-md text-gray-400 hover:text-green-600 hover:bg-green-50"
+                                  title="Record payment"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => togglePayments(item.id)}
+                                  className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                                  title="View payments"
+                                >
+                                  <Receipt className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => openEditItem(item)}
+                                  className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteItem(item.id)}
+                                  className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </div>
                           </div>
 
