@@ -380,6 +380,39 @@ function parseZola(from: string, body: string): FormRelayLead | null {
   // Zola moved the per-prospect relay onto a subdomain (e.g.
   // connect-{uuid}@vmkt-message.zola.com) — must match any zola.com subdomain.
   const connectMatch = body.match(/connect-[a-f0-9-]+@(?:[\w-]+\.)*zola\.com/i)
+
+  // 2026-05-28 platform-notification guard. Zola sends BOTH real
+  // inquiry forwards AND platform-admin emails from the same shared
+  // sender address (weddingvendors@zola.com / Kathleen K display name).
+  // The admin set includes:
+  //   - "You're connected with X & Y 🙌" — confirmation that the
+  //     operator/couple connection was made (the couple's contact
+  //     info was already shared)
+  //   - "One day left! Respond to X & Y" — expiry warning for an
+  //     existing-but-unanswered inquiry
+  //   - "New message from X & Y for <venue>" — "go check the Zola
+  //     dashboard inbox" notification, no body content
+  //   - "X closed their inquiry" — lost-lead notification
+  //   - "Response needed—You have a new inquiry!" — generic reminder
+  //   - "Let's collaborate, Isadora" / "Are you missing out…" / "Good
+  //     news! Your Zola plan is ready" — marketing
+  //
+  // Real Zola inquiries carry EITHER a per-prospect connect-{uuid}
+  // relay in the body OR the structured form sections ("sent you an
+  // inquiry" headline + "Their note to you" + Desired day/Guest count/
+  // Overall budget labels). Admin emails carry NEITHER. Refuse to
+  // mint a FormRelayLead from the latter — the inbound stays out of
+  // the form-relay code path and won't trigger a Sage draft to
+  // weddingvendors@zola.com (the v1 pre-7d68f37 footgun, plus the
+  // operator-flagged 2026-05-28 inbox showing 3 such admin drafts).
+  const hasRealInquiryMarkers =
+    /sent you an inquiry/i.test(body) ||
+    /Their note to you/i.test(body) ||
+    /(?:Desired day|Wedding date|Guest count|Overall budget)\s*[:\r\n]/i.test(body)
+  if (!connectMatch && !hasRealInquiryMarkers) {
+    return null
+  }
+
   const replyTo = connectMatch ? connectMatch[0].toLowerCase() : fromAddr
 
   // Prospect name(s): "Molly w & Ethan W sent you an inquiry!"
