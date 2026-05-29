@@ -24,7 +24,7 @@ async function main() {
   console.log()
 
   const result = detectFormRelay(
-    { from, to: null, subject: i.subject as string, body },
+    { from, to: '', subject: i.subject as string, body },
     new Set(),
   )
   console.log('detectFormRelay result:')

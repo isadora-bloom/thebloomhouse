@@ -2535,6 +2535,9 @@ export async function processIncomingEmail(
           rawFromEmail,
           weddingId,
           actionType: 'human_requested',
+          // Phase 1.1.b (N3 / GC-10): full body + headers into the spine.
+          fullBody: email.body,
+          rfc2822Headers: email.headers,
           // formLead wins over schedulingEvent (matches the identity-
           // priority order at pipeline.ts:1277-1281 for fromEmail).
           resolvedEmail: formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? null,
@@ -5014,6 +5017,12 @@ export async function processIncomingEmail(
           rawFromEmail,
           draftId,
           weddingId,
+          // Phase 1.1.b (N3 / GC-10 — no silent drops): forward the full
+          // body + RFC2822 headers into the spine's raw_payload so the
+          // couple's record no longer depends on the legacy interactions
+          // row for content (lets interactions be retired — gap G1).
+          fullBody: email.body,
+          rfc2822Headers: email.headers,
           // formLead wins over schedulingEvent (matches the identity-
           // priority order at pipeline.ts:1277-1281 for fromEmail).
           resolvedEmail: formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? null,

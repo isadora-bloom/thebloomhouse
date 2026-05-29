@@ -1,0 +1,8 @@
+{
+  "_README": "Anti-bandaid ratchet (Mandate M1). Baseline = audit-measured 2026-05-28 truth. Each number may only DECREASE; CI (check-cleanup-budget.mjs) fails if any rises. Lower these at every phase boundary. Phase-4 ship-gate targets: cron_count<=~24, duplicate_identity_modules=0, resolver_reassign_calls=0, grandfather_entries=0, migration_files=1 (post-flatten). Re-snapshot deliberately with --update; the diff is the human decision point.",
+  "cron_count": 49,
+  "duplicate_identity_modules": 5,
+  "resolver_reassign_calls": 34,
+  "grandfather_entries": 27,
+  "migration_files": 376
+}

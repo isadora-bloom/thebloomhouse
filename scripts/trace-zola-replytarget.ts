@@ -23,13 +23,13 @@ async function main() {
   const from = i.from_name ? `${i.from_name} <${rawFromEmail}>` : rawFromEmail
 
   // Simulate the pipeline's resolution chain.
-  const formLead = detectFormRelay({ from, to: i.to_email as string | null, subject: i.subject as string, body }, new Set())
+  const formLead = detectFormRelay({ from, to: (i.to_email as string | null) ?? '', subject: i.subject as string, body }, new Set())
   const baseExtractedIdentity = extractIdentityFromEmail({ subject: i.subject as string, body }, { ownEmails: new Set() })
   const extractedPrimaryEmail = typeof baseExtractedIdentity.primary_email === 'string'
     ? baseExtractedIdentity.primary_email : null
   const useExtractedFallback = extractedPrimaryEmail !== null && /^messages@(weddingwire|theknotww)\.com$/i.test(rawFromEmail)
-  const fromEmail = formLead?.leadEmail ?? null ?? (useExtractedFallback ? extractedPrimaryEmail : rawFromEmail)
-  const replyTargetEmail = formLead?.replyToEmail ?? null ?? fromEmail
+  const fromEmail = formLead?.leadEmail ?? (useExtractedFallback ? extractedPrimaryEmail : rawFromEmail)
+  const replyTargetEmail = formLead?.replyToEmail ?? fromEmail
 
   console.log('=== detectFormRelay ===')
   console.log('source:', formLead?.source)

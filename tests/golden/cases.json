@@ -1,0 +1,224 @@
+{
+  "_README": "Golden cases (FIX-PLAN Layer C). Each assertion carries a `surface`: 'spine' runs now against the live cascade (linkSignal); 'legacy' targets tables linkSignal doesn't write under shadow mode (people / attribution_events) — un-tag when Phase 3 migrates that limb; 'pending:D4|D5|A2' needs a schema addition from CANONICAL-RECONCILIATION-SPECS.md that doesn't exist yet (point_zero cols, touchpoint direction/zero_phase, identifier-pool/reliability) — un-tag when that migration lands. PENDING assertions are REPORTED every run, never silently passed. The full run is a phase-gate instrument (needs a TEST-BRANCH DB); a case goes green as its phase ships. Catalog is ADDITIVE-ONLY (removal needs CEO sign-off). GC-1/2 ported from Bloom Scratch goldens; GC-3/4 are House failure shapes; GC-5..9 are Canonical v1.0 examples/invariants.",
+  "cases": [
+    {
+      "id": "GC-1",
+      "title": "Doug L. — relay + direct collapse to ONE couple",
+      "gaps": ["G5"],
+      "source": "Bloom Scratch golden A",
+      "signals": [
+        { "channel": "knot", "action": "knot_message", "name": "Doug Loxtercamp", "identifiers": [{ "kind": "email", "value": "doug.loxtercamp.772357@member.theknot.com", "reliability": "relay" }], "at": "2026-01-04T10:00:00Z" },
+        { "channel": "knot", "action": "knot_message", "name": "Doug Loxtercamp", "identifiers": [{ "kind": "email", "value": "doug.loxtercamp.772357@member.theknot.com", "reliability": "relay" }], "at": "2026-01-06T12:00:00Z", "body": "Nevermind" },
+        { "channel": "gmail", "action": "reply", "name": "Doug Loxtercamp", "identifiers": [{ "kind": "email", "value": "dloxtercamp@gmail.com", "reliability": "direct" }], "at": "2026-03-09T09:00:00Z", "body": "Are highland cows available?" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "link_actions_include", "eq": ["attached"], "surface": "spine" },
+        { "check": "touchpoint_count_min", "min": 2, "surface": "spine" },
+        { "check": "identifier_reliability", "value": "doug.loxtercamp.772357@member.theknot.com", "reliability": "relay", "surface": "pending:A2-identifier-pool" },
+        { "check": "identifier_reliability", "value": "dloxtercamp@gmail.com", "reliability": "direct", "surface": "pending:A2-identifier-pool" },
+        { "check": "lifecycle_value", "eq": "dropped_on_our_side", "surface": "pending:D5-lifecycle-vocab" }
+      ]
+    },
+    {
+      "id": "GC-2",
+      "title": "Ashley + Ryan — cross-source (original_source vs inquiry_channel)",
+      "gaps": ["G23"],
+      "source": "Bloom Scratch golden B",
+      "signals": [
+        { "channel": "knot", "action": "knot_view", "name": "Ashley", "identifiers": [{ "kind": "email", "value": "ashley.r.5521@member.theknot.com", "reliability": "relay" }], "at": "2025-11-02T10:00:00Z", "repeat": 24 },
+        { "channel": "web", "action": "calculator_submitted", "name": "Ashley Bennett", "identifiers": [{ "kind": "email", "value": "ashleybennett@gmail.com", "reliability": "direct" }], "at": "2026-02-15T14:00:00Z" }
+      ],
+      "_note": "Relay 'Ashley' + calculator 'Ashley Bennett' share NO deterministic anchor (different name strings, relay≠direct email). Deterministic-first CORRECTLY keeps them separate (forcing a merge here is the unsafe heuristic that causes GC-4 over-merges). Full cross-source reconstruction to ONE couple needs the corroborated probabilistic bridge (LLM judge + Point-Zero coalescence) — a future feature, hence pending.",
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "pending:probabilistic-bridge" },
+        { "check": "link_actions_include", "eq": ["attached"], "surface": "pending:probabilistic-bridge" },
+        { "check": "fact", "field": "original_source", "value": "The Knot", "confidence": "confirmed", "surface": "pending:phase-3.3-attribution" },
+        { "check": "fact", "field": "inquiry_channel", "value": "Calculator", "surface": "pending:phase-3.3-attribution" }
+      ]
+    },
+    {
+      "id": "GC-3",
+      "title": "Liam Hunt — partner2 exists, never a 3rd person row",
+      "gaps": ["G6"],
+      "source": "House under-merge bug (the canonical cleanup)",
+      "signals": [
+        { "channel": "honeybook", "action": "contract_signed", "name": "Liam Hunt", "partnerName": "Lea Nowak", "wedding_id": "W-LIAM", "identifiers": [{ "kind": "email", "value": "liam@example.com", "reliability": "direct" }], "at": "2026-01-10T10:00:00Z" },
+        { "channel": "gmail", "action": "reply", "name": "Liam Hunt", "partnerName": "Lea", "wedding_id": "W-LIAM", "identifiers": [{ "kind": "email", "value": "liam@example.com", "reliability": "direct" }], "at": "2026-01-20T10:00:00Z" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "link_actions_include", "eq": ["attached"], "surface": "spine" },
+        { "check": "people_for_wedding_max", "wedding_id": "W-LIAM", "max": 2, "surface": "legacy" },
+        { "check": "no_person_named", "value": "Liam null", "surface": "legacy" }
+      ]
+    },
+    {
+      "id": "GC-4",
+      "title": "Two Sarahs — distinct couples stay TWO, ambiguous routes to review",
+      "gaps": ["D6"],
+      "source": "House over-merge risk / Scratch Tier-1.5 guard",
+      "signals": [
+        { "channel": "gmail", "action": "reply", "name": "Sarah Miller", "identifiers": [{ "kind": "email", "value": "sarah.m@gmail.com", "reliability": "direct" }], "at": "2026-02-01T10:00:00Z", "wedding_date": "2026-09-12" },
+        { "channel": "gmail", "action": "reply", "name": "Sarah Miller", "identifiers": [{ "kind": "email", "value": "different.sarah@yahoo.com", "reliability": "direct" }], "at": "2026-02-03T10:00:00Z", "wedding_date": "2027-05-30" }
+      ],
+      "assert": [
+        { "check": "couple_count_min", "min": 2, "surface": "spine" },
+        { "check": "link_action_absent", "eq": "attached", "surface": "spine" },
+        { "check": "auto_merge_suppressed", "surface": "pending:D6-tier1.5-guard" }
+      ]
+    },
+    {
+      "id": "GC-5",
+      "title": "Madison Bryant — 5 signals across 5 channels collapse to ONE record",
+      "gaps": ["G5"],
+      "source": "Canonical v1.0 §9.5 worked example",
+      "signals": [
+        { "channel": "knot", "action": "knot_message", "name": "Madison Bryant", "identifiers": [{ "kind": "email", "value": "madison.b.4410@member.theknot.com", "reliability": "relay" }], "at": "2025-10-01T10:00:00Z" },
+        { "channel": "instagram", "action": "ig_dm", "identifiers": [{ "kind": "instagram_handle", "value": "@madsandwill", "reliability": "inferred" }], "at": "2025-10-03T10:00:00Z" },
+        { "channel": "calendly", "action": "tour_booked", "name": "Will Carter", "identifiers": [{ "kind": "email", "value": "will.carter@gmail.com", "reliability": "direct" }], "at": "2025-10-20T10:00:00Z" },
+        { "channel": "web", "action": "calculator_submitted", "name": "Madison Bryant", "identifiers": [{ "kind": "email", "value": "madison.bryant@gmail.com", "reliability": "direct" }], "at": "2025-11-02T10:00:00Z" },
+        { "channel": "honeybook", "action": "contract_signed", "name": "Madison Bryant", "partnerName": "Will Carter", "identifiers": [{ "kind": "email", "value": "madison.bryant@gmail.com", "reliability": "direct" }], "at": "2025-12-01T10:00:00Z" }
+      ],
+      "_note": "Bridges only where identifiers overlap (calculator + honeybook share madison.bryant@gmail.com). Linking the partner email (will.carter), the Knot relay, and the IG handle into ONE couple needs the probabilistic bridge — future. Deterministic-first keeps the unanchored signals separate (correct, not a bug).",
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "pending:probabilistic-bridge" },
+        { "check": "touchpoint_count_min", "min": 5, "surface": "pending:probabilistic-bridge" },
+        { "check": "lifecycle_value", "eq": "booked", "surface": "legacy" }
+      ]
+    },
+    {
+      "id": "GC-6",
+      "title": "HoneyBook Lead Source ignored — attribution from upstream signal",
+      "gaps": ["G23"],
+      "source": "Canonical v1.0 §3.1 / conflict registry",
+      "signals": [
+        { "channel": "knot", "action": "knot_view", "name": "Priya Shah", "identifiers": [{ "kind": "email", "value": "priya.s.7@member.theknot.com", "reliability": "relay" }], "at": "2026-01-05T10:00:00Z" },
+        { "channel": "honeybook", "action": "contract_signed", "name": "Priya Shah", "lead_source_field": "Instagram", "identifiers": [{ "kind": "email", "value": "priya@gmail.com", "reliability": "direct" }], "at": "2026-02-01T10:00:00Z" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "fact", "field": "original_source", "value": "The Knot", "surface": "pending:phase-3.3-attribution" },
+        { "check": "fact_not_equal", "field": "original_source", "value": "Instagram", "surface": "pending:phase-3.3-attribution" }
+      ]
+    },
+    {
+      "id": "GC-7",
+      "title": "Knot relay ceiling — relay-only stays channel_scoped",
+      "gaps": ["D6"],
+      "source": "Canonical v1.0 conflict registry",
+      "signals": [
+        { "channel": "knot", "action": "knot_message", "name": "Jordan Lee", "identifiers": [{ "kind": "email", "value": "jordan.l.33@member.theknot.com", "reliability": "relay" }], "at": "2026-02-10T10:00:00Z" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "lifecycle_state_any", "eq": "channel_scoped", "surface": "spine" },
+        { "check": "confidence_ceiling", "eq": "medium", "surface": "pending:A2-identifier-pool" }
+      ]
+    },
+    {
+      "id": "GC-8",
+      "title": "Point-Zero — pre-zero discovery vs post-zero reconfirmation",
+      "gaps": ["G13"],
+      "source": "Canonical v1.0 §3.3 / Draft A D4",
+      "signals": [
+        { "channel": "knot", "action": "knot_view", "identifiers": [{ "kind": "knot_id", "value": "anon-knot-991", "reliability": "relay" }], "at": "2026-01-02T10:00:00Z" },
+        { "channel": "web", "action": "calculator_submitted", "name": "Grace Kim", "identifiers": [{ "kind": "email", "value": "grace.kim@gmail.com", "reliability": "direct" }], "at": "2026-01-15T10:00:00Z" },
+        { "channel": "knot", "action": "knot_message", "name": "Grace Kim", "identifiers": [{ "kind": "email", "value": "grace.k.12@member.theknot.com", "reliability": "relay" }], "at": "2026-02-01T10:00:00Z" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "point_zero_touchpoint", "value": "web:calculator_submitted", "surface": "pending:D4-point-zero" },
+        { "check": "zero_phase", "match": "knot:knot_view@2026-01-02", "phase": "pre_zero", "signal_type": "discovery", "surface": "pending:D4-point-zero" },
+        { "check": "zero_phase", "match": "knot:knot_message@2026-02-01", "phase": "post_zero", "signal_type": "reconfirmation", "surface": "pending:D4-point-zero" }
+      ]
+    },
+    {
+      "id": "GC-9",
+      "title": "Decay clock direction — outbound never resets decay or adds heat",
+      "gaps": ["G11"],
+      "source": "Canonical v1.0 §3.4/§5 / Draft A D5",
+      "signals": [
+        { "channel": "gmail", "action": "reply", "name": "Tom Reilly", "identifiers": [{ "kind": "email", "value": "tom@gmail.com", "reliability": "direct" }], "at": "2026-01-01T10:00:00Z", "direction": "inbound" },
+        { "channel": "gmail", "action": "venue_sent", "identifiers": [{ "kind": "email", "value": "tom@gmail.com", "reliability": "direct" }], "at": "2026-03-15T10:00:00Z", "direction": "outbound" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "last_progression_unchanged_by", "ts": "2026-03-15T10:00:00Z", "surface": "pending:D5-direction-discipline" },
+        { "check": "heat_delta_from_outbound", "eq": 0, "surface": "pending:D5-direction-discipline" },
+        { "check": "decay_reset_by_outbound", "eq": false, "surface": "pending:D5-direction-discipline" }
+      ]
+    },
+    {
+      "id": "GC-10",
+      "title": "Fidelity — full email body reaches the spine",
+      "gaps": ["G1", "N3"],
+      "source": "ORIGIN-INGESTION-SPEC.md / Phase 1.1.b",
+      "signals": [
+        { "channel": "gmail", "action": "reply", "name": "Nadia Okafor", "identifiers": [{ "kind": "email", "value": "nadia@gmail.com", "reliability": "direct" }], "at": "2026-02-01T10:00:00Z", "body": "We loved the highland cows — is October 2027 open? Budget is around 45k." }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "raw_payload_has_full_body", "surface": "pending:1.1-fidelity" },
+        { "check": "raw_payload_has_rfc2822_headers", "surface": "pending:1.1-fidelity" }
+      ]
+    },
+    {
+      "id": "GC-11",
+      "title": "Fidelity — Calendly four-state Q&A reaches the spine",
+      "gaps": ["G1", "N3"],
+      "source": "ORIGIN-INGESTION-SPEC.md / Phase 1.1.c",
+      "signals": [
+        { "channel": "calendly", "action": "tour_booked", "name": "Owen Pratt", "identifiers": [{ "kind": "email", "value": "owen@gmail.com", "reliability": "direct" }], "at": "2026-02-05T15:00:00Z", "body": "How did you hear about us? -> Instagram" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "raw_payload_has_calendly_qa", "surface": "pending:1.1-calendly" },
+        { "check": "discovery_answer_captured", "value": "Instagram", "surface": "pending:1.1-calendly" }
+      ]
+    },
+    {
+      "id": "GC-12",
+      "title": "No-mirror — rebuild from origin with `interactions` truncated is identical",
+      "gaps": ["G1", "N3"],
+      "source": "ORIGIN-INGESTION-SPEC.md / Phase 1.1 (the anti-circularity proof)",
+      "signals": [
+        { "channel": "gmail", "action": "reply", "name": "Priya Raman", "identifiers": [{ "kind": "email", "value": "priya.raman@gmail.com", "reliability": "direct" }], "at": "2026-01-12T10:00:00Z" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "rebuild_identical_with_interactions_truncated", "surface": "pending:1.1-no-mirror" }
+      ]
+    },
+    {
+      "id": "GC-13",
+      "title": "Pixel stitch — anonymous UTM binds to the couple on first identification",
+      "gaps": ["N3", "USP-2"],
+      "source": "ORIGIN-INGESTION-SPEC.md §5 (web pixel) / Phase 1.1 follow-on",
+      "signals": [
+        { "channel": "web", "action": "page_view", "identifiers": [{ "kind": "anon_visitor_id", "value": "anon-7781", "reliability": "inferred" }], "at": "2026-01-20T09:00:00Z", "body": "utm_source=google utm_medium=cpc" },
+        { "channel": "web", "action": "calculator_submitted", "name": "Sasha Petrov", "identifiers": [{ "kind": "email", "value": "sasha@gmail.com", "reliability": "direct" }, { "kind": "anon_visitor_id", "value": "anon-7781", "reliability": "inferred" }], "at": "2026-01-20T09:14:00Z" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "utm_bound_to_couple", "value": "google", "surface": "pending:web-stitch" }
+      ]
+    },
+    {
+      "id": "GC-14",
+      "title": "Corroborated bridge — two emails + same wedding date = ONE couple (guard must NOT split)",
+      "gaps": ["GC-4-regression"],
+      "source": "Tier 1.5 guard false-positive check — don't over-suppress a legitimate one-wedding couple",
+      "_note": "Same name 'Jamie Ng', DIFFERENT strong emails, SAME wedding date. The contradiction guard must NOT split them into two couples (the matching date corroborates one couple) → couple_count stays 1. The differing email keeps it medium-confidence, so the 2nd signal correctly routes to the review queue (no silent attach, no over-split) — 'no silent merge above review threshold'. This locks the GC-4 fix from over-splitting a one-wedding couple that uses two addresses.",
+      "signals": [
+        { "channel": "gmail", "action": "reply", "name": "Jamie Ng", "identifiers": [{ "kind": "email", "value": "jamie.ng@gmail.com", "reliability": "direct" }], "at": "2026-03-01T10:00:00Z", "wedding_date": "2026-10-10" },
+        { "channel": "gmail", "action": "reply", "name": "Jamie Ng", "identifiers": [{ "kind": "email", "value": "jamie@work.com", "reliability": "direct" }], "at": "2026-03-05T10:00:00Z", "wedding_date": "2026-10-10" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "link_action_absent", "eq": "minted", "surface": "spine" },
+        { "check": "review_queue_open_min", "min": 1, "surface": "spine" }
+      ]
+    }
+  ]
+}

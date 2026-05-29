@@ -64,6 +64,7 @@ import {
   type MatcherVerdict,
   type MatchTier,
 } from './matcher'
+import { hardContradiction } from './identity-cascade'
 import {
   judgeCandidate,
   newJudgeBudget,
@@ -324,6 +325,38 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
         reasonExtra = ` | judge skipped (budget ${judgeRes.scope})`
       } else if (judgeRes.kind === 'error') {
         reasonExtra = ` | judge error: ${judgeRes.error}`
+      }
+    }
+
+    // 2.5 Tier 1.5 safety guard (AMEND-01 / golden case GC-4). A
+    // deterministic CONTRADICTION overrides an auto-attach: two distinct
+    // couples that share a name but differ on a STRONG (non-relay) email or
+    // a wedding date >90d apart must NOT fuse. Demote high→medium so the
+    // pair routes to the candidate-review queue instead of attaching. Runs
+    // AFTER the judge on purpose — a deterministic contradiction wins over
+    // an LLM approval (under-merge-to-review beats a silent fuse of
+    // strangers). Relay (Knot/Zola/WW) emails are medium-tier and never
+    // count as a contradicting strong identifier.
+    if (best && finalTier !== 'below_threshold') {
+      const bestCouple = couples.find((c) => c.id === best!.coupleId)
+      const contradiction = bestCouple
+        ? hardContradiction(
+            signal.primary_email,
+            signal.wedding_date,
+            [bestCouple.primary_email, bestCouple.partner_email],
+            bestCouple.wedding_date,
+          )
+        : null
+      if (contradiction) {
+        // A HARD contradiction means "definitively a different couple", not
+        // "ambiguous" — so demote to below_threshold (→ mint a distinct
+        // couple / leave-separate), NOT medium (→ review-orphan). This is
+        // the doctrine default "merge only with a deterministic anchor;
+        // otherwise leave separate and show both." Fires from any matched
+        // tier (high attach OR medium/low review), since the contradiction
+        // refutes the match regardless of the name score.
+        reasonExtra += ` | tier1.5_guard:${contradiction} demoted ${finalTier}→below_threshold (keep separate)`
+        finalTier = 'below_threshold'
       }
     }
 

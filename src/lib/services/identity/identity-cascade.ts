@@ -11,12 +11,16 @@
  * The 11 stages, in order:
  *
  *   1. Exact primary email match
- *   1b. Knot per-prospect personId match (2026-05-27, Tara Simpson +
+ *   1b. Knot per-prospect key match (2026-05-27, Tara Simpson +
  *       operator-reported flood). The Knot sends 3+ separate emails per
- *       inquiry from `<name>.<seq>.<personId>(.reminder)?@member.theknot.
- *       com`. The trailing personId is the stable per-prospect token;
- *       deterministic equality on it is the same evidence tier as
- *       email_exact and short-circuits before any name-based stage.
+ *       inquiry from `<first>.<last>.<seq>.<venueId>(.reminder)?@member.
+ *       theknot.com`. The per-prospect key is the FULL localpart prefix
+ *       (via extractKnotPersonId) — NOT the trailing number, which is the
+ *       VENUE's shared vendor-listing id (collapsing on it fuses every
+ *       prospect at a venue into one couple — the v1 bug, reverted in
+ *       f0a64aa). Deterministic equality on the full prefix is the same
+ *       evidence tier as email_exact and short-circuits before any
+ *       name-based stage.
  *   2. Exact full first + last name match (case-insensitive)
  *   2b. Partner-side exact full first + last name match. Mirror of stage
  *       2 against the signal's partner_first/partner_last slot. Carries
@@ -193,6 +197,98 @@ function extractPhones(text: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Contradiction guard — Tier 1.5 safety (AMEND-01 doctrine, ported from
+// Bloom Scratch; resolves golden case GC-4 over-merge).
+//
+// The name-only stages (2, 2b, 3, 5b) match on first+last name WITHOUT a
+// shared strong identifier. That is correct for BRIDGING a partial / relay
+// identity onto the same couple — but it must NOT fuse two DISTINCT couples
+// who merely share a name. This guard suppresses a name-only match when the
+// candidate carries POSITIVE contradicting evidence:
+//   (a) both sides assert a wedding date and they differ by > 90 days, OR
+//   (b) both sides carry a STRONG (non-relay) email, and they differ and
+//       are unshared — two distinct strong identities under one name.
+//
+// Marketplace-relay addresses (Knot / Zola / WeddingWire) are MEDIUM tier
+// and never count as a contradicting strong identifier — a relay localpart
+// is not the prospect's real inbox, so "different relay address" is not
+// evidence of a different person. Identifier / phone stages (1, 1b, 4) are
+// unaffected: a shared STRONG identifier is never overridden by this guard.
+//
+// Conservative by construction — fires only on positive conflicting
+// evidence, never on mere absence. When it fires, the cascade falls through
+// (→ fuzzy scorer → candidate-review queue), i.e. we prefer under-merge-to-
+// review over a silent fuse of strangers.
+const WEDDING_DATE_CONTRADICTION_DAYS = 90
+const RELAY_DOMAIN_SUFFIXES = ['member.theknot.com', 'vmkt-message.zola.com', 'mail.weddingwire.com']
+
+function isRelayEmail(email: string | null | undefined): boolean {
+  const e = (email ?? '').trim().toLowerCase()
+  if (!e) return false
+  if (extractKnotPersonId(e) !== null) return true
+  return RELAY_DOMAIN_SUFFIXES.some((d) => e.endsWith('@' + d) || e.endsWith('.' + d))
+}
+
+function strongCanonicalEmail(email: string | null | undefined): string | null {
+  if (!email || isRelayEmail(email)) return null
+  return canonicaliseEmail(email)
+}
+
+/**
+ * Positive contradiction between a name-matched signal and a candidate.
+ * Returns a short reason when they should NOT auto-merge despite the name
+ * match, else null.
+ */
+/**
+ * Generic hard-contradiction predicate — the single definition of the
+ * Tier-1.5 safety rule, shared by the cascade's name-only stages AND the
+ * Forwards Linker's tier decision (`forwards-linker.ts`) so there is no
+ * drift between "what the cascade refuses to fuse" and "what linkSignal
+ * refuses to auto-attach". Returns a short reason when a name-based match
+ * should NOT auto-merge, else null. Relay (Knot/Zola/WW) emails are MEDIUM
+ * tier and never count as a contradicting strong identifier.
+ */
+export function hardContradiction(
+  signalEmail: string | null | undefined,
+  signalWeddingDate: string | null | undefined,
+  candidateEmails: Array<string | null | undefined>,
+  candidateWeddingDate: string | null | undefined,
+): string | null {
+  const datesPresent = Boolean(signalWeddingDate && candidateWeddingDate)
+  if (
+    datesPresent
+    && daysBetween(signalWeddingDate as string, candidateWeddingDate as string) > WEDDING_DATE_CONTRADICTION_DAYS
+  ) {
+    return 'wedding_date_delta'
+  }
+  // A present + close wedding date (≤90d — we'd have returned above
+  // otherwise) CORROBORATES "same couple", so a differing strong email
+  // (two partners, or one person with two inboxes for one wedding) is NOT
+  // a contradiction. Only treat differing strong emails as a conflict when
+  // the dates do not vouch for the pair. This keeps the guard from
+  // splitting a legitimate one-wedding couple that uses two addresses.
+  const datesCorroborate = datesPresent
+  if (!datesCorroborate) {
+    const sigStrong = strongCanonicalEmail(signalEmail)
+    if (sigStrong) {
+      const cand = candidateEmails
+        .map((e) => strongCanonicalEmail(e))
+        .filter((e): e is string => Boolean(e))
+      if (cand.length > 0 && !cand.includes(sigStrong)) return 'strong_email_conflict'
+    }
+  }
+  return null
+}
+
+function hasHardContradiction(signal: CascadeSignal, c: CascadeCandidate): string | null {
+  const candEmails = c.people.flatMap((p) => [
+    p.email,
+    ...(Array.isArray(p.aliasEmails) ? p.aliasEmails : []),
+  ])
+  return hardContradiction(signal.primaryEmail, signal.weddingDate, candEmails, c.weddingDate)
+}
+
+// ---------------------------------------------------------------------------
 // Stage implementations — each returns a CascadeMatch when it fires, null
 // otherwise.
 // ---------------------------------------------------------------------------
@@ -226,15 +322,20 @@ function stage1ExactEmail(
  * sends 3+ separate emails per inquiry, each in its own Gmail thread,
  * from addresses that look like:
  *
- *   <firstname>.<lastname>.<seq>.<personId>@member.theknot.com
- *   <firstname>.<lastname>.<seq>.<personId>.reminder@member.theknot.com
+ *   <firstname>.<lastname>.<seq>.<venueId>@member.theknot.com
+ *   <firstname>.<lastname>.<seq>.<venueId>.reminder@member.theknot.com
  *
  * Each address is a different string at the email level, so stage 1
  * (exact_email) misses, and the cascade falls through to fuzzy scoring
  * which then mints a duplicate person — and the live pipeline drafts a
- * second Sage reply. The trailing numeric personId is STABLE across all
- * variants of the same prospect, so deterministic equality on that
- * extracted token IS the same tier of evidence as email_exact.
+ * second Sage reply. The per-prospect key is the FULL localpart prefix
+ * returned by extractKnotPersonId (STABLE across the initial + reminder +
+ * nudge variants of one inquiry, DIFFERENT across distinct inquirers).
+ * The trailing number alone is the VENUE's shared vendor-listing id and
+ * must NEVER be the key (it collapses every prospect at a venue into one
+ * couple — the v1 error reverted in f0a64aa; locked by
+ * scripts/test-knot-relay-id.ts). Equality on the full prefix IS the same
+ * tier of evidence as email_exact.
  *
  * Why this lives BEFORE stage 2 (exact_full_name):
  *   - The Knot relay localpart starts with the prospect's name, so
@@ -292,6 +393,9 @@ function stage2ExactFullName(
       const pl = lowerTrim(p.lastName)
       if (!pf || !pl) continue
       if (pf === sf && pl === sl) {
+        // Tier 1.5 safety: a name match must not fuse two distinct couples
+        // with the same name and contradicting strong evidence (GC-4).
+        if (hasHardContradiction(signal, c)) break
         return {
           matched: true,
           coupleId: c.coupleId,
@@ -338,6 +442,7 @@ function stage2bPartnerFullName(
       const pl = lowerTrim(p.lastName)
       if (!pf || !pl) continue
       if (pf === sf && pl === sl) {
+        if (hasHardContradiction(signal, c)) break // Tier 1.5 safety (GC-4)
         return {
           matched: true,
           coupleId: c.coupleId,
@@ -369,6 +474,7 @@ function stage3NicknamePlusLastName(
       // would have caught that, so this only fires when they differ
       // case-insensitively but are dictionary-aliased).
       if (nicknameEquivalent(sf, pf)) {
+        if (hasHardContradiction(signal, c)) break // Tier 1.5 safety (GC-4)
         return {
           matched: true,
           coupleId: c.coupleId,
@@ -415,6 +521,16 @@ function stage5EmailLocalpartLogicalName(
       if (!candLp) continue
       if (sigLp === candLp) continue // stage 1 would have caught it
       if (logicalLocalpartMatch(sigLp, candLp)) {
+        // Tier 1.5 (date only): logically-similar localparts across a
+        // >90d wedding-date gap are likely two different people who share
+        // a name root, not one person's email variants. The strong-email
+        // half of the guard does NOT apply here — stage 5 matches across
+        // DIFFERENT emails by design — but a contradicting wedding date
+        // still refutes the match.
+        if (
+          signal.weddingDate && c.weddingDate
+          && daysBetween(signal.weddingDate, c.weddingDate) > WEDDING_DATE_CONTRADICTION_DAYS
+        ) break
         return {
           matched: true,
           coupleId: c.coupleId,
@@ -505,6 +621,7 @@ function stage5bBothPartnersFullNameMatch(
       if (matched) break
     }
     if (!matched) continue
+    if (hasHardContradiction(signal, c)) continue // Tier 1.5 safety (GC-4)
 
     // Determine cross vs same pair for the evidence string. The
     // candidate carries no role marker on the CascadeCandidate.people

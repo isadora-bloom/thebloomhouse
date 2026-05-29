@@ -21,6 +21,12 @@
     "check:people-insert": "node scripts/check-no-direct-people-insert.mjs",
     "check:operator-vocab": "node scripts/check-operator-vocab.mjs",
     "check:mig-deploy-unit": "node scripts/check-mig-deploy-unit.mjs",
+    "check:cleanup-budget": "node scripts/check-cleanup-budget.mjs",
+    "check:pr-section": "node scripts/check-pr-cites-section.mjs",
+    "check:rls-venue": "node scripts/check-rls-on-venue-id.mjs",
+    "check:governance": "npm run check:cleanup-budget && npm run check:rls-venue && npm run test:golden:dry",
+    "test:golden:dry": "tsx tests/golden/run-golden-cases.ts --dry",
+    "test:golden": "tsx tests/golden/run-golden-cases.ts",
     "sync:couple-lifecycle": "tsx scripts/sync-couple-lifecycle-from-weddings.ts",
     "verify:cohort-divergence": "tsx scripts/verify-cohort-divergence.ts"
   },

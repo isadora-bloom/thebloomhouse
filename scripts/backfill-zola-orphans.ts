@@ -119,7 +119,7 @@ async function main() {
     if (realSamples.length < 8) {
       realSamples.push({
         name: `${lead.leadName ?? '?'}${lead.partnerName ? ' & ' + lead.partnerName : ''}`,
-        date: lead.eventDate,
+        date: lead.eventDate ?? null,
         replyTo: lead.replyToEmail ?? '?',
       })
     }

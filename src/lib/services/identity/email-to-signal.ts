@@ -140,6 +140,17 @@ export interface EmailSignalInput {
    * for venue_calculator).
    */
   actionTypeOverride?: string
+  /**
+   * Phase 1.1.b (N3 / GC-10 — no silent drops): the full email body and
+   * RFC2822 headers, forwarded into `raw_payload` so the SPINE is
+   * self-sufficient — it no longer depends on the legacy `interactions`
+   * row for body/header content (the circular-dependency that made
+   * `interactions` undeletable, gap G1). Optional + backward-compatible:
+   * when omitted, raw_payload carries null and behaviour is byte-identical
+   * to the pre-1.1 literal.
+   */
+  fullBody?: string | null
+  rfc2822Headers?: Record<string, unknown> | string | null
 }
 
 /**
@@ -175,6 +186,8 @@ export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSign
     resolvedPhone = null,
     channelOverride,
     actionTypeOverride,
+    fullBody = null,
+    rfc2822Headers = null,
   } = input
 
   // Identity resolution — relay-resolved values win when present.
@@ -229,6 +242,12 @@ export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSign
       raw_from_email: rawFromEmail,
       raw_from_name: rawFromName,
       identity_resolved: identityResolved,
+      // Phase 1.1.b (N3 / GC-10): full-fidelity body + headers carried
+      // into the spine so the legacy `interactions` row can be retired
+      // (gap G1). null until the call site forwards them — byte-identical
+      // legacy behaviour in the meantime.
+      full_body: fullBody,
+      rfc2822_headers: rfc2822Headers,
     },
     legacy_wedding_id: weddingId ?? null,
   }

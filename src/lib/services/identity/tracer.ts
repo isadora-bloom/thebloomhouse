@@ -6,17 +6,12 @@
  * venue's connected channels and reconstructs the couples /
  * touchpoints / fragments graph from raw evidence.
  *
- * Six stages, doctrine §4
- * -----------------------
+ * Stages, doctrine §4
+ * -------------------
  *   anchor_discovery       — booked clients become anchor couples
  *                              (Phase A already mirrored them; this
  *                              stage tags them in tracer_run_events
  *                              so the operator sees the seed count)
- *   touchpoint_sweep       — for each non-anchor adapter, walk every
- *                              signal: attach to a couple OR mint a
- *                              new channel-scoped couple OR drop as
- *                              fragment. Idempotent via
- *                              UNIQUE(venue_id, channel, external_id).
  *   cross_channel_coalesce — promote fragment pairs into channel-
  *                              scoped couples when matcher tier ≥ low.
  *   agent_infer            — surface couples with same email/phone
@@ -37,13 +32,20 @@
  * fragments / candidate_matches. Concurrent multi-process resumes
  * land in Phase D.)
  *
+ * Touchpoint creation
+ * -------------------
+ * The mirror-reading adapter sweep (Phase 1.1, `touchpoint_sweep`) has
+ * been removed. Touchpoints are now created from origin-replay through
+ * `linkSignal` (Forwards Linker + the per-source replay primitives),
+ * not by walking the legacy tables here. This file owns only the
+ * post-replay stages: coalesce / agent / decay / validate.
+ *
  * Advisory locks
  * --------------
  * Doctrine §4 Don't skip #1. Before INSERTing a new couples row for
- * an identifier, the Tracer acquires
+ * an identifier, the mint path acquires
  *   pg_try_advisory_xact_lock(hashtextextended(venue_id || ':' || identifier, 0))
- * The Phase B implementation uses transaction-scoped locks via
- * Supabase's RPC interface (see `lockAndUpsertCouple` below).
+ * via Supabase's RPC interface (see `lockAndMintCouple`).
  *
  * What this file does NOT do
  * --------------------------
@@ -61,23 +63,13 @@ import { logEvent } from '@/lib/observability/logger'
 import {
   scoreCandidate,
   type MatchableRecord,
-  type MatchTier,
-  type MatcherVerdict,
 } from './matcher'
 import {
-  judgeCandidate,
   newJudgeBudget,
   type JudgeRunBudget,
 } from './llm-judge'
-import {
-  ALL_ADAPTERS,
-  adaptersByName,
-  type NormalizedSignal,
-  type SourceAdapter,
-} from './sources'
-import { applyTierRouting } from './route-by-tier'
+import type { NormalizedSignal } from './sources'
 import { decayStaleCouples } from './decay'
-import { buildJudgeContext } from './judge-context'
 import { lockAndMintCouple } from './mint-couple'
 
 // ---------------------------------------------------------------------------
@@ -86,7 +78,6 @@ import { lockAndMintCouple } from './mint-couple'
 
 export type TracerStage =
   | 'anchor_discovery'
-  | 'touchpoint_sweep'
   | 'cross_channel_coalesce'
   | 'agent_infer'
   | 'decay_sweep'
@@ -94,7 +85,6 @@ export type TracerStage =
 
 const STAGE_ORDER: TracerStage[] = [
   'anchor_discovery',
-  'touchpoint_sweep',
   'cross_channel_coalesce',
   'agent_infer',
   'decay_sweep',
@@ -247,23 +237,12 @@ async function stageAnchorDiscovery(
 }
 
 // ---------------------------------------------------------------------------
-// Stage 2: touchpoint_sweep
+// Shared matcher plumbing (consumed by route-by-tier + forwards-linker)
 // ---------------------------------------------------------------------------
 //
-// For each non-anchor adapter, walk every signal. For each signal:
-//
-//   1. If signal has legacy_wedding_id, find the couples row via
-//      source_wedding_id and INSERT a touchpoint anchored to it.
-//      (Cheapest path — Phase A already established the wedding↔couple
-//      link.)
-//
-//   2. Else, score the signal against recent couples for this venue
-//      (a windowed lookup, not a full table scan). If matcher returns
-//      high, attach. If medium and needs_judge, call LLM judge. If
-//      low/below_threshold, store as fragment.
-//
-// All inserts are idempotent via UNIQUE(venue_id, channel, external_id).
-// Reruns produce 0 new rows.
+// These helpers were the touchpoint_sweep's matcher/insert primitives.
+// The sweep itself is gone (origin-replay through linkSignal now creates
+// touchpoints), but linkSignal and applyTierRouting still import them.
 // ---------------------------------------------------------------------------
 
 export interface CoupleForMatch {
@@ -439,220 +418,6 @@ export async function loadRecentCouples(
     wedding_date: r.wedding_date,
     source_wedding_id: r.source_wedding_id,
   }))
-}
-
-async function processSignal(
-  state: RunState,
-  signal: NormalizedSignal,
-  couples: CoupleForMatch[],
-): Promise<{
-  touchpoints: number
-  fragments: number
-  candidates: number
-  couplesMinted: number
-}> {
-  const inc = { touchpoints: 0, fragments: 0, candidates: 0, couplesMinted: 0 }
-
-  // Fast-path: signal carries legacy_wedding_id → attach to mirrored couple.
-  if (signal.legacy_wedding_id) {
-    const coupleId = await findCoupleForLegacyWedding(
-      state.supabase,
-      state.venueId,
-      signal.legacy_wedding_id,
-    )
-    if (coupleId) {
-      const r = await insertTouchpoint(state.supabase, state.venueId, coupleId, signal)
-      if (r.inserted) inc.touchpoints += 1
-      return inc
-    }
-  }
-
-  // Otherwise: score against existing couples.
-  const sigRecord = signalToMatchableRecord(signal)
-  let bestVerdict: { coupleId: string; verdict: MatcherVerdict } | null = null
-  for (const c of couples) {
-    const v = scoreCandidate(sigRecord, coupleToMatchableRecord(c))
-    if (!bestVerdict || v.score > bestVerdict.verdict.score) {
-      bestVerdict = { coupleId: c.id, verdict: v }
-    }
-  }
-
-  let finalTier: MatchTier = bestVerdict?.verdict.tier ?? 'below_threshold'
-  let reasonExtra = ''
-  if (bestVerdict?.verdict.needs_judge) {
-    const judgeRes = await judgeCandidate({
-      supabase: state.supabase,
-      venueId: state.venueId,
-      primary: sigRecord,
-      secondary: coupleToMatchableRecord(
-        couples.find((c) => c.id === bestVerdict!.coupleId)!,
-      ),
-      matcher: bestVerdict.verdict,
-      context: await buildJudgeContext(
-        state.supabase,
-        state.venueId,
-        signal,
-        bestVerdict.coupleId,
-      ),
-      budget: state.judgeBudget,
-      perDayBudget: state.judgePerDayBudget,
-      runId: state.runId,
-    })
-    if (judgeRes.kind === 'verdict') {
-      finalTier =
-        judgeRes.verdict.outcome === 'reject'
-          ? 'below_threshold'
-          : judgeRes.verdict.outcome
-      reasonExtra = ` | judge: ${judgeRes.verdict.outcome} — ${judgeRes.verdict.reasoning}`
-      state.totals.judge_calls += 1
-    } else if (judgeRes.kind === 'budget_exhausted') {
-      reasonExtra = ` | judge skipped (budget ${judgeRes.scope})`
-    } else if (judgeRes.kind === 'error') {
-      reasonExtra = ` | judge error: ${judgeRes.error}`
-    }
-  }
-
-  const routed = await applyTierRouting({
-    supabase: state.supabase,
-    venueId: state.venueId,
-    signal,
-    best: bestVerdict,
-    finalTier,
-    reasonExtra,
-  })
-  if (routed.touchpoint_inserted) inc.touchpoints += 1
-  if (routed.fragment_inserted) inc.fragments += 1
-  if (routed.candidate_match_queued) inc.candidates += 1
-  if (routed.couple_minted) inc.couplesMinted += 1
-  return inc
-}
-
-// signal_tier layering for the sweep (T8.1d). The sweep cannot fully
-// sort a streaming signal source by signal_tier without buffering
-// every signal (the types.ts header forbids it — ~100K+ per venue) or
-// re-walking each adapter once per tier (6x the DB reads). Two cheap
-// mechanisms reach the same end — a later signal sees the couples an
-// earlier signal minted — without either cost:
-//
-//   1. Channel ordering. Adapters sweep high-signal channel first
-//      (calendly / honeybook tours+bookings → gmail / sms replies →
-//      web forms → knot / weddingwire inquiries → instagram / review
-//      saves), so the channels that MINT couples mostly run before the
-//      channels that only ATTACH.
-//   2. Snapshot reload. The couples snapshot the matcher scores
-//      against is re-loaded every SNAPSHOT_RELOAD_EVERY signals, so a
-//      low-tier signal arriving after a high-tier mint matches the
-//      freshly-minted couple instead of orphaning into a Fragment.
-//
-// Tombstoning note (re the original §C.3 wording): the matcher scores
-// signals against `couples`, never against `candidate_matches`, so
-// there is no candidate_matches snapshot to "tombstone so the next
-// pass's matcher excludes it." Duplicate candidate_matches are already
-// prevented by the uq_candidate_matches_pair unique index (T8.0a).
-const CHANNEL_SWEEP_RANK: Record<string, number> = {
-  calendly: 0,
-  honeybook: 0,
-  gmail: 1,
-  sms: 1,
-  phone: 1,
-  web: 2,
-  knot: 3,
-  weddingwire: 3,
-  instagram: 4,
-  review: 4,
-}
-const SNAPSHOT_RELOAD_EVERY = 500
-
-async function stageTouchpointSweep(
-  state: RunState,
-  adapters: SourceAdapter[],
-): Promise<void> {
-  // Sweep high-signal channels first (see CHANNEL_SWEEP_RANK above).
-  const ordered = adapters
-    .slice()
-    .sort(
-      (a, b) =>
-        (CHANNEL_SWEEP_RANK[a.channel] ?? 2) -
-        (CHANNEL_SWEEP_RANK[b.channel] ?? 2),
-    )
-  await emitEvent(state, 'touchpoint_sweep', 'started', 0, 0, {
-    adapters: ordered.map((a) => a.name),
-  })
-
-  let couples = await loadRecentCouples(state.supabase, state.venueId)
-  let sinceReload = 0
-  const adapterStats: Record<
-    string,
-    { signals: number; tp: number; frag: number; cand: number; mint: number }
-  > = {}
-
-  for (const adapter of ordered) {
-    if (adapter.name === 'anchors') continue // anchor stage handled it
-    const stats = { signals: 0, tp: 0, frag: 0, cand: 0, mint: 0 }
-    adapterStats[adapter.name] = stats
-    let batchIndex = 0
-    let inBatch = 0
-    try {
-      for await (const signal of adapter.walk({
-        supabase: state.supabase,
-        venueId: state.venueId,
-      })) {
-        stats.signals += 1
-        state.totals.signals_seen += 1
-        const r = await processSignal(state, signal, couples)
-        stats.tp += r.touchpoints
-        stats.frag += r.fragments
-        stats.cand += r.candidates
-        stats.mint += r.couplesMinted
-        state.totals.touchpoints_written += r.touchpoints
-        state.totals.fragments_written += r.fragments
-        state.totals.candidate_matches_written += r.candidates
-        state.totals.couples_minted += r.couplesMinted
-        // Refresh the couples snapshot so later signals match couples
-        // earlier signals just minted (signal_tier layering, T8.1d).
-        if (++sinceReload >= SNAPSHOT_RELOAD_EVERY) {
-          couples = await loadRecentCouples(state.supabase, state.venueId)
-          sinceReload = 0
-        }
-        inBatch += 1
-        if (inBatch >= 200) {
-          await emitEvent(
-            state,
-            'touchpoint_sweep',
-            'progress',
-            stats.signals,
-            stats.tp + stats.frag,
-            { adapter: adapter.name, batch: batchIndex, stats },
-            batchIndex,
-          )
-          batchIndex += 1
-          inBatch = 0
-        }
-      }
-    } catch (err) {
-      await emitEvent(
-        state,
-        'touchpoint_sweep',
-        'failed',
-        stats.signals,
-        stats.tp + stats.frag,
-        {
-          adapter: adapter.name,
-          error: err instanceof Error ? err.message : String(err),
-        },
-      )
-      throw err
-    }
-  }
-
-  await emitEvent(
-    state,
-    'touchpoint_sweep',
-    'succeeded',
-    state.totals.signals_seen,
-    state.totals.touchpoints_written + state.totals.fragments_written,
-    { per_adapter: adapterStats },
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,7 +847,6 @@ export async function runTracer(opts: TracerOptions): Promise<TracerSummary> {
     },
   }
 
-  const adapters = adaptersByName(opts.adapters)
   const summary: TracerSummary = {
     run_id: runId,
     venue_id: opts.venueId,
@@ -1097,7 +861,6 @@ export async function runTracer(opts: TracerOptions): Promise<TracerSummary> {
     msg: 'tracer.run_started',
     venueId: opts.venueId,
     correlationId: runId,
-    data: { adapters: adapters.map((a) => a.name) },
   })
 
   const startFrom = opts.runId
@@ -1122,16 +885,6 @@ export async function runTracer(opts: TracerOptions): Promise<TracerSummary> {
         summary.judge_budget_remaining = state.judgeBudget.remaining
         return summary
       }
-    }
-    if (shouldRun('touchpoint_sweep')) {
-      await stageTouchpointSweep(state, adapters)
-      summary.stages.push({
-        stage: 'touchpoint_sweep',
-        status: 'succeeded',
-        rows_seen: state.totals.signals_seen,
-        rows_written:
-          state.totals.touchpoints_written + state.totals.fragments_written,
-      })
     }
     if (shouldRun('cross_channel_coalesce')) {
       await stageCoalesce(state)
@@ -1192,7 +945,3 @@ export async function runTracer(opts: TracerOptions): Promise<TracerSummary> {
 }
 
 export { STAGE_ORDER }
-
-// Use `void` to acknowledge unused import without removing the public
-// re-export shape (ALL_ADAPTERS is the registry imported by callers).
-void ALL_ADAPTERS

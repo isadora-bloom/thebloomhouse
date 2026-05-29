@@ -57,6 +57,15 @@ jobs:
       - name: Unit tests — per-platform identity windows (T2-D)
         run: npx tsx scripts/test-identity-windows.ts
 
+      - name: Unit tests — email-signal fidelity (Phase 1.1.b / GC-10 — full_body+headers into spine)
+        run: npx tsx scripts/test-email-signal-fidelity.ts
+
+      - name: Unit tests — Tier 1.5 contradiction guard (GC-4 over-merge fix — distinct same-name couples don't fuse)
+        run: npx tsx scripts/test-contradiction-guard.ts
+
+      - name: Unit tests — Knot relay per-prospect key (no venue-id over-merge regression)
+        run: npx tsx scripts/test-knot-relay-id.ts
+
       - name: Unit tests — HoneyBook lifecycle events (T2-F)
         run: npx tsx scripts/test-honeybook-lifecycle.ts
 
@@ -160,3 +169,25 @@ jobs:
 
       - name: Plan-tier enforcement guard — every paid-tier API route calls requirePlan (PROJECT-AUDIT-V2 GAP-12)
         run: node scripts/check-plan-enforcement.mjs
+
+      # --- Consolidation governance (FIX-PLAN Layer B/C/D) ------------------
+      # INFORMATIONAL UNTIL PHASE 0 RATIFICATION (Monday). Every step here is
+      # `continue-on-error: true` so it PRINTS the worklist but never fails the
+      # build — normal weekend commits (new migration / cron / un-cited commit)
+      # are not blocked. Flip these to blocking (remove continue-on-error) in
+      # Phase 0 §0.9 once governance is ratified. See BLOOM-MASTER-PLAN.md §0.
+      - name: (informational) Cleanup-budget ratchet — debt may only DECREASE (M1)
+        run: node scripts/check-cleanup-budget.mjs
+        continue-on-error: true
+
+      - name: (informational) RLS venue-isolation guard — venue_id tables need RLS + policy (G17)
+        run: node scripts/check-rls-on-venue-id.mjs
+        continue-on-error: true
+
+      - name: (informational) Plan-trace guard — commits cite a plan §/Phase/mandate (FIX-PLAN §B.2)
+        run: node scripts/check-pr-cites-section.mjs
+        continue-on-error: true
+
+      - name: (informational) Golden-case spec validation — GC-1..GC-9 well-formed (FIX-PLAN Layer C)
+        run: npx tsx tests/golden/run-golden-cases.ts --dry
+        continue-on-error: true
