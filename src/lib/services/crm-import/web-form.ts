@@ -1135,7 +1135,121 @@ async function commitWebForm(args: {
     }
   })()
 
+  // GC-13 — website-pixel visitor_id carry-forward (ORIGIN-INGESTION-SPEC §5).
+  // When a calculator / contact submission carried the anon_visitor_id cookie
+  // (the form's hidden field surfaced via hint.visitorIdColumn → parsed into
+  // interaction.extracted_identity.visitor_id), bind that visitor's earliest
+  // UTM / referrer `web_visits` row to the couple this submission resolved to.
+  // That click is the venue's first-touch acquisition source, days before the
+  // form fill, and is otherwise orphaned in `web_visits`. Fire-and-forget +
+  // unambiguous-match-only: never blocks the import, never risks mis-
+  // attribution, idempotent. A safe no-op until a CSV actually carries
+  // visitor_id (the calculator-export hidden-field dependency).
+  void stitchWebFormVisits({ supabase, venueId, rows }).catch((err) => {
+    console.warn(
+      '[web-form] visitor-id stitch dispatch threw (non-fatal):',
+      err instanceof Error ? err.message : err,
+    )
+  })
+
   return baseResult
+}
+
+// ---------------------------------------------------------------------------
+// GC-13 visitor_id carry-forward
+// ---------------------------------------------------------------------------
+
+/** Read the website-pixel visitor_id parked on a row's primary interaction
+ *  (set at parse time from hint.visitorIdColumn — see line ~834). Null when
+ *  the submission carried no visitor cookie. */
+function visitorIdOfRow(r: NormalisedLeadRow): string | null {
+  const interaction = r.interactions?.[0] as
+    | { extracted_identity?: Record<string, unknown> }
+    | undefined
+  const v = interaction?.extracted_identity?.visitor_id
+  return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null
+}
+
+/** Injectable stitch fn — defaults to the real web-visit stitch. The
+ *  dependency seam lets the unit test verify the wiring (which rows stitch,
+ *  ambiguity guard, error-swallowing) without a database. */
+type StitchFn = (args: {
+  supabase: SupabaseClient
+  venueId: string
+  coupleId: string
+  anonVisitorId: string
+}) => Promise<{ utmBound: boolean; visits: number }>
+
+export interface StitchWebFormVisitsResult {
+  /** Rows that carried a visitor_id AND a primary email (candidates). */
+  attempted: number
+  /** Rows that resolved to exactly one couple AND bound a UTM-bearing visit. */
+  stitched: number
+}
+
+/**
+ * For every committed web-form row that carries a visitor_id, attach the
+ * visitor's earliest attribution-bearing `web_visits` row to the couple the
+ * submission resolved to.
+ *
+ * Couple resolution is deliberately UNAMBIGUOUS-ONLY: we bind only when
+ * exactly one non-merged couple in the venue has this submitter as its
+ * primary contact email. Zero matches (couple not mirrored yet) or more than
+ * one (name/email collision) → skip, never guess — attaching browsing
+ * history to the wrong couple is worse than not attaching it. The underlying
+ * `stitchVisitsToCouple` is idempotent, so a later re-import re-converges.
+ *
+ * Exported for the unit test; `commitWebForm` calls it fire-and-forget.
+ */
+export async function stitchWebFormVisits(args: {
+  supabase: SupabaseClient
+  venueId: string
+  rows: NormalisedLeadRow[]
+  stitch?: StitchFn
+}): Promise<StitchWebFormVisitsResult> {
+  const { supabase, venueId, rows } = args
+  const stitch: StitchFn =
+    args.stitch ??
+    (async (a) => {
+      const { stitchVisitsToCouple } = await import(
+        '@/lib/services/identity/replay/web-visit-stitch'
+      )
+      return stitchVisitsToCouple(a)
+    })
+
+  let attempted = 0
+  let stitched = 0
+  for (const r of rows) {
+    const anonVisitorId = visitorIdOfRow(r)
+    const email = (r.partner1_email ?? '').trim().toLowerCase()
+    if (!anonVisitorId || !email) continue
+    attempted++
+    try {
+      const { data, error } = await supabase
+        .from('couples')
+        .select('id')
+        .eq('venue_id', venueId)
+        .eq('primary_contact_email', email)
+        .is('merged_into_id', null)
+        .limit(2)
+      if (error) throw new Error(error.message)
+      const matched = (data ?? []) as { id: string }[]
+      if (matched.length !== 1) continue // ambiguous or none → never guess
+      const res = await stitch({
+        supabase,
+        venueId,
+        coupleId: matched[0].id,
+        anonVisitorId,
+      })
+      if (res.utmBound) stitched++
+    } catch (err) {
+      console.warn(
+        '[web-form] visitor-id stitch row failed (non-fatal):',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+  return { attempted, stitched }
 }
 
 // ---------------------------------------------------------------------------

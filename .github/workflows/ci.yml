@@ -69,6 +69,9 @@ jobs:
       - name: Unit tests — WeddingWire / Zola relay per-prospect key (cascade stage 1c dedup)
         run: npx tsx scripts/test-marketplace-relay-id.ts
 
+      - name: Unit tests — web-form visitor_id carry-forward (GC-13 — pixel first-touch -> couple)
+        run: npx tsx scripts/test-web-form-visitor-stitch.ts
+
       - name: Unit tests — relay-partial first-name bridge (GC-2 cross-source -> judge band)
         run: npx tsx scripts/test-relay-bridge.ts
 
