@@ -66,6 +66,7 @@ import { canonicaliseEmail, normalizePhone } from './resolver'
 import { nicknameEquivalent } from './nicknames'
 import { logicalLocalpartMatch, localpartOf } from './email-localpart'
 import { extractKnotPersonId, knotPersonIdsFromEmails } from './knot-sender-id'
+import { extractMarketplacePersonId, marketplacePersonIdsFromEmails } from './marketplace-relay-id'
 
 // ---------------------------------------------------------------------------
 // Inputs
@@ -143,6 +144,7 @@ export interface CascadeCandidate {
 export type CascadeStageId =
   | 'exact_email'
   | 'knot_person_id_match'
+  | 'marketplace_person_id_match'
   | 'exact_full_name'
   | 'partner_full_name'
   | 'nickname_plus_last_name'
@@ -225,7 +227,12 @@ const RELAY_DOMAIN_SUFFIXES = ['member.theknot.com', 'vmkt-message.zola.com', 'm
 export function isRelayEmail(email: string | null | undefined): boolean {
   const e = (email ?? '').trim().toLowerCase()
   if (!e) return false
+  // Per-prospect platform relays are MEDIUM tier — never a strong-email
+  // conflict. Detect via the platform key extractors so the WW
+  // (`reply.weddingwire.com`, synthetic `.invalid`) and bare-domain Zola
+  // (`connect-{uuid}@zola.com`) shapes are covered, not just the suffix list.
   if (extractKnotPersonId(e) !== null) return true
+  if (extractMarketplacePersonId(e) !== null) return true
   return RELAY_DOMAIN_SUFFIXES.some((d) => e.endsWith('@' + d) || e.endsWith('.' + d))
 }
 
@@ -373,6 +380,53 @@ function stage1bKnotPersonIdMatch(
           coupleId: c.coupleId,
           stage: 'knot_person_id_match',
           evidence: `knot_person_id:${sigPersonId}`,
+        }
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Stage 1c — WeddingWire / Zola per-prospect key match.
+ *
+ * The Knot analogue of stage 1b for the other two marketplaces. Each
+ * platform sends multiple notification emails per inquiry from slightly
+ * different relay addresses:
+ *
+ *   WeddingWire: user-{token}@reply.weddingwire.com
+ *                auth-{token}@reply.weddingwire.com
+ *                authsolic-{token}@weddingwire.bloom-relay.invalid (synthetic)
+ *   Zola:        connect-{uuid}@zola.com
+ *                connect-{uuid}@vmkt-message.zola.com
+ *
+ * Each is a different string, so stage 1 (exact_email) misses and the
+ * cascade would fall through to fuzzy scoring → duplicate person + a
+ * second drafted reply. `extractMarketplacePersonId` returns the
+ * platform's per-prospect-UNIQUE token / uuid (namespaced `ww:` / `zola:`),
+ * which is STABLE across the variants of one inquiry and DIFFERENT across
+ * distinct prospects. Equality on that key is the same tier of evidence as
+ * email_exact, so it runs before any name-based stage — and, like Knot's
+ * key, it can only ADD correct merges (a per-prospect token is never
+ * shared), never fuse strangers. See `marketplace-relay-id.ts` for the
+ * safety argument.
+ */
+function stage1cMarketplacePersonIdMatch(
+  signal: CascadeSignal,
+  candidates: CascadeCandidate[],
+): CascadeMatch | null {
+  const sigId = extractMarketplacePersonId(signal.primaryEmail ?? null)
+  if (!sigId) return null
+  for (const c of candidates) {
+    for (const p of c.people) {
+      const aliasList = Array.isArray(p.aliasEmails) ? p.aliasEmails : []
+      const candidateIds = marketplacePersonIdsFromEmails([p.email, ...aliasList])
+      if (candidateIds.has(sigId)) {
+        return {
+          matched: true,
+          coupleId: c.coupleId,
+          stage: 'marketplace_person_id_match',
+          evidence: `marketplace_person_id:${sigId}`,
         }
       }
     }
@@ -839,6 +893,7 @@ function stage8FamilyNamePlusDate(
 const STAGES: Array<(s: CascadeSignal, c: CascadeCandidate[]) => CascadeMatch | null> = [
   stage1ExactEmail,
   stage1bKnotPersonIdMatch,
+  stage1cMarketplacePersonIdMatch,
   stage2ExactFullName,
   stage2bPartnerFullName,
   stage3NicknamePlusLastName,
@@ -882,6 +937,8 @@ export function describeMatch(m: CascadeMatch): string {
       return `exact email match (${m.evidence})`
     case 'knot_person_id_match':
       return `Knot per-prospect personId match (${m.evidence})`
+    case 'marketplace_person_id_match':
+      return `marketplace per-prospect key match (${m.evidence})`
     case 'exact_full_name':
       return `exact full-name match (${m.evidence})`
     case 'partner_full_name':
