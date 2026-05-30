@@ -222,7 +222,7 @@ function extractPhones(text: string): string[] {
 const WEDDING_DATE_CONTRADICTION_DAYS = 90
 const RELAY_DOMAIN_SUFFIXES = ['member.theknot.com', 'vmkt-message.zola.com', 'mail.weddingwire.com']
 
-function isRelayEmail(email: string | null | undefined): boolean {
+export function isRelayEmail(email: string | null | undefined): boolean {
   const e = (email ?? '').trim().toLowerCase()
   if (!e) return false
   if (extractKnotPersonId(e) !== null) return true

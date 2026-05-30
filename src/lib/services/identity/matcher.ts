@@ -43,6 +43,7 @@ import {
 import {
   cascadeMatch,
   describeMatch,
+  isRelayEmail,
   type CascadeSignal,
   type CascadeCandidate,
 } from './identity-cascade'
@@ -153,6 +154,18 @@ const W = {
    * auto-attach.
    */
   both_partners_full_name_cross_match: 50,
+  /**
+   * Relay-partial first-name bridge (added 2026-05-29, GC-2 cross-source).
+   * A marketplace relay (Knot/Zola/WW) exposes only first-name + last-
+   * INITIAL, so a relay-sourced couple often has just a first name. When a
+   * full-identity record (real last name OR direct email) shares that first
+   * name, it is a PLAUSIBLE cross-source bridge — too weak to auto-attach,
+   * strong enough to route to the LLM judge. 45 lands in the 40-90 judge
+   * band on its own; the judge (with cross-channel context) adjudicates.
+   * Never fires when both sides are full identities (normal name scorer
+   * handles those) or when a full_name_exact already matched.
+   */
+  relay_partial_first_name: 45,
 } as const
 
 // ---------------------------------------------------------------------------
@@ -389,6 +402,45 @@ function asCascadeCandidate(r: MatchableRecord): CascadeCandidate {
   }
 }
 
+/**
+ * Relay-partial first-name bridge (cross-source, judge-band — GC-2).
+ *
+ * Returns evidence when EXACTLY ONE side is a relay-partial identity
+ * (marketplace-relay email + first-name only / last-initial) and the OTHER
+ * is a fuller identity (real last name or direct email) and their first
+ * names match. Else null. Conservative: never fires when both sides are
+ * full identities (the normal name scorer owns those). The match it
+ * produces is judge-band, never auto-attach — the LLM judge decides with
+ * cross-channel context.
+ */
+function relayPartialFirstNameBridge(
+  primary: MatchableRecord,
+  secondary: MatchableRecord,
+): string | null {
+  const isPartial = (r: MatchableRecord): boolean => {
+    if (!(isRelayEmail(r.primary_email) || isRelayEmail(r.partner_email))) return false
+    const { lastName } = splitFullName(r.primary_name)
+    return !lastName || lastName.length <= 1 // first-name-only or last-initial
+  }
+  const isFuller = (r: MatchableRecord): boolean => {
+    const { lastName } = splitFullName(r.primary_name)
+    const directEmail = Boolean(r.primary_email && !isRelayEmail(r.primary_email))
+    return Boolean((lastName && lastName.length >= 2) || directEmail)
+  }
+  const aPartial = isPartial(primary)
+  const bPartial = isPartial(secondary)
+  if (aPartial === bPartial) return null // need exactly one relay-partial side
+  const partial = aPartial ? primary : secondary
+  const fuller = aPartial ? secondary : primary
+  if (!isFuller(fuller)) return null
+  const pf = splitFullName(partial.primary_name).firstName
+  const ff = splitFullName(fuller.primary_name).firstName
+  if (pf && ff && pf.toLowerCase() === ff.toLowerCase()) {
+    return `relay_partial_first_name:${pf.toLowerCase()}`
+  }
+  return null
+}
+
 export function scoreCandidate(
   primary: MatchableRecord,
   secondary: MatchableRecord,
@@ -542,6 +594,18 @@ export function scoreCandidate(
           evidence: `${a1} + ${a2} ↔ ${b1} + ${b2} (${crossPair ? 'cross' : 'same'})`,
         })
       }
+    }
+  }
+
+  // ---- Relay-partial first-name bridge (cross-source → judge band) -------
+  // Only when no full-name match already fired (don't override / inflate a
+  // strong name signal). Routes a relay-first-name vs full-identity match
+  // to the LLM judge instead of minting a duplicate couple (GC-2).
+  if (!bestNameEvidence.startsWith('full_name_exact')) {
+    const bridge = relayPartialFirstNameBridge(primary, secondary)
+    if (bridge) {
+      score += W.relay_partial_first_name
+      signals.push({ name: 'relay_partial_first_name', weight: W.relay_partial_first_name, evidence: bridge })
     }
   }
 

@@ -88,6 +88,12 @@ async function materialize(c: Case): Promise<SpineState> {
   const venueId = process.env.GOLDEN_TEST_VENUE ?? env.GOLDEN_TEST_VENUE
     ?? '0a17e57e-0000-4000-8000-000000000001' // dedicated throwaway; must exist in `venues` on the branch
 
+  // Propagate .env.test into process.env BEFORE importing the cascade, so
+  // callAI / the LLM judge (read at module-load + call time) sees
+  // ANTHROPIC_API_KEY etc. Without this the judge errors "key not set" and
+  // the medium band silently falls back to the matcher tier.
+  for (const [k, v] of Object.entries(env)) if (process.env[k] === undefined) process.env[k] = v
+
   const { createClient } = await import('@supabase/supabase-js')
   const sb = createClient(url, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
   const { linkSignal } = await import('@/lib/spine/cascade') as typeof import('@/lib/spine/cascade')

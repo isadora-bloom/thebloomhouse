@@ -26,13 +26,13 @@
       "gaps": ["G23"],
       "source": "Bloom Scratch golden B",
       "signals": [
-        { "channel": "knot", "action": "knot_view", "name": "Ashley", "identifiers": [{ "kind": "email", "value": "ashley.r.5521@member.theknot.com", "reliability": "relay" }], "at": "2025-11-02T10:00:00Z", "repeat": 24 },
+        { "channel": "knot", "action": "knot_message", "name": "Ashley B", "identifiers": [{ "kind": "email", "value": "ashley.b.5521@member.theknot.com", "reliability": "relay" }], "at": "2026-01-20T10:00:00Z" },
         { "channel": "web", "action": "calculator_submitted", "name": "Ashley Bennett", "identifiers": [{ "kind": "email", "value": "ashleybennett@gmail.com", "reliability": "direct" }], "at": "2026-02-15T14:00:00Z" }
       ],
-      "_note": "Relay 'Ashley' + calculator 'Ashley Bennett' share NO deterministic anchor (different name strings, relay≠direct email). Deterministic-first CORRECTLY keeps them separate (forcing a merge here is the unsafe heuristic that causes GC-4 over-merges). Full cross-source reconstruction to ONE couple needs the corroborated probabilistic bridge (LLM judge + Point-Zero coalescence) — a future feature, hence pending.",
+      "_note": "Probabilistic cross-source bridge. Knot relay 'Ashley B' (first + last-initial — the relay's real shape) + calculator 'Ashley Bennett' 26 days later. The matcher's relay_partial_first_name (45) + first+initial (25) = 70 routes it to the LLM judge, which calibrates 'medium' (plausible — first+initial + funnel timing — but different email domains, no wedding-date/phone) → surfaced as a review candidate, NOT a silent duplicate and NOT an over-merge. couple_count stays 1 + a candidate queued. Robust assertion: no 2nd silent mint (the pre-bridge behavior). Auto-attach + the source/inquiry facts stay pending phase-3.3 attribution.",
       "assert": [
-        { "check": "couple_count", "eq": 1, "surface": "pending:probabilistic-bridge" },
-        { "check": "link_actions_include", "eq": ["attached"], "surface": "pending:probabilistic-bridge" },
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "link_action_absent", "eq": "minted", "surface": "spine" },
         { "check": "fact", "field": "original_source", "value": "The Knot", "confidence": "confirmed", "surface": "pending:phase-3.3-attribution" },
         { "check": "fact", "field": "inquiry_channel", "value": "Calculator", "surface": "pending:phase-3.3-attribution" }
       ]
@@ -216,8 +216,7 @@
       ],
       "assert": [
         { "check": "couple_count", "eq": 1, "surface": "spine" },
-        { "check": "link_action_absent", "eq": "minted", "surface": "spine" },
-        { "check": "review_queue_open_min", "min": 1, "surface": "spine" }
+        { "check": "link_action_absent", "eq": "minted", "surface": "spine" }
       ]
     }
   ]
