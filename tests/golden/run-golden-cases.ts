@@ -141,7 +141,11 @@ async function materialize(c: Case): Promise<SpineState> {
     }
   }
 
-  const { data: couples } = await sb.from('couples').select('id,lifecycle_state').eq('venue_id', venueId)
+  // Exclude merged (tombstoned) couples — a merged loser is demoted, not
+  // deleted (migration 379 merged_into_id), so an active-couple count must
+  // skip it. This is the doctrine-correct read (readers exclude merged).
+  const { data: couples } = await sb.from('couples')
+    .select('id,lifecycle_state').eq('venue_id', venueId).is('merged_into_id', null)
   const { data: tps } = await sb.from('touchpoints').select('channel,action_type,occurred_at,couple_id').eq('venue_id', venueId)
   const { count: openCandidates } = await sb.from('candidate_matches')
     .select('id', { count: 'exact', head: true }).eq('venue_id', venueId).is('resolution', null)

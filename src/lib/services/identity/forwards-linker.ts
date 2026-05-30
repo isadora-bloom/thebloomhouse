@@ -379,6 +379,59 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
     } else {
       result.reason = (result.reason || 'no above-threshold match') + reasonExtra
     }
+
+    // 3.5 Partner reconciliation (GC-5). When this signal landed on a couple
+    // AND names a partner, a SEPARATE couple may already exist for that
+    // partner (they booked their own tour before the contract named them).
+    // Merge it in via the merge_couples primitive. Partners legitimately have
+    // DIFFERENT emails, so only a far-apart wedding date blocks the merge
+    // (date-only guard); requires an unambiguous single full-name match.
+    if (result.matched_couple_id && signal.partner_name) {
+      try {
+        const normaliseFullName = (n: string | null | undefined): string | null => {
+          const parts = (n ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean)
+          return parts.length >= 2 ? parts.join(' ') : null // require first + last
+        }
+        const winnerId = result.matched_couple_id
+        const partnerKey = normaliseFullName(signal.partner_name)
+        if (partnerKey) {
+          const losers = couples.filter(
+            (c) => c.id !== winnerId && normaliseFullName(c.primary_name) === partnerKey,
+          )
+          if (losers.length === 1) {
+            const loser = losers[0]
+            const winner = couples.find((c) => c.id === winnerId)
+            // The winner may have been minted in THIS call (not in the
+            // pre-loaded `couples`), so fall back to the triggering signal's
+            // wedding_date — otherwise the date guard is blind to a freshly
+            // minted winner and would over-merge (GC-15).
+            const winnerDate = winner?.wedding_date ?? signal.wedding_date ?? null
+            const dateConflict = hardContradiction(null, loser.wedding_date, [], winnerDate)
+            if (!dateConflict) {
+              const { data: merged } = await supabase.rpc('merge_couples', {
+                p_winner: winnerId,
+                p_loser: loser.id,
+                p_reason: `partner '${signal.partner_name}' matched couple primary`,
+                p_rule: 'partner_reconciliation',
+              })
+              if (merged) {
+                result.reason += ` | partner_reconciliation: merged ${loser.id.slice(0, 8)} → ${winnerId.slice(0, 8)}`
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Best-effort: a reconciliation failure must never throw out of the
+        // pipeline (the legacy write + the attach already succeeded).
+        logEvent({
+          level: 'warn',
+          msg: 'partner_reconciliation_failed',
+          venue_id: venueId,
+          error: e instanceof Error ? e.message : String(e),
+        } as never)
+      }
+    }
+
     await emitLinkEvent(supabase, venueId, runId, result, signal)
     return result
   } catch (err) {

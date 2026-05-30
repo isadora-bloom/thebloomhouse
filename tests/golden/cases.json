@@ -85,7 +85,7 @@
         { "check": "link_actions_include", "eq": ["attached"], "surface": "spine" },
         { "check": "link_actions_include", "eq": ["fragment"], "surface": "spine" },
         { "check": "touchpoint_count_min", "min": 4, "surface": "spine" },
-        { "check": "couple_count", "eq": 1, "surface": "pending:partner-reconciliation" },
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
         { "check": "lifecycle_value", "eq": "booked", "surface": "legacy" }
       ]
     },
@@ -219,6 +219,20 @@
       "assert": [
         { "check": "couple_count", "eq": 1, "surface": "spine" },
         { "check": "link_action_absent", "eq": "minted", "surface": "spine" }
+      ]
+    },
+    {
+      "id": "GC-15",
+      "title": "Partner-reconciliation date guard — different same-named partners do NOT merge",
+      "gaps": ["GC-5-regression"],
+      "source": "merge_couples date-guard (the dangerous direction must stay safe)",
+      "_note": "A 'Will Carter' booked a tour for a 2027 wedding (couple B). A different couple's contract later names partner 'Will Carter' for a 2026 wedding. The partner-reconciliation trigger must NOT merge them — the >90d wedding-date gap means they are different Will Carters. couple_count stays 2. Locks the merge_couples trigger's date-only contradiction guard so partner-reconciliation can't become an over-merge.",
+      "signals": [
+        { "channel": "calendly", "action": "tour_booked", "name": "Will Carter", "identifiers": [{ "kind": "email", "value": "will.c.early@gmail.com", "reliability": "direct" }], "at": "2026-03-01T10:00:00Z", "wedding_date": "2027-05-01" },
+        { "channel": "honeybook", "action": "contract_signed", "name": "Dana Pine", "partnerName": "Will Carter", "identifiers": [{ "kind": "email", "value": "dana.pine@gmail.com", "reliability": "direct" }], "at": "2026-03-10T10:00:00Z", "wedding_date": "2026-01-15" }
+      ],
+      "assert": [
+        { "check": "couple_count_min", "min": 2, "surface": "spine" }
       ]
     }
   ]
