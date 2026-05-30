@@ -80,10 +80,12 @@
         { "channel": "web", "action": "calculator_submitted", "name": "Madison Bryant", "identifiers": [{ "kind": "email", "value": "madison.bryant@gmail.com", "reliability": "direct" }], "at": "2025-11-02T10:00:00Z" },
         { "channel": "honeybook", "action": "contract_signed", "name": "Madison Bryant", "partnerName": "Will Carter", "identifiers": [{ "kind": "email", "value": "madison.bryant@gmail.com", "reliability": "direct" }], "at": "2025-12-01T10:00:00Z" }
       ],
-      "_note": "Bridges only where identifiers overlap (calculator + honeybook share madison.bryant@gmail.com). Linking the partner email (will.carter), the Knot relay, and the IG handle into ONE couple needs the probabilistic bridge — future. Deterministic-first keeps the unanchored signals separate (correct, not a bug).",
+      "_note": "Diagnosed 2026-05-30. CORRECT now: Madison's knot relay + calculator + honeybook (linked by name + shared madison.bryant@gmail.com) reconstruct into ONE couple; the IG '@madsandwill' is correctly an aggregate-only FRAGMENT (no identity → not a couple touchpoint), so '5 touchpoints' was over-specified — 4 couple-touchpoints + 1 fragment is right. The ONE remaining gap: Will Carter's calendly tour mints a SEPARATE couple, and when the honeybook contract reveals 'partner: Will Carter' the system neither persists the partner onto Madison's couple nor merges Will's couple in. Closing it needs a PARTNER-RECONCILIATION feature = a new spine couple-merge primitive (reassign B's touchpoints/identifiers to A, mark B merged_into A, write couple_merge_events, idempotent + unmergeable) triggered when couple A's partner identity matches couple B's primary. That's a sizeable, data-moving, load-bearing build (the careful inverse of the over-merge guard) — scoped as the next focused effort, not rushed. couple_count==1 stays pending on it.",
       "assert": [
-        { "check": "couple_count", "eq": 1, "surface": "pending:probabilistic-bridge" },
-        { "check": "touchpoint_count_min", "min": 5, "surface": "pending:probabilistic-bridge" },
+        { "check": "link_actions_include", "eq": ["attached"], "surface": "spine" },
+        { "check": "link_actions_include", "eq": ["fragment"], "surface": "spine" },
+        { "check": "touchpoint_count_min", "min": 4, "surface": "spine" },
+        { "check": "couple_count", "eq": 1, "surface": "pending:partner-reconciliation" },
         { "check": "lifecycle_value", "eq": "booked", "surface": "legacy" }
       ]
     },
