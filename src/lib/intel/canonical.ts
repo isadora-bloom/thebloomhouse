@@ -98,14 +98,87 @@ const ZERO_LIFECYCLE: Record<LifecycleState, number> = {
   agent: 0,
 }
 
-export async function getVenueOverview(venueId: string): Promise<VenueOverview> {
-  void venueId // STUB — implemented Day 14
-  return {
-    couples: { total: 0, byLifecycle: { ...ZERO_LIFECYCLE } },
-    recentActivity: [],
-    dataMaturity: { backfillStatus: 'unknown', oldestTouchpoint: null, n: 0 },
-    generatedAt: new Date().toISOString(),
+/** Spine-only venue overview: couples counted by lifecycle, the latest
+ *  touchpoints as a recent-activity feed, and a data-maturity read
+ *  (oldest touchpoint + total count). Reads ONLY `couples` + `touchpoints`,
+ *  venue-scoped; excludes merged-away couples from the counts (they are
+ *  tombstones, not live couples). Injectable core for unit testing. */
+export async function loadVenueOverview(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<VenueOverview> {
+  const generatedAt = new Date().toISOString()
+  if (!venueId) {
+    return {
+      couples: { total: 0, byLifecycle: { ...ZERO_LIFECYCLE } },
+      recentActivity: [],
+      dataMaturity: { backfillStatus: 'unknown', oldestTouchpoint: null, n: 0 },
+      generatedAt,
+    }
   }
+
+  // Couples by lifecycle — one exact head-count per state, in parallel.
+  // lifecycle_state is CHECK-constrained to these six, so the sum is the
+  // true total of live (non-merged) couples.
+  const states = Object.keys(ZERO_LIFECYCLE) as LifecycleState[]
+  const counts = await Promise.all(
+    states.map(async (st) => {
+      const { count } = await supabase
+        .from('couples')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('lifecycle_state', st)
+        .is('merged_into_id', null)
+      return count ?? 0
+    }),
+  )
+  const byLifecycle = { ...ZERO_LIFECYCLE }
+  states.forEach((st, i) => {
+    byLifecycle[st] = counts[i]
+  })
+  const total = counts.reduce((a, b) => a + b, 0)
+
+  // Recent activity — the latest touchpoints across the venue.
+  const { data: recent } = await supabase
+    .from('touchpoints')
+    .select('id, channel, action_type, occurred_at, raw_payload')
+    .eq('venue_id', venueId)
+    .order('occurred_at', { ascending: false })
+    .limit(12)
+  const recentActivity: ActivityItem[] = ((recent ?? []) as RawJourneyTouchpointRow[]).map(
+    (t) => ({
+      id: t.id,
+      kind: `${t.channel}/${t.action_type}`,
+      occurredAt: t.occurred_at,
+      summary: pickString(t.raw_payload, 'subject') ?? pickString(t.raw_payload, 'body_preview') ?? `${t.channel} ${t.action_type}`,
+    }),
+  )
+
+  // Data maturity — total touchpoint count + the oldest one.
+  const { count: tpCount } = await supabase
+    .from('touchpoints')
+    .select('id', { count: 'exact', head: true })
+    .eq('venue_id', venueId)
+  const { data: oldest } = await supabase
+    .from('touchpoints')
+    .select('occurred_at')
+    .eq('venue_id', venueId)
+    .order('occurred_at', { ascending: true })
+    .limit(1)
+  const n = tpCount ?? 0
+  const oldestTouchpoint = (oldest?.[0] as { occurred_at: string } | undefined)?.occurred_at ?? null
+
+  return {
+    couples: { total, byLifecycle },
+    recentActivity,
+    dataMaturity: { backfillStatus: n === 0 ? 'empty' : 'populated', oldestTouchpoint, n },
+    generatedAt,
+  }
+}
+
+export async function getVenueOverview(venueId: string): Promise<VenueOverview> {
+  const { createServiceClient } = await import('@/lib/supabase/service')
+  return loadVenueOverview(createServiceClient(), venueId)
 }
 
 // ─────────────────────────────────────────────────────────────────────
