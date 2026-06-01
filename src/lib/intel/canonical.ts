@@ -22,6 +22,8 @@
  * zero denominator.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
+
 // ─────────────────────────────────────────────────────────────────────
 // Shared types
 // ─────────────────────────────────────────────────────────────────────
@@ -248,20 +250,184 @@ export interface CoupleJourney {
   generatedAt: string
 }
 
-export async function getCoupleJourney(
+/** Spine-only read. Pulls the couple identity, its ordered touchpoint
+ *  ribbon, progression anchors, the Wave-4 forensic profile (when the
+ *  couple is mirror-linked to a wedding), and a same-stage look-alike
+ *  cohort — all from `couples` / `touchpoints` / `couple_progression_events`
+ *  / `couple_identity_profile`. NEVER reads the legacy stacks
+ *  (interactions / attribution_events / candidate_identities / people).
+ *
+ *  Tenancy: every query is scoped by `venueId`; a coupleId from a foreign
+ *  venue returns `couple: null` (honest-empty), never another tenant's row.
+ *
+ *  Exported (alongside the public `getCoupleJourney`) so it can be unit-
+ *  tested with a mock client without standing up a database — the same
+ *  dependency-seam pattern the spine writers use. */
+export async function loadCoupleJourney(
+  supabase: SupabaseClient,
   venueId: string,
   coupleId: string,
 ): Promise<CoupleJourney> {
-  void venueId // STUB — implemented Day 15
-  void coupleId
-  return {
+  const generatedAt = new Date().toISOString()
+  const empty: CoupleJourney = {
     couple: null,
     ribbon: [],
     progression: [],
     identityProfile: null,
     lookAlikeCohort: [],
-    generatedAt: new Date().toISOString(),
+    generatedAt,
   }
+  if (!venueId || !coupleId) return empty
+
+  // 1. Couple identity — venue-scoped. Excludes a merged-away couple
+  //    (merged_into_id set) so a stale id resolves to honest-empty rather
+  //    than a tombstone; callers should follow the pointer upstream.
+  const { data: c } = await supabase
+    .from('couples')
+    .select(
+      'id, venue_id, primary_contact_name, lifecycle_state, heat_score, wedding_date, source_wedding_id, merged_into_id',
+    )
+    .eq('id', coupleId)
+    .eq('venue_id', venueId)
+    .maybeSingle<RawJourneyCoupleRow>()
+  if (!c || c.merged_into_id) return empty
+
+  // 2. Ribbon — full touchpoint stream, chronological. cascade_stage /
+  //    cascade_reason live in raw_payload (written by the cascade at
+  //    match time); null when the touchpoint predates cascade telemetry.
+  const { data: tps } = await supabase
+    .from('touchpoints')
+    .select('id, channel, action_type, occurred_at, raw_payload')
+    .eq('couple_id', coupleId)
+    .order('occurred_at', { ascending: true })
+    .limit(1000)
+  const ribbon: TouchpointRibbon[] = ((tps ?? []) as RawJourneyTouchpointRow[]).map((t) => ({
+    id: t.id,
+    channel: t.channel,
+    actionType: t.action_type,
+    occurredAt: t.occurred_at,
+    cascadeStage: pickString(t.raw_payload, 'cascade_stage'),
+    cascadeReason: pickString(t.raw_payload, 'cascade_reason'),
+  }))
+
+  // 3. Progression anchors.
+  const { data: progs } = await supabase
+    .from('couple_progression_events')
+    .select('event_type, occurred_at')
+    .eq('couple_id', coupleId)
+    .order('occurred_at', { ascending: true })
+  const progression: ProgressionEvent[] = ((progs ?? []) as RawJourneyProgressionRow[]).map(
+    (p) => ({ eventType: p.event_type, occurredAt: p.occurred_at }),
+  )
+
+  // 4. Wave-4 forensic profile (keyed on the legacy wedding id). Best-
+  //    effort enrichment — a missing/unreadable profile leaves it null.
+  let identityProfile: Record<string, unknown> | null = null
+  if (c.source_wedding_id) {
+    try {
+      const { data: prof } = await supabase
+        .from('couple_identity_profile')
+        .select('profile')
+        .eq('wedding_id', c.source_wedding_id)
+        .maybeSingle<{ profile: Record<string, unknown> | null }>()
+      identityProfile = prof?.profile ?? null
+    } catch {
+      // enrichment, not a gate
+    }
+  }
+
+  // 5. Look-alike cohort — same venue + same lifecycle stage, excluding
+  //    self and merged-away couples. When the target has a wedding date we
+  //    rank by date proximity (the closest-season peers); otherwise newest
+  //    first. Definition is deliberately spine-cheap + explainable, not a
+  //    fuzzy similarity model.
+  const lookAlikeCohort = await loadLookAlikeCohort(supabase, venueId, c)
+
+  return {
+    couple: {
+      id: c.id,
+      names: c.primary_contact_name ?? null,
+      lifecycle: (c.lifecycle_state as LifecycleState) ?? null,
+      heatScore: c.heat_score ?? null,
+    },
+    ribbon,
+    progression,
+    identityProfile,
+    lookAlikeCohort,
+    generatedAt,
+  }
+}
+
+export async function getCoupleJourney(
+  venueId: string,
+  coupleId: string,
+): Promise<CoupleJourney> {
+  const { createServiceClient } = await import('@/lib/supabase/service')
+  return loadCoupleJourney(createServiceClient(), venueId, coupleId)
+}
+
+// — getCoupleJourney internals —————————————————————————————————————————
+
+interface RawJourneyCoupleRow {
+  id: string
+  venue_id: string
+  primary_contact_name: string | null
+  lifecycle_state: string
+  heat_score: number | null
+  wedding_date: string | null
+  source_wedding_id: string | null
+  merged_into_id: string | null
+}
+interface RawJourneyTouchpointRow {
+  id: string
+  channel: string
+  action_type: string
+  occurred_at: string
+  raw_payload: Record<string, unknown> | null
+}
+interface RawJourneyProgressionRow {
+  event_type: string
+  occurred_at: string
+}
+
+/** Read a string field out of raw_payload; null when absent / non-string. */
+function pickString(raw: Record<string, unknown> | null, key: string): string | null {
+  if (!raw) return null
+  const v = raw[key]
+  return typeof v === 'string' && v.trim().length > 0 ? v : null
+}
+
+const LOOKALIKE_LIMIT = 6
+const LOOKALIKE_SCAN = 60
+
+async function loadLookAlikeCohort(
+  supabase: SupabaseClient,
+  venueId: string,
+  c: RawJourneyCoupleRow,
+): Promise<CoupleRef[]> {
+  const { data } = await supabase
+    .from('couples')
+    .select('id, primary_contact_name, wedding_date')
+    .eq('venue_id', venueId)
+    .eq('lifecycle_state', c.lifecycle_state)
+    .neq('id', c.id)
+    .is('merged_into_id', null)
+    .order('created_at', { ascending: false })
+    .limit(LOOKALIKE_SCAN)
+  const rows = (data ?? []) as Array<{
+    id: string
+    primary_contact_name: string | null
+    wedding_date: string | null
+  }>
+  const target = c.wedding_date ? Date.parse(c.wedding_date) : NaN
+  if (Number.isFinite(target)) {
+    rows.sort((a, b) => {
+      const da = a.wedding_date ? Math.abs(Date.parse(a.wedding_date) - target) : Infinity
+      const db = b.wedding_date ? Math.abs(Date.parse(b.wedding_date) - target) : Infinity
+      return da - db
+    })
+  }
+  return rows.slice(0, LOOKALIKE_LIMIT).map((r) => ({ id: r.id, names: r.primary_contact_name ?? null }))
 }
 
 // ─────────────────────────────────────────────────────────────────────
