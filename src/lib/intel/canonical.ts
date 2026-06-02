@@ -24,6 +24,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AttributionResult } from '@/lib/services/attribution/couple-attribution'
+import type { CohortIntel } from '@/lib/services/cohort'
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared types
@@ -323,21 +324,97 @@ const EMPTY_DISTRIBUTION: Distribution = {
   reason: 'no_data',
 }
 
+/** Map the cohort module's rich Distribution (median/p25/p75/n/enoughData)
+ *  to the canonical single-value Distribution. The median is the headline
+ *  value; honesty flags carry through. median is null only at n=0. */
+function distFromCohort(d: {
+  n: number
+  enoughData: boolean
+  median: number | null
+}): Distribution {
+  if (d.median === null) return { value: null, n: d.n, enoughData: false, reason: 'no_data' }
+  if (!d.enoughData) return { value: d.median, n: d.n, enoughData: false, reason: 'insufficient_sample' }
+  return { value: d.median, n: d.n, enoughData: true }
+}
+
+/** cohort family trend → canonical ThemePattern trend. */
+function mapTrend(t: 'rising' | 'steady' | 'declining' | 'insufficient_data'): ThemePattern['trend'] {
+  if (t === 'rising') return 'rising'
+  if (t === 'declining') return 'falling'
+  return 'flat'
+}
+
+/** Pure mapping from the cohort builder's CohortIntel to the canonical
+ *  CohortFunnel. Exported for unit testing with a hand-built fixture (no DB).
+ *  - funnel: stage label + couple count (the furthest-stage funnel).
+ *  - responseTime / leadTime: cohort median as the canonical value.
+ *  - conversionCurve: response-speed bands with a measurable tour rate
+ *    (bands with null rate are dropped — honest, not plotted as 0).
+ *  - knee: the band after which tour rate drops most; dropoffAfter is the
+ *    rate delta into the next band.
+ *  - textPatterns: topic families → theme + total mentions + trend. */
+export function mapCohortIntelToFunnel(intel: CohortIntel): CohortFunnel {
+  const funnel: FunnelStage[] = intel.funnel.overall.map((s) => ({ stage: s.label, n: s.count }))
+
+  const bands = intel.curve.bands
+  const conversionCurve: CurvePoint[] = bands
+    .filter((b) => b.touredRate !== null)
+    .map((b) => ({ x: b.lowerHours, y: b.touredRate as number }))
+
+  let knee: CohortFunnel['knee'] = null
+  const ki = intel.curve.kneeBandIndex
+  if (ki !== null && ki >= 0 && ki < bands.length) {
+    const here = bands[ki]
+    const next = bands[ki + 1]
+    const dropoffAfter =
+      here.touredRate !== null && next && next.touredRate !== null
+        ? Math.round((here.touredRate - next.touredRate) * 1000) / 1000
+        : 0
+    knee = { responseHours: here.upperHours ?? here.lowerHours, dropoffAfter }
+  }
+
+  const textPatterns: ThemePattern[] = intel.textPatterns.families.map((f) => ({
+    theme: f.label,
+    count: f.monthly.reduce((s, m) => s + m.mentions, 0),
+    trend: mapTrend(f.trend),
+  }))
+
+  return {
+    funnel,
+    responseTime: distFromCohort(intel.responseTime.overall),
+    leadTime: distFromCohort(intel.leadTime.dist),
+    conversionCurve,
+    knee,
+    textPatterns,
+    generatedAt: intel.generatedAt,
+  }
+}
+
 export async function getCohortFunnel(
   venueId: string,
   opts: CohortFunnelOpts = {},
 ): Promise<CohortFunnel> {
-  void venueId // STUB — implemented Day 15 (wraps loadCohortData)
-  return {
-    funnel: [],
-    responseTime: { ...EMPTY_DISTRIBUTION },
-    leadTime: { ...EMPTY_DISTRIBUTION },
-    conversionCurve: [],
-    knee: null,
-    textPatterns: [],
-    ...(opts.operatorAxis ? { operatorBreakdown: [] } : {}),
-    generatedAt: new Date().toISOString(),
+  // NOTE: opts.segment + opts.operatorAxis are not yet wired into the
+  // cohort builder — accepted for forward-compat, ignored in this pass
+  // (operatorBreakdown is therefore omitted, matching the contract's
+  // "present only when operatorAxis" — it's simply never present yet).
+  if (!venueId) {
+    return {
+      funnel: [],
+      responseTime: { ...EMPTY_DISTRIBUTION },
+      leadTime: { ...EMPTY_DISTRIBUTION },
+      conversionCurve: [],
+      knee: null,
+      textPatterns: [],
+      generatedAt: new Date().toISOString(),
+    }
   }
+  const { createServiceClient } = await import('@/lib/supabase/service')
+  const { buildCohortIntel } = await import('@/lib/services/cohort')
+  const intel = await buildCohortIntel(createServiceClient(), venueId, {
+    since: opts.period?.from ?? null,
+  })
+  return mapCohortIntelToFunnel(intel)
 }
 
 // ─────────────────────────────────────────────────────────────────────
