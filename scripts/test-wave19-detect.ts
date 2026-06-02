@@ -26,8 +26,15 @@ import { captureKnowledge } from '../src/lib/services/knowledge-gaps/capture.js'
 import { buildVenueKnowledgeBlock, inferContextTags } from '../src/lib/services/knowledge-gaps/fold-in.js'
 
 async function main() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  // Safety: this test writes (deletes) rows. Never run against prod — same
+  // doctrine as scripts/branch-sql.mjs. Refuse the prod ref (skip, not fail).
+  if (url.includes('jsxxgwprxuqgcauzlxcb')) {
+    console.log('[integration] REFUSED — resolved URL is PROD; this test writes rows. Target a dev/branch DB (skipping, not failing).')
+    process.exit(0)
+  }
   const sb = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    url,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { persistSession: false } },
   )

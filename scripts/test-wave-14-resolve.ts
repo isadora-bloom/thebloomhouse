@@ -41,6 +41,12 @@ for (const [k, v] of Object.entries(fileEnv)) {
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+// Safety: this test deletes attribution_events. Never run against prod —
+// same doctrine as scripts/branch-sql.mjs. Refuse the prod ref (skip).
+if (url.includes('jsxxgwprxuqgcauzlxcb')) {
+  console.log('[integration] REFUSED — resolved URL is PROD; this test writes rows. Target a dev/branch DB (skipping, not failing).')
+  process.exit(0)
+}
 const supabase = createClient(url, serviceKey)
 const RIXEY = 'f3d10226-4c5c-47ad-b89b-98ad63842492'
 

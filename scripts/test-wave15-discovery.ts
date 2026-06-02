@@ -23,6 +23,13 @@ const env = Object.fromEntries(
 )
 for (const k of Object.keys(env)) if (!process.env[k]) process.env[k] = env[k]
 
+// Safety: this test upserts rows. Never run against prod — same doctrine
+// as scripts/branch-sql.mjs. Refuse the prod ref (skip, not fail).
+if ((env.NEXT_PUBLIC_SUPABASE_URL ?? '').includes('jsxxgwprxuqgcauzlxcb')) {
+  console.log('[integration] REFUSED — .env.local points at PROD; this test writes rows. Target a dev/branch DB (skipping, not failing).')
+  process.exit(0)
+}
+
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 })
