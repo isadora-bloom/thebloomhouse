@@ -78,6 +78,9 @@ jobs:
       - name: Unit tests — getVenueOverview spine reader (Phase 3.3 canonical fn — lifecycle counts / data maturity)
         run: npx tsx scripts/test-venue-overview-reader.ts
 
+      - name: Unit tests — getSourceAttribution mapping (Phase 3.3 canonical fn — builder cells → Distribution honesty)
+        run: npx tsx scripts/test-source-attribution-mapping.ts
+
       - name: Unit tests — relay-partial first-name bridge (GC-2 cross-source -> judge band)
         run: npx tsx scripts/test-relay-bridge.ts
 

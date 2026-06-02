@@ -23,6 +23,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { AttributionResult } from '@/lib/services/attribution/couple-attribution'
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared types
@@ -206,18 +207,68 @@ export interface SourceAttributionOpts {
   period?: DateRange
 }
 
+/** Build a Distribution from a builder cell value + sample. Honest by
+ *  construction: null value → no_data (n=0) or zero_denominator (n>0);
+ *  a present value below the builder's sufficiency gate → insufficient_sample. */
+function toDistribution(value: number | null, n: number, enoughData: boolean): Distribution {
+  if (value === null) return { value: null, n, enoughData: false, reason: n > 0 ? 'zero_denominator' : 'no_data' }
+  if (!enoughData) return { value, n, enoughData: false, reason: 'insufficient_sample' }
+  return { value, n, enoughData: true }
+}
+
+/** Pure mapping from the attribution builder's per-model channel cells to
+ *  the canonical SourceAttribution shape. Exported for unit testing without
+ *  a database (feed it a hand-built AttributionResult fixture). `cac` is
+ *  converted from the builder's cents to dollars to match the field name;
+ *  conversion + revenuePerDollar are unitless ratios, passed through. */
+export function mapAttributionToCanonical(
+  result: AttributionResult,
+  model: AttributionModel,
+): SourceAttribution {
+  const channels: ChannelStat[] = result.channels.map((row) => {
+    const cell = row.models[model]
+    return {
+      channel: row.channel,
+      n: cell.distinctCouples,
+      conversion: toDistribution(cell.inquiryToBookingRate, cell.distinctCouples, cell.enoughData),
+      cac: toDistribution(cell.cacCents === null ? null : cell.cacCents / 100, cell.distinctBooked, cell.enoughData),
+      revenuePerDollar: toDistribution(cell.revenuePerDollar, cell.distinctCouples, cell.enoughData),
+    }
+  })
+
+  let topByVolume: string | null = null
+  let maxN = 0
+  let topByConversion: string | null = null
+  let maxConv = -1
+  for (const row of result.channels) {
+    const cell = row.models[model]
+    if (cell.distinctCouples > maxN) {
+      maxN = cell.distinctCouples
+      topByVolume = row.channel
+    }
+    if (cell.enoughData && cell.inquiryToBookingRate !== null && cell.inquiryToBookingRate > maxConv) {
+      maxConv = cell.inquiryToBookingRate
+      topByConversion = row.channel
+    }
+  }
+
+  return { model, channels, topByVolume, topByConversion, generatedAt: result.generatedAt }
+}
+
 export async function getSourceAttribution(
   venueId: string,
   opts: SourceAttributionOpts = {},
 ): Promise<SourceAttribution> {
-  void venueId // STUB — implemented Day 14 (wraps buildCoupleAttribution)
-  return {
-    model: opts.model ?? 'first_touch',
-    channels: [],
-    topByVolume: null,
-    topByConversion: null,
-    generatedAt: new Date().toISOString(),
+  const model = opts.model ?? 'first_touch'
+  if (!venueId) {
+    return { model, channels: [], topByVolume: null, topByConversion: null, generatedAt: new Date().toISOString() }
   }
+  const { createServiceClient } = await import('@/lib/supabase/service')
+  const { buildCoupleAttribution } = await import('@/lib/services/attribution/couple-attribution')
+  const result = await buildCoupleAttribution(createServiceClient(), venueId, {
+    since: opts.period?.from ?? null,
+  })
+  return mapAttributionToCanonical(result, model)
 }
 
 // ─────────────────────────────────────────────────────────────────────
