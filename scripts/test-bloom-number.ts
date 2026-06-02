@@ -61,9 +61,12 @@ try {
   // .env.local not present (CI). Integration block self-skips below.
 }
 
+// Safety: this test INSERTS weddings. Never run it against prod — same
+// doctrine as scripts/branch-sql.mjs. Refuse the prod ref (skip, don't fail).
+const isProd = (env.NEXT_PUBLIC_SUPABASE_URL ?? '').includes('jsxxgwprxuqgcauzlxcb')
 const integrationEnabled = Boolean(
   env.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY,
-)
+) && !isProd
 
 const sb = integrationEnabled
   ? createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -75,6 +78,10 @@ const sb = integrationEnabled
 const HAW = '22222222-2222-2222-2222-222222222201'
 
 async function runIntegration() {
+  if (isProd) {
+    console.log('[integration] REFUSED — .env.local points at PROD; this test writes weddings. Target a dev/branch DB (skipping, not failing).')
+    return
+  }
   if (!sb) {
     console.log('[integration] skipped — .env.local or service-role key missing')
     return

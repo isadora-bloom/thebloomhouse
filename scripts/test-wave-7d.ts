@@ -57,6 +57,13 @@ if (!serviceKey) {
   console.error('Missing SUPABASE_SERVICE_ROLE_KEY in env')
   process.exit(1)
 }
+// Safety: this test INSERTS intel_discoveries/digests, and `url` above
+// DEFAULTS to the prod ref — never let it write to prod. Same doctrine as
+// scripts/branch-sql.mjs: refuse the prod ref (skip, don't fail).
+if (url.includes('jsxxgwprxuqgcauzlxcb')) {
+  console.log('[integration] REFUSED — resolved URL is PROD; this test writes rows. Set NEXT_PUBLIC_SUPABASE_URL to a dev/branch DB (skipping, not failing).')
+  process.exit(0)
+}
 
 const supabase = createClient(url, serviceKey, {
   auth: { persistSession: false, autoRefreshToken: false },

@@ -53,7 +53,15 @@ try {
   )
 } catch { /* CI / no env.local */ }
 
-const integrationEnabled = Boolean(env.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY)
+// SAFETY: this test INSERTS rows. interactions.wedding_id and
+// engagement_events.wedding_id are ON DELETE SET NULL (not CASCADE), so the
+// cleanup must delete child rows explicitly — and the test must NEVER run
+// against production (a failed/partial run would leak orphaned tour_cancelled
+// engagement_events that pollute heat scoring). Same doctrine as
+// scripts/branch-sql.mjs: refuse the prod ref.
+const PROD_REF = 'jsxxgwprxuqgcauzlxcb'
+const isProd = (env.NEXT_PUBLIC_SUPABASE_URL ?? '').includes(PROD_REF)
+const integrationEnabled = Boolean(env.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) && !isProd
 const sb = integrationEnabled
   ? createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
   : null
@@ -128,6 +136,10 @@ async function runCase(label: string, run: (client: NonNullable<typeof sb>) => P
 }
 
 async function runIntegration() {
+  if (isProd) {
+    console.log('[integration] REFUSED — .env.local points at PROD; integration writes must target a dev/branch DB (skipping, not failing)')
+    return
+  }
   if (!sb) {
     console.log('[integration] skipped — .env.local or service-role key missing')
     return
@@ -158,6 +170,11 @@ async function runIntegration() {
       const suppress = await shouldSuppressTourCompleted(client, HAW, weddingId, tourDt, null)
       assertEq(suppress, true, 'within-14d cancel suppresses tour_completed')
     } finally {
+      // wedding_id is ON DELETE SET NULL on both child tables, so deleting
+      // the wedding does NOT remove these rows — delete them explicitly
+      // (by wedding_id, BEFORE the wedding) or they leak as orphans.
+      await client.from('engagement_events').delete().eq('wedding_id', weddingId)
+      await client.from('interactions').delete().eq('wedding_id', weddingId)
       await client.from('weddings').delete().eq('id', weddingId)
     }
   })
@@ -189,6 +206,11 @@ async function runIntegration() {
       const suppress = await shouldSuppressTourCompleted(client, HAW, weddingId, newTourDt, null)
       assertEq(suppress, false, '90d-apart cancel does NOT suppress unrelated tour')
     } finally {
+      // wedding_id is ON DELETE SET NULL on both child tables, so deleting
+      // the wedding does NOT remove these rows — delete them explicitly
+      // (by wedding_id, BEFORE the wedding) or they leak as orphans.
+      await client.from('engagement_events').delete().eq('wedding_id', weddingId)
+      await client.from('interactions').delete().eq('wedding_id', weddingId)
       await client.from('weddings').delete().eq('id', weddingId)
     }
   })
@@ -206,7 +228,10 @@ async function runIntegration() {
     const sharedThread = `thread_pass5_${Date.now()}`
     try {
       // Insert a cancel interaction first so we can reference its id.
-      const { data: cancelIx } = await client
+      // signal_class is NOT NULL (migration 192) — the live pipeline always
+      // sets it; this test's insert must too or it 23502-fails. Surface the
+      // DB error instead of swallowing it as a bare "insert failed".
+      const { data: cancelIx, error: cancelIxErr } = await client
         .from('interactions')
         .insert({
           venue_id: HAW,
@@ -216,10 +241,13 @@ async function runIntegration() {
           subject: 'Cancel tour',
           gmail_thread_id: sharedThread,
           timestamp: new Date('2026-01-05T18:00:00Z').toISOString(),
+          signal_class: 'touchpoint',
         })
         .select('id')
         .single()
-      if (!cancelIx) throw new Error('insert cancel interaction failed')
+      if (cancelIxErr || !cancelIx) {
+        throw new Error(`insert cancel interaction failed: ${cancelIxErr?.message ?? 'no row returned'}`)
+      }
 
       await client.from('engagement_events').insert({
         venue_id: HAW,
@@ -240,6 +268,11 @@ async function runIntegration() {
       const suppress = await shouldSuppressTourCompleted(client, HAW, weddingId, newTourDt, sharedThread)
       assertEq(suppress, true, 'thread-id match suppresses even when 90d apart')
     } finally {
+      // wedding_id is ON DELETE SET NULL on both child tables, so deleting
+      // the wedding does NOT remove these rows — delete them explicitly
+      // (by wedding_id, BEFORE the wedding) or they leak as orphans.
+      await client.from('engagement_events').delete().eq('wedding_id', weddingId)
+      await client.from('interactions').delete().eq('wedding_id', weddingId)
       await client.from('weddings').delete().eq('id', weddingId)
     }
   })

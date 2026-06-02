@@ -26,6 +26,12 @@ if (!url || !key) {
   console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
   process.exit(1)
 }
+// Safety: this test INSERTS venues/social_captures/social_engagements/people.
+// Never run it against prod — same doctrine as scripts/branch-sql.mjs.
+if (url.includes('jsxxgwprxuqgcauzlxcb')) {
+  console.log('[integration] REFUSED — NEXT_PUBLIC_SUPABASE_URL points at PROD; this test writes rows. Target a dev/branch DB.')
+  process.exit(0)
+}
 
 const sb = createClient(url, key, {
   auth: { persistSession: false, autoRefreshToken: false },
