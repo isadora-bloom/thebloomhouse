@@ -27,12 +27,23 @@ comment on column couples.merged_into_id is
   'When set, this couple was merged INTO the referenced couple (demotion, not deletion). Readers should follow the pointer / exclude merged couples. Reversible via unmerge.';
 
 -- Allow the partner-reconciliation merge event_type.
+--
+-- DRIFT WARNING (2026-06-02 fix): this CHECK must carry forward EVERY
+-- value the prior migration (374) allowed, not just the merge-family ones
+-- — dropping + recreating with a partial list rejects existing rows.
+-- The v1 of this block omitted 'couple_minted' (written on EVERY mint by
+-- the lock_and_mint chokepoint, mig 366) and 'reattach' (orphan-reattach,
+-- mig 374), so applying it against any populated table failed with
+-- "check constraint ... violated by some row". The full set below is
+-- 374's ten values + 'partner_reconciliation'. If a future migration adds
+-- an event_type, this list (the latest definition) is the source of truth.
 alter table couple_merge_events drop constraint if exists couple_merge_events_event_type_check;
 alter table couple_merge_events add constraint couple_merge_events_event_type_check
   check (event_type = any (array[
     'fragment_promoted','channel_scoped_bridged','candidate_confirmed',
     'candidate_rejected','manual_merge','manual_unmerge','resurrection',
-    'resurrection_rejected','partner_reconciliation'
+    'resurrection_rejected','couple_minted','reattach',
+    'partner_reconciliation'
   ]));
 
 -- merge_couples(winner, loser, reason, rule) → boolean (true when a merge happened).
