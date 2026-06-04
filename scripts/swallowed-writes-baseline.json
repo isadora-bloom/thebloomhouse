@@ -1,0 +1,4 @@
+{
+  "count": 123,
+  "note": "Un-wrapped statement-level awaited insert/upsert in src/ (HARDENING-SCOPE Area 1). May only DECREASE — migrate sites to writeOrLog (src/lib/db/write-or-log.ts) and lower this. Baselined 2026-06-04."
+}

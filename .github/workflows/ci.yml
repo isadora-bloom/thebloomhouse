@@ -36,6 +36,9 @@ jobs:
       - name: Vitest suite (was NOT gated before — contract + cascade tests rotted unnoticed; all pure/mock, CI-safe)
         run: npx vitest run
 
+      - name: Unit tests — writeOrLog (HARDENING-SCOPE Area 1 — failed writes logged not swallowed)
+        run: npx tsx scripts/test-write-or-log.ts
+
       - name: Unit tests — normalizeSource
         run: npx tsx scripts/test-normalize-source.ts
 
@@ -208,6 +211,10 @@ jobs:
       # Phase 0 §0.9 once governance is ratified. See BLOOM-MASTER-PLAN.md §0.
       - name: (informational) Cleanup-budget ratchet — debt may only DECREASE (M1)
         run: node scripts/check-cleanup-budget.mjs
+
+      - name: (informational) Swallowed-writes ratchet — un-wrapped awaited insert/upsert may only DECREASE (HARDENING-SCOPE Area 1)
+        continue-on-error: true
+        run: node scripts/check-swallowed-writes.mjs
         continue-on-error: true
 
       - name: (informational) RLS venue-isolation guard — venue_id tables need RLS + policy (G17)
