@@ -102,6 +102,9 @@ jobs:
       - name: Unit tests — data-completeness self-report (battery Q30)
         run: npx tsx scripts/test-data-completeness.ts
 
+      - name: Unit tests — identity-precision audit (battery Q36 — merge precision + recall)
+        run: npx tsx scripts/test-identity-precision.ts
+
       - name: Unit tests — relay-partial first-name bridge (GC-2 cross-source -> judge band)
         run: npx tsx scripts/test-relay-bridge.ts
 
