@@ -37,20 +37,58 @@ export interface HeatTouchpoint {
   occurred_at: string
 }
 
-export function computeHeatScore(
+/** One touchpoint's contribution to the heat score — the evidence behind
+ *  the number. Used by ghost-risk + any "why is this couple hot/cold"
+ *  surface (battery Q19: prediction WITH transparency). */
+export interface HeatContribution {
+  signalTier: string
+  occurredAt: string
+  ageDays: number
+  weight: number
+  /** weight × time-decay — the actual points this touchpoint added. */
+  weightedValue: number
+}
+
+export interface HeatBreakdown {
+  score: number
+  /** Contributions sorted most-influential-first. Empty when no scoring
+   *  touchpoints (aggregate_only / unknown tiers are excluded). */
+  contributions: HeatContribution[]
+}
+
+/** The heat score AND the per-touchpoint breakdown that produced it. */
+export function computeHeatBreakdown(
   touchpoints: HeatTouchpoint[],
   now = Date.now(),
-): number {
-  let sum = 0
+): HeatBreakdown {
+  const contributions: HeatContribution[] = []
+  let score = 0
   for (const t of touchpoints) {
     if (t.signal_tier === 'aggregate_only') continue
     const w = WEIGHTS[t.signal_tier]
     if (!w) continue
     const ageDays = (now - Date.parse(t.occurred_at)) / 86_400_000
-    const decay = Math.pow(0.5, ageDays / HALF_LIFE_DAYS)
-    sum += w * decay
+    const weightedValue = w * Math.pow(0.5, ageDays / HALF_LIFE_DAYS)
+    score += weightedValue
+    contributions.push({
+      signalTier: t.signal_tier,
+      occurredAt: t.occurred_at,
+      ageDays: Math.round(ageDays * 10) / 10,
+      weight: w,
+      weightedValue: Math.round(weightedValue * 10) / 10,
+    })
   }
-  return sum
+  contributions.sort((a, b) => b.weightedValue - a.weightedValue)
+  return { score, contributions }
+}
+
+/** Time-decayed weighted heat score. Single source of truth =
+ *  computeHeatBreakdown (so the score and its explanation never drift). */
+export function computeHeatScore(
+  touchpoints: HeatTouchpoint[],
+  now = Date.now(),
+): number {
+  return computeHeatBreakdown(touchpoints, now).score
 }
 
 /**
