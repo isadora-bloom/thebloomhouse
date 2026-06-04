@@ -20,6 +20,7 @@
 
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+import { parseSafetyFlags, assertNotProd, requireApply } from './_safety.mjs'
 
 const env = {}
 for (const line of readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
@@ -29,6 +30,10 @@ for (const line of readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
   if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1)
   env[m[1]] = v
 }
+
+const { apply, allowProd } = parseSafetyFlags(process.argv)
+assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd })
+
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 })
@@ -43,6 +48,11 @@ async function phase1NullPlaceholders() {
     .eq('venue_id', RIXEY)
     .eq('first_name', '(Unknown)')
   console.log(`  Found ${hits?.length ?? 0} people rows with first_name='(Unknown)'`)
+
+  if (!requireApply(apply, 'repair-low-quality-syncs phase 1')) {
+    console.log(`  WOULD NULL first_name on ${hits?.length ?? 0} matching rows`)
+    return
+  }
 
   const { error } = await sb
     .from('people')

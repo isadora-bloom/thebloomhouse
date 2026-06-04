@@ -25,6 +25,7 @@
 
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+import { parseSafetyFlags, assertNotProd, requireApply } from './_safety.mjs'
 
 const env = {}
 for (const line of readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
@@ -34,6 +35,11 @@ for (const line of readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
   if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1)
   env[m[1]] = v
 }
+
+const { apply, allowProd } = parseSafetyFlags(process.argv)
+assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd })
+const willWrite = requireApply(apply, 'run-non-couple-tombstone')
+
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY)
 
 // Same constants as src/lib/services/identity/non-couple-tombstone.ts
@@ -141,6 +147,12 @@ for (const wid of unknownIds) {
     skipUncertain++
     continue
   }
+  if (!willWrite) {
+    // Dry-run: count what WOULD be tombstoned, write nothing.
+    tombstoned++
+    if (tombstones.length < 20) tombstones.push({ wid, reason: strong })
+    continue
+  }
   const { error } = await sb
     .from('weddings')
     .update({
@@ -157,8 +169,8 @@ for (const wid of unknownIds) {
   if (tombstones.length < 20) tombstones.push({ wid, reason: strong })
 }
 
-console.log(`\n=== Tombstone sweep results ===`)
-console.log(`  tombstoned:                          ${tombstoned}`)
+console.log(`\n=== Tombstone sweep results${willWrite ? '' : ' (DRY-RUN — no writes)'} ===`)
+console.log(`  ${willWrite ? 'tombstoned' : 'WOULD tombstone'}:${willWrite ? '                          ' : '                     '}${tombstoned}`)
 console.log(`  skipped (couple-intent in thread):   ${skipCouple}`)
 console.log(`  skipped (no classified intent):      ${skipNoIntent}`)
 console.log(`  skipped (uncertain - all logistics): ${skipUncertain}`)

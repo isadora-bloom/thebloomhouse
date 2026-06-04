@@ -13,6 +13,7 @@
 //      the wide columns are populated.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
+import { parseSafetyFlags, assertNotProd, requireApply } from './_safety.mjs'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8').split('\n').filter((l) => l && !l.startsWith('#') && l.includes('=')).map((l) => {
@@ -20,6 +21,10 @@ const env = Object.fromEntries(
   })
 )
 for (const k of Object.keys(env)) if (!process.env[k]) process.env[k] = env[k]
+
+const { apply, allowProd } = parseSafetyFlags(process.argv)
+assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd })
+
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
 
 const RIXEY = 'f3d10226-4c5c-47ad-b89b-98ad63842492'
@@ -37,6 +42,17 @@ async function main() {
   // CHECK 2: seating_assignments dropped
   const { error: saErr } = await sb.from('seating_assignments').select('id').limit(1)
   console.log(`[2] seating_assignments dropped: ${saErr?.message?.includes('does not exist') || saErr?.message?.includes('schema cache') ? '✓' : '❌ ' + (saErr?.message ?? 'still exists')}`)
+
+  // CHECKS 3-5 perform real round-trip writes (insert/update/delete) on
+  // storefront / borrow_catalog / borrow_selections / venue_resources /
+  // venue_seasonal_content. Gate them behind --apply so a no-flag run is
+  // read-only.
+  if (!requireApply(apply, 'selfreview-data-cleanup write checks 3-5')) {
+    console.log('\n[3-5] skipped (dry-run) — would insert/update/delete test rows on')
+    console.log('      venue_seasonal_content, venue_resources, storefront, borrow_catalog, borrow_selections')
+    console.log('\n=== done (dry-run) ===')
+    return
+  }
 
   // CHECK 3: seasonal_content unique constraint
   const dupePayload = { venue_id: RIXEY, season: 'spring', imagery: 'test', phrases: ['test'] }
