@@ -11,6 +11,7 @@
 
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+import { parseSafetyFlags, assertNotProd } from './_safety.mjs'
 
 function loadEnv() {
   const env: Record<string, string> = { ...process.env } as Record<string, string>
@@ -26,6 +27,8 @@ function loadEnv() {
 
 async function main() {
   const env = loadEnv()
+  // Smoke test writes + deletes test rows; never run against prod.
+  assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd: parseSafetyFlags(process.argv).allowProd })
   process.env.NEXT_PUBLIC_SUPABASE_URL = env.NEXT_PUBLIC_SUPABASE_URL
   process.env.SUPABASE_SERVICE_ROLE_KEY = env.SUPABASE_SERVICE_ROLE_KEY
 

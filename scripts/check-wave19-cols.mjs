@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
+import { parseSafetyFlags, assertNotProd } from './_safety.mjs'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -12,6 +13,7 @@ const env = Object.fromEntries(
 )
 for (const k of Object.keys(env)) if (!process.env[k]) process.env[k] = env[k]
 
+assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd: parseSafetyFlags(process.argv).allowProd })
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 })

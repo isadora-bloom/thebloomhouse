@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
+import { parseSafetyFlags, assertNotProd } from './_safety.mjs'
+assertNotProd(process.env.NEXT_PUBLIC_SUPABASE_URL, { allowProd: parseSafetyFlags(process.argv).allowProd })
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 const { data: rows, error: rowErr } = await sb.from('external_calendar_events').select('*').limit(1)

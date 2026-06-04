@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+import { parseSafetyFlags, assertNotProd } from './_safety.mjs'
 
 const envContent = readFileSync('.env.local', 'utf8')
 const env = {}
@@ -12,6 +13,7 @@ for (const line of envContent.split(/\r?\n/)) {
   env[m[1]] = value
 }
 
+assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd: parseSafetyFlags(process.argv).allowProd })
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY)
 
 // Probe: does the table exist? Use head=true to skip data fetch.

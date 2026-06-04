@@ -14,6 +14,7 @@
 // portal does at runtime. Doesn't write — read-only validation.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
+import { parseSafetyFlags, assertNotProd } from './_safety.mjs'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8').split('\n').filter((l) => l && !l.startsWith('#') && l.includes('=')).map((l) => {
@@ -21,6 +22,9 @@ const env = Object.fromEntries(
   })
 )
 for (const k of Object.keys(env)) if (!process.env[k]) process.env[k] = env[k]
+
+// Self-review writes + deletes sentinel rows; never run against prod.
+assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd: parseSafetyFlags(process.argv).allowProd })
 
 // Anon client — same shape couples authenticate as.
 const anon = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
