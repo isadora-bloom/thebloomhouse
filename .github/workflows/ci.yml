@@ -33,6 +33,9 @@ jobs:
       - name: TypeScript
         run: npx tsc --noEmit
 
+      - name: Vitest suite (was NOT gated before — contract + cascade tests rotted unnoticed; all pure/mock, CI-safe)
+        run: npx vitest run
+
       - name: Unit tests — normalizeSource
         run: npx tsx scripts/test-normalize-source.ts
 
