@@ -25,6 +25,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AttributionResult } from '@/lib/services/attribution/couple-attribution'
 import type { CohortIntel } from '@/lib/services/cohort'
+import { computeHeatScore } from '@/lib/services/identity/heat-score'
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared types
@@ -649,15 +650,225 @@ export interface DailyList {
   generatedAt: string
 }
 
-export async function getDailyList(venueId: string): Promise<DailyList> {
-  void venueId // STUB — implemented Day 16
-  return {
+/**
+ * SPINE-ONLY reader for the operator's daily landing list. Reads only
+ * `couples`, `touchpoints`, `tours` — never the legacy stacks. Injectable
+ * core (supabase passed in) so the unit test drives it with a pure mock;
+ * the public `getDailyList` wraps the service client.
+ *
+ * Four buckets, every threshold SOURCED (no invented numbers):
+ *  - needsReply : couples whose LATEST touchpoint is an inbound,
+ *      progression-eligible signal. Inbound channel/action set mirrors
+ *      migration 348 §1 (the set that stamps last_progression_at).
+ *      Excludes booked/ghost.
+ *  - goingCold : resolved/channel_scoped couples whose decay clock is past
+ *      GOING_COLD_FRACTION of decay_window_days but NOT yet the full window
+ *      (still recoverable — the decay sweep ghosts them at the full window).
+ *      Window arithmetic lifted from decayStaleCouples (decay.ts).
+ *  - toursThisWeek : tours scheduled in [now, now+7d], not cancelled/no_show,
+ *      resolved to a couple via tours.wedding_id -> couples.source_wedding_id
+ *      (tours has no couple_id column).
+ *  - highIntent : couples at/above the 'hot' heat bar (60, from
+ *      heatBucket() in heat-score.ts), top HIGH_INTENT_LIMIT; heat_score
+ *      recomputed from touchpoints when the cached column is null.
+ *
+ * Venue-scoped + excludes merged-away couples (`merged_into_id IS NULL`,
+ * the column migration 379 added — consistent with getCoupleJourney /
+ * getVenueOverview). Honest-empty on missing venueId.
+ */
+
+/** Fraction of decay_window_days after which a still-resolved couple is
+ *  "going cold". CHOSEN (the decay doctrine only defines the full-window
+ *  ghost threshold); 0.75 surfaces a couple in the last quarter of its
+ *  window — early enough to act, late enough to be a real warning. */
+const GOING_COLD_FRACTION = 0.75
+/** 'hot' heat bar, sourced from heatBucket() (heat-score.ts). */
+const HIGH_INTENT_HEAT_BAR = 60
+/** Cap on the highIntent list (top-N by heat). */
+const HIGH_INTENT_LIMIT = 10
+
+/** Inbound, progression-eligible (channel, action_type) pairs — mirrors
+ *  migration 348 §1. A latest touchpoint matching one of these = the
+ *  couple is awaiting a venue reply. */
+const INBOUND_ACTIONS: Record<string, ReadonlySet<string>> = {
+  gmail: new Set(['reply', 'inquiry']),
+  calendly: new Set(['tour_booked', 'tour_attended']),
+  honeybook: new Set(['contract_signed', 'booking_signed']),
+  knot: new Set(['inquiry', 'message', 'inquiry_form']),
+  weddingwire: new Set(['inquiry', 'message', 'inquiry_form']),
+  zola: new Set(['inquiry', 'message', 'inquiry_form']),
+  portal: new Set(['portal_click', 'portal_visit']),
+  website: new Set(['inquiry_form_submitted']),
+}
+
+function isInboundTouchpoint(channel: string, actionType: string): boolean {
+  return INBOUND_ACTIONS[channel]?.has(actionType) ?? false
+}
+
+/** Couple display name, primary then partner — mirrors the couples page. */
+function coupleNames(primary: string | null, partner: string | null): string | null {
+  if (primary && partner) return `${primary} & ${partner}`
+  return primary ?? partner ?? null
+}
+
+interface DailyCoupleRow {
+  id: string
+  primary_contact_name: string | null
+  partner_contact_name: string | null
+  lifecycle_state: string | null
+  last_progression_at: string | null
+  decay_window_days: number | null
+  heat_score: number | null
+  source_wedding_id: string | null
+}
+interface DailyTouchpointRow {
+  couple_id: string | null
+  channel: string
+  action_type: string
+  signal_tier: string
+  occurred_at: string
+}
+interface DailyTourRow {
+  id: string
+  wedding_id: string | null
+  scheduled_at: string | null
+  outcome: string | null
+}
+
+export async function loadDailyList(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<DailyList> {
+  const generatedAt = new Date().toISOString()
+  const empty: DailyList = {
     needsReply: [],
     goingCold: [],
     toursThisWeek: [],
     highIntent: [],
-    generatedAt: new Date().toISOString(),
+    generatedAt,
   }
+  if (!venueId) return empty
+
+  // Couples spine (channel_scoped included so channel-only saves can still
+  // go cold / be high-intent). Excludes merged-away couples (mig 379).
+  const { data: coupleData, error: coupleErr } = await supabase
+    .from('couples')
+    .select(
+      'id, primary_contact_name, partner_contact_name, lifecycle_state, last_progression_at, decay_window_days, heat_score, source_wedding_id',
+    )
+    .eq('venue_id', venueId)
+    .is('merged_into_id', null)
+    .limit(5000)
+  if (coupleErr) throw new Error(`getDailyList: couples ${coupleErr.message}`)
+  const couples = (coupleData ?? []) as DailyCoupleRow[]
+  const byId = new Map(couples.map((c) => [c.id, c]))
+  const byWedding = new Map<string, DailyCoupleRow>()
+  for (const c of couples) {
+    if (c.source_wedding_id) byWedding.set(c.source_wedding_id, c)
+  }
+
+  // Touchpoints (newest first) for needsReply (latest-is-inbound) + heat.
+  const coupleIds = couples.map((c) => c.id)
+  const tpByCouple = new Map<string, DailyTouchpointRow[]>()
+  if (coupleIds.length > 0) {
+    const { data: tpData, error: tpErr } = await supabase
+      .from('touchpoints')
+      .select('couple_id, channel, action_type, signal_tier, occurred_at')
+      .eq('venue_id', venueId)
+      .order('occurred_at', { ascending: false })
+      .limit(20000)
+    if (tpErr) throw new Error(`getDailyList: touchpoints ${tpErr.message}`)
+    for (const t of (tpData ?? []) as DailyTouchpointRow[]) {
+      if (!t.couple_id || !byId.has(t.couple_id)) continue
+      const arr = tpByCouple.get(t.couple_id)
+      if (arr) arr.push(t)
+      else tpByCouple.set(t.couple_id, [t])
+    }
+  }
+
+  // needsReply: latest touchpoint (desc → [0]) is inbound.
+  const needsReply: CoupleRef[] = []
+  for (const c of couples) {
+    if (c.lifecycle_state === 'booked' || c.lifecycle_state === 'ghost') continue
+    const tps = tpByCouple.get(c.id)
+    if (!tps || tps.length === 0) continue
+    if (isInboundTouchpoint(tps[0].channel, tps[0].action_type)) {
+      needsReply.push({ id: c.id, names: coupleNames(c.primary_contact_name, c.partner_contact_name) })
+    }
+  }
+
+  // goingCold: decay arithmetic from decay.ts, at GOING_COLD_FRACTION of the
+  // window and BEFORE the full window.
+  const now = Date.now()
+  const goingCold: CoupleRef[] = []
+  for (const c of couples) {
+    if (c.lifecycle_state !== 'resolved' && c.lifecycle_state !== 'channel_scoped') continue
+    if (!c.last_progression_at) continue
+    const ageMs = now - Date.parse(c.last_progression_at)
+    const windowMs = (c.decay_window_days ?? 180) * 86_400_000
+    if (ageMs >= GOING_COLD_FRACTION * windowMs && ageMs < windowMs) {
+      goingCold.push({ id: c.id, names: coupleNames(c.primary_contact_name, c.partner_contact_name) })
+    }
+  }
+
+  // toursThisWeek: [now, now+7d], not cancelled/no_show, resolved to a couple.
+  const weekFromNow = new Date(now + 7 * 86_400_000).toISOString()
+  const nowIso = new Date(now).toISOString()
+  const { data: tourData, error: tourErr } = await supabase
+    .from('tours')
+    .select('id, wedding_id, scheduled_at, outcome')
+    .eq('venue_id', venueId)
+    .gte('scheduled_at', nowIso)
+    .lte('scheduled_at', weekFromNow)
+    .order('scheduled_at', { ascending: true })
+    .limit(2000)
+  if (tourErr) throw new Error(`getDailyList: tours ${tourErr.message}`)
+  const toursThisWeek: TourRef[] = []
+  for (const t of (tourData ?? []) as DailyTourRow[]) {
+    if (t.outcome === 'cancelled' || t.outcome === 'no_show') continue
+    if (!t.scheduled_at || !t.wedding_id) continue
+    const couple = byWedding.get(t.wedding_id)
+    if (!couple) continue
+    toursThisWeek.push({ id: t.id, coupleId: couple.id, scheduledAt: t.scheduled_at })
+  }
+
+  // highIntent: heat_score (cached) or recomputed, above the 'hot' bar, top N.
+  const scored: Array<{ ref: CoupleRef; heat: number }> = []
+  for (const c of couples) {
+    if (c.lifecycle_state === 'ghost' || c.lifecycle_state === 'agent') continue
+    let heat = typeof c.heat_score === 'number' ? c.heat_score : null
+    if (heat === null) {
+      const tps = tpByCouple.get(c.id) ?? []
+      heat = computeHeatScore(
+        tps.map((t) => ({ signal_tier: t.signal_tier, occurred_at: t.occurred_at })),
+        now,
+      )
+    }
+    if (heat >= HIGH_INTENT_HEAT_BAR) {
+      scored.push({
+        ref: { id: c.id, names: coupleNames(c.primary_contact_name, c.partner_contact_name) },
+        heat,
+      })
+    }
+  }
+  scored.sort((a, b) => b.heat - a.heat)
+  const highIntent = scored.slice(0, HIGH_INTENT_LIMIT).map((s) => s.ref)
+
+  return { needsReply, goingCold, toursThisWeek, highIntent, generatedAt }
+}
+
+export async function getDailyList(venueId: string): Promise<DailyList> {
+  if (!venueId) {
+    return {
+      needsReply: [],
+      goingCold: [],
+      toursThisWeek: [],
+      highIntent: [],
+      generatedAt: new Date().toISOString(),
+    }
+  }
+  const { createServiceClient } = await import('@/lib/supabase/service')
+  return loadDailyList(createServiceClient(), venueId)
 }
 
 // ─────────────────────────────────────────────────────────────────────
