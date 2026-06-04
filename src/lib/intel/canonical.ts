@@ -906,14 +906,36 @@ export interface IntelAnswer {
   generatedAt: string
 }
 
-export async function askIntel(venueId: string, question: string): Promise<IntelAnswer> {
-  void venueId // STUB — implemented Day 16 (wraps the NLQ brain)
+/** Nil UUID used as the actor when a canonical askIntel call has no user
+ *  context. The NLQ brain logs each query to natural_language_queries with
+ *  this user_id; the log insert is best-effort (non-fatal on failure), so a
+ *  sentinel actor never blocks the answer. */
+const ASK_INTEL_SYSTEM_USER = '00000000-0000-0000-0000-000000000000'
+
+/** Pure mapping from the NLQ brain's result to the canonical IntelAnswer.
+ *  Exported for unit testing without the LLM. The brain answers
+ *  conversationally with inline citations (no structured evidence refs), so
+ *  `evidence` is []; confidence is derived from the post-call honesty
+ *  inspector — any tripped honesty flag means the answer hedged. */
+export function mapNLQToAnswer(nlq: { response: string; honestyFlags: readonly unknown[] }): IntelAnswer {
   return {
-    answer:
-      'Intel is not yet implemented (canonical API stub). ' +
-      `Question received: ${question.slice(0, 120)}`,
+    answer: nlq.response,
     evidence: [],
-    confidence: 'refused',
+    confidence: (nlq.honestyFlags?.length ?? 0) > 0 ? 'hedged' : 'high',
     generatedAt: new Date().toISOString(),
   }
+}
+
+export async function askIntel(venueId: string, question: string): Promise<IntelAnswer> {
+  if (!venueId || !question.trim()) {
+    return {
+      answer: 'Ask a question about this venue’s performance, bookings, sources, or trends.',
+      evidence: [],
+      confidence: 'refused',
+      generatedAt: new Date().toISOString(),
+    }
+  }
+  const { answerNaturalLanguageQuery } = await import('@/lib/services/brain/intel-brain')
+  const nlq = await answerNaturalLanguageQuery(venueId, ASK_INTEL_SYSTEM_USER, question)
+  return mapNLQToAnswer(nlq)
 }

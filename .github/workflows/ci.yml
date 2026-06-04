@@ -90,6 +90,9 @@ jobs:
       - name: Unit tests — getDailyList spine reader (Phase 3.3 canonical fn — needsReply/goingCold/tours/highIntent)
         run: npx tsx scripts/test-daily-list-reader.ts
 
+      - name: Unit tests — askIntel mapping (Phase 3.3 canonical fn #6 — NLQ → IntelAnswer + refused guard)
+        run: npx tsx scripts/test-ask-intel-mapping.ts
+
       - name: Unit tests — relay-partial first-name bridge (GC-2 cross-source -> judge band)
         run: npx tsx scripts/test-relay-bridge.ts
 
