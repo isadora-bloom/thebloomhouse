@@ -262,16 +262,30 @@ function strongCanonicalEmail(email: string | null | undefined): string | null {
  *  primary_name/partner_name); they are normalised here so both callers
  *  compare identically. */
 export interface ContradictionCorroboration {
+  signalPrimaryName?: string | null
   signalPartnerName?: string | null
   candidateNames?: Array<string | null | undefined>
 }
 function normName(s: string | null | undefined): string {
   return (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
+/**
+ * Same-couple veto: the two differing strong emails belong to two PARTNERS of
+ * ONE couple only when BOTH the signal's partner AND its primary appear among
+ * the candidate's names — i.e. the candidate already holds both people.
+ *
+ * Requiring the PRIMARY too is load-bearing (GC-5): if only the partner
+ * matches, the candidate is the partner's SOLO couple, and the right move is
+ * partner-reconciliation (mint the primary's couple, then merge the partner's
+ * in) — NOT attaching the primary's signal onto the partner's couple. Vetoing
+ * there silently fused the primary onto the partner and broke the merge.
+ */
 function partnerCorroborates(c?: ContradictionCorroboration): boolean {
-  const pk = normName(c?.signalPartnerName)
-  if (!pk) return false
-  return (c?.candidateNames ?? []).some((n) => normName(n) === pk)
+  const partnerKey = normName(c?.signalPartnerName)
+  const primaryKey = normName(c?.signalPrimaryName)
+  if (!partnerKey || !primaryKey) return false
+  const cand = (c?.candidateNames ?? []).map(normName)
+  return cand.includes(partnerKey) && cand.includes(primaryKey)
 }
 
 export function hardContradiction(
@@ -330,6 +344,7 @@ function hasHardContradiction(signal: CascadeSignal, c: CascadeCandidate): strin
   // emailing from their own address) is not split, while a bare same-name
   // match with no partner corroboration (GC-4 two-Sarahs) still contradicts.
   return hardContradiction(signal.primaryEmail, signal.weddingDate, candEmails, c.weddingDate, {
+    signalPrimaryName: joinName(signal.firstName, signal.lastName),
     signalPartnerName: joinName(signal.partnerFirstName, signal.partnerLastName),
     candidateNames: c.people.map((p) => joinName(p.firstName, p.lastName)),
   })

@@ -36,24 +36,29 @@ check('no signal email + no dates → null', hardContradiction(null, null, ['b@y
 check('candidate has no strong email (relay only) + dates absent → null',
   hardContradiction('a@gmail.com', null, [null], null) === null)
 
-console.log('hardContradiction — partner-corroboration veto (shared by cascade + forwards-linker):')
-check('differing emails VETOED when signal partner matches a candidate name → null (two-partners, one couple)',
+console.log('hardContradiction — same-couple veto (BOTH primary + partner present; shared cascade + forwards-linker):')
+check('VETOED when BOTH primary + partner match candidate names → null (both-partners, one couple)',
   hardContradiction('minette@yahoo.com', null, ['glascow@gmail.com'], null,
-    { signalPartnerName: 'Glascow Tennille', candidateNames: ['Glascow Tennille', 'Minette Nupa'] }) === null,
+    { signalPrimaryName: 'Minette Nupa', signalPartnerName: 'Glascow Tennille', candidateNames: ['Glascow Tennille', 'Minette Nupa'] }) === null,
   hardContradiction('minette@yahoo.com', null, ['glascow@gmail.com'], null,
-    { signalPartnerName: 'Glascow Tennille', candidateNames: ['Glascow Tennille', 'Minette Nupa'] }))
-check('partner name does NOT match any candidate → strong_email_conflict still stands (GC-4 preserved)',
+    { signalPrimaryName: 'Minette Nupa', signalPartnerName: 'Glascow Tennille', candidateNames: ['Glascow Tennille', 'Minette Nupa'] }))
+check('GC-5 case: partner matches but PRIMARY does NOT (partner SOLO couple) → conflict STANDS (so reconciliation, not attach)',
+  hardContradiction('madison@x.com', null, ['will@x.com'], null,
+    { signalPrimaryName: 'Madison Bryant', signalPartnerName: 'Will Carter', candidateNames: ['Will Carter'] }) === 'strong_email_conflict',
+  hardContradiction('madison@x.com', null, ['will@x.com'], null,
+    { signalPrimaryName: 'Madison Bryant', signalPartnerName: 'Will Carter', candidateNames: ['Will Carter'] }))
+check('partner does NOT match any candidate → strong_email_conflict (GC-4 preserved)',
   hardContradiction('a@gmail.com', null, ['b@yahoo.com'], null,
-    { signalPartnerName: 'Someone Else', candidateNames: ['Sarah Miller'] }) === 'strong_email_conflict')
+    { signalPrimaryName: 'Sarah Miller', signalPartnerName: 'Someone Else', candidateNames: ['Sarah Miller'] }) === 'strong_email_conflict')
 check('no signal partner name → no veto → strong_email_conflict (bare same-name match)',
   hardContradiction('a@gmail.com', null, ['b@yahoo.com'], null,
-    { signalPartnerName: null, candidateNames: ['Sarah Miller'] }) === 'strong_email_conflict')
-check('partner corroboration is case/whitespace-insensitive',
+    { signalPrimaryName: 'Sarah Miller', signalPartnerName: null, candidateNames: ['Sarah Miller'] }) === 'strong_email_conflict')
+check('same-couple veto is case/whitespace-insensitive',
   hardContradiction('minette@yahoo.com', null, ['glascow@gmail.com'], null,
-    { signalPartnerName: '  glascow   TENNILLE ', candidateNames: ['Glascow Tennille'] }) === null)
+    { signalPrimaryName: ' minette  NUPA ', signalPartnerName: '  glascow   TENNILLE ', candidateNames: ['Glascow Tennille', 'Minette Nupa'] }) === null)
 check('corroboration does NOT override a hard wedding-date delta',
   hardContradiction('minette@yahoo.com', '2027-05-30', ['glascow@gmail.com'], '2026-01-01',
-    { signalPartnerName: 'Glascow Tennille', candidateNames: ['Glascow Tennille'] }) === 'wedding_date_delta')
+    { signalPrimaryName: 'Minette Nupa', signalPartnerName: 'Glascow Tennille', candidateNames: ['Glascow Tennille', 'Minette Nupa'] }) === 'wedding_date_delta')
 
 console.log('cascadeMatch suppression (GC-4 shape):')
 const twoSarahs = cascadeMatch(

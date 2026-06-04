@@ -352,6 +352,7 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
             // strangers — don't demote. Without this, linkSignal would split
             // a both-partners couple the cascade correctly keeps together.
             {
+              signalPrimaryName: signal.primary_name,
               signalPartnerName: signal.partner_name,
               candidateNames: [bestCouple.primary_name, bestCouple.partner_name],
             },
