@@ -40,6 +40,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { invalidateCouplesCache } from '@/lib/services/identity/forwards-linker'
 import { recordFragmentMatchReturned } from '@/lib/services/identity/progression'
 
@@ -184,7 +185,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       m.confidence_tier === 'low'
         ? m.confidence_tier
         : null
-    await supabase.from('couple_merge_events').insert({
+    await writeOrLog(supabase.from('couple_merge_events').insert({
       venue_id: m.venue_id,
       event_type: resolution === 'confirmed' ? 'candidate_confirmed' : 'candidate_rejected',
       primary_couple_id: coupleId,
@@ -194,7 +195,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       reason: body.note
         ? `operator ${resolution}: ${body.note}`
         : `operator ${resolution} of ${m.confidence_tier} candidate_match`,
-    })
+    }), { op: 'couple_merge_events.insert', venueId: m.venue_id })
   }
 
   // 5. The operator confirming a candidate IS a progression event

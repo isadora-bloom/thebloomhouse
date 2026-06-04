@@ -15,6 +15,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { recordHistogram } from '@/lib/observability/metrics'
 
@@ -1369,14 +1370,14 @@ export async function markAsBooked(
   // Record engagement event. Direction: 'inbound' = couple committed
   // (signed contract, paid). Per INV-13 every engagement_event has
   // explicit direction at write time.
-  await supabase.from('engagement_events').insert({
+  await writeOrLog(supabase.from('engagement_events').insert({
     venue_id: venueId,
     wedding_id: weddingId,
     event_type: 'contract_signed',
     direction: 'inbound',
     points: DEFAULT_POINTS.contract_signed,
     metadata: { action: 'marked_booked', notes: notes ?? null },
-  })
+  }), { op: 'engagement_events.insert', venueId })
 
   // Insert score history snapshot
   await supabase.from('lead_score_history').insert({

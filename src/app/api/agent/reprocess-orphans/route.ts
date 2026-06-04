@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { classifyEmail } from '@/lib/services/brain/router'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'
@@ -258,13 +259,13 @@ export async function POST(req: Request) {
       if (!existingPartner2) {
         const [p2First, ...p2Rest] = extracted.partnerName.trim().split(/\s+/)
         const p2Last = p2Rest.join(' ') || null
-        await supabase.from('people').insert({
+        await writeOrLog(supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: weddingId,
           role: 'partner2',
           first_name: p2First || null,
           last_name: p2Last,
-        })
+        }), { op: 'people.insert', venueId })
       }
     }
 

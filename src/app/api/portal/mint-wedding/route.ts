@@ -28,6 +28,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import {
   getPlatformAuth,
@@ -172,7 +173,7 @@ export async function POST(request: Request) {
         .is('merged_into_id', null)
         .maybeSingle()
       if (!existingP2) {
-        await supabase.from('people').insert({
+        await writeOrLog(supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: minted.weddingId,
           role: 'partner2',
@@ -180,7 +181,7 @@ export async function POST(request: Request) {
           last_name: (body.partner2.lastName ?? '').trim() || null,
           email: body.partner2.email?.trim() || null,
           phone: body.partner2.phone?.trim() || null,
-        })
+        }), { op: 'people.insert', venueId })
       }
     }
 

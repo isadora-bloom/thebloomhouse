@@ -40,6 +40,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 type Field = 'heat_score' | 'persona_label' | 'first_touch'
 const FIELDS: ReadonlyArray<Field> = ['heat_score', 'persona_label', 'first_touch']
@@ -225,13 +226,13 @@ export async function POST(
   // Audit row. wedding_lifecycle_events shape: signal NOT NULL,
   // detected_by NOT NULL CHECK ('ai'|'pipeline'|'coordinator'|'webhook'
   // |'cron'|'backfill'). Verified against migration 246.
-  await supabase.from('wedding_lifecycle_events').insert({
+  await writeOrLog(supabase.from('wedding_lifecycle_events').insert({
     wedding_id: weddingId,
     venue_id: venueId,
     signal: `override:${field}=${appliedValueLabel}`,
     detected_by: 'coordinator',
     reason: body.note?.slice(0, 500) ?? null,
-  })
+  }), { op: 'wedding_lifecycle_events.insert', venueId })
 
   return NextResponse.json({ ok: true, field, applied: patch })
 }

@@ -27,6 +27,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 type Field =
   | 'has_toured_in_person'
@@ -137,13 +138,13 @@ export async function POST(
   // Audit row. `wedding_lifecycle_events` shape: signal NOT NULL,
   // detected_by NOT NULL CHECK ('ai'|'pipeline'|'coordinator'|'webhook'
   // |'cron'|'backfill'), reason text — verified against migration 246.
-  await supabase.from('wedding_lifecycle_events').insert({
+  await writeOrLog(supabase.from('wedding_lifecycle_events').insert({
     wedding_id: weddingId,
     venue_id: (wedding as { venue_id: string }).venue_id,
     signal: `sticky_state:${field}=${String(body.value)}`,
     detected_by: 'coordinator',
     reason: body.note?.slice(0, 500) ?? null,
-  })
+  }), { op: 'wedding_lifecycle_events.insert', venueId: (wedding as { venue_id: string }).venue_id })
 
   return NextResponse.json({ ok: true, field, applied: patch })
 }

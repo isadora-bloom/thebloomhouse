@@ -34,6 +34,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { invalidateCouplesCache } from '@/lib/services/identity/forwards-linker'
 
 interface UnmergeBody {
@@ -235,7 +236,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Audit trail. §9: manual_unmerge with the required reason.
-  await supabase.from('couple_merge_events').insert({
+  await writeOrLog(supabase.from('couple_merge_events').insert({
     venue_id: src.venue_id,
     event_type: 'manual_unmerge',
     primary_couple_id: src.id,
@@ -243,7 +244,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     operator_id: auth.userId ?? null,
     rule_triggered: `unmerge:${body.destination}:${moved}_touchpoints`,
     reason: body.reason.trim(),
-  })
+  }), { op: 'couple_merge_events.insert', venueId: src.venue_id })
 
   invalidateCouplesCache(src.venue_id)
 

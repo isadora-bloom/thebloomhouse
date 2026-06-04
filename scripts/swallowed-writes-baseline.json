@@ -1,4 +1,4 @@
 {
-  "count": 120,
-  "note": "Un-wrapped statement-level awaited insert/upsert in src/ (HARDENING-SCOPE Area 1). May only DECREASE — migrate sites to writeOrLog (src/lib/db/write-or-log.ts) and lower this. Baselined 2026-06-04 at 123; ratcheted to 120 (tours/interactions/engagement_events Tier-1 wraps)."
+  "count": 100,
+  "note": "Un-wrapped statement-level awaited insert/upsert in src/ (HARDENING-SCOPE Area 1). May only DECREASE — migrate sites to writeOrLog (src/lib/db/write-or-log.ts) and lower this. 123 baseline → 120 (first Tier-1 batch) → 100 (Tier-1 COMPLETE: all 8 core tables — people/engagement_events/couple_merge_events/tours/interactions/tangential_signals/wedding_touchpoints/wedding_lifecycle_events). Remaining 100 are Tier-2 (feature) + Tier-3 (telemetry) tables."
 }

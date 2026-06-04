@@ -60,6 +60,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/observability/logger'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   scoreCandidate,
   type MatchableRecord,
@@ -567,14 +568,14 @@ async function promoteFragmentInto(
 
     coupleId = mintResult.coupleId
     if (mintResult.minted) state.totals.couples_minted += 1
-    await state.supabase.from('couple_merge_events').insert({
+    await writeOrLog(state.supabase.from('couple_merge_events').insert({
       venue_id: state.venueId,
       event_type: 'fragment_promoted',
       primary_couple_id: coupleId,
       rule_triggered: 'cross_channel_coalesce',
       confidence_tier: 'high',
       reason,
-    })
+    }), { op: 'couple_merge_events.insert', venueId: state.venueId })
   }
 
   // Link the fragment one-way (§11 invariant 5 — fragments do not

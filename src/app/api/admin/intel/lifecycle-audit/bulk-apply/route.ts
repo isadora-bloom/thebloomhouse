@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   getPlatformAuth,
   unauthorized,
@@ -100,7 +101,7 @@ export async function POST(req: NextRequest) {
       confidence_tier: 'high',
       reason: `lifecycle_state ${c.lifecycle_state ?? '(null)'} -> ${body.newState}`,
     }))
-    await supabase.from('couple_merge_events').insert(auditRows)
+    await writeOrLog(supabase.from('couple_merge_events').insert(auditRows), { op: 'couple_merge_events.insert', venueId: auth.venueId })
   } catch {
     // Audit insert is best-effort; do not fail the apply.
   }

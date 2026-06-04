@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   getPlatformAuth,
   unauthorized,
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
 
   // Audit log row to couple_merge_events so the change is recoverable.
   try {
-    await supabase.from('couple_merge_events').insert({
+    await writeOrLog(supabase.from('couple_merge_events').insert({
       venue_id: auth.venueId,
       event_type: 'manual_merge',
       primary_couple_id: body.coupleId,
@@ -94,7 +95,7 @@ export async function POST(req: NextRequest) {
       rule_triggered: 'lifecycle_audit_apply',
       confidence_tier: 'high',
       reason: `lifecycle_state ${oldState ?? '(null)'} -> ${body.newState}`,
-    })
+    }), { op: 'couple_merge_events.insert', venueId: auth.venueId })
   } catch {
     // Audit row is best-effort; do not fail the apply.
   }

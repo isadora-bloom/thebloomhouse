@@ -33,6 +33,7 @@ import {
   type LifecycleSignal,
   type WeddingStatus,
 } from './wedding-lifecycle-engine'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export interface ApplyLifecycleSignalArgs {
   supabase: SupabaseClient
@@ -125,7 +126,7 @@ export async function applyLifecycleSignal(
     const isViolation = isTerminalStatus(currentStatus)
     if (isViolation) {
       try {
-        await supabase.from('wedding_lifecycle_events').insert({
+        await writeOrLog(supabase.from('wedding_lifecycle_events').insert({
           venue_id: venueId,
           wedding_id: weddingId,
           signal: 'violation:' + signal,
@@ -137,7 +138,7 @@ export async function applyLifecycleSignal(
           detected_by: detectedBy,
           source_interaction_id: args.sourceInteractionId ?? null,
           confidence: args.confidence ?? null,
-        })
+        }), { op: 'wedding_lifecycle_events.insert', venueId })
       } catch (err) {
         console.warn('[lifecycle] violation log failed:', err)
       }

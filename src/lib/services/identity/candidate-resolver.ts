@@ -37,6 +37,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeSource } from '../normalize-source'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   adjudicateAmbiguousMatch,
   fetchWeddingContext,
@@ -628,7 +629,7 @@ async function backfillTouchpoint(
     .limit(1)
   if ((existing ?? []).length > 0) return
 
-  await supabase.from('wedding_touchpoints').insert({
+  await writeOrLog(supabase.from('wedding_touchpoints').insert({
     venue_id: candidate.venue_id,
     wedding_id: match.wedding_id,
     source: signal.source_platform ?? candidate.source_platform,
@@ -643,7 +644,7 @@ async function backfillTouchpoint(
       action_class: signal.action_class,
       source_platform: signal.source_platform ?? candidate.source_platform,
     },
-  })
+  }), { op: 'wedding_touchpoints.insert', venueId: candidate.venue_id })
 }
 
 async function writeAttributionEvents(args: {

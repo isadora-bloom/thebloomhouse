@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 type AuthorClass =
   | 'couple'
@@ -114,13 +115,13 @@ export async function POST(
   // an unrouted interaction, skip the audit; the patch itself still landed.
   const weddingId = (interaction as { wedding_id: string | null }).wedding_id
   if (weddingId) {
-    await supabase.from('wedding_lifecycle_events').insert({
+    await writeOrLog(supabase.from('wedding_lifecycle_events').insert({
       wedding_id: weddingId,
       venue_id: venueId,
       signal: `override:author_class=${authorClass}`,
       detected_by: 'coordinator',
       reason: body.note?.slice(0, 500) ?? null,
-    })
+    }), { op: 'wedding_lifecycle_events.insert', venueId })
   }
 
   return NextResponse.json({ ok: true, interactionId, applied: patch })

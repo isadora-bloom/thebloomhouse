@@ -23,6 +23,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export type TouchType =
   | 'inquiry'
@@ -157,7 +158,7 @@ export async function recordTouchpoint(input: TouchpointInput): Promise<void> {
   }
   if (input.occurredAt) row.occurred_at = input.occurredAt
 
-  await sb.from('wedding_touchpoints').insert(row)
+  await writeOrLog(sb.from('wedding_touchpoints').insert(row), { op: 'wedding_touchpoints.insert', venueId: input.venueId })
 }
 
 /**

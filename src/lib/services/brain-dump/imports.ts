@@ -31,6 +31,7 @@ import { normalizeSource } from '@/lib/services/normalize-source'
 import { htmlToText } from '@/lib/utils/html-text'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export interface ImportSummary {
   inserted: number
@@ -209,14 +210,14 @@ export async function importLeads(args: {
       // Partner 2 if provided.
       if (r.partner_name) {
         const email2 = (r.email_2 ?? '').toLowerCase() || null
-        await supabase.from('people').insert({
+        await writeOrLog(supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: wedding.id,
           role: 'partner2',
           first_name: parseFirstName(r.partner_name),
           last_name: parseLastName(r.partner_name),
           email: email2,
-        })
+        }), { op: 'people.insert', venueId })
         if (email2) existingEmails.add(email2)
       }
 
@@ -224,14 +225,14 @@ export async function importLeads(args: {
       for (const key of ['email_3', 'email_4'] as const) {
         const e = (r[key] ?? '').toLowerCase()
         if (!e || existingEmails.has(e)) continue
-        await supabase.from('people').insert({
+        await writeOrLog(supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: wedding.id,
           role: 'contact',
           first_name: parseFirstName(r.client_name),
           last_name: parseLastName(r.client_name),
           email: e,
-        })
+        }), { op: 'people.insert', venueId })
         existingEmails.add(e)
       }
 
@@ -251,7 +252,7 @@ export async function importLeads(args: {
         // T5-Rixey-BBB: brain-dump CSV historical notes carry no
         // class signal — they're free-text the coordinator pasted in.
         // signal-class-justified: brain-dump CSV historical notes have no class
-        await supabase.from('interactions').insert({
+        await writeOrLog(supabase.from('interactions').insert({
           venue_id: venueId,
           wedding_id: wedding.id,
           type: 'note',
@@ -263,7 +264,7 @@ export async function importLeads(args: {
           from_email: email1,
           from_name: r.client_name ?? null,
           signal_class: 'unclassified',
-        })
+        }), { op: 'interactions.insert', venueId })
       }
 
       // Log FAQ candidates from the sheet into knowledge_gaps so they

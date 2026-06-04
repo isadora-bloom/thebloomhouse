@@ -24,6 +24,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeEmail, normalizePhone } from './resolver'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import type { NormalizedSignal } from './sources/types'
 
 export interface ResurrectionResult {
@@ -106,13 +107,13 @@ export async function maybeResurrectGhost(args: {
       .eq('id', coupleId)
       .eq('lifecycle_state', 'ghost')
 
-    await supabase.from('couple_merge_events').insert({
+    await writeOrLog(supabase.from('couple_merge_events').insert({
       venue_id: venueId,
       event_type: 'resurrection',
       primary_couple_id: coupleId,
       rule_triggered: `linker_high_tier:${signal.channel}:${signal.external_id}`,
       reason: `Ghost resurrected by high-tier ${signal.channel} ${signal.action_type}`,
-    })
+    }), { op: 'couple_merge_events.insert', venueId })
 
     return { resurrected: true, blocked_by_blacklist: false }
   } catch {
@@ -165,13 +166,13 @@ export async function rejectResurrection(args: {
         )
     }
 
-    await supabase.from('couple_merge_events').insert({
+    await writeOrLog(supabase.from('couple_merge_events').insert({
       venue_id: venueId,
       event_type: 'resurrection_rejected',
       primary_couple_id: coupleId,
       operator_id: operatorId,
       reason,
-    })
+    }), { op: 'couple_merge_events.insert', venueId })
 
     return { ok: true }
   } catch {

@@ -13,6 +13,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   shouldAutoIgnore,
   isMachineGenerated,
@@ -2441,7 +2442,7 @@ export async function processIncomingEmail(
           },
         }
         if (correlationId) ePayload.correlation_id = correlationId
-        await supabase.from('engagement_events').insert(ePayload)
+        await writeOrLog(supabase.from('engagement_events').insert(ePayload), { op: 'engagement_events.insert', venueId })
       }
     } catch (err) {
       await logPipelineError(venueId, 'human_requested_event', err, {
