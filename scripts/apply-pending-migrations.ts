@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { splitSqlStatements } from './lib/sql-split.js'
+import { parseSafetyFlags, requireApply } from './_safety.mjs'
 
 function loadEnv() {
   const env: Record<string, string> = { ...process.env } as Record<string, string>
@@ -251,6 +252,14 @@ async function main() {
 
   if (pending.length === 0) {
     console.log('\nNothing pending. All probed migrations are applied.')
+    return
+  }
+
+  // Safety: applying migrations mutates the schema of whatever .env.local
+  // points at (prod). Default to DRY-RUN — the "← will apply" list above is
+  // the preview; require --apply to actually execute.
+  const { apply } = parseSafetyFlags(process.argv)
+  if (!requireApply(apply, `apply-pending-migrations: ${pending.length} pending → ${env.NEXT_PUBLIC_SUPABASE_URL}`)) {
     return
   }
 
