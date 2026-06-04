@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/email/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { appendAIDisclosureWithVersion, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
 import { isUnsendableAddress } from '@/lib/services/identity/body-extract'
@@ -120,7 +121,7 @@ export async function POST(request: NextRequest) {
     // html-stripped-justified: outbound coordinator/AI replies are
     //   plain-text composed in the coordinator UI + appended disclosure;
     //   no inbound HTML to strip.
-    await supabase.from('interactions').insert({
+    await writeOrLog(supabase.from('interactions').insert({
       venue_id: auth.venueId,
       wedding_id: null,
       person_id: interaction.person_id,
@@ -136,7 +137,7 @@ export async function POST(request: NextRequest) {
       // Migration 300: persist the disclosure version on the row so the
       // next reply on this thread short-circuits the footer re-append.
       disclosure_version: disclosureVersion,
-    })
+    }), { op: 'interactions.insert', venueId: auth.venueId })
 
     // Inbox lifecycle folder (mig 242). A coordinator reply on a thread
     // promotes it out of 'new_inquiry' since outbound count just went

@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { NextRequest, NextResponse } from 'next/server'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 import { trackCoordinatorAction } from '@/lib/services/intel/consultant-tracking'
@@ -362,7 +363,7 @@ export async function POST(request: NextRequest) {
 
       if (!existing) {
         // signal-class-justified: tours are structurally always touchpoint
-        await supabase.from('tours').insert({
+        await writeOrLog(supabase.from('tours').insert({
           venue_id: venueId,
           wedding_id: weddingId,
           scheduled_at: scheduledAt,
@@ -373,7 +374,7 @@ export async function POST(request: NextRequest) {
           notes: calendlyUri ? `Booked via Calendly: ${calendlyUri}` : 'Booked via Calendly',
           attendees: [],
           signal_class: 'touchpoint',
-        })
+        }), { op: 'tours.insert', venueId })
         console.log(`[webhook/calendly] Created pending tour row for wedding ${weddingId}`)
       } else {
         console.log(`[webhook/calendly] Tour row already exists — skipping insert`)

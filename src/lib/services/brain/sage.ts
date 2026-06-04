@@ -13,6 +13,7 @@
  */
 
 import { callAI } from '@/lib/ai/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   buildSignoffBlock,
   requireAiName,
@@ -135,7 +136,7 @@ export async function routeChatToHuman(opts: {
         conversation_id: opts.conversationId ?? null,
       },
     }
-    await supabase.from('engagement_events').insert(ePayload)
+    await writeOrLog(supabase.from('engagement_events').insert(ePayload), { op: 'engagement_events.insert', venueId: opts.venueId })
   } catch (err) {
     console.warn('[sage-brain] human_requested engagement_event insert failed:', err)
   }
