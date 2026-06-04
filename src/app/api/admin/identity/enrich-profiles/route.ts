@@ -51,6 +51,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import {
   getPlatformAuth,
@@ -197,7 +198,7 @@ export async function POST(req: NextRequest) {
   // Coordinator-audit notification — one summary row per backfill so the
   // bell shows the rollup without per-wedding spam.
   try {
-    await supabase.from('admin_notifications').insert({
+    await writeOrLog(supabase.from('admin_notifications').insert({
       venue_id: venueId,
       type: 'profile_enrichment_backfill',
       title:
@@ -211,7 +212,7 @@ export async function POST(req: NextRequest) {
         skipped,
       }),
       priority: 'low',
-    })
+    }), { op: 'admin_notifications.insert', venueId })
   } catch (notifErr) {
     console.warn(
       '[enrich-profiles] summary notification insert failed:',

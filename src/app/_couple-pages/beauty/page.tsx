@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Sparkles,
@@ -244,10 +245,10 @@ export default function BeautySchedulePage() {
     if (editingId) {
       await supabase.from('makeup_schedule').update(payload).eq('id', editingId)
     } else {
-      await supabase.from('makeup_schedule').insert({
+      await writeOrLog(supabase.from('makeup_schedule').insert({
         ...payload,
         sort_order: appointments.length,
-      })
+      }), { op: 'makeup_schedule.insert', venueId })
     }
 
     setShowModal(false)

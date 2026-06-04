@@ -31,6 +31,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { callAIJson } from '@/lib/ai/client'
 import type { MatchableRecord, MatcherVerdict, MatchTier } from './matcher'
 
@@ -82,7 +83,7 @@ async function recordJudgeInvocation(
   // and the per-day cap reads this. A telemetry write failure must not
   // bring down the actual judge call result.
   try {
-    await supabase.from('tracer_run_events').insert({
+    await writeOrLog(supabase.from('tracer_run_events').insert({
       venue_id: venueId,
       run_id: runId,
       stage: 'llm_judge',
@@ -90,7 +91,7 @@ async function recordJudgeInvocation(
       rows_seen: 1,
       rows_written: status === 'succeeded' ? 1 : 0,
       detail,
-    })
+    }), { op: 'tracer_run_events.insert', venueId })
   } catch {
     // intentionally swallowed
   }

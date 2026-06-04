@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import {
   getPlatformAuth,
@@ -118,7 +119,7 @@ export async function POST(request: NextRequest) {
       // rejection_reason / metadata (jsonb). Previous writer used
       // non-existent feedback_type + original_subject + email_category
       // so every cancel here was silently dropping zero rows.
-      await supabase.from('draft_feedback').insert({
+      await writeOrLog(supabase.from('draft_feedback').insert({
         venue_id: draft.venue_id,
         draft_id: draftId,
         action: 'rejected',
@@ -128,7 +129,7 @@ export async function POST(request: NextRequest) {
           original_subject: (draft.subject as string) ?? '',
           email_category: (draft.context_type as string) ?? 'inquiry',
         },
-      })
+      }), { op: 'draft_feedback.insert', venueId: draft.venue_id })
     }
 
     return NextResponse.json({ success: true, cancelled: true })

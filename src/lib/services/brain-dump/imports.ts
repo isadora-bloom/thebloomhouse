@@ -270,13 +270,13 @@ export async function importLeads(args: {
       // Log FAQ candidates from the sheet into knowledge_gaps so they
       // surface for triage rather than getting lost.
       if (r.faq_questions) {
-        await supabase.from('knowledge_gaps').insert({
+        await writeOrLog(supabase.from('knowledge_gaps').insert({
           venue_id: venueId,
           question: r.faq_questions,
           category: 'imported_from_crm',
           frequency: 1,
           status: 'open',
-        })
+        }), { op: 'knowledge_gaps.insert', venueId })
       }
 
       summary.inserted++

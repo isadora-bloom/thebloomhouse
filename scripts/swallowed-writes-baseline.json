@@ -1,4 +1,4 @@
 {
-  "count": 100,
-  "note": "Un-wrapped statement-level awaited insert/upsert in src/ (HARDENING-SCOPE Area 1). May only DECREASE — migrate sites to writeOrLog (src/lib/db/write-or-log.ts) and lower this. 123 baseline → 120 (first Tier-1 batch) → 100 (Tier-1 COMPLETE: all 8 core tables — people/engagement_events/couple_merge_events/tours/interactions/tangential_signals/wedding_touchpoints/wedding_lifecycle_events). Remaining 100 are Tier-2 (feature) + Tier-3 (telemetry) tables."
+  "count": 0,
+  "note": "Un-wrapped statement-level awaited insert/upsert in src/ (HARDENING-SCOPE Area 1). COMPLETE: 123 → 120 → 100 → 0. Every such write now routes through writeOrLog (src/lib/db/write-or-log.ts) — a failed write is logged (db.write_failed), never silently dropped. Ratchet stays at 0: any NEW swallowed write fails CI. If a legitimate new pattern needs an exception, justify it — do not raise this number."
 }

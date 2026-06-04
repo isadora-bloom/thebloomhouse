@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   Calendar,
   CheckCircle2,
@@ -137,11 +138,11 @@ export default function OnboardingProjectPage() {
     if (!venueId || busy) return
     setBusy(true)
     try {
-      await supabase.from('onboarding_projects').insert({
+      await writeOrLog(supabase.from('onboarding_projects').insert({
         venue_id: venueId,
         status: 'in_progress',
         current_day: 1,
-      })
+      }), { op: 'onboarding_projects.insert', venueId })
       await fetchProject()
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start project'

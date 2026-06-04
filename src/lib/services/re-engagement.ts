@@ -26,6 +26,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export const COHORT_FUNNEL_THRESHOLD = 3
 export const COHORT_LAST_SEEN_DAYS = 90
@@ -84,7 +85,7 @@ export async function setReEngagementEnabled(
   if (row) {
     await sb.from('venue_config').update({ feature_flags: next }).eq('venue_id', venueId)
   } else {
-    await sb.from('venue_config').insert({ venue_id: venueId, feature_flags: next })
+    await writeOrLog(sb.from('venue_config').insert({ venue_id: venueId, feature_flags: next }), { op: 'venue_config.insert', venueId })
   }
 }
 

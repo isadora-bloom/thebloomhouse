@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Globe,
@@ -293,7 +294,7 @@ export default function WeddingWebsitePage() {
     setSaving(true)
     const payload = { ...settings, ...updated, wedding_id: weddingId, venue_id: venueId }
     // T5-Rixey-XX: matched by uq_wedding_website_settings_wedding_id (mig 188).
-    await supabase.from('wedding_website_settings').upsert(payload, { onConflict: 'wedding_id' })
+    await writeOrLog(supabase.from('wedding_website_settings').upsert(payload, { onConflict: 'wedding_id' }), { op: 'wedding_website_settings.upsert', venueId })
     if (updated) setSettings(prev => ({ ...prev, ...updated }))
     setSaving(false)
   }

@@ -39,6 +39,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import { findIdentityMatches } from './resolution'
 import { mintWedding } from './mint-wedding'
@@ -398,7 +399,7 @@ async function enqueueAmbiguousMatch(
     { interaction_id: interactionId, binder_proposed_match: true },
     ...(Array.isArray(match.signals) ? match.signals : []),
   ]
-  await supabase.from('client_match_queue').insert({
+  await writeOrLog(supabase.from('client_match_queue').insert({
     venue_id: venueId,
     person_a_id: match.personId,
     person_b_id: null,
@@ -407,5 +408,5 @@ async function enqueueAmbiguousMatch(
     signals,
     tier: match.tier,
     status: 'pending',
-  })
+  }), { op: 'client_match_queue.insert', venueId })
 }

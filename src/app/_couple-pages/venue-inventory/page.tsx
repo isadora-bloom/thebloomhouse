@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Package,
@@ -127,12 +128,12 @@ export default function VenueInventoryPage() {
 
   // ---- Add / Remove ----
   async function addToSelections(catalogItemId: string) {
-    await supabase.from('borrow_selections').insert({
+    await writeOrLog(supabase.from('borrow_selections').insert({
       venue_id: venueId,
       wedding_id: weddingId,
       catalog_item_id: catalogItemId,
       quantity: 1,
-    })
+    }), { op: 'borrow_selections.insert', venueId })
     fetchData()
   }
 

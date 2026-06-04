@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   ClipboardCheck,
@@ -138,13 +139,13 @@ export default function FinalReviewPage() {
         })
         .eq('id', existing.id)
     } else {
-      await supabase.from('section_finalisations').insert({
+      await writeOrLog(supabase.from('section_finalisations').insert({
         venue_id: venueId,
         wedding_id: weddingId,
         section_name: sectionKey,
         couple_signed_off: true,
         couple_signed_off_at: new Date().toISOString(),
-      })
+      }), { op: 'section_finalisations.insert', venueId })
     }
 
     fetchData()

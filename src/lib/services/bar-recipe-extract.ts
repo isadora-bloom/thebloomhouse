@@ -20,6 +20,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { callAIJson, callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
 import { safeFetch } from '@/lib/security/safe-fetch'
 import {
@@ -194,7 +195,7 @@ async function logPdfUsage(
   try {
     const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)
     const supabase = createServiceClient()
-    await supabase.from('api_costs').insert({
+    await writeOrLog(supabase.from('api_costs').insert({
       venue_id: venueId,
       service: 'anthropic',
       model: CLAUDE_MODEL,
@@ -203,7 +204,7 @@ async function logPdfUsage(
       cost,
       context: taskType,
       prompt_version: promptVersion ?? null,
-    })
+    }), { op: 'api_costs.insert', venueId })
   } catch {
     // never block the caller
   }

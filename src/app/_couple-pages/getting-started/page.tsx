@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Check,
@@ -343,12 +344,12 @@ export default function GettingStartedPage() {
           .update({ ...merged, ...stamps })
           .eq('id', existing.id)
       } else {
-        await supabase.from('onboarding_progress').insert({
+        await writeOrLog(supabase.from('onboarding_progress').insert({
           venue_id: venueId,
           wedding_id: weddingId,
           ...merged,
           ...stamps,
-        })
+        }), { op: 'onboarding_progress.insert', venueId })
       }
     }
 

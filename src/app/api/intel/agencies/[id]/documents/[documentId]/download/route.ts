@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createHash } from 'crypto'
 import {
   getPlatformAuth,
@@ -77,13 +78,13 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
               .digest('hex')
               .slice(0, 32)
           : null
-        await service.from('agency_document_downloads').insert({
+        await writeOrLog(service.from('agency_document_downloads').insert({
           document_id: documentId,
           agency_id: agencyId,
           downloaded_by: auth.userId,
           ip_hash: ipHash,
           user_agent_hash: userAgentHash,
-        })
+        }), { op: 'agency_document_downloads.insert', venueId: null })
       } catch (err) {
         console.warn('[documents/download] audit write failed:', err)
       }

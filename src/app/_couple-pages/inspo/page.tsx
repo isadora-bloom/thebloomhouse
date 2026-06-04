@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Sparkles,
@@ -210,13 +211,13 @@ export default function InspoGalleryPage() {
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean)
 
-      await supabase.from('inspo_gallery').insert({
+      await writeOrLog(supabase.from('inspo_gallery').insert({
         venue_id: venueId,
         wedding_id: weddingId,
         image_url: publicUrl,
         caption: form.caption.trim() || null,
         tags: tags.length > 0 ? tags : null,
-      })
+      }), { op: 'inspo_gallery.insert', venueId })
 
       setForm(EMPTY_FORM)
       clearFile()

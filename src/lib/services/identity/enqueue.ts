@@ -18,6 +18,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { findIdentityMatches, personToCandidate } from '@/lib/services/identity/resolution'
 import { mergePeople } from '@/lib/services/identity/merge-people'
 
@@ -151,7 +152,7 @@ export async function enqueueIdentityMatches(args: {
         .in('status', ['pending', 'snoozed'])
         .limit(1)
       if (existing && existing.length > 0) continue
-      await supabase.from('client_match_queue').insert({
+      await writeOrLog(supabase.from('client_match_queue').insert({
         venue_id: venueId,
         person_a_id: m.personId,
         person_b_id: newPersonId,
@@ -160,7 +161,7 @@ export async function enqueueIdentityMatches(args: {
         signals: m.signals,
         tier: m.tier,
         status: 'pending',
-      })
+      }), { op: 'client_match_queue.insert', venueId })
       queued++
     }
   }

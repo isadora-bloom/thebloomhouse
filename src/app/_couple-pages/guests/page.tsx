@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Users,
@@ -585,7 +586,7 @@ export default function GuestListPage() {
     await supabase.from('guest_tag_assignments').delete().eq('guest_id', guestId)
     if (tagIds.length > 0) {
       const rows = tagIds.map((tid) => ({ guest_id: guestId, tag_id: tid }))
-      await supabase.from('guest_tag_assignments').insert(rows)
+      await writeOrLog(supabase.from('guest_tag_assignments').insert(rows), { op: 'guest_tag_assignments.insert', venueId })
     }
   }
 
@@ -739,7 +740,7 @@ export default function GuestListPage() {
     })
 
     if (toInsert.length > 0) {
-      await supabase.from('guest_list').insert(toInsert)
+      await writeOrLog(supabase.from('guest_list').insert(toInsert), { op: 'guest_list.insert', venueId })
     }
     setShowCsvModal(false)
     setCsvData([])

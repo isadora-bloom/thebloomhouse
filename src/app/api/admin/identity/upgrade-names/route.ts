@@ -38,6 +38,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import {
   getPlatformAuth,
@@ -140,7 +141,7 @@ export async function POST(req: NextRequest) {
           )
           .join('\n')
         try {
-          await supabase.from('admin_notifications').insert({
+          await writeOrLog(supabase.from('admin_notifications').insert({
             venue_id: venueId,
             wedding_id: w.id,
             type: 'name_upgraded',
@@ -152,7 +153,7 @@ export async function POST(req: NextRequest) {
               `Coordinator audit — name-upgrade backfill changed the ` +
               `following people rows on this wedding:\n\n${lines}`,
             priority: 'low',
-          })
+          }), { op: 'admin_notifications.insert', venueId })
         } catch (notifErr) {
           // Notification is informational. Never let it abort the sweep.
           console.warn(

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   ClipboardList,
@@ -276,12 +277,12 @@ export default function WorksheetsPage() {
         .update({ content, updated_at: new Date().toISOString() })
         .eq('id', existing.id)
     } else {
-      await supabase.from('wedding_worksheets').insert({
+      await writeOrLog(supabase.from('wedding_worksheets').insert({
         venue_id: venueId,
         wedding_id: weddingId,
         section,
         content,
-      })
+      }), { op: 'wedding_worksheets.insert', venueId })
     }
 
     setSavingSection(null)
@@ -340,13 +341,13 @@ export default function WorksheetsPage() {
       }
 
       // Create admin notification
-      await supabase.from('admin_notifications').insert({
+      await writeOrLog(supabase.from('admin_notifications').insert({
         venue_id: venueId,
         wedding_id: weddingId,
         type: 'worksheet_submitted',
         title: 'Worksheets submitted',
         body: 'The couple has submitted their wedding worksheets for review.',
-      })
+      }), { op: 'admin_notifications.insert', venueId })
 
       setSentToTeam(true)
       setTimeout(() => setSentToTeam(false), 4000)

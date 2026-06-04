@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
@@ -378,7 +379,7 @@ export default function SageQueuePage() {
     if (addToKB) {
       const item = pendingItems.find((i) => i.id === id)
       if (item) {
-        await supabase.from('knowledge_base').insert({
+        await writeOrLog(supabase.from('knowledge_base').insert({
           venue_id: item.venue_id,
           category: 'sage_learned',
           question: item.question,
@@ -386,7 +387,7 @@ export default function SageQueuePage() {
           keywords: [],
           priority: 1,
           is_active: true,
-        })
+        }), { op: 'knowledge_base.insert', venueId: item.venue_id })
       }
     }
 

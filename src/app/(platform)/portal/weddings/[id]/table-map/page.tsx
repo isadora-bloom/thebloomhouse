@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Stage, Layer, Image as KonvaImage, Circle, Rect, Text, Group } from 'react-konva'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
@@ -447,10 +448,10 @@ export default function AdminTableMapEditor() {
 
   const handleSave = async () => {
     setSaving(true)
-    await supabase.from('table_map_layouts').upsert(
+    await writeOrLog(supabase.from('table_map_layouts').upsert(
       { wedding_id: weddingId, elements, updated_at: new Date().toISOString() },
       { onConflict: 'wedding_id' }
-    )
+    ), { op: 'table_map_layouts.upsert', venueId })
     setSaving(false); setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }

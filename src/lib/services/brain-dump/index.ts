@@ -29,6 +29,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import type { BrainDumpParseResult as DiscriminatedParseResult } from '@/lib/services/brain-dump/parse-result-schema'
@@ -710,7 +711,7 @@ export async function routeBrainDump(args: {
         const existingSet = new Set(((existing ?? []) as Array<{ question: string }>).map((r) => r.question))
         const toInsert = stamped.filter((r) => !existingSet.has(r.question))
         if (toInsert.length > 0) {
-          await supabase.from('knowledge_base').insert(toInsert)
+          await writeOrLog(supabase.from('knowledge_base').insert(toInsert), { op: 'knowledge_base.insert', venueId })
         }
         routedTo.push({
           table: 'knowledge_base',

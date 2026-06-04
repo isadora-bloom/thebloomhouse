@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { cookies } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateSageResponse, detectChatHumanRequest, routeChatToHuman } from '@/lib/services/brain/sage'
@@ -291,14 +292,14 @@ export async function POST(request: NextRequest) {
     if (detectChatHumanRequest(message)) {
       // Persist the user's request so the conversation history stays
       // accurate.
-      await supabase.from('sage_conversations').insert({
+      await writeOrLog(supabase.from('sage_conversations').insert({
         venue_id: venueId,
         wedding_id: weddingId || null,
         role: 'user',
         content: message,
         confidence_score: null,
         flagged_uncertain: true,
-      })
+      }), { op: 'sage_conversations.insert', venueId })
 
       const cannedResponse = await routeChatToHuman({
         venueId,
@@ -349,14 +350,14 @@ export async function POST(request: NextRequest) {
     const forbidden = await checkEscalationForVenue(message, venueId)
     if (forbidden.shouldEscalate && forbidden.matchedKeyword) {
       // Save the user message so the conversation history stays correct.
-      await supabase.from('sage_conversations').insert({
+      await writeOrLog(supabase.from('sage_conversations').insert({
         venue_id: venueId,
         wedding_id: weddingId || null,
         role: 'user',
         content: message,
         confidence_score: null,
         flagged_uncertain: true,
-      })
+      }), { op: 'sage_conversations.insert', venueId })
 
       const cannedResponse =
         `That's an important question, and I want to make sure you get the right answer. ` +
@@ -378,7 +379,7 @@ export async function POST(request: NextRequest) {
         .select('id')
         .single()
 
-      await supabase.from('sage_uncertain_queue').insert({
+      await writeOrLog(supabase.from('sage_uncertain_queue').insert({
         venue_id: venueId,
         wedding_id: weddingId || null,
         conversation_id: cannedSageMsg?.id ?? null,
@@ -386,7 +387,7 @@ export async function POST(request: NextRequest) {
         sage_answer: cannedResponse,
         confidence_score: 0,
         reason: 'forbidden_topic',
-      })
+      }), { op: 'sage_uncertain_queue.insert', venueId })
 
       try {
         await createNotification({
@@ -460,14 +461,14 @@ export async function POST(request: NextRequest) {
     // -----------------------------------------------------------------------
 
     // Save user message
-    await supabase.from('sage_conversations').insert({
+    await writeOrLog(supabase.from('sage_conversations').insert({
       venue_id: venueId,
       wedding_id: weddingId || null,
       role: 'user',
       content: message,
       confidence_score: null,
       flagged_uncertain: false,
-    })
+    }), { op: 'sage_conversations.insert', venueId })
 
     // Escalation scan on the couple's message — fire-and-forget so a notif
     // failure can't break the chat. Only scans user content; the assistant
@@ -520,14 +521,14 @@ export async function POST(request: NextRequest) {
 
     if (confidence < 80 && sageMsg) {
       // Add to uncertain queue for coordinator review
-      await supabase.from('sage_uncertain_queue').insert({
+      await writeOrLog(supabase.from('sage_uncertain_queue').insert({
         venue_id: venueId,
         wedding_id: weddingId || null,
         conversation_id: sageMsg.id,
         question: message,
         sage_answer: finalResponse,
         confidence_score: confidence,
-      })
+      }), { op: 'sage_uncertain_queue.insert', venueId })
 
       // Create admin notification so venue staff knows to check
       const tierLabel = confidence < 50 ? 'low confidence' : 'needs confirmation'

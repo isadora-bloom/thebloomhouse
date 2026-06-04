@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import {
   getPlatformAuth,
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
 
     // Insert a thread_lock activity log entry. Stores BOTH the user_id
     // (auditable, immutable) and the display name (UX-friendly).
-    await supabase.from('activity_log').insert({
+    await writeOrLog(supabase.from('activity_log').insert({
       venue_id: venueId,
       activity_type: 'thread_lock',
       entity_type: 'interaction',
@@ -94,7 +95,7 @@ export async function POST(request: NextRequest) {
         locked_at: new Date().toISOString(),
         thread_id: threadId ?? null,
       },
-    })
+    }), { op: 'activity_log.insert', venueId })
 
     return NextResponse.json({ success: true })
   } catch (err) {

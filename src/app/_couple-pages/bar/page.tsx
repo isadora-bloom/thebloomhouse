@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Wine,
@@ -702,14 +703,14 @@ export default function BarPlannerPage() {
       if (!weddingId || !venueId) return
       setSelectedPackageId(packageId)
       try {
-        await supabase.from('bar_planning').upsert(
+        await writeOrLog(supabase.from('bar_planning').upsert(
           {
             venue_id: venueId,
             wedding_id: weddingId,
             selected_package_id: packageId,
           },
           { onConflict: 'wedding_id' }
-        )
+        ), { op: 'bar_planning.upsert', venueId })
       } catch (err) {
         console.error('[BarPlanner] Package select error:', err)
       }
@@ -737,7 +738,7 @@ export default function BarPlannerPage() {
         if (notesTimer.current) clearTimeout(notesTimer.current)
         notesTimer.current = setTimeout(async () => {
           try {
-            await supabase.from('bar_planning').upsert(
+            await writeOrLog(supabase.from('bar_planning').upsert(
               {
                 venue_id: venueId,
                 wedding_id: weddingId,
@@ -749,7 +750,7 @@ export default function BarPlannerPage() {
               },
               // T5-Rixey-XX: matched by uq_bar_planning_wedding_id (mig 188).
               { onConflict: 'wedding_id' }
-            )
+            ), { op: 'bar_planning.upsert', venueId })
           } catch (err) {
             console.error('[BarPlanner] Notes save error:', err)
           }

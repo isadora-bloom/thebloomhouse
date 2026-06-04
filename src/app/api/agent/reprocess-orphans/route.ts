@@ -270,7 +270,7 @@ export async function POST(req: Request) {
     }
 
     // Persist the full classifier blob for the intel layer + client page.
-    await supabase.from('intelligence_extractions').insert({
+    await writeOrLog(supabase.from('intelligence_extractions').insert({
       venue_id: venueId,
       wedding_id: weddingId,
       interaction_id: row.id as string,
@@ -285,7 +285,7 @@ export async function POST(req: Request) {
           : null,
         via: 'reprocess-orphans',
       },
-    })
+    }), { op: 'intelligence_extractions.insert', venueId })
 
     created++
   }

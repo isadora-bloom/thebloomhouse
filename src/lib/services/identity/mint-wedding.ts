@@ -40,6 +40,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { resolveIdentity } from './resolver'
 import { mirrorCoupleFromWedding } from './mirror-couple'
 import { logEvent } from '@/lib/observability/logger'
@@ -164,7 +165,7 @@ export async function mintWedding(
         const tClient =
           supabase ??
           (await import('@/lib/supabase/service')).createServiceClient()
-        await tClient.from('mint_wedding_telemetry').insert({
+        await writeOrLog(tClient.from('mint_wedding_telemetry').insert({
           venue_id: venueId,
           source,
           reason: reason ?? source,
@@ -177,7 +178,7 @@ export async function mintWedding(
           errored: true,
           error_message: err instanceof Error ? err.message : String(err),
           correlation_id: correlationId ?? null,
-        })
+        }), { op: 'mint_wedding_telemetry.insert', venueId })
       } catch {
         // Telemetry must never block / mask the real error.
       }
@@ -335,7 +336,7 @@ export async function mintWedding(
       const tClient =
         supabase ??
         (await import('@/lib/supabase/service')).createServiceClient()
-      await tClient.from('mint_wedding_telemetry').insert({
+      await writeOrLog(tClient.from('mint_wedding_telemetry').insert({
         venue_id: venueId,
         source,
         reason: reason ?? source,
@@ -348,7 +349,7 @@ export async function mintWedding(
         errored: false,
         error_message: null,
         correlation_id: correlationId ?? null,
-      })
+      }), { op: 'mint_wedding_telemetry.insert', venueId })
     } catch {
       // Telemetry must never break ingest.
     }

@@ -17,6 +17,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { isAutonomousPaused } from '@/lib/services/cost-ceiling'
 
@@ -43,7 +44,7 @@ async function recordShadowDecision(args: {
 }): Promise<void> {
   try {
     const supabase = createServiceClient()
-    await supabase.from('auto_send_shadow_decisions').insert({
+    await writeOrLog(supabase.from('auto_send_shadow_decisions').insert({
       venue_id: args.venueId,
       rule_id: args.ruleId,
       wedding_id: args.draft.weddingId ?? null,
@@ -54,7 +55,7 @@ async function recordShadowDecision(args: {
       injection_suspected: args.draft.injectionSuspected ?? false,
       would_have_sent: args.wouldHaveSent,
       reason: args.reason,
-    })
+    }), { op: 'auto_send_shadow_decisions.insert', venueId: args.venueId })
   } catch (err) {
     console.warn(
       '[auto-sender] shadow_decision insert failed (non-fatal):',

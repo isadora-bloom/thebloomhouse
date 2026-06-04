@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { BrainDumpClarifications } from '@/components/agent/brain-dump-clarifications'
 import { ActiveGrantsBanner } from '@/components/agent/active-grants-banner'
@@ -963,10 +964,10 @@ export default function NotificationsPage() {
           })
           .eq('id', existing.id)
       } else {
-        await supabase.from('venue_config').insert({
+        await writeOrLog(supabase.from('venue_config').insert({
           venue_id: settingsVenueId,
           feature_flags: { notification_settings: notifSettings },
-        })
+        }), { op: 'venue_config.insert', venueId: settingsVenueId })
       }
 
       setSaved(true)
@@ -1005,12 +1006,12 @@ export default function NotificationsPage() {
         setPushRegistered(true)
 
         // Register device token (simplified — real implementation would use service worker)
-        await supabase.from('notification_tokens').upsert({
+        await writeOrLog(supabase.from('notification_tokens').upsert({
           venue_id: settingsVenueId,
           token: 'browser-' + Date.now(),
           platform: 'web',
           active: true,
-        })
+        }), { op: 'notification_tokens.upsert', venueId: settingsVenueId })
       }
     } catch (err) {
       console.error('Push permission request failed:', err)

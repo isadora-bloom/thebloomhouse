@@ -34,6 +34,7 @@
 // ---------------------------------------------------------------------------
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import {
   applyLifecycleTransition,
@@ -447,7 +448,7 @@ async function runJudgeForOne(args: RunJudgeArgs): Promise<JudgeOutcome> {
 
   if (refusal || conf < JUDGE_CONFIDENCE_FLOOR) {
     // Record auto_stuck so the next sweep doesn't immediately re-enqueue.
-    await supabase.from('lifecycle_transitions').insert({
+    await writeOrLog(supabase.from('lifecycle_transitions').insert({
       wedding_id: weddingId,
       venue_id: venueId,
       from_stage: fromStage,
@@ -462,7 +463,7 @@ async function runJudgeForOne(args: RunJudgeArgs): Promise<JudgeOutcome> {
         refusal ??
         ('low confidence (' + conf + ') — held in ' + fromStage),
       confidence: conf,
-    })
+    }), { op: 'lifecycle_transitions.insert', venueId })
     return { kind: 'auto_stuck', stage: fromStage }
   }
 
@@ -473,7 +474,7 @@ async function runJudgeForOne(args: RunJudgeArgs): Promise<JudgeOutcome> {
 
   if (toStage === fromStage) {
     // Judge agreed to hold — same as low-confidence path.
-    await supabase.from('lifecycle_transitions').insert({
+    await writeOrLog(supabase.from('lifecycle_transitions').insert({
       wedding_id: weddingId,
       venue_id: venueId,
       from_stage: fromStage,
@@ -486,7 +487,7 @@ async function runJudgeForOne(args: RunJudgeArgs): Promise<JudgeOutcome> {
       },
       reasoning: judgeOutput?.reasoning ?? 'judge held current stage',
       confidence: conf,
-    })
+    }), { op: 'lifecycle_transitions.insert', venueId })
     return { kind: 'auto_stuck', stage: fromStage }
   }
 

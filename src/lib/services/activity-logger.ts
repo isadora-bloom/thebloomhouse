@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 // ---------------------------------------------------------------------------
 // Activity Log types
@@ -33,7 +34,7 @@ export async function logActivity(options: {
   try {
     const supabase = createServiceClient()
 
-    await supabase.from('activity_log').insert({
+    await writeOrLog(supabase.from('activity_log').insert({
       venue_id: options.venueId,
       wedding_id: options.weddingId ?? null,
       user_id: options.userId ?? null,
@@ -41,7 +42,7 @@ export async function logActivity(options: {
       entity_type: options.entityType ?? null,
       entity_id: options.entityId ?? null,
       details: options.details ?? {},
-    })
+    }), { op: 'activity_log.insert', venueId: options.venueId })
   } catch (err) {
     console.error('[activity-logger] Failed to log activity:', err)
   }

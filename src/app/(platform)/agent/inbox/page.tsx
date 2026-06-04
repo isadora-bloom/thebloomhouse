@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { VenueChip } from '@/components/intel/venue-chip'
 // Stream HHH Bug 10: InlineInsightBanner removed from /agent/inbox.
 // High-priority risk insights now route to /pulse + /intel/dashboard
@@ -1658,11 +1659,11 @@ export default function InboxPage() {
         .from('drafts')
         .update({ status: 'approved', approved_at: new Date().toISOString() })
         .eq('id', draftId)
-      await supabase.from('draft_feedback').insert({
+      await writeOrLog(supabase.from('draft_feedback').insert({
         venue_id: venueId,
         draft_id: draftId,
         action: 'approved',
-      })
+      }), { op: 'draft_feedback.insert', venueId })
       clearDraftFromList(draftId)
     } catch (err) {
       console.error('Failed to approve draft:', err)
@@ -1678,11 +1679,11 @@ export default function InboxPage() {
         .from('drafts')
         .update({ status: 'approved', approved_at: new Date().toISOString() })
         .eq('id', draftId)
-      await supabase.from('draft_feedback').insert({
+      await writeOrLog(supabase.from('draft_feedback').insert({
         venue_id: venueId,
         draft_id: draftId,
         action: 'approved',
-      })
+      }), { op: 'draft_feedback.insert', venueId })
       try {
         await fetch('/api/agent/drafts', {
           method: 'PATCH',
@@ -1714,13 +1715,13 @@ export default function InboxPage() {
           approved_at: new Date().toISOString(),
         })
         .eq('id', draftId)
-      await supabase.from('draft_feedback').insert({
+      await writeOrLog(supabase.from('draft_feedback').insert({
         venue_id: venueId,
         draft_id: draftId,
         action: 'edited',
         original_body: original,
         edited_body: body,
-      })
+      }), { op: 'draft_feedback.insert', venueId })
       clearDraftFromList(draftId)
     } catch (err) {
       console.error('Failed to edit/approve draft:', err)
@@ -1737,12 +1738,12 @@ export default function InboxPage() {
         .from('drafts')
         .update({ status: 'rejected', feedback_notes: reason || null })
         .eq('id', draftId)
-      await supabase.from('draft_feedback').insert({
+      await writeOrLog(supabase.from('draft_feedback').insert({
         venue_id: venueId,
         draft_id: draftId,
         action: 'rejected',
         rejection_reason: reason || null,
-      })
+      }), { op: 'draft_feedback.insert', venueId })
       clearDraftFromList(draftId)
     } catch (err) {
       console.error('Failed to reject draft:', err)
@@ -2636,11 +2637,11 @@ export default function InboxPage() {
                         .from('drafts')
                         .update({ draft_body: body, status: 'pending' })
                         .eq('id', draftId)
-                      await supabase.from('draft_feedback').insert({
+                      await writeOrLog(supabase.from('draft_feedback').insert({
                         venue_id: selectedInteraction?.venue_id,
                         draft_id: draftId,
                         action: 'edited',
-                      })
+                      }), { op: 'draft_feedback.insert', venueId: selectedInteraction?.venue_id })
                       setThreadDraft((prev) =>
                         prev && prev.id === draftId ? { ...prev, draft_body: body } : prev
                       )
@@ -2655,11 +2656,11 @@ export default function InboxPage() {
                           approved_at: new Date().toISOString(),
                         })
                         .eq('id', draftId)
-                      await supabase.from('draft_feedback').insert({
+                      await writeOrLog(supabase.from('draft_feedback').insert({
                         venue_id: selectedInteraction?.venue_id,
                         draft_id: draftId,
                         action: 'approved',
-                      })
+                      }), { op: 'draft_feedback.insert', venueId: selectedInteraction?.venue_id })
                       try {
                         await fetch('/api/agent/drafts', {
                           method: 'PATCH',
@@ -2677,13 +2678,13 @@ export default function InboxPage() {
                       // delete to rejected + signal in metadata so the
                       // insert actually lands instead of silently
                       // failing the CHECK.
-                      await supabase.from('draft_feedback').insert({
+                      await writeOrLog(supabase.from('draft_feedback').insert({
                         venue_id: selectedInteraction?.venue_id,
                         draft_id: draftId,
                         action: 'rejected',
                         rejection_reason: 'deleted_by_coordinator',
                         metadata: { delete_reason: 'hard_delete' },
-                      })
+                      }), { op: 'draft_feedback.insert', venueId: selectedInteraction?.venue_id })
                       await supabase.from('drafts').delete().eq('id', draftId)
                       setThreadDraft(null)
                     }}

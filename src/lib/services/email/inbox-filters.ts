@@ -20,6 +20,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export interface VenueEmailFilter {
   id: string
@@ -114,7 +115,7 @@ export async function logFilterMatch(
 ): Promise<void> {
   try {
     const supabase = createServiceClient()
-    await supabase.from('venue_email_filter_matches').insert({
+    await writeOrLog(supabase.from('venue_email_filter_matches').insert({
       venue_id: venueId,
       filter_id: match.filterId,
       pattern: match.pattern,
@@ -122,7 +123,7 @@ export async function logFilterMatch(
       action: match.action,
       from_email: fromEmail.toLowerCase().trim(),
       matched_label: match.matchedLabel ?? null,
-    })
+    }), { op: 'venue_email_filter_matches.insert', venueId })
   } catch (err) {
     console.warn(`[inbox-filters] log write failed for venue ${venueId}:`, err)
   }

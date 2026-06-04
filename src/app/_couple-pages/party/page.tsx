@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Users,
@@ -273,7 +274,7 @@ export default function WeddingPartyPage() {
 
     const nextOrder = ((maxRow?.[0]?.sort_order as number | undefined) || 0) + 1
 
-    await supabase.from('ceremony_order').insert({
+    await writeOrLog(supabase.from('ceremony_order').insert({
       venue_id: venueId,
       wedding_id: weddingId,
       participant_name: member.name,
@@ -282,7 +283,7 @@ export default function WeddingPartyPage() {
       section,
       sort_order: nextOrder,
       notes: marker,
-    })
+    }), { op: 'ceremony_order.insert', venueId })
   }
 
   async function deleteCeremonyForPartyMember(memberId: string) {

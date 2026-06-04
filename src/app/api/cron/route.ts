@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { asCents, centsToDollars } from '@/lib/types/monetary'
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchAllVenueTrends } from '@/lib/services/intel/trends'
@@ -2664,7 +2665,7 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
         const conversionRate = data.inquiries > 0 ? data.bookings / data.inquiries : 0
         const roi = data.spend > 0 ? (data.revenue - data.spend) / data.spend : 0
 
-        await supabase.from('source_attribution').upsert({
+        await writeOrLog(supabase.from('source_attribution').upsert({
           venue_id: id,
           source,
           period_start: periodStart,
@@ -2679,7 +2680,7 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
           conversion_rate: conversionRate,
           roi,
           calculated_at: now,
-        }, { onConflict: 'venue_id,source,period_start' })
+        }, { onConflict: 'venue_id,source,period_start' }), { op: 'source_attribution.upsert', venueId: id })
       }
 
       results[id] = true

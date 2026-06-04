@@ -37,6 +37,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export interface MergeSignals {
   type: string
@@ -256,7 +257,7 @@ export async function softTombstonePerson(args: {
 
   // Audit row — same shape as mergePeople, with reason capturing the
   // soft-tombstone trigger (e.g., 'phantom_partner', 'duplicate_partner1').
-  await supabase.from('person_merges').insert({
+  await writeOrLog(supabase.from('person_merges').insert({
     venue_id: venueId,
     kept_person_id: keepPersonId,
     merged_person_id: tombstonePersonId,
@@ -265,7 +266,7 @@ export async function softTombstonePerson(args: {
     confidence_score: 100,
     snapshot: { person: doomed as Record<string, unknown>, soft_tombstone: true, reason },
     merged_by: `system:${reason}`,
-  })
+  }), { op: 'person_merges.insert', venueId })
 
   // The tombstone — set merged_into_id instead of DELETE.
   await supabase

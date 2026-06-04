@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
@@ -216,7 +217,7 @@ export default function AllergyRegistryPage() {
     if (editingId) {
       await supabase.from('allergy_registry').update(payload).eq('id', editingId)
     } else {
-      await supabase.from('allergy_registry').insert(payload)
+      await writeOrLog(supabase.from('allergy_registry').insert(payload), { op: 'allergy_registry.insert', venueId })
     }
 
     cancelForm()

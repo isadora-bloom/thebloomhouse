@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 // ---------------------------------------------------------------------------
 // Admin Notification types
@@ -132,7 +133,7 @@ export async function createNotification(options: {
     }
     if (options.correlationId) insertPayload.correlation_id = options.correlationId
 
-    await supabase.from('admin_notifications').insert(insertPayload)
+    await writeOrLog(supabase.from('admin_notifications').insert(insertPayload), { op: 'admin_notifications.insert', venueId: options.venueId })
   } catch (err) {
     console.error('[admin-notifications] Failed to create notification:', err)
   }

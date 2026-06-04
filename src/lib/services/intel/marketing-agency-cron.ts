@@ -18,6 +18,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { computeKpiPerformance } from './marketing-agency-kpi-performance'
 import {
   computeTbhReport,
@@ -138,7 +139,7 @@ export async function runAgencyActivitySweep(): Promise<ActivitySweepResult> {
         }
         for (const m of missed) {
           if (recentKpiIds.has(m.kpiId)) continue
-          await service.from('agency_activity_log').insert({
+          await writeOrLog(service.from('agency_activity_log').insert({
             agency_id: agency.id,
             venue_id: venueIds[0] ?? null,
             kind: 'kpi_missed',
@@ -153,7 +154,7 @@ export async function runAgencyActivitySweep(): Promise<ActivitySweepResult> {
               status: m.status,
             },
             recorded_by: null,
-          })
+          }), { op: 'agency_activity_log.insert', venueId: venueIds[0] ?? null })
           result.kpiMissedWritten += 1
         }
       }
@@ -199,7 +200,7 @@ export async function runAgencyActivitySweep(): Promise<ActivitySweepResult> {
           daysSinceReceived > threshold &&
           daysSinceLate > SUPPRESS_DUPLICATE_DAYS
         ) {
-          await service.from('agency_activity_log').insert({
+          await writeOrLog(service.from('agency_activity_log').insert({
             agency_id: agency.id,
             engagement_id: eng.id,
             venue_id: eng.venue_id,
@@ -212,7 +213,7 @@ export async function runAgencyActivitySweep(): Promise<ActivitySweepResult> {
               last_received_at: lastReceived?.occurred_at ?? null,
             },
             recorded_by: null,
-          })
+          }), { op: 'agency_activity_log.insert', venueId: eng.venue_id })
           result.reportLateWritten += 1
         }
       }

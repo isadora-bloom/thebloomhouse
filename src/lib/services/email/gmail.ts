@@ -14,6 +14,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { htmlToText } from '@/lib/utils/html-text'
 
 // ---------------------------------------------------------------------------
@@ -1045,13 +1046,13 @@ async function flagPaginationTruncation(
       .is('read_at', null)
       .limit(1)
     if (existing && existing.length > 0) return // already open
-    await supabase.from('admin_notifications').insert({
+    await writeOrLog(supabase.from('admin_notifications').insert({
       venue_id: venueId,
       alert_type: 'gmail_pagination_truncation',
       severity: 'warning',
       message: `Gmail sync for ${emailAddress} paginated past ${50} pages. Some messages may sync next run instead of immediately. If the cron is keeping up this clears on its own.`,
       metadata: { connection_id: connId, email_address: emailAddress },
-    })
+    }), { op: 'admin_notifications.insert', venueId })
   } catch (err) {
     console.warn('[gmail] could not flag pagination truncation:', err)
   }

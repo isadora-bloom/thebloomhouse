@@ -9,6 +9,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import type { DataType, ColumnMapping } from './data-detection'
 import { normalizeSource } from './normalize-source'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
@@ -365,7 +366,7 @@ export async function importClientList(
         partnerLast = ''
         // Insert the relationship row.
         try {
-          await supabase.from('wedding_relationships').insert({
+          await writeOrLog(supabase.from('wedding_relationships').insert({
             venue_id: venueId,
             wedding_id: resolvedWeddingId,
             full_name: p2RoleDescriptor.cleanName || partnerFullForRole,
@@ -374,7 +375,7 @@ export async function importClientList(
             email: row.partner_email || null,
             source: 'csv_import',
             confidence: 80,
-          })
+          }), { op: 'wedding_relationships.insert', venueId })
         } catch (err) {
           // wedding_relationships table missing (mig 255 not yet
           // applied) — fall back to leaving the partner2 cell blank;
@@ -391,7 +392,7 @@ export async function importClientList(
       // combined-name cell upstream.
       if (p1RoleDescriptor) {
         try {
-          await supabase.from('wedding_relationships').insert({
+          await writeOrLog(supabase.from('wedding_relationships').insert({
             venue_id: venueId,
             wedding_id: resolvedWeddingId,
             full_name: p1RoleDescriptor.cleanName,
@@ -400,7 +401,7 @@ export async function importClientList(
             email: email || null,
             source: 'csv_import',
             confidence: 80,
-          })
+          }), { op: 'wedding_relationships.insert', venueId })
         } catch (err) {
           errors.push(
             `Row ${i + 1}: detected role descriptor "${p1RoleDescriptor.detail ?? p1RoleDescriptor.role}" ` +

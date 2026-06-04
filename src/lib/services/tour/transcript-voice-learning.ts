@@ -23,6 +23,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { callAIJson } from '@/lib/ai/client'
 import { redactError } from '@/lib/observability/redact'
 
@@ -275,7 +276,7 @@ export async function mineTranscriptVoice(
             .eq('id', existing.id)
           phrasesUpdated++
         } else {
-          await supabase.from('review_language').insert({
+          await writeOrLog(supabase.from('review_language').insert({
             venue_id: venueId,
             phrase: p.phrase,
             theme: p.theme,
@@ -285,7 +286,7 @@ export async function mineTranscriptVoice(
             approved_for_marketing: false,
             source_type: 'transcript',
             source_reference: `tour:${tourId}`,
-          })
+          }), { op: 'review_language.insert', venueId })
           phrasesAdded++
         }
       } catch (err) {

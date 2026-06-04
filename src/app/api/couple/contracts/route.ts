@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, callAIVision } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
@@ -449,7 +450,7 @@ Return 5-15 items. Be specific and factual.`,
       }))
 
     if (notesToInsert.length > 0) {
-      await supabase.from('planning_notes').insert(notesToInsert)
+      await writeOrLog(supabase.from('planning_notes').insert(notesToInsert), { op: 'planning_notes.insert', venueId: auth.venueId })
     }
   }
 

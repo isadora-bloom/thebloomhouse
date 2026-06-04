@@ -36,6 +36,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { randomUUID } from 'crypto'
 import { createServiceClient } from '@/lib/supabase/service'
 import { verifyTwilioSignature } from '@/lib/services/sms/twilio-signature'
@@ -180,7 +181,7 @@ export async function POST(request: NextRequest) {
     // No venue claims either phone. We still log the webhook for audit so
     // an operator who forgot to add their number can see it landed; no
     // interaction is created.
-    await supabase.from('twilio_webhook_log').insert({
+    await writeOrLog(supabase.from('twilio_webhook_log').insert({
       venue_id: null,
       message_sid: messageSid,
       from_phone: fromPhone,
@@ -189,7 +190,7 @@ export async function POST(request: NextRequest) {
       num_media: Number.isFinite(numMedia) ? numMedia : 0,
       raw_payload: formParams,
       interaction_id: null,
-    })
+    }), { op: 'twilio_webhook_log.insert', venueId: null })
     console.warn('[webhook/twilio] no venue matches To/From; logged without interaction', {
       messageSid,
       toPhone,
@@ -296,7 +297,7 @@ export async function POST(request: NextRequest) {
   if (interactionErr || !interaction) {
     console.error('[webhook/twilio] interaction insert failed:', interactionErr?.message)
     // Still log the webhook so a retry / manual replay can pick it up.
-    await supabase.from('twilio_webhook_log').insert({
+    await writeOrLog(supabase.from('twilio_webhook_log').insert({
       venue_id: venueId,
       message_sid: messageSid,
       from_phone: fromPhone,
@@ -305,7 +306,7 @@ export async function POST(request: NextRequest) {
       num_media: Number.isFinite(numMedia) ? numMedia : 0,
       raw_payload: formParams,
       interaction_id: null,
-    })
+    }), { op: 'twilio_webhook_log.insert', venueId })
     return twimlResponse(200)
   }
 

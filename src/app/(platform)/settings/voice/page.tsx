@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import {
   MessageSquare, ThumbsUp, ThumbsDown, Zap, Trophy, ArrowLeft,
@@ -219,7 +220,7 @@ export default function VoiceTrainingPage() {
         response_reason: r.response_reason || null,
       }))
 
-      await supabase.from('voice_training_responses').insert(rows)
+      await writeOrLog(supabase.from('voice_training_responses').insert(rows), { op: 'voice_training_responses.insert', venueId })
     }
 
     // Update session completed
@@ -236,7 +237,7 @@ export default function VoiceTrainingPage() {
       for (const r of responses) {
         const phrase = r.content_type
         const isCringe = r.response === 'cringe'
-        await supabase.from('voice_preferences').upsert(
+        await writeOrLog(supabase.from('voice_preferences').upsert(
           {
             venue_id: venueId,
             preference_type: isCringe ? 'banned_phrase' : 'approved_phrase',
@@ -245,7 +246,7 @@ export default function VoiceTrainingPage() {
             sample_count: 1,
           },
           { onConflict: 'venue_id,preference_type,content' }
-        )
+        ), { op: 'voice_preferences.upsert', venueId })
       }
     } else if (activeGame === 'quick_quiz') {
       // Aggregate dimension scores
@@ -258,7 +259,7 @@ export default function VoiceTrainingPage() {
       }
 
       for (const [dim, { total, count }] of Object.entries(dimensionScores)) {
-        await supabase.from('voice_preferences').upsert(
+        await writeOrLog(supabase.from('voice_preferences').upsert(
           {
             venue_id: venueId,
             preference_type: 'dimension',
@@ -267,12 +268,12 @@ export default function VoiceTrainingPage() {
             sample_count: count,
           },
           { onConflict: 'venue_id,preference_type,content' }
-        )
+        ), { op: 'voice_preferences.upsert', venueId })
       }
     } else if (activeGame === 'would_you_send') {
       // Store approval pattern
       const approved = responses.filter((r) => r.response === 'send').length
-      await supabase.from('voice_preferences').upsert(
+      await writeOrLog(supabase.from('voice_preferences').upsert(
         {
           venue_id: venueId,
           preference_type: 'dimension',
@@ -281,7 +282,7 @@ export default function VoiceTrainingPage() {
           sample_count: responses.length,
         },
         { onConflict: 'venue_id,preference_type,content' }
-      )
+      ), { op: 'voice_preferences.upsert', venueId })
     }
 
     // Update local stats

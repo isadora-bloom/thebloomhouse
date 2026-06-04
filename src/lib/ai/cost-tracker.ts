@@ -7,6 +7,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 // ---------------------------------------------------------------------------
 // Cost constants (per million tokens)
@@ -92,7 +93,7 @@ interface LogAICostOptions {
 export async function logAICost(options: LogAICostOptions): Promise<void> {
   try {
     const supabase = createServiceClient()
-    await supabase.from('api_costs').insert({
+    await writeOrLog(supabase.from('api_costs').insert({
       venue_id: options.venueId,
       service: options.service,
       model: options.model,
@@ -100,7 +101,7 @@ export async function logAICost(options: LogAICostOptions): Promise<void> {
       output_tokens: options.outputTokens,
       cost: options.cost,
       context: options.context,
-    })
+    }), { op: 'api_costs.insert', venueId: options.venueId })
   } catch {
     // Fire and forget — never block for logging
   }

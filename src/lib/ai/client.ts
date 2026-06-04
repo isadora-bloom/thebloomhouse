@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import OpenAI from 'openai'
 import { createServiceClient } from '@/lib/supabase/service'
 import { calculateCost as calculateModelCost } from '@/lib/ai/cost-tracker'
@@ -181,7 +182,7 @@ async function logUsage(
 ) {
   try {
     const supabase = createServiceClient()
-    await supabase.from('api_costs').insert({
+    await writeOrLog(supabase.from('api_costs').insert({
       venue_id: venueId,
       service,
       model,
@@ -192,7 +193,7 @@ async function logUsage(
       content_tier: contentTier,
       prompt_version: promptVersion ?? null,
       correlation_id: correlationId ?? null,
-    })
+    }), { op: 'api_costs.insert', venueId })
   } catch {
     // Fire and forget — never block AI calls for logging
   }

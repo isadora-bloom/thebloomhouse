@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
@@ -494,7 +495,7 @@ export default function VendorsPage() {
       const fileType = ext === 'pdf' ? 'pdf' : ['jpg', 'jpeg', 'png', 'webp'].includes(ext) ? 'image' : 'doc'
       const vendor = vendors.find(v => v.id === vendorId)
 
-      await supabase.from('contracts').insert({
+      await writeOrLog(supabase.from('contracts').insert({
         venue_id: venueId,
         wedding_id: weddingId,
         filename: file.name,
@@ -504,7 +505,7 @@ export default function VendorsPage() {
         vendor_id: vendorId,
         vendor_name: vendor?.vendor_name || getTypeConfig(vendor?.vendor_type || '').label,
         status: 'uploaded',
-      })
+      }), { op: 'contracts.insert', venueId })
 
       // Trigger AI extraction in the background
       const formData = new FormData()

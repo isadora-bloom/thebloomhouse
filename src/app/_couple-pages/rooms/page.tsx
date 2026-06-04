@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
@@ -377,7 +378,7 @@ export default function RoomAssignmentsPage() {
     if (editingBlockId) {
       await supabase.from('bedroom_assignments').update(payload).eq('id', editingBlockId)
     } else {
-      await supabase.from('bedroom_assignments').insert(payload)
+      await writeOrLog(supabase.from('bedroom_assignments').insert(payload), { op: 'bedroom_assignments.insert', venueId })
     }
 
     setShowBlockModal(false)

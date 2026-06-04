@@ -25,6 +25,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 interface SubScores {
   inquiry_volume_trend: number
@@ -241,7 +242,7 @@ export async function persistVenueHealthSnapshot(venueId: string): Promise<Venue
   // downstream reads use ORDER BY calculated_at DESC LIMIT 1. Migration 080
   // extended venue_health with the 5 Phase 4 subscore columns so the full
   // 7-dimension picture is now round-trippable.
-  await supabase.from('venue_health').insert({
+  await writeOrLog(supabase.from('venue_health').insert({
     venue_id: venueId,
     calculated_at: snapshot.calculatedAt,
     overall_score: snapshot.overallScore,
@@ -257,11 +258,11 @@ export async function persistVenueHealthSnapshot(venueId: string): Promise<Venue
     avg_revenue_score: snapshot.subScores.avg_revenue,
     review_score_trend: snapshot.subScores.review_score_trend,
     availability_fill_rate: snapshot.subScores.availability_fill_rate,
-  })
+  }), { op: 'venue_health.insert', venueId })
 
   // History row (migration 080 created the table). The /intel/health trend
   // line and /intel/benchmark rollup both read from here.
-  await supabase.from('venue_health_history').insert({
+  await writeOrLog(supabase.from('venue_health_history').insert({
     venue_id: venueId,
     calculated_at: snapshot.calculatedAt,
     overall_score: snapshot.overallScore,
@@ -272,7 +273,7 @@ export async function persistVenueHealthSnapshot(venueId: string): Promise<Venue
     avg_revenue_score: snapshot.subScores.avg_revenue,
     review_score_trend: snapshot.subScores.review_score_trend,
     availability_fill_rate: snapshot.subScores.availability_fill_rate,
-  })
+  }), { op: 'venue_health_history.insert', venueId })
 
   return snapshot
 }

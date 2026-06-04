@@ -1380,13 +1380,13 @@ export async function markAsBooked(
   }), { op: 'engagement_events.insert', venueId })
 
   // Insert score history snapshot
-  await supabase.from('lead_score_history').insert({
+  await writeOrLog(supabase.from('lead_score_history').insert({
     venue_id: venueId,
     wedding_id: weddingId,
     score: 100,
     temperature_tier: 'hot',
     calculated_at: now,
-  })
+  }), { op: 'lead_score_history.insert', venueId })
 
   console.log(`[heat-mapping] Wedding ${weddingId} marked as booked`)
 }

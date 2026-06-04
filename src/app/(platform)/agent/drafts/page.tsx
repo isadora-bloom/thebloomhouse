@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { DraftContextPanel } from '@/components/agent/DraftContextPanel'
 import { HyperlinkedBody } from '@/components/agent/HyperlinkedBody'
@@ -941,12 +942,12 @@ export default function ApprovalQueuePage() {
       if (updateError) throw updateError
 
       // Log feedback
-      await supabase.from('draft_feedback').insert({
+      await writeOrLog(supabase.from('draft_feedback').insert({
         venue_id: draftRow?.venue_id,
         draft_id: id,
         action: 'rejected',
         rejection_reason: reason || null,
-      })
+      }), { op: 'draft_feedback.insert', venueId: draftRow?.venue_id })
 
       setDrafts((prev) => prev.filter((d) => d.id !== id))
     } catch (err) {

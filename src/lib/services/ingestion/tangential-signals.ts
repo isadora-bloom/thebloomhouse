@@ -11,6 +11,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { findIdentityMatches } from '@/lib/services/identity/resolution'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { clusterSignals } from '@/lib/services/identity/candidate-clusterer'
@@ -296,7 +297,7 @@ async function enqueueSignalPairs(
       .limit(1)
     if (existing && existing.length > 0) continue
 
-    await supabase.from('client_match_queue').insert({
+    await writeOrLog(supabase.from('client_match_queue').insert({
       venue_id: venueId,
       signal_a_id: newSignalId,
       signal_b_id: m.signalId,
@@ -305,6 +306,6 @@ async function enqueueSignalPairs(
       signals: m.signals,
       tier: m.tier,
       status: 'pending',
-    })
+    }), { op: 'client_match_queue.insert', venueId })
   }
 }

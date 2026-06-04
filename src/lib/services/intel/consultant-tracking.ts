@@ -7,6 +7,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,7 +107,7 @@ export async function trackCoordinatorAction(
       calculated_at: new Date().toISOString(),
     }
 
-    await supabase.from('consultant_metrics').insert(row)
+    await writeOrLog(supabase.from('consultant_metrics').insert(row), { op: 'consultant_metrics.insert', venueId })
   }
 }
 
@@ -146,7 +147,7 @@ export async function trackResponseTime(
       .eq('id', existing.id)
   } else {
     // Create a new row with this response time
-    await supabase.from('consultant_metrics').insert({
+    await writeOrLog(supabase.from('consultant_metrics').insert({
       venue_id: venueId,
       consultant_id: userId,
       period_start: start,
@@ -158,6 +159,6 @@ export async function trackResponseTime(
       avg_response_time_minutes: responseTimeMinutes,
       avg_booking_value: null,
       calculated_at: new Date().toISOString(),
-    })
+    }), { op: 'consultant_metrics.insert', venueId })
   }
 }

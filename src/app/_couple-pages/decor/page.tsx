@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
@@ -206,7 +207,7 @@ export default function DecorInventoryPage() {
       sort_order: (spaces[spaceName]?.length || 0),
     }
 
-    await supabase.from('decor_inventory').insert(payload)
+    await writeOrLog(supabase.from('decor_inventory').insert(payload), { op: 'decor_inventory.insert', venueId })
     setAddingToSpace(null)
     setItemForm(EMPTY_ITEM)
     fetchItems()

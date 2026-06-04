@@ -64,6 +64,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
@@ -891,7 +892,7 @@ async function persistRunLog(
   },
 ): Promise<void> {
   try {
-    await supabase.from('profile_enrichment_runs').insert({
+    await writeOrLog(supabase.from('profile_enrichment_runs').insert({
       venue_id: args.venueId,
       wedding_id: args.weddingId,
       trigger: args.trigger,
@@ -901,7 +902,7 @@ async function persistRunLog(
       prompt_version: PROFILE_ENRICHMENT_PROMPT_VERSION,
       correlation_id: args.correlationId ?? null,
       error: args.error ?? null,
-    })
+    }), { op: 'profile_enrichment_runs.insert', venueId: args.venueId })
   } catch (err) {
     // Telemetry failures are silent — the caller's work is already done.
     console.warn('[profile-enrichment] run log insert failed:', err instanceof Error ? err.message : err)

@@ -17,6 +17,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export interface CounterOpts {
   /** Optional venue scope. NULL = global. */
@@ -40,12 +41,12 @@ export async function recordCounter(
 ): Promise<void> {
   try {
     const supabase = createServiceClient()
-    await supabase.from('metered_events').insert({
+    await writeOrLog(supabase.from('metered_events').insert({
       counter_name: name,
       venue_id: opts.venueId ?? null,
       value: opts.value ?? 1,
       dimension: opts.dimension ?? {},
-    })
+    }), { op: 'metered_events.insert', venueId: opts.venueId ?? null })
   } catch (err) {
     console.warn(`[metrics] recordCounter('${name}') failed:`, err instanceof Error ? err.message : err)
   }
@@ -62,13 +63,13 @@ export async function recordHistogram(
 ): Promise<void> {
   try {
     const supabase = createServiceClient()
-    await supabase.from('metered_events').insert({
+    await writeOrLog(supabase.from('metered_events').insert({
       counter_name: name,
       venue_id: opts.venueId ?? null,
       value,
       dimension: opts.dimension ?? {},
       observed_at: opts.observedAt ?? new Date().toISOString(),
-    })
+    }), { op: 'metered_events.insert', venueId: opts.venueId ?? null })
   } catch (err) {
     console.warn(`[metrics] recordHistogram('${name}') failed:`, err instanceof Error ? err.message : err)
   }

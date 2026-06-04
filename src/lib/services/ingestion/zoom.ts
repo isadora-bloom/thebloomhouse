@@ -26,6 +26,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 import {
   linkSignal,
@@ -598,7 +599,7 @@ export async function syncMeetings(
       result.skippedNoTranscript++
       // Still record dedup so we don't keep re-checking the same meeting.
       try {
-        await supabase.from('processed_zoom_meetings').insert({
+        await writeOrLog(supabase.from('processed_zoom_meetings').insert({
           venue_id: venueId,
           zoom_meeting_id: meeting.meetingId,
           zoom_meeting_uuid: meeting.uuid,
@@ -608,7 +609,7 @@ export async function syncMeetings(
           participant_names: [],
           transcript_text: null,
           recording_urls: meeting.recordingUrls,
-        })
+        }), { op: 'processed_zoom_meetings.insert', venueId })
         seen.add(meeting.meetingId)
       } catch (err) {
         console.error('[zoom] dedup insert (no transcript) failed:', err)

@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { Plus, Trash2, Save, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -50,10 +51,10 @@ export default function CeremonyChairsPage() {
     setSaved(false)
     setSaving(true)
     const plan: ChairPlan = { rows: newRows ?? rows }
-    await supabase.from('ceremony_chair_plans').upsert(
+    await writeOrLog(supabase.from('ceremony_chair_plans').upsert(
       { wedding_id: weddingId!, plan, updated_at: new Date().toISOString() },
       { onConflict: 'wedding_id' }
-    )
+    ), { op: 'ceremony_chair_plans.upsert', venueId: null })
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)

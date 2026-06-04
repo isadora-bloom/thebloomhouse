@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Image as ImageIcon,
@@ -217,7 +218,7 @@ export default function PhotoLibraryPage() {
     if (editingId) {
       await supabase.from('photo_library').update(payload).eq('id', editingId)
     } else {
-      await supabase.from('photo_library').insert(payload)
+      await writeOrLog(supabase.from('photo_library').insert(payload), { op: 'photo_library.insert', venueId })
     }
 
     setShowModal(false)

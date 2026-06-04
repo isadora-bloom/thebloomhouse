@@ -58,6 +58,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { logEvent } from '@/lib/observability/logger'
 import {
   scoreCandidate,
@@ -179,7 +180,7 @@ async function emitLinkEvent(
   result: LinkResult,
   signal: NormalizedSignal,
 ): Promise<void> {
-  await supabase.from('tracer_run_events').insert({
+  await writeOrLog(supabase.from('tracer_run_events').insert({
     venue_id: venueId,
     run_id: runId,
     stage: 'forwards_link',
@@ -204,7 +205,7 @@ async function emitLinkEvent(
         wedding_date: signal.wedding_date,
       },
     },
-  })
+  }), { op: 'tracer_run_events.insert', venueId })
 }
 
 // ---------------------------------------------------------------------------

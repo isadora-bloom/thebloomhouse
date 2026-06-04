@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   CheckSquare,
@@ -282,7 +283,7 @@ export default function ChecklistPage() {
           vendor_type: t.vendor_type ?? null,
         }))
 
-    await supabase.from('checklist_items').insert(rows)
+    await writeOrLog(supabase.from('checklist_items').insert(rows), { op: 'checklist_items.insert', venueId })
   }, [supabase, venueId, weddingId])
 
   // ---- Fetch ----
@@ -461,7 +462,7 @@ export default function ChecklistPage() {
         .eq('id', editingId)
         .eq('wedding_id', weddingId)
     } else {
-      await supabase.from('checklist_items').insert(payload)
+      await writeOrLog(supabase.from('checklist_items').insert(payload), { op: 'checklist_items.insert', venueId })
     }
 
     setShowModal(false)

@@ -53,6 +53,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 
 // ---------------------------------------------------------------------------
@@ -665,7 +666,7 @@ async function flagWeddingDateConflict(
   sourceLabel: string | null
 ): Promise<void> {
   try {
-    await supabase.from('admin_notifications').insert({
+    await writeOrLog(supabase.from('admin_notifications').insert({
       venue_id: venueId,
       type: 'identity_conflict',
       title: 'Wedding date conflict on identity match',
@@ -676,7 +677,7 @@ async function flagWeddingDateConflict(
         `No silent merge performed; coordinator review required.`,
       priority: 'normal',
       wedding_id: weddingId,
-    })
+    }), { op: 'admin_notifications.insert', venueId })
   } catch (err) {
     // Best-effort. If admin_notifications doesn't exist for some reason
     // (or RLS rejects the write), we log and keep going. The match itself
@@ -1575,7 +1576,7 @@ export async function resolveIdentity(
     // Surface the re-engagement to the coordinator so they're aware of
     // the history. Best-effort; never fails the resolver.
     try {
-      await supabase.from('admin_notifications').insert({
+      await writeOrLog(supabase.from('admin_notifications').insert({
         venue_id: venueId,
         type: 'identity_re_engagement',
         title: 'Re-engagement detected — fresh wedding minted',
@@ -1588,7 +1589,7 @@ export async function resolveIdentity(
           `Source: ${sourceLabel ?? 'unknown'}.`,
         priority: 'normal',
         wedding_id: weddingId,
-      })
+      }), { op: 'admin_notifications.insert', venueId })
     } catch (err) {
       console.warn('[identity/resolver] re-engagement notification insert failed:', err)
     }

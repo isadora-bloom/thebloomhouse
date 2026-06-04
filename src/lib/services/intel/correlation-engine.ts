@@ -29,6 +29,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 import { createHash } from 'node:crypto'
 import { loadFredSeries } from '../external-context/fred'
 import { loadCulturalMomentsSeries } from '../external-context/cultural-moments'
@@ -753,7 +754,7 @@ export async function computeCorrelationsForVenue(args: {
     if (existing) {
       await supabase.from('intelligence_insights').update(row).eq('id', existing.id)
     } else {
-      await supabase.from('intelligence_insights').insert(row)
+      await writeOrLog(supabase.from('intelligence_insights').insert(row), { op: 'intelligence_insights.insert', venueId })
     }
   }
 

@@ -465,14 +465,14 @@ async function logPipelineError(
   console.error(`[pipeline] ${stage}:`, message, context)
   try {
     const supabase = createServiceClient()
-    await supabase.from('error_logs').insert({
+    await writeOrLog(supabase.from('error_logs').insert({
       venue_id: venueId,
       error_type: `pipeline:${stage}`,
       message: message.slice(0, 2000),
       stack_trace: stack?.slice(0, 4000) ?? null,
       context,
       correlation_id: correlationId ?? null,
-    })
+    }), { op: 'error_logs.insert', venueId })
   } catch (insertErr) {
     console.error('[pipeline] logPipelineError insert failed:', insertErr)
   }
@@ -884,12 +884,12 @@ export async function findOrCreateContact(
   // path always created — guarding on mintIsNew preserves that 1:1
   // create→mirror invariant now that the create can resolve to a match.)
   if (mintIsNew) {
-    await supabase.from('contacts').insert({
+    await writeOrLog(supabase.from('contacts').insert({
       person_id: newPerson.id,
       type: 'email',
       value: email,
       is_primary: true,
-    })
+    }), { op: 'contacts.insert', venueId })
   } else {
     // M3 alias/pool-hit mirror (PHASE-1-BATCH-1 remediation, 2026-05-23 —
     // MEDIUM defect).
@@ -917,7 +917,7 @@ export async function findOrCreateContact(
         .ilike('value', email)
         .limit(1)
       if (!existing || existing.length === 0) {
-        await supabase.from('contacts').insert({
+        await writeOrLog(supabase.from('contacts').insert({
           person_id: newPerson.id,
           type: 'email',
           value: email,
@@ -927,7 +927,7 @@ export async function findOrCreateContact(
           // the alias-discovery semantics live in this comment + the
           // resolver's pool/alias_emails source-of-truth.)
           is_primary: false,
-        })
+        }), { op: 'contacts.insert', venueId })
       }
     } catch (err) {
       // Mirror failure is non-fatal — the resolve already returned a
@@ -3118,7 +3118,7 @@ export async function processIncomingEmail(
       }
 
       const sourcePlatform = detectedSource
-      await supabase.from('candidate_identities').insert({
+      await writeOrLog(supabase.from('candidate_identities').insert({
         venue_id: venueId,
         source_platform: sourcePlatform,
         first_name: subZeroFirstName,
@@ -3132,7 +3132,7 @@ export async function processIncomingEmail(
         first_seen: email.date,
         last_seen: email.date,
         review_status: 'needs_review',
-      })
+      }), { op: 'candidate_identities.insert', venueId })
     } catch (err) {
       console.warn('[pipeline] sub-zero candidate insert failed:', err)
     }
@@ -3221,7 +3221,7 @@ export async function processIncomingEmail(
   // Persist the full classifier blob for every email. This is the
   // source-of-truth for the /intel/clients/[id] AI-insights section and
   // the feed the intel layer learns from (urgency, sentiment, questions).
-  await supabase.from('intelligence_extractions').insert({
+  await writeOrLog(supabase.from('intelligence_extractions').insert({
     venue_id: venueId,
     wedding_id: weddingId,
     interaction_id: interactionId,
@@ -3239,7 +3239,7 @@ export async function processIncomingEmail(
       via: 'live-pipeline',
       subject: email.subject,
     },
-  })
+  }), { op: 'intelligence_extractions.insert', venueId })
 
   // 2026-05-09 user mandate: "no names should be just one name if they
   // have inquired or sent an email". The Knot relay hands us "Jen B" on
@@ -4217,7 +4217,7 @@ export async function processIncomingEmail(
         // Flag the interaction via intelligence_extractions — the audit
         // trail feeds future learning (which phrases correlate with real
         // bookings vs false positives).
-        await supabase.from('intelligence_extractions').insert({
+        await writeOrLog(supabase.from('intelligence_extractions').insert({
           venue_id: venueId,
           wedding_id: weddingId,
           interaction_id: interactionId,
@@ -4229,7 +4229,7 @@ export async function processIncomingEmail(
             matched_phrase: signal.phrase,
           },
           confidence: 0.8,
-        })
+        }), { op: 'intelligence_extractions.insert', venueId })
 
         // Build couple name for the card header.
         let coupleLabel = fromName || fromEmail
@@ -5642,7 +5642,7 @@ export async function approveDraft(draftId: string, userId: string): Promise<voi
   // / coordinator_edits / metadata (jsonb). Subject + email category go
   // in metadata. T5-α.1 fix: previous writer used non-existent columns
   // and silently failed.
-  await supabase.from('draft_feedback').insert({
+  await writeOrLog(supabase.from('draft_feedback').insert({
     venue_id: draft.venue_id,
     draft_id: draftId,
     action: 'approved',
@@ -5651,7 +5651,7 @@ export async function approveDraft(draftId: string, userId: string): Promise<voi
       original_subject: draft.subject ?? '',
       email_category: draft.context_type ?? 'inquiry',
     },
-  })
+  }), { op: 'draft_feedback.insert', venueId: draft.venue_id })
 
   // Track coordinator action for metrics
   if (draft.venue_id) {
@@ -5711,7 +5711,7 @@ export async function rejectDraft(
 
   // Create feedback record for learning. T5-α.1 fix: schema columns
   // are action / original_body / rejection_reason / metadata (jsonb).
-  await supabase.from('draft_feedback').insert({
+  await writeOrLog(supabase.from('draft_feedback').insert({
     venue_id: draft.venue_id,
     draft_id: draftId,
     action: 'rejected',
@@ -5721,7 +5721,7 @@ export async function rejectDraft(
       original_subject: draft.subject ?? '',
       email_category: draft.context_type ?? 'inquiry',
     },
-  })
+  }), { op: 'draft_feedback.insert', venueId: draft.venue_id })
 
   // Track coordinator action for metrics
   if (draft.venue_id) {
@@ -5782,7 +5782,7 @@ export async function editAndApproveDraft(
   // schema columns are action / original_body / edited_body / metadata
   // (jsonb). Previous writer used non-existent feedback_type +
   // original_subject + email_category and silently failed every time.
-  await supabase.from('draft_feedback').insert({
+  await writeOrLog(supabase.from('draft_feedback').insert({
     venue_id: draft.venue_id,
     draft_id: draftId,
     action: 'edited',
@@ -5792,7 +5792,7 @@ export async function editAndApproveDraft(
       original_subject: draft.subject ?? '',
       email_category: draft.context_type ?? 'inquiry',
     },
-  })
+  }), { op: 'draft_feedback.insert', venueId: draft.venue_id })
 
   // Track coordinator action for metrics
   if (draft.venue_id) {
