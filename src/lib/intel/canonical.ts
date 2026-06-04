@@ -180,6 +180,14 @@ export async function loadVenueOverview(
 }
 
 export async function getVenueOverview(venueId: string): Promise<VenueOverview> {
+  if (!venueId) {
+    return {
+      couples: { total: 0, byLifecycle: { ...ZERO_LIFECYCLE } },
+      recentActivity: [],
+      dataMaturity: { backfillStatus: 'unknown', oldestTouchpoint: null, n: 0 },
+      generatedAt: new Date().toISOString(),
+    }
+  }
   const { createServiceClient } = await import('@/lib/supabase/service')
   return loadVenueOverview(createServiceClient(), venueId)
 }
@@ -564,6 +572,16 @@ export async function getCoupleJourney(
   venueId: string,
   coupleId: string,
 ): Promise<CoupleJourney> {
+  if (!venueId || !coupleId) {
+    return {
+      couple: null,
+      ribbon: [],
+      progression: [],
+      identityProfile: null,
+      lookAlikeCohort: [],
+      generatedAt: new Date().toISOString(),
+    }
+  }
   const { createServiceClient } = await import('@/lib/supabase/service')
   return loadCoupleJourney(createServiceClient(), venueId, coupleId)
 }

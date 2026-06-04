@@ -292,7 +292,29 @@ function hasHardContradiction(signal: CascadeSignal, c: CascadeCandidate): strin
     p.email,
     ...(Array.isArray(p.aliasEmails) ? p.aliasEmails : []),
   ])
-  return hardContradiction(signal.primaryEmail, signal.weddingDate, candEmails, c.weddingDate)
+  const base = hardContradiction(signal.primaryEmail, signal.weddingDate, candEmails, c.weddingDate)
+  if (base === null) return null
+  // Partner-corroboration veto: when the signal's partner name matches one of
+  // the candidate's people, the two differing strong emails are two-partner
+  // reality (each partner has their own inbox), NOT two strangers — the same
+  // logic by which a corroborating wedding date vetoes the email conflict.
+  // This keeps a both-partners couple (e.g. Minette Nupa + Glascow Tennille,
+  // each emailing from their own address) from being split, while a bare
+  // same-name match with no partner corroboration (GC-4 two-Sarahs) still
+  // contradicts. Only vetoes the email conflict — a hard wedding-date delta
+  // still stands.
+  if (base === 'strong_email_conflict') {
+    const pf = lowerTrim(signal.partnerFirstName)
+    const pl = lowerTrim(signal.partnerLastName)
+    if (
+      pf &&
+      pl &&
+      c.people.some((p) => lowerTrim(p.firstName) === pf && lowerTrim(p.lastName) === pl)
+    ) {
+      return null
+    }
+  }
+  return base
 }
 
 // ---------------------------------------------------------------------------
