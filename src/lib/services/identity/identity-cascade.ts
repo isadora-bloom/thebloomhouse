@@ -255,11 +255,31 @@ function strongCanonicalEmail(email: string | null | undefined): string | null {
  * should NOT auto-merge, else null. Relay (Knot/Zola/WW) emails are MEDIUM
  * tier and never count as a contradicting strong identifier.
  */
+/** Two differing strong emails are two PARTNERS of one couple (not two
+ *  strangers) when the signal's partner name matches one of the candidate's
+ *  people. `corroboration` carries free-form full-name strings from either
+ *  caller (cascade joins first+last; the Forwards Linker passes
+ *  primary_name/partner_name); they are normalised here so both callers
+ *  compare identically. */
+export interface ContradictionCorroboration {
+  signalPartnerName?: string | null
+  candidateNames?: Array<string | null | undefined>
+}
+function normName(s: string | null | undefined): string {
+  return (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+function partnerCorroborates(c?: ContradictionCorroboration): boolean {
+  const pk = normName(c?.signalPartnerName)
+  if (!pk) return false
+  return (c?.candidateNames ?? []).some((n) => normName(n) === pk)
+}
+
 export function hardContradiction(
   signalEmail: string | null | undefined,
   signalWeddingDate: string | null | undefined,
   candidateEmails: Array<string | null | undefined>,
   candidateWeddingDate: string | null | undefined,
+  corroboration?: ContradictionCorroboration,
 ): string | null {
   const datesPresent = Boolean(signalWeddingDate && candidateWeddingDate)
   if (
@@ -281,10 +301,23 @@ export function hardContradiction(
       const cand = candidateEmails
         .map((e) => strongCanonicalEmail(e))
         .filter((e): e is string => Boolean(e))
-      if (cand.length > 0 && !cand.includes(sigStrong)) return 'strong_email_conflict'
+      if (cand.length > 0 && !cand.includes(sigStrong)) {
+        // Partner-corroboration veto (parallel to the wedding-date veto):
+        // a matching partner name means the differing emails are two
+        // partners of one couple, not strangers. Both the cascade AND the
+        // Forwards Linker pass corroboration through THIS function, so the
+        // veto can never apply in one path and not the other.
+        if (partnerCorroborates(corroboration)) return null
+        return 'strong_email_conflict'
+      }
     }
   }
   return null
+}
+
+function joinName(first: string | null | undefined, last: string | null | undefined): string | null {
+  const j = `${(first ?? '').trim()} ${(last ?? '').trim()}`.trim()
+  return j.length ? j : null
 }
 
 function hasHardContradiction(signal: CascadeSignal, c: CascadeCandidate): string | null {
@@ -292,29 +325,14 @@ function hasHardContradiction(signal: CascadeSignal, c: CascadeCandidate): strin
     p.email,
     ...(Array.isArray(p.aliasEmails) ? p.aliasEmails : []),
   ])
-  const base = hardContradiction(signal.primaryEmail, signal.weddingDate, candEmails, c.weddingDate)
-  if (base === null) return null
-  // Partner-corroboration veto: when the signal's partner name matches one of
-  // the candidate's people, the two differing strong emails are two-partner
-  // reality (each partner has their own inbox), NOT two strangers — the same
-  // logic by which a corroborating wedding date vetoes the email conflict.
-  // This keeps a both-partners couple (e.g. Minette Nupa + Glascow Tennille,
-  // each emailing from their own address) from being split, while a bare
-  // same-name match with no partner corroboration (GC-4 two-Sarahs) still
-  // contradicts. Only vetoes the email conflict — a hard wedding-date delta
-  // still stands.
-  if (base === 'strong_email_conflict') {
-    const pf = lowerTrim(signal.partnerFirstName)
-    const pl = lowerTrim(signal.partnerLastName)
-    if (
-      pf &&
-      pl &&
-      c.people.some((p) => lowerTrim(p.firstName) === pf && lowerTrim(p.lastName) === pl)
-    ) {
-      return null
-    }
-  }
-  return base
+  // Partner-corroboration handled inside hardContradiction (single source of
+  // truth): a both-partners couple (e.g. Minette Nupa + Glascow Tennille, each
+  // emailing from their own address) is not split, while a bare same-name
+  // match with no partner corroboration (GC-4 two-Sarahs) still contradicts.
+  return hardContradiction(signal.primaryEmail, signal.weddingDate, candEmails, c.weddingDate, {
+    signalPartnerName: joinName(signal.partnerFirstName, signal.partnerLastName),
+    candidateNames: c.people.map((p) => joinName(p.firstName, p.lastName)),
+  })
 }
 
 // ---------------------------------------------------------------------------

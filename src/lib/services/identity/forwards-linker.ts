@@ -345,6 +345,15 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
             signal.wedding_date,
             [bestCouple.primary_email, bestCouple.partner_email],
             bestCouple.wedding_date,
+            // Partner-corroboration veto (same as the cascade): if the
+            // signal's partner names the candidate's primary/partner, the
+            // differing strong emails are two partners of one couple, not
+            // strangers — don't demote. Without this, linkSignal would split
+            // a both-partners couple the cascade correctly keeps together.
+            {
+              signalPartnerName: signal.partner_name,
+              candidateNames: [bestCouple.primary_name, bestCouple.partner_name],
+            },
           )
         : null
       if (contradiction) {
