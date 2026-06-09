@@ -33,7 +33,12 @@ jobs:
       - name: TypeScript
         run: npx tsc --noEmit
 
-      - name: Vitest suite (was NOT gated before — contract + cascade tests rotted unnoticed; all pure/mock, CI-safe)
+      # Includes the mock-driven golden subset (src/lib/spine/__tests__/golden-cascade.test.ts):
+      # runs the REAL linkSignal over tests/golden/cases.json against an in-memory Supabase
+      # fake, so an end-to-end matcher / Tier-1.5-veto / tier-routing / partner-reconciliation
+      # regression fails CI WITHOUT a TEST-BRANCH DB. The full DB-backed golden harness
+      # (tests/golden/run-golden-cases.ts) remains the deeper, manual phase-gate.
+      - name: Vitest suite (was NOT gated before — contract + cascade + golden-subset tests; all pure/mock, CI-safe)
         run: npx vitest run
 
       - name: Unit tests — writeOrLog (HARDENING-SCOPE Area 1 — failed writes logged not swallowed)
