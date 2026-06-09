@@ -11,6 +11,12 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-06-09 (Intel brain — battery-gap grounding Q19/Q30/Q36)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| intel-brain (`answerNaturalLanguageQuery`) | v2.0 | v2.1 | NLQ context loader now folds three spine-only battery readers into `VenueDataContext` + `formatDataContext`: **GHOST RISK** (Q19 — active couples most likely to go quiet, ranked by decay proximity + heat with the evidence/WHY, no fabricated probability), **DATA COMPLETENESS** (Q30 — last-90-day complete-vs-partial record self-report with partial-reason split, honest null on empty window), and **IDENTITY PRECISION** (Q36 — weakMerges / suspectedSamePairs / confidentMerges review sets so Sage can answer "where might Bloom be wrong about who's the same couple"). Behavioural impact: predictive / self-report / identity-audit questions are now grounded in sourced rows instead of refused or hedged. Each reader is best-effort (failure → section omitted). Readers: `intel/ghost-risk.ts`, `intel/data-completeness.ts`, `intel/identity-precision.ts`. |
+
 ## 2026-05-27 (Inquiry brain temporal anchoring — v1.5 → v1.6)
 
 Bumped `inquiry-brain.prompt.v1.5` → `v1.6`

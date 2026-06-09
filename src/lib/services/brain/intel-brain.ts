@@ -24,6 +24,12 @@ import {
   findCoupleByName,
   buildCoupleContextBlock,
 } from '@/lib/services/sage/couple-context'
+// Battery-gap readers (Q19/Q30/Q36) — spine-only, injectable, unit-tested.
+// Surfaced to the NLQ brain so an operator can ask the predictive /
+// self-report / identity-audit questions and get grounded, sourced answers.
+import { loadGhostRisk, type GhostRiskAssessment } from '@/lib/services/intel/ghost-risk'
+import { loadDataCompleteness, type DataCompleteness } from '@/lib/services/intel/data-completeness'
+import { loadIdentityPrecision, type IdentityPrecision } from '@/lib/services/intel/identity-precision'
 import {
   inspectResponseForHonesty,
   type HonestyFlag,
@@ -39,7 +45,7 @@ import {
 // already plumbed through (T5-θ.2); the narration block closes the loop.
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
-export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v2.0'
+export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v2.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,6 +132,14 @@ interface VenueDataContext {
    *  correlation_narration rows so Sage can answer macro-story questions
    *  with engine-confirmed cross-channel relationships. */
   correlationNarrations: CorrelationNarrationRow[]
+
+  // Battery-gap readers (2026-06-09) — Q19/Q30/Q36. Spine-only, sourced.
+  /** Q19: active couples most likely to go quiet, each with the WHY. */
+  ghostRisk: GhostRiskAssessment[]
+  /** Q30: last-90-day inquiry record completeness (complete vs partial + why). */
+  dataCompleteness: DataCompleteness | null
+  /** Q36: identity-model precision/recall review sets (merges + suspected-same). */
+  identityPrecision: IdentityPrecision | null
 }
 
 interface WeddingSummary {
@@ -1314,6 +1328,15 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
   )
   const reviewsCtx = await _getReviews(venueId).catch(() => null)
 
+  // Battery-gap readers (Q19/Q30/Q36). Spine-only + independent of the
+  // queries above, so run them together. Each is best-effort — a failure
+  // leaves its field empty/null and the prompt section simply doesn't render.
+  const [ghostRisk, dataCompleteness, identityPrecision] = await Promise.all([
+    loadGhostRisk(supabase, venueId).catch(() => [] as GhostRiskAssessment[]),
+    loadDataCompleteness(supabase, venueId).catch(() => null),
+    loadIdentityPrecision(supabase, venueId).catch(() => null),
+  ])
+
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
     recentWeddings: recentWeddingsWithHeat,
@@ -1346,6 +1369,10 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     websiteTrafficHistory,
     // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09)
     correlationNarrations,
+    // Battery-gap readers (2026-06-09)
+    ghostRisk,
+    dataCompleteness,
+    identityPrecision,
   }
 }
 
@@ -1745,6 +1772,72 @@ function formatDataContext(data: VenueDataContext): string {
       `surfaces on /intel/macro-correlations. When the user asks about ` +
       `macro-correlated channels, FRED-vs-venue relationships, or ` +
       `cultural moments hitting the funnel, quote from these directly.\n${lines}`,
+    )
+  }
+
+  // GHOST RISK (battery Q19) — which active couples are most likely to go
+  // quiet, and WHY. No fabricated probability; the evidence IS the answer.
+  if (data.ghostRisk.length > 0) {
+    const lines = data.ghostRisk
+      .map((g) => {
+        const parts = [`risk=${g.riskTier}`, `heat=${g.heatScore} (${g.heatBucket})`]
+        if (g.daysQuiet !== null) parts.push(`quiet=${g.daysQuiet}d`)
+        if (g.decayFraction !== null) parts.push(`decay=${Math.round(g.decayFraction * 100)}% of window`)
+        return `  - ${g.names ?? '(unnamed couple)'}: ${parts.join(', ')}\n      why: ${g.signals.join('; ')}`
+      })
+      .join('\n')
+    sections.push(
+      `GHOST RISK — couples most likely to go quiet (Q19; active resolved/` +
+      `channel-scoped couples ranked by decay proximity + heat, evidence ` +
+      `included; booked/ghost/completed are out of scope). When asked "who's ` +
+      `about to go cold / who should I follow up with", answer from THESE rows ` +
+      `and cite the WHY — do not invent a probability:\n${lines}`,
+    )
+  }
+
+  // DATA COMPLETENESS (battery Q30) — self-report on last-90-day records.
+  if (data.dataCompleteness && data.dataCompleteness.couplesInWindow > 0) {
+    const dc = data.dataCompleteness
+    const pct = dc.completeFraction === null ? 'n/a' : `${Math.round(dc.completeFraction * 100)}%`
+    sections.push(
+      `DATA COMPLETENESS (Q30; couples created in the last ${dc.windowDays} days): ` +
+      `${dc.complete}/${dc.couplesInWindow} complete (${pct}), ${dc.partial} partial. ` +
+      `Complete = reachable identifier (email or phone) AND ≥1 touchpoint. ` +
+      `Partial reasons: no_reachable_identifier=${dc.partialReasons.noReachableIdentifier}, ` +
+      `no_touchpoints=${dc.partialReasons.noTouchpoints}. Answer "how complete is my ` +
+      `data" from these exact counts; never round to a fake 100%.`,
+    )
+  }
+
+  // IDENTITY PRECISION (battery Q36) — what the identity model fused vs kept
+  // separate, with evidence, for operator verification (precision AND recall).
+  if (
+    data.identityPrecision &&
+    (data.identityPrecision.confidentMerges.length > 0 ||
+      data.identityPrecision.weakMerges.length > 0 ||
+      data.identityPrecision.suspectedSamePairs.length > 0)
+  ) {
+    const ip = data.identityPrecision
+    const fmtMerge = (m: IdentityPrecision['weakMerges'][number]) =>
+      `      - ${m.eventType} (${m.confidenceTier})${m.reason ? `: ${m.reason.slice(0, 140)}` : ''} [${(m.occurredAt ?? '').split('T')[0]}]`
+    const blocks: string[] = []
+    if (ip.weakMerges.length > 0) {
+      blocks.push(`  weakMerges (most likely OVER-merges — review first), ${ip.weakMerges.length}:\n${ip.weakMerges.map(fmtMerge).join('\n')}`)
+    }
+    if (ip.suspectedSamePairs.length > 0) {
+      const pairs = ip.suspectedSamePairs
+        .map((p) => `      - ${p.primaryRecordType}:${p.primaryRecordId.slice(0, 8)} ↔ ${p.secondaryRecordType}:${p.secondaryRecordId.slice(0, 8)} (${p.confidenceTier})${p.matcherReason ? `: ${p.matcherReason.slice(0, 120)}` : ''}`)
+        .join('\n')
+      blocks.push(`  suspectedSamePairs (likely MISSED merges — kept separate, queued), ${ip.suspectedSamePairs.length}:\n${pairs}`)
+    }
+    if (ip.confidentMerges.length > 0) {
+      blocks.push(`  confidentMerges (high-confidence fusions), ${ip.confidentMerges.length}:\n${ip.confidentMerges.map(fmtMerge).join('\n')}`)
+    }
+    sections.push(
+      `IDENTITY PRECISION (Q36; ${ip.note}). When asked "where might Bloom be ` +
+      `wrong about who's the same couple", point at weakMerges (false positives) ` +
+      `and suspectedSamePairs (false negatives) — cite the evidence, don't claim ` +
+      `the model is perfect:\n${blocks.join('\n')}`,
     )
   }
 
