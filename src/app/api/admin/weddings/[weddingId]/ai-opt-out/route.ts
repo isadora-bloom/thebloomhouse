@@ -1,5 +1,5 @@
 /**
- * POST /api/admin/weddings/[id]/ai-opt-out
+ * POST /api/admin/weddings/[weddingId]/ai-opt-out
  *
  * Toggles the sticky `weddings.ai_opted_out` flag (mig 303). When set to
  * true, the pipeline skips drafting for any future inbound on this
@@ -7,6 +7,13 @@
  * inbound.
  *
  * Body: { optedOut: boolean, reason?: string }
+ *
+ * NOTE (2026-06-09): moved from the sibling `[id]/` segment to `[weddingId]/`.
+ * Two dynamic segments with DIFFERENT slug names under one path
+ * (api/admin/weddings/[id] vs [weddingId]) is an illegal route tree — it
+ * broke Turbopack's dev route-reload ("'id' !== 'weddingId'") and 500'd EVERY
+ * API route in `next dev`. The URL path is unchanged (the slug is only the
+ * param name), so callers are unaffected.
  *
  * Anchor docs:
  *   - bloom-constitution.md (operator authority — operators clear AI
@@ -30,13 +37,13 @@ interface PostBody {
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: { params: Promise<{ weddingId: string }> },
 ) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) return forbidden('demo cannot toggle AI opt-out')
 
-  const { id: weddingId } = await params
+  const { weddingId } = await params
   if (!weddingId) return badRequest('wedding id required')
 
   let body: PostBody = {}
