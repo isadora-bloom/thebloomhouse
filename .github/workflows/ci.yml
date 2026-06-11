@@ -71,6 +71,9 @@ jobs:
       - name: Unit tests — email-signal fidelity (Phase 1.1.b / GC-10 — full_body+headers into spine)
         run: npx tsx scripts/test-email-signal-fidelity.ts
 
+      - name: Unit tests — D5 direction discipline (outbound never progression-eligible / never resets decay clock)
+        run: npx tsx scripts/test-progression-direction.ts
+
       - name: Unit tests — Tier 1.5 contradiction guard (GC-4 over-merge fix — distinct same-name couples don't fuse)
         run: npx tsx scripts/test-contradiction-guard.ts
 

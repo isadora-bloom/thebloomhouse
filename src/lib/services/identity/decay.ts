@@ -59,7 +59,8 @@ export async function decayStaleCouples(
 
   for (const r of rows) {
     const ageMs = now - Date.parse(r.last_progression_at)
-    const windowMs = (r.decay_window_days ?? 180) * 86_400_000
+    // Canonical v1.0 §3.4: 90-120d band, default 120 (migration 380; was 180).
+    const windowMs = (r.decay_window_days ?? 120) * 86_400_000
     if (ageMs <= windowMs) continue
 
     // Doctrine second guard: NOT EXISTS a recent progression event.

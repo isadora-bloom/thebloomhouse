@@ -35,9 +35,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // sit outside).
 const ENGAGED_STATES = new Set(['resolved', 'booked', 'ghost', 'completed'])
 
-// Days quiet before a 'resolved' couple should flip to 'ghost' under
-// doctrine §3. Mirrors the existing decay-sweep default.
-const DECAY_WINDOW_DAYS = 180
+// Days quiet before a 'resolved' couple should flip to 'ghost'.
+// Canonical v1.0 §3.4 band 90-120, default 120 (migration 380; was
+// doctrine-era 180). Mirrors the decay-sweep default in decay.ts.
+const DECAY_WINDOW_DAYS = 120
 
 export type LifecycleState =
   | 'channel_scoped'

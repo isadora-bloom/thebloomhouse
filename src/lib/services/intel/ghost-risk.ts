@@ -27,7 +27,8 @@ import {
 
 /** 0.75 of the decay window = "going cold" — same threshold as getDailyList. */
 const COLD_FRACTION = 0.75
-const DEFAULT_WINDOW_DAYS = 180
+// Canonical v1.0 §3.4: default 120 (migration 380; was 180).
+const DEFAULT_WINDOW_DAYS = 120
 
 export interface GhostRiskCoupleInput {
   id: string

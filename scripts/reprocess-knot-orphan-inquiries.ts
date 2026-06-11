@@ -257,13 +257,13 @@ async function main() {
         // Synthesize the minted couple so subsequent orphans can match it.
         const synth: CoupleForMatch = {
           id: `synth-${synthSeq++}`,
-          primary_name: signal.primary_name,
-          primary_email: signal.primary_email,
-          primary_phone: signal.primary_phone,
-          partner_name: signal.partner_name,
-          partner_email: signal.partner_email,
-          partner_phone: signal.partner_phone,
-          wedding_date: signal.wedding_date,
+          primary_name: signal.primary_name ?? null,
+          primary_email: signal.primary_email ?? null,
+          primary_phone: signal.primary_phone ?? null,
+          partner_name: signal.partner_name ?? null,
+          partner_email: signal.partner_email ?? null,
+          partner_phone: signal.partner_phone ?? null,
+          wedding_date: signal.wedding_date ?? null,
           source_wedding_id: null,
         }
         couples.push(synth)

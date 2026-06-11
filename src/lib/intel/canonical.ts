@@ -823,7 +823,8 @@ export async function loadDailyList(
     if (c.lifecycle_state !== 'resolved' && c.lifecycle_state !== 'channel_scoped') continue
     if (!c.last_progression_at) continue
     const ageMs = now - Date.parse(c.last_progression_at)
-    const windowMs = (c.decay_window_days ?? 180) * 86_400_000
+    // Canonical v1.0 §3.4: default 120 (migration 380; was 180).
+    const windowMs = (c.decay_window_days ?? 120) * 86_400_000
     if (ageMs >= GOING_COLD_FRACTION * windowMs && ageMs < windowMs) {
       goingCold.push({ id: c.id, names: coupleNames(c.primary_contact_name, c.partner_contact_name) })
     }
