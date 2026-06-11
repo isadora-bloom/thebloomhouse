@@ -82,6 +82,7 @@ import {
 } from './tracer'
 import { applyTierRouting } from './route-by-tier'
 import { recordProgressionIfEligible } from './progression'
+import { stampTouchpointAndPointZero } from './point-zero'
 import { buildJudgeContext } from './judge-context'
 import type { NormalizedSignal } from './sources/types'
 
@@ -255,6 +256,17 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
             signal,
             touchpointId: r.touchpoint_id,
           })
+          // D4/D5 (migration 381): direction + zero_phase + point-zero
+          // establishment. Best-effort by contract — never throws.
+          if (r.touchpoint_id) {
+            await stampTouchpointAndPointZero({
+              supabase,
+              venueId,
+              coupleId,
+              touchpointId: r.touchpoint_id,
+              signal,
+            })
+          }
         }
         await emitLinkEvent(supabase, venueId, runId, result, signal)
         return result
@@ -279,6 +291,16 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
       result.action = routed.action === 'duplicate' ? 'duplicate' : 'cold_start'
       result.duplicate = routed.action === 'duplicate'
       result.reason = 'no couples in venue yet'
+      // D4/D5 stamp on a cold-start mint (migration 381).
+      if (routed.matched_couple_id && routed.touchpoint_id && routed.action !== 'duplicate') {
+        await stampTouchpointAndPointZero({
+          supabase,
+          venueId,
+          coupleId: routed.matched_couple_id,
+          touchpointId: routed.touchpoint_id,
+          signal,
+        })
+      }
       await emitLinkEvent(supabase, venueId, runId, result, signal)
       return result
     }
@@ -389,6 +411,26 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
       result.reason = best.verdict.reason + reasonExtra
     } else {
       result.reason = (result.reason || 'no above-threshold match') + reasonExtra
+    }
+
+    // 3.4 D4/D5 stamp (migration 381): when the touchpoint landed on a
+    // couple (attached or minted), stamp write-time direction + zero_phase
+    // and establish point_zero_at if this is the qualifying signal.
+    // Candidate orphans (couple NULL) are stamped on resolution; fragments
+    // carry no couple. Best-effort by contract — never throws.
+    if (
+      result.matched_couple_id &&
+      result.touchpoint_id &&
+      !result.duplicate &&
+      (result.action === 'attached' || result.action === 'minted')
+    ) {
+      await stampTouchpointAndPointZero({
+        supabase,
+        venueId,
+        coupleId: result.matched_couple_id,
+        touchpointId: result.touchpoint_id,
+        signal,
+      })
     }
 
     // 3.5 Partner reconciliation (GC-5). When this signal landed on a couple
