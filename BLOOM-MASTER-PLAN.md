@@ -1,8 +1,18 @@
 # Bloom — Ratified Execution Plan (Master · Drift-Proof)
 
+> ## ⚠️ STATUS 2026-06-11 — SUPERSEDED AS THE EXECUTION TRACKER
+> The 2026-06-11 plan stress-test (Fable-5 audit) found this document's checkboxes were
+> never updated across ~35 commits of real work (Phase 3.3 complete, Phase 1.1 shipped,
+> hardening done — all unticked). Rather than maintain two trackers, this doc is
+> **retired as the live tracker**. What remains authoritative here: the §3 decision
+> ledger (D-0…D-12 rationale) and the doctrine anchoring. For *sequence and current
+> state*, read: **`CONSOLIDATION-PLAN-PHASED.md` (execution authority, incl. the new
+> §1.8 D4/D5 pre-Phase-2 requirement) + `CHANGELOG.md` (ship record)**.
+> The Phase-0 §0.9 guard flip was executed 2026-06-11 (commit on `consolidation`).
+
 **Version:** 1.0 — **RATIFIED 2026-05-29** (CEO sign-off, §10)
 **Date:** 2026-05-28 (ratified 2026-05-29) · **CEO:** Isadora Martin-Dye · **Eng Lead:** Claude (orchestrator)
-**Status of the work:** RATIFIED. Phase 0 in progress — D-1 ✅ verified, D-3 ✅ resolved (portal empty → wipe); remaining Phase-0 actions: D-12 (wire test-branch `.env`) + flip the CI guards to enforcing (§0.9). Phase 1.1 starts Monday.
+**Status of the work:** RATIFIED. Phase 0 in progress — D-1 ✅ verified, D-3 ✅ resolved (portal empty → wipe); remaining Phase-0 actions: D-12 (wire test-branch `.env`) + flip the CI guards to enforcing (§0.9). Phase 1.1 starts Monday. *(Stale — see the 2026-06-11 banner above.)*
 
 > **What this document is.** The single execution authority for the Bloom House rebuild. It does not restate the detail in the supporting docs — it *sequences* them, attaches a **guardrail** to every gate and a **checkbox** to every step, and defines what "no drift" means and how it is enforced. If any other doc conflicts with this one on *sequence or gates*, this wins; on *doctrine* the Canonical Product Definition v1.0 wins; on *identity/lifecycle detail* the supporting specs win.
 
