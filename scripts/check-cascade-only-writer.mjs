@@ -364,6 +364,10 @@ const GRANDFATHERED = new Map([
     'src/app/api/admin/identity/resolve/route.ts',
     'couple_merge_events.insert for candidate_confirmed / candidate_rejected operator decisions. Audit-only write.',
   ],
+  [
+    'src/app/api/admin/identity/undo-merge/route.ts',
+    'couple_merge_events.insert of the PAIRED REVERSAL row when an operator undoes a merge from /intel/identity-review (remediation round 2, a040038). Audit-only write; no couple creation — the walk-back UPDATEs candidate_matches/fragments in place. Same family as lifecycle-audit apply; folds into the `recordLifecycleEvent` primitive (Phase 4 follow-up).',
+  ],
 
   // --- spine: NEW grandfather entries surfaced by Pbatch2-9
   // restructure. These files were silently exempted by the old

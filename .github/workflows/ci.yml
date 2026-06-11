@@ -218,27 +218,23 @@ jobs:
         run: node scripts/check-plan-enforcement.mjs
 
       # --- Consolidation governance (FIX-PLAN Layer B/C/D) ------------------
-      # INFORMATIONAL UNTIL PHASE 0 RATIFICATION (Monday). Every step here is
-      # `continue-on-error: true` so it PRINTS the worklist but never fails the
-      # build — normal weekend commits (new migration / cron / un-cited commit)
-      # are not blocked. Flip these to blocking (remove continue-on-error) in
-      # Phase 0 §0.9 once governance is ratified. See BLOOM-MASTER-PLAN.md §0.
-      - name: (informational) Cleanup-budget ratchet — debt may only DECREASE (M1)
+      # ENFORCING since 2026-06-11 (Phase 0 §0.9 flip executed — was left
+      # `continue-on-error: true` at the 2026-05-29 ratification "until
+      # Monday" and never flipped; two ratchets then failed silently for
+      # 13 days). A failing ratchet now FAILS the build. To deliberately
+      # raise a budget, edit the baseline JSON in the same PR — the diff
+      # is the human decision point (FIX-PLAN Layer B / Mandate M1).
+      - name: Cleanup-budget ratchet — debt may only DECREASE (M1)
         run: node scripts/check-cleanup-budget.mjs
 
-      - name: (informational) Swallowed-writes ratchet — un-wrapped awaited insert/upsert may only DECREASE (HARDENING-SCOPE Area 1)
-        continue-on-error: true
+      - name: Swallowed-writes ratchet — un-wrapped awaited insert/upsert may only DECREASE (HARDENING-SCOPE Area 1)
         run: node scripts/check-swallowed-writes.mjs
-        continue-on-error: true
 
-      - name: (informational) RLS venue-isolation guard — venue_id tables need RLS + policy (G17)
+      - name: RLS venue-isolation guard — venue_id tables need RLS + policy (G17)
         run: node scripts/check-rls-on-venue-id.mjs
-        continue-on-error: true
 
-      - name: (informational) Plan-trace guard — commits cite a plan §/Phase/mandate (FIX-PLAN §B.2)
+      - name: Plan-trace guard — commits cite a plan §/Phase/mandate (FIX-PLAN §B.2)
         run: node scripts/check-pr-cites-section.mjs
-        continue-on-error: true
 
-      - name: (informational) Golden-case spec validation — GC-1..GC-9 well-formed (FIX-PLAN Layer C)
+      - name: Golden-case spec validation — GC-1..GC-9 well-formed (FIX-PLAN Layer C)
         run: npx tsx tests/golden/run-golden-cases.ts --dry
-        continue-on-error: true
