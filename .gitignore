@@ -24,3 +24,6 @@ next-env.d.ts
 
 .vercel
 .claude/
+
+# Phase 2 operator-data exports (PII; never commit)
+phase2-exports/
