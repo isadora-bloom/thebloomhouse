@@ -397,8 +397,8 @@ export default function CouplesListPage() {
         Showing the 500 most recently active couples. Channel-only
         signals (anonymous Knot saves and other partial-identity
         records) are hidden by default — use the toggle to include them.
-        The Phase B Tracer rebuilds this graph nightly; the Phase C
-        Forwards Linker keeps it current per signal. Pending matches
+        The identity engine rebuilds this graph nightly and keeps it
+        current by linking new signals as they arrive. Pending matches
         live in the review queue above.
       </p>
     </div>

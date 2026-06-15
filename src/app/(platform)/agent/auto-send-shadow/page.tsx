@@ -217,7 +217,7 @@ export default function AutoSendShadowPage() {
                 key={rule.id}
                 className="rounded-lg border border-sage-50 bg-sage-50/40 px-4 py-2 text-sm text-sage-700"
               >
-                {rule.context} / {rule.source ?? 'all'}
+                {rule.context} / {rule.source ?? 'all'} {/* source-render-ok: auto_send_rules.source is the rule SCOPE filter (null = all sources), not a lead/wedding source */}
                 {rule.graduated_at && (
                   <span className="ml-2 text-xs text-sage-500">
                     promoted {new Date(rule.graduated_at).toLocaleDateString()}
@@ -280,7 +280,7 @@ export default function AutoSendShadowPage() {
                         </span>
                       )}
                       <span className="text-[11px] text-sage-500">
-                        {d.context_type} · {d.source ?? 'direct'} · conf{' '}
+                        {d.context_type} · {d.source ?? 'direct'} {/* source-render-ok: decision SCOPE discriminator (null = direct), not a lead/wedding source render */} · conf{' '}
                         {d.confidence_score}
                       </span>
                     </div>

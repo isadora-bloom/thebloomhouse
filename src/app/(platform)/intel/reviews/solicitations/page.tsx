@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import Link from 'next/link'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { Loader2, MessageSquare, ExternalLink, CheckCircle, XCircle, Clock } from 'lucide-react'
@@ -96,6 +97,7 @@ function formatDate(iso: string | null): string {
 
 export default function ReviewSolicitationsPage() {
   const venueId = useVenueId()
+  const aiName = useAiName()
   const [statusFilter, setStatusFilter] = useState<Status | 'all'>('all')
   const [rows, setRows] = useState<SolicitRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -142,7 +144,7 @@ export default function ReviewSolicitationsPage() {
         <div>
           <h1 className="text-2xl font-serif text-stone-900">Review solicitations</h1>
           <p className="text-sm text-stone-600 mt-1">
-            Sage drafts a personalised review request after each event. Every
+            {aiName} drafts a personalised review request after each event. Every
             draft goes to coordinator review before it sends.
           </p>
         </div>
@@ -180,7 +182,7 @@ export default function ReviewSolicitationsPage() {
             No solicitations yet for this filter.
           </p>
           <p className="mt-1 text-xs text-stone-500">
-            Sage drafts a solicitation when a wedding enters the post-event
+            {aiName} drafts a solicitation when a wedding enters the post-event
             window (7+ days after the event).
           </p>
         </div>

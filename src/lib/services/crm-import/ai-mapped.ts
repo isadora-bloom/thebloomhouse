@@ -99,6 +99,7 @@ const FIELD_DESCRIPTIONS: Record<AiMappableField, string> = {
   refunded_amount: 'amount refunded',
   package_name: 'name of the package / collection / tier booked',
   status: 'lead / project status (inquiry, booked, lost, etc.)',
+  // adapter-source-justified: AI column-mapper prompt description string, not a weddings.source write.
   source: 'how the couple found the venue / lead source channel',
   source_detail: 'free-text detail about the source',
   inquiry_date: 'date the couple first inquired / lead created date',

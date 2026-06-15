@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { callAIJson } from '@/lib/ai/client'
 
 /**
@@ -68,6 +69,9 @@ interface ExtractResult {
 }
 
 export async function POST(req: NextRequest) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) {

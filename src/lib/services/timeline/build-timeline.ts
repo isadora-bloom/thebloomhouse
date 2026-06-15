@@ -719,8 +719,8 @@ async function readContractEvents(
     .eq('wedding_id', weddingId)
     .order('created_at', { ascending: false })
     .limit(cap)
-  if (since) q = q.gte('created_at', since)
-  if (until) q = q.lte('created_at', until)
+  if (since) q = q.gte('created_at', since) // created-at-ok: contract document upload time IS the timeline event
+  if (until) q = q.lte('created_at', until) // created-at-ok: contract document upload time IS the timeline event
   const { data, error } = await q
   if (error || !data) return []
 
@@ -1019,8 +1019,8 @@ async function readDiscoveryEvents(
     .eq('venue_id', venueId)
     .order('created_at', { ascending: false })
     .limit(cap * 4) // overfetch — we filter by wedding membership client-side
-  if (since) q = q.gte('created_at', since)
-  if (until) q = q.lte('created_at', until)
+  if (since) q = q.gte('created_at', since) // created-at-ok: discovery time IS the timeline event
+  if (until) q = q.lte('created_at', until) // created-at-ok: discovery time IS the timeline event
   const { data, error } = await q
   if (error || !data) return []
 

@@ -4374,14 +4374,23 @@ export async function processIncomingEmail(
     ) {
       const inviteeEmail = schedulingEvent.inviteeEmail
       const inviteeName = (schedulingEvent.inviteeName ?? '').trim() || null
+      // Resolve the venue's own name so the synthetic greeting + welcome
+      // subject speak in this venue's brand rather than a hardcoded
+      // venue name (white-label: every venue must address itself).
+      const { data: venueRow } = await supabase
+        .from('venues')
+        .select('name')
+        .eq('id', venueId)
+        .single()
+      const venueName = ((venueRow?.name as string | null) ?? '').trim() || 'the venue'
       // Synthetic inquiry body conveying the booking action in the
       // couple's voice. Inquiry-brain treats this as fresh outreach
       // from the couple; the CURRENT TOUR STATE line carries the real
       // date/time signal so the draft anchors to the booked visit
       // rather than re-pitching the tour.
       const synthBody = inviteeName
-        ? `Hi Rixey Manor! This is ${inviteeName} — I just booked a venue tour through your Calendly. Looking forward to seeing the space!`
-        : `Hi Rixey Manor! I just booked a venue tour through your Calendly. Looking forward to seeing the space!`
+        ? `Hi ${venueName}! This is ${inviteeName} — I just booked a venue tour through your Calendly. Looking forward to seeing the space!`
+        : `Hi ${venueName}! I just booked a venue tour through your Calendly. Looking forward to seeing the space!`
       const synthSubject = 'Tour booked'
 
       try {
@@ -4411,7 +4420,7 @@ export async function processIncomingEmail(
               wedding_id: weddingId,
               interaction_id: interactionId,
               to_email: inviteeEmail,
-              subject: `Welcome — your Rixey Manor tour`,
+              subject: `Welcome — your ${venueName} tour`,
               draft_body: result.draft,
               original_sage_body: result.draft,
               confidence_score: result.confidence,

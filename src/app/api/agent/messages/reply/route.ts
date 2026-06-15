@@ -70,6 +70,8 @@ export async function POST(request: NextRequest) {
 
   // Mirror the outbound side into interactions for the inbox thread view.
   // Fire-and-forget; the messages row is the source of truth.
+  // signal-class-justified: portal_chat reply is a coordinator->couple touchpoint
+  // html-stripped-justified: `trimmed` is plain text typed by the coordinator, not HTML
   void supabase
     .from('interactions')
     .insert({
@@ -80,6 +82,7 @@ export async function POST(request: NextRequest) {
       subject: 'Reply to couple',
       body_preview: trimmed.length > 240 ? trimmed.slice(0, 240) + '…' : trimmed,
       full_body: trimmed,
+      signal_class: 'touchpoint',
     })
     .then(({ error: mirrorErr }) => {
       if (mirrorErr) {

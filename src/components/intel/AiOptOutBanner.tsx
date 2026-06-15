@@ -13,6 +13,7 @@
  */
 
 import { useState } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { Bot, Loader2, CheckCircle2 } from 'lucide-react'
 
 interface AiOptOutBannerProps {
@@ -57,6 +58,7 @@ export function AiOptOutBanner({
   reason,
   onResumed,
 }: AiOptOutBannerProps) {
+  const aiName = useAiName()
   const [resuming, setResuming] = useState(false)
   const [resumed, setResumed] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -88,7 +90,7 @@ export function AiOptOutBanner({
     return (
       <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 flex items-center gap-2">
         <CheckCircle2 className="w-4 h-4" />
-        Sage will draft replies for this couple again starting with their next inbound.
+        {aiName} will draft replies for this couple again starting with their next inbound.
       </div>
     )
   }
@@ -98,7 +100,7 @@ export function AiOptOutBanner({
       <div className="flex items-start gap-2">
         <Bot className="w-4 h-4 mt-0.5 flex-shrink-0" />
         <div className="flex-1 space-y-1">
-          <div className="font-semibold">Sage is not drafting for this couple.</div>
+          <div className="font-semibold">{aiName} is not drafting for this couple.</div>
           <div className="leading-relaxed">
             Reason: {humanReason(reason)}
             {optedOutAt ? ` (${relativeTime(optedOutAt)})` : ''}. Any inbound from this

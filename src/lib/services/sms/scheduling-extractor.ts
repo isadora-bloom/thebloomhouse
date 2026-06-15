@@ -232,6 +232,8 @@ export async function extractTourSignalsFromSmsThread(params: {
           scheduled_at: proposed.toISOString(),
           tour_type: 'in_person',
           source: 'sms_extractor',
+          // A scheduled tour is a mid-funnel touchpoint, not an acquisition source.
+          signal_class: 'touchpoint',
           notes:
             extracted.evidence?.slice(0, 500) ??
             'Inferred from SMS thread by Haiku extractor.',

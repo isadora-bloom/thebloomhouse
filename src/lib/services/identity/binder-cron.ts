@@ -115,6 +115,10 @@ export async function runIdentityBinder(
     .from('interactions')
     .select('id, venue_id, created_at, direction, extracted_identity, from_email')
     .is('wedding_id', null)
+    // created-at-ok: the binder MUST window on INGESTION time, not the email's
+    // own timestamp. A Gmail reconnect/backfill re-ingests old-dated emails with
+    // created_at=now but timestamp=weeks-ago; those still need binding, and a
+    // timestamp window would skip them as "too old" and leave them orphaned forever.
     .gte('created_at', sinceIso)
     .not('extracted_identity', 'is', null)
     .eq('direction', 'inbound')

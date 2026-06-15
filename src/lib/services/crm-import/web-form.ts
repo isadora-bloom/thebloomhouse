@@ -508,6 +508,7 @@ function extractUtmFromRow(args: {
   // columns ARE the UTM data, so a bare "source" header maps to
   // utm_source. The utm_-prefixed form still wins when both exist.
   const BARE_UTM_ALIAS: Record<string, keyof UtmFields> = {
+    // adapter-source-justified: CSV-header alias map key (bare "source" col → utm_source field), not a weddings.source write.
     source: 'utm_source',
     medium: 'utm_medium',
     campaign: 'utm_campaign',

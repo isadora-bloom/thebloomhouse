@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
 import {
@@ -109,6 +110,7 @@ const EMPTY_OWNER: OwnerPresence = {
 
 export default function VenueInfoSettingsPage() {
   const { venueId, level: scopeLevel } = useScope()
+  const aiName = useAiName()
   const supabase = createClient()
   const [data, setData] = useState<VenueLocation>(EMPTY)
   const [owner, setOwner] = useState<OwnerPresence>(EMPTY_OWNER)
@@ -757,7 +759,7 @@ export default function VenueInfoSettingsPage() {
             Bulk Paste
           </a>{' '}
           page. Storing each platform&apos;s URL or business ID here lets
-          you and Sage open the live listing in one click from the
+          you and {aiName} open the live listing in one click from the
           reviews page.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -852,7 +854,7 @@ export default function VenueInfoSettingsPage() {
         <textarea
           className={inputCls}
           rows={5}
-          placeholder="e.g. Hi! I'm Isadora, the owner. I'll be checking in every couple of weeks to see how planning is going. Anything you need that Sage can't help with — just message me directly. We can't wait to host you."
+          placeholder={`e.g. Hi! I'm the owner. I'll be checking in every couple of weeks to see how planning is going. Anything you need that ${aiName} can't help with — just message me directly. We can't wait to host you.`}
           value={owner.owner_note_to_couples ?? ''}
           onChange={(e) =>
             setOwner({ ...owner, owner_note_to_couples: e.target.value })

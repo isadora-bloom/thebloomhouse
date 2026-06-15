@@ -795,7 +795,7 @@ ${name}`
           <Sparkles className="w-5 h-5 text-sage-500" />
           <h2 className="font-heading text-xl font-semibold text-sage-900">Live Preview</h2>
           {previewLoading && (
-            <span className="text-xs text-sage-500 italic">{config.ai_name || 'Sage'} is drafting...</span>
+            <span className="text-xs text-sage-500 italic">{config.ai_name || 'your AI assistant'} is drafting...</span>
           )}
         </div>
         <p className="text-xs text-sage-500 mb-4">

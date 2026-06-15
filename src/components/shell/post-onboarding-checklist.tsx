@@ -31,6 +31,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -81,6 +82,7 @@ interface Props {
 export function PostOnboardingChecklist({ venueId }: Props) {
   const searchParams = useSearchParams()
   const justCompleted = searchParams?.get('onboarding') === 'complete'
+  const aiName = useAiName()
 
   const [dismissed, setDismissedState] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -183,8 +185,8 @@ export function PostOnboardingChecklist({ venueId }: Props) {
         },
         {
           id: 'voice',
-          label: "Train Sage's voice",
-          description: 'Approve or edit 5 drafts so Sage learns your tone',
+          label: `Train ${aiName}'s voice`,
+          description: `Approve or edit 5 drafts so ${aiName} learns your tone`,
           href: '/agent/learning',
           icon: Mic,
           done: voiceDone,
@@ -200,7 +202,7 @@ export function PostOnboardingChecklist({ venueId }: Props) {
         {
           id: 'signature',
           label: 'Add a signature / footer',
-          description: 'Set the sign-off Sage uses on outgoing replies',
+          description: `Set the sign-off ${aiName} uses on outgoing replies`,
           href: '/agent/settings',
           icon: PenLine,
           done: signatureDone,
@@ -217,7 +219,7 @@ export function PostOnboardingChecklist({ venueId }: Props) {
     return () => {
       cancelled = true
     }
-  }, [venueId])
+  }, [venueId, aiName])
 
   if (dismissed) return null
   if (loading) return null
@@ -236,8 +238,8 @@ export function PostOnboardingChecklist({ venueId }: Props) {
     ? "You're set up — here's what to do next"
     : 'Recommended next steps'
   const subhead = justCompleted
-    ? `Finish wiring up the ${remaining.length === 1 ? 'last integration' : `${remaining.length} integrations`} Sage needs to work properly.`
-    : 'Finish setting up the integrations Sage needs to work properly.'
+    ? `Finish wiring up the ${remaining.length === 1 ? 'last integration' : `${remaining.length} integrations`} ${aiName} needs to work properly.`
+    : `Finish setting up the integrations ${aiName} needs to work properly.`
 
   return (
     <div className="rounded-xl border border-gold-200 bg-gold-50/40 p-5">

@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, forbidden } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { backfillGmailVoice } from '@/lib/services/voice/gmail-backfill'
 
 /**
@@ -21,7 +22,10 @@ import { backfillGmailVoice } from '@/lib/services/voice/gmail-backfill'
  */
 export const maxDuration = 300
 
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) return forbidden('Voice backfill is unavailable in demo mode')

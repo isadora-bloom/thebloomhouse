@@ -32,7 +32,7 @@ export default function IdentityReviewPage() {
       <div className="mb-6">
         <h1 className="font-serif text-3xl text-stone-900">Identity</h1>
         <p className="mt-2 max-w-2xl text-sm text-stone-600">
-          Adjudicate borderline matches and read the identity-model report
+          Review borderline matches and read the identity-model report
           showing how confident Bloom is across the cohort.
         </p>
       </div>

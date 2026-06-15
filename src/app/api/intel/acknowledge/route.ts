@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 
 /**
@@ -25,6 +26,9 @@ const MAX_SUPPRESS_DAYS = 365
 const MAX_NOTE_LEN = 500
 
 export async function POST(req: NextRequest) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   if (!auth.venueId || !auth.userId) {
@@ -76,6 +80,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   if (!auth.venueId) return NextResponse.json({ error: 'Venue not resolved' }, { status: 400 })
@@ -102,6 +109,9 @@ export async function DELETE(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   if (!auth.venueId) return NextResponse.json({ error: 'Venue not resolved' }, { status: 400 })

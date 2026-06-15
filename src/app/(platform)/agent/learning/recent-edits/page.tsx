@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { BookOpen, Check, AlertCircle, ChevronRight } from 'lucide-react'
 
 interface Insight {
@@ -79,6 +80,7 @@ export default function RecentLearningsPage() {
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [filter, setFilter] = useState<string>('')
+  const aiName = useAiName()
 
   useEffect(() => {
     const fetchInsights = async () => {
@@ -122,7 +124,7 @@ export default function RecentLearningsPage() {
           </h1>
         </div>
         <p className="text-sage-600">
-          Every time you edit a draft, Sage extracts what it learned and where the lesson landed. Audit the history here. Click any item to see the verbatim excerpts.
+          Every time you edit a draft, {aiName} extracts what it learned and where the lesson landed. Audit the history here. Click any item to see the verbatim excerpts.
         </p>
       </div>
 
@@ -166,7 +168,7 @@ export default function RecentLearningsPage() {
             No learnings yet
           </h3>
           <p className="text-sm text-sage-600 max-w-md mx-auto">
-            When you edit a Sage draft, the platform extracts what changed and saves the learning. Approve an edited draft to start the loop.
+            When you edit a {aiName} draft, the platform extracts what changed and saves the learning. Approve an edited draft to start the loop.
           </p>
         </div>
       ) : (
@@ -229,7 +231,7 @@ export default function RecentLearningsPage() {
                   <div className="px-5 pb-5 pt-1 border-t border-border bg-warm-white space-y-3">
                     {ins.sage_text && (
                       <div>
-                        <p className="text-xs font-medium text-sage-500 mb-1">Sage wrote</p>
+                        <p className="text-xs font-medium text-sage-500 mb-1">{aiName} wrote</p>
                         <p className="text-sm text-sage-700 italic whitespace-pre-wrap leading-relaxed">
                           {ins.sage_text}
                         </p>

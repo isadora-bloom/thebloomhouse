@@ -179,7 +179,7 @@ export function DiscoveriesPanel() {
                     {humaniseCategory(d.hypothesis_category)}
                   </span>
                   <span className="text-[10px] text-sage-400">
-                    {relativeTime(d.created_at)}
+                    {relativeTime(d.created_at)}{/* created-at-ok: discovery time IS the event */}
                   </span>
                 </div>
               </Link>

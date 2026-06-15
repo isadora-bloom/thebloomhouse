@@ -702,9 +702,9 @@ export default function CoupleDetailPage() {
       )}
 
       <p className="mt-8 text-xs text-stone-400">
-        Identity reconstruction is continuous. The Phase B Tracer
-        rebuilds nightly, and the Phase C Forwards Linker writes new
-        touchpoints in shadow mode the moment they arrive.
+        Identity matching runs continuously. The identity engine rebuilds
+        this picture nightly and links new signals in shadow mode the
+        moment they arrive.
       </p>
 
 

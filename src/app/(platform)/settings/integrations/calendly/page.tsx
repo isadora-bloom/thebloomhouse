@@ -42,10 +42,15 @@ export default async function CalendlyIntegrationPage() {
   const supabase = createServiceClient()
   const { data } = await supabase
     .from('venue_ai_config')
-    .select('tour_booking_links')
+    .select('tour_booking_links, ai_name')
     .eq('venue_id', auth.venueId)
     .maybeSingle()
 
+  const aiName =
+    (data as { ai_name?: unknown } | null)?.ai_name &&
+    typeof (data as { ai_name?: unknown }).ai_name === 'string'
+      ? ((data as { ai_name: string }).ai_name)
+      : 'your AI assistant'
   const rawLinks = (data as { tour_booking_links?: unknown } | null)?.tour_booking_links
   const links: TourLink[] = Array.isArray(rawLinks)
     ? rawLinks
@@ -110,7 +115,7 @@ export default async function CalendlyIntegrationPage() {
           )}
         </div>
         <p className="text-xs text-sage-600">
-          Tour booking links are edited at Sage Identity. Sage offers the
+          Tour booking links are edited at Sage Identity. {aiName} offers the
           default link by default when a couple asks for a tour.
         </p>
         <div>
@@ -162,7 +167,7 @@ export default async function CalendlyIntegrationPage() {
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-sage-800">Other booking links</h2>
           <p className="text-xs text-sage-500">
-            Non-Calendly links Sage may also offer (e.g. HoneyBook scheduler,
+            Non-Calendly links {aiName} may also offer (e.g. HoneyBook scheduler,
             direct email-for-tour). They don&apos;t flow through the Calendly
             webhook.
           </p>

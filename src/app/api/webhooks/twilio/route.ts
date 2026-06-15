@@ -272,6 +272,7 @@ export async function POST(request: NextRequest) {
   const authorClass = direction === 'outbound' ? 'operator' : 'couple'
 
   const timestampIso = new Date().toISOString()
+  // html-stripped-justified: Twilio SMS body is plain text, not HTML
   const { data: interaction, error: interactionErr } = await supabase
     .from('interactions')
     .insert({

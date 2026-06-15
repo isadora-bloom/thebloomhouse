@@ -198,7 +198,7 @@ async function notifyReconstruction(
         .select('id', { count: 'exact', head: true })
         .eq('venue_id', venueId)
         .eq('type', 'identity_reconstruction_started')
-        .gte('created_at', twentyMinAgo)
+        .gte('created_at', twentyMinAgo) // created-at-ok: recent-notifications dedup window; notification creation time
       if ((count ?? 0) > 0) return
       await createNotification({
         venueId,

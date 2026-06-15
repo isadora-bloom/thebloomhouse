@@ -54,7 +54,9 @@ export async function loadCohortData(
       )
       .eq('venue_id', venueId)
       .order('created_at', { ascending: true })
-    if (since) q = q.gte('created_at', since)
+    // Window on last activity (last_progression_at, set from signal time at
+    // mint) — not created_at, which the Phase-2 reimport stamps to now().
+    if (since) q = q.gte('last_progression_at', since)
     return q
   })
 

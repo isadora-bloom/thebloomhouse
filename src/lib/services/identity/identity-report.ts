@@ -474,14 +474,16 @@ async function loadCompleteness(
 ): Promise<IdentityReportCompleteness> {
   const cutoff = new Date(Date.now() - COMPLETENESS_WINDOW_DAYS * 86400_000).toISOString()
 
-  // Engaged couples that arrived in the window. channel_scoped + agent
-  // sit outside the doctrine engaged set.
+  // Engaged couples active in the window. channel_scoped + agent sit
+  // outside the doctrine engaged set. Window on last_progression_at (set
+  // from signal time at mint), not created_at — the Phase-2 reimport stamps
+  // created_at to now(), which would make this window return every couple.
   const { data: couples } = await supabase
     .from('couples')
     .select('id, wedding_date, primary_contact_email, created_at')
     .eq('venue_id', venueId)
     .in('lifecycle_state', ['resolved', 'booked', 'ghost'])
-    .gte('created_at', cutoff)
+    .gte('last_progression_at', cutoff)
     .limit(10000)
 
   const coupleRows = (couples ?? []) as CompletenessSnapshotCouple[]

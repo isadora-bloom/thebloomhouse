@@ -180,7 +180,7 @@ async function findExistingLlmProposalByTitle(
     .from('cultural_moments')
     .select('id, title, evidence, status, start_at')
     .neq('status', 'dismissed')
-    .gte('created_at', new Date(Date.now() - 60 * DAY_MS).toISOString())
+    .gte('created_at', new Date(Date.now() - 60 * DAY_MS).toISOString()) // created-at-ok: dedup on proposal recency; created_at IS the proposal time
     .limit(200)
   if (!data) return null
   for (const row of data as Array<{
@@ -225,7 +225,7 @@ async function getRecentVenueTitles(
       .from('cultural_moments')
       .select('title')
       .eq('status', 'proposed')
-      .gte('created_at', sinceIso)
+      .gte('created_at', sinceIso) // created-at-ok: dedup on proposal recency; created_at IS the proposal time
       .limit(50),
   ])
   const titles = new Set<string>()

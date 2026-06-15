@@ -28,6 +28,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   Sparkles,
   Quote,
@@ -539,6 +540,7 @@ function HistoryRow({ derivation }: { derivation: Derivation }) {
 // ---------------------------------------------------------------------------
 
 export function VoiceDNAPanel({ venueId }: { venueId: string | null | undefined }) {
+  const aiName = useAiName()
   const [derivations, setDerivations] = useState<Derivation[]>([])
   const [loading, setLoading] = useState(true)
   const [deriving, setDeriving] = useState(false)
@@ -618,7 +620,7 @@ export function VoiceDNAPanel({ venueId }: { venueId: string | null | undefined 
             <p className="text-sm text-sage-600 mt-1 max-w-2xl">
               Instead of typing every banned phrase, approved phrase, tone and
               principle, let Bloom infer your voice from emails you&apos;ve already
-              sent + edits you&apos;ve already made to Sage drafts. Each derived item
+              sent + edits you&apos;ve already made to {aiName} drafts. Each derived item
               comes with a verbatim evidence quote, so you can audit before
               accepting.
             </p>
@@ -669,7 +671,7 @@ export function VoiceDNAPanel({ venueId }: { venueId: string | null | undefined 
           </h3>
           <p className="text-sm text-sage-600 max-w-md mx-auto">
             Hit &ldquo;Derive my voice&rdquo; above. Bloom will analyse your recent
-            coordinator emails + Sage draft edits and propose four buckets of
+            coordinator emails + {aiName} draft edits and propose four buckets of
             voice DNA (banned, approved, tone, principles) for you to review.
           </p>
         </div>

@@ -49,6 +49,9 @@ export async function POST(request: NextRequest) {
     const { body: bodyWithDisclosure, disclosureVersion } =
       appendAIDisclosureWithVersion(body, disclosureCtx, null)
 
+    // disclosure-justified: body wrapped via appendAIDisclosureWithVersion (the
+    //   migration-300 idempotency-aware chokepoint) immediately above; guard regex
+    //   only recognises the bare appendAIDisclosure() sibling.
     const sentMessageId = await sendEmail(
       auth.venueId,
       to,

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { FONT_PAIRS, getFontUrl } from '@/config/fonts'
 import { useScope, useScopeMutator, type Scope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   Settings, Palette, Type, Save, Eye, Building2, User, Clock, DollarSign,
   Layers, ArrowRight, Plus, Trash2, Image as ImageIcon, X, Plug,
@@ -308,6 +309,7 @@ export default function SettingsPage() {
 /* Venue Settings — existing editor, now scoped by scope.venueId        */
 /* ================================================================== */
 function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
+  const aiName = useAiName()
   const [config, setConfig] = useState<VenueConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -1017,9 +1019,9 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
                     className="mt-0.5 accent-sage-500"
                   />
                   <div>
-                    <div className="text-sm font-medium text-sage-800">Sage may auto-attach</div>
+                    <div className="text-sm font-medium text-sage-800">{aiName} may auto-attach</div>
                     <div className="text-xs text-sage-500">
-                      Lets Sage pick this when replying to emails about a matching topic.
+                      Lets {aiName} pick this when replying to emails about a matching topic.
                     </div>
                   </div>
                 </label>
@@ -1073,7 +1075,7 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
             <div className="p-4 border border-dashed border-sage-300 rounded-xl text-center bg-warm-white">
               <ImageIcon className="w-6 h-6 text-sage-300 mx-auto mb-2" />
               <p className="text-sm text-sage-500">No brand assets yet.</p>
-              <p className="text-xs text-sage-400 mt-1">Add ceremony, tent, and reception photos for Sage to use, plus floor plans and watercolors for your couples to download.</p>
+              <p className="text-xs text-sage-400 mt-1">Add ceremony, tent, and reception photos for {aiName} to use, plus floor plans and watercolors for your couples to download.</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -1120,8 +1122,8 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
                           </span>
                         )}
                         {asset.sage_eligible && (
-                          <span className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700" title="Sage may auto-attach this">
-                            Sage
+                          <span className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700" title={`${aiName} may auto-attach this`}>
+                            {aiName}
                           </span>
                         )}
                         {asset.couple_facing && (
@@ -1257,10 +1259,10 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
           />
           <div className="flex-1">
             <div className="text-sm font-medium text-sage-900">
-              Sage may auto-attach photos to email replies
+              {aiName} may auto-attach photos to email replies
             </div>
             <p className="text-xs text-sage-600 mt-1 leading-relaxed">
-              When on, Sage picks 0 to 2 photos from your brand-assets library that match the email content. Mark photos as Sage-eligible on the brand-assets section to include them.
+              When on, {aiName} picks 0 to 2 photos from your brand-assets library that match the email content. Mark photos as {aiName}-eligible on the brand-assets section to include them.
             </p>
           </div>
         </label>

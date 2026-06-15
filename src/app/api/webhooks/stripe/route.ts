@@ -190,6 +190,8 @@ async function sendPaymentAlertEmail(opts: {
   }
   try {
     const html = `<p>${body.replace(/\n/g, '<br>')}</p>`
+    // disclosure-justified: system billing email (payment-issue alert) to the
+    //   venue owner via the transactional sendEmail; not a Sage-authored couple-facing send.
     const result = await sendEmail({ to: ownerEmail, subject, html, text: body })
     if (!result.ok) {
       console.warn(`[webhook/stripe] sendPaymentAlertEmail failed for venue ${venueId}:`, result.error)

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   TrendingUp,
   TrendingDown,
@@ -74,6 +75,7 @@ export function InsightPanel({ title, insights, className = '', ackKind }: Insig
   // Acknowledged keys for this surface. Empty until first fetch resolves.
   // Local state so a fresh dismiss removes the row immediately without a
   // network round-trip.
+  const aiName = useAiName()
   const [ackedKeys, setAckedKeys] = useState<Set<string>>(new Set())
   const [acksLoaded, setAcksLoaded] = useState(false)
 
@@ -154,7 +156,7 @@ export function InsightPanel({ title, insights, className = '', ackKind }: Insig
                         pathname: '/intel/nlq',
                         query: { prompt: `Tell me more about this: ${item.text}` },
                       }}
-                      title="Ask Sage about this"
+                      title={`Ask ${aiName} about this`}
                       className="p-1.5 rounded-md text-sage-400 hover:text-sage-700 hover:bg-sage-50 shrink-0"
                     >
                       <Sparkles className="w-4 h-4" />

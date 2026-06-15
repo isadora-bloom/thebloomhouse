@@ -27,6 +27,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   Sparkles,
   TrendingUp,
@@ -178,6 +179,7 @@ function offeredIcon(offered: ServiceDemandEntry['currently_offered']) {
 // ---------------------------------------------------------------------------
 
 export function ThemesTab() {
+  const aiName = useAiName()
   const [data, setData] = useState<PageResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -460,7 +462,7 @@ export function ThemesTab() {
             Voice that lands
           </h2>
           <span className="text-xs text-sage-500 ml-auto">
-            per persona · feeds Sage drafts once enough samples land
+            per persona · feeds {aiName} drafts once enough samples land
           </span>
         </div>
         {rollup.voice_calibration.length === 0 ? (

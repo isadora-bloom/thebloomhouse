@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 import { batchExtractReviews } from '@/lib/services/intel/review-language'
 
@@ -21,6 +22,9 @@ export const maxDuration = 300
  *   set with mode='venue-empty-only'.
  */
 export async function POST(req: NextRequest) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) {

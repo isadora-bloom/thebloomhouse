@@ -28,6 +28,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   AlertCircle,
   Check,
@@ -443,6 +444,7 @@ function PartnerEvidenceBlock({
 // ---------------------------------------------------------------------------
 
 export function NameEvidencePanel({ weddingId }: { weddingId: string }) {
+  const aiName = useAiName()
   const [data, setData] = useState<ApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -517,7 +519,7 @@ export function NameEvidencePanel({ weddingId }: { weddingId: string }) {
         </div>
         {data?.partnerCount === 1 && (
           <span
-            title="Phantom-partner detector flagged this couple as a single decision-maker. Sage prompts will use a singular salutation."
+            title={`Phantom-partner detector flagged this couple as a single decision-maker. ${aiName} prompts will use a singular salutation.`}
             className="text-[10px] uppercase tracking-wide font-medium text-sage-700 bg-sage-50 border border-sage-200 px-1.5 py-0.5 rounded"
           >
             Single decision-maker

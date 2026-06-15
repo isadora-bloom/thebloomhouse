@@ -8,6 +8,7 @@ import {
   notFound,
   assertCanAccessVenue,
 } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**
  * PATCH /api/intel/pricing-history/[id]
@@ -25,6 +26,9 @@ import {
  * Body: { notes: string | null }. Anything else in the body is ignored.
  */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) return forbidden('Editing notes is unavailable in demo mode')

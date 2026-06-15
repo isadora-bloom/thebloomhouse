@@ -525,7 +525,7 @@ export default function MarketingSpendPage() {
           onChange={(e) => setCsvText(e.target.value)}
           className="mt-3 w-full rounded-md border border-[var(--bh-line)] bg-white p-3 font-mono text-xs"
           placeholder={
-            'channel,date,amount,campaign\ngoogle_ads,2026-05-01,42.50,Spring Tour Push\nmeta_ads,2026-05-01,18.00,Sage Reels'
+            'channel,date,amount,campaign\ngoogle_ads,2026-05-01,42.50,Spring Tour Push\nmeta_ads,2026-05-01,18.00,Spring Reels'
           }
         />
         <div className="mt-3 flex items-center gap-3">

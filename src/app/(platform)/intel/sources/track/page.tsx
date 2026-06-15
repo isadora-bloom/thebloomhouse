@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import Link from 'next/link'
 import {
   Sparkles,
@@ -62,6 +63,7 @@ interface FreshnessApiResponse {
 }
 
 export default function SourcesTrackPage() {
+  const aiName = useAiName()
   const [tracked, setTracked] = useState<TrackedRow[]>([])
   const [reports, setReports] = useState<FreshnessReport[]>([])
   const [loading, setLoading] = useState(true)
@@ -222,7 +224,7 @@ export default function SourcesTrackPage() {
             </h1>
             <p className="text-sage-600 max-w-3xl">
               Pick the platforms where your venue spends money or earns referrals.
-              Sage will remind you to upload fresh data every month so the source
+              {aiName} will remind you to upload fresh data every month so the source
               scorecard stays honest. Each source has a short import guide so the
               coordinator knows where to find the numbers.
             </p>
@@ -311,7 +313,7 @@ export default function SourcesTrackPage() {
 
       <div className="text-xs text-sage-500 pt-6 border-t border-border">
         Want a source that is not in the registry? Drop it into the brain dump
-        with the spend or count and Sage will start tracking it. The curated list
+        with the spend or count and {aiName} will start tracking it. The curated list
         only shows our recommended starting set.
       </div>
     </div>

@@ -43,21 +43,24 @@ function mockSupabase(tables: Record<string, Record<string, unknown>[]>) {
 async function main() {
   const VENUE = 'v1'
   const sb = mockSupabase({
+    // Window membership is keyed on last_progression_at (real activity time,
+    // set from signal time at mint) — created_at is reset to now() by the
+    // Phase-2 reimport, so the reader windows on last_progression_at instead.
     couples: [
       // complete: email + a touchpoint, in window
-      { id: 'A', venue_id: VENUE, primary_contact_email: 'a@x.com', primary_contact_phone: null, created_at: daysAgo(10), merged_into_id: null },
+      { id: 'A', venue_id: VENUE, primary_contact_email: 'a@x.com', primary_contact_phone: null, last_progression_at: daysAgo(10), created_at: daysAgo(10), merged_into_id: null },
       // complete: phone + touchpoint
-      { id: 'B', venue_id: VENUE, primary_contact_email: null, primary_contact_phone: '+15551234567', created_at: daysAgo(20), merged_into_id: null },
+      { id: 'B', venue_id: VENUE, primary_contact_email: null, primary_contact_phone: '+15551234567', last_progression_at: daysAgo(20), created_at: daysAgo(20), merged_into_id: null },
       // partial: reachable but NO touchpoint
-      { id: 'C', venue_id: VENUE, primary_contact_email: 'c@x.com', primary_contact_phone: null, created_at: daysAgo(5), merged_into_id: null },
+      { id: 'C', venue_id: VENUE, primary_contact_email: 'c@x.com', primary_contact_phone: null, last_progression_at: daysAgo(5), created_at: daysAgo(5), merged_into_id: null },
       // partial: touchpoint but NO reachable identifier
-      { id: 'D', venue_id: VENUE, primary_contact_email: null, primary_contact_phone: null, created_at: daysAgo(5), merged_into_id: null },
+      { id: 'D', venue_id: VENUE, primary_contact_email: null, primary_contact_phone: null, last_progression_at: daysAgo(5), created_at: daysAgo(5), merged_into_id: null },
       // out of window (older than 90d) → excluded
-      { id: 'E', venue_id: VENUE, primary_contact_email: 'e@x.com', primary_contact_phone: null, created_at: daysAgo(120), merged_into_id: null },
+      { id: 'E', venue_id: VENUE, primary_contact_email: 'e@x.com', primary_contact_phone: null, last_progression_at: daysAgo(120), created_at: daysAgo(120), merged_into_id: null },
       // other venue → excluded
-      { id: 'F', venue_id: 'other', primary_contact_email: 'f@x.com', primary_contact_phone: null, created_at: daysAgo(5), merged_into_id: null },
+      { id: 'F', venue_id: 'other', primary_contact_email: 'f@x.com', primary_contact_phone: null, last_progression_at: daysAgo(5), created_at: daysAgo(5), merged_into_id: null },
       // merged → excluded
-      { id: 'G', venue_id: VENUE, primary_contact_email: 'g@x.com', primary_contact_phone: null, created_at: daysAgo(5), merged_into_id: 'A' },
+      { id: 'G', venue_id: VENUE, primary_contact_email: 'g@x.com', primary_contact_phone: null, last_progression_at: daysAgo(5), created_at: daysAgo(5), merged_into_id: 'A' },
     ],
     touchpoints: [
       { couple_id: 'A', venue_id: VENUE, occurred_at: daysAgo(9) },

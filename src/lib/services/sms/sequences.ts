@@ -176,7 +176,7 @@ async function findNoReplyCandidates(
       .eq('venue_id', seq.venue_id)
       .eq('to_phone', r.from_email)
       .eq('sequence_type', 'sms_no_reply')
-      .gte('created_at', cutoffIso)
+      .gte('created_at', cutoffIso) // created-at-ok: pending_sms_drafts queue window (enqueue time)
     if ((priorCount ?? 0) > 0) continue
 
     candidates.push({
@@ -257,7 +257,7 @@ async function findTourReminderCandidates(
       .eq('venue_id', seq.venue_id)
       .eq('to_phone', phoneRow.phone)
       .eq('sequence_type', 'sms_tour_reminder')
-      .gte('created_at', lowerIso)
+      .gte('created_at', lowerIso) // created-at-ok: pending_sms_drafts queue window (enqueue time)
     if ((priorCount ?? 0) > 0) continue
 
     candidates.push({

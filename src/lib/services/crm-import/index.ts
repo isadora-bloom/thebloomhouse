@@ -1088,6 +1088,7 @@ export async function commitNormalisedRows(args: {
         try {
           const minted = await mintWedding({
             venueId,
+            // adapter-source-justified: factual provenance label for mintWedding telemetry/source_provenance (where the row came from), not an attribution decision on weddings.source.
             source: 'crm_import',
             reason: `crm_import:${crmSource}`,
             supabase,
@@ -1196,6 +1197,7 @@ export async function commitNormalisedRows(args: {
             partner2Name: [row.partner2_first_name, row.partner2_last_name]
               .filter(Boolean).join(' ') || null,
           },
+          // adapter-source-justified: factual provenance label for mintPerson (where the person clue came from), not a weddings.source attribution write.
           source: 'crm_import',
           reason: `crm_import:${crmSource}:partner1`,
           supabase,
@@ -1243,6 +1245,7 @@ export async function commitNormalisedRows(args: {
                     first: fromEmail.first,
                     last: fromEmail.last,
                     email: row.partner1_email,
+                    // adapter-source-justified: captureNameEvidence provenance (which clue derived the name), not a weddings.source attribution write.
                     source: 'email_handle_parse',
                   })
                 }
@@ -1324,6 +1327,7 @@ export async function commitNormalisedRows(args: {
                   .filter(Boolean).join(' ') || null,
                 partner2Name: partner2FullName,
               },
+              // adapter-source-justified: factual provenance label for mintPerson (where the person clue came from), not a weddings.source attribution write.
               source: 'crm_import',
               reason: `crm_import:${crmSource}:partner2`,
               supabase,
@@ -1391,6 +1395,7 @@ export async function commitNormalisedRows(args: {
                       first: fromEmail.first,
                       last: fromEmail.last,
                       email: row.partner2_email,
+                      // adapter-source-justified: captureNameEvidence provenance (which clue derived the name), not a weddings.source attribution write.
                       source: 'email_handle_parse',
                     })
                   }
@@ -1913,6 +1918,7 @@ export async function commitNormalisedRows(args: {
         supabase,
         venueId,
         signals: sorted,
+        // adapter-source-justified: factual provenance label for the shared linkSignalBatch commit helper (per-signal origin), not a weddings.source attribution write.
         source: `crm_import:${crmSource}`,
         judgeBudget: budget,
       })

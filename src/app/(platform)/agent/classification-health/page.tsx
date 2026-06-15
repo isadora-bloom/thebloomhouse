@@ -27,6 +27,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import {
   Activity,
@@ -169,6 +170,7 @@ function classificationColor(c: string): string {
 
 export default function ClassificationHealthPage() {
   const scope = useScope()
+  const aiName = useAiName()
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
@@ -571,7 +573,7 @@ export default function ClassificationHealthPage() {
           Classification health
         </h1>
         <p className="text-sm text-sage-500 mt-1">
-          Verifies Sage is reading and classifying every inbound email. If
+          Verifies {aiName} is reading and classifying every inbound email. If
           the daily bars stop matching or the unclassified list grows, the
           pipeline is dropping work.
         </p>

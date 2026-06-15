@@ -66,7 +66,7 @@ export async function detectBulkReadAnomalies(): Promise<BulkReadAnomalyResult> 
   const { data: rows, error } = await supabase
     .from('activity_log')
     .select('venue_id, user_id, activity_type, details, created_at')
-    .gte('created_at', dailyCutoff)
+    .gte('created_at', dailyCutoff) // created-at-ok: activity_log action-time scan; created_at IS the action time
     .or(
       TIER_1_READ_PREFIXES.map((p) => `activity_type.like.${p}*`).join(','),
     )

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -1298,6 +1299,7 @@ function RejectDraftModal({
 
 export default function InboxPage() {
   const scope = useScope()
+  const aiName = useAiName()
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialSearchQuery = searchParams?.get('q') ?? ''
@@ -2092,7 +2094,7 @@ export default function InboxPage() {
   // coordinator can click again to process the next batch.
   const handleReclass = async () => {
     setReclassing(true)
-    setReclassStatus('Sage is reading 500 emails... this takes ~2 minutes.')
+    setReclassStatus(`${aiName} is reading 500 emails... this takes ~2 minutes.`)
     try {
       const res = await fetch('/api/admin/reclass-folders-ai', {
         method: 'POST',
@@ -2127,7 +2129,7 @@ export default function InboxPage() {
           : ''
       const summary =
         data.updated === 0
-          ? `Sage scanned ${data.scanned} email${data.scanned === 1 ? '' : 's'}, no high-confidence matches.${promotedSuffix}`
+          ? `${aiName} scanned ${data.scanned} email${data.scanned === 1 ? '' : 's'}, no high-confidence matches.${promotedSuffix}`
           : `Moved ${moved.join(', ')}.${promotedSuffix}`
       setReclassStatus(summary)
       await fetchInteractions()
@@ -2340,7 +2342,7 @@ export default function InboxPage() {
           <button
             onClick={handleReclass}
             disabled={reclassing}
-            title="Have Sage read each Other-folder email and bucket it correctly"
+            title={`Have ${aiName} read each Other-folder email and bucket it correctly`}
             className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Sparkles className={`w-4 h-4 ${reclassing ? 'animate-pulse' : ''}`} />
@@ -2362,8 +2364,8 @@ export default function InboxPage() {
               }
             }}
             title={showOutbound
-              ? "Hide your outbound replies and Sage's nurture sequence"
-              : "Show your outbound replies and Sage's nurture sequence inline"}
+              ? `Hide your outbound replies and ${aiName}'s nurture sequence`
+              : `Show your outbound replies and ${aiName}'s nurture sequence inline`}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors border ${
               showOutbound
                 ? 'bg-sage-100 text-sage-800 border-sage-300'

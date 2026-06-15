@@ -104,7 +104,7 @@ async function threadCapExceeded(
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)
     .eq('to_phone', phone)
-    .gte('created_at', cutoff)
+    .gte('created_at', cutoff) // created-at-ok: pending_sms_drafts queue age (enqueue time)
     .neq('status', 'rejected')
     .neq('status', 'expired')
   return (count ?? 0) >= cap
@@ -126,7 +126,7 @@ async function dailyCapExceeded(
     .from('pending_sms_drafts')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)
-    .gte('created_at', cutoff)
+    .gte('created_at', cutoff) // created-at-ok: pending_sms_drafts queue age (enqueue time)
     .neq('status', 'rejected')
     .neq('status', 'expired')
   return (count ?? 0) >= cap

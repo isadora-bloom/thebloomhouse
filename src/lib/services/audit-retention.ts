@@ -44,7 +44,7 @@ export async function runAuditRetentionPrune(): Promise<AuditRetentionResult> {
     const { data, error } = await supabase
       .from('activity_log')
       .delete()
-      .lt('created_at', cutoff)
+      .lt('created_at', cutoff) // created-at-ok: retention DELETE cutoff; activity_log.created_at IS the row write time
       .select('id')
     if (error) errors.push(`activity_log: ${error.message}`)
     deleted = (data ?? []).length

@@ -91,6 +91,15 @@ export default async function IntegrationsHubPage() {
   if (!auth) redirect('/login?redirect=/settings/integrations')
 
   const supabase = createServiceClient()
+  const { data: aiCfg } = await supabase
+    .from('venue_ai_config')
+    .select('ai_name')
+    .eq('venue_id', auth.venueId)
+    .maybeSingle()
+  const aiName =
+    typeof (aiCfg as { ai_name?: unknown } | null)?.ai_name === 'string'
+      ? (aiCfg as { ai_name: string }).ai_name
+      : 'your AI assistant'
   // Fan out every adapter's status check in parallel so the page
   // doesn't serially block on slow ones. Individual failures fall back
   // to a default-disconnected status so one broken table doesn't
@@ -131,7 +140,7 @@ export default async function IntegrationsHubPage() {
           <h1 className="text-2xl font-serif text-sage-900">Integrations</h1>
           <p className="text-sm text-sage-600 mt-1 max-w-2xl">
             Everywhere your couples and vendors reach you, connected to
-            Sage&apos;s forensic record. Pick the provider you already use;
+            {aiName}&apos;s forensic record. Pick the provider you already use;
             ask for the one you wish was on this list.
           </p>
         </div>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { Activity, AlertTriangle, Bot, Hand, Webhook, Clock, Loader2 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -89,6 +90,7 @@ function prettyStatus(s: string | null): string {
 }
 
 export function LifecycleHistory({ weddingId, venueId }: Props) {
+  const aiName = useAiName()
   const [rows, setRows] = useState<EventRow[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -122,7 +124,7 @@ export function LifecycleHistory({ weddingId, venueId }: Props) {
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-sage-200 bg-warm-white p-6 text-sm text-sage-600">
-        No lifecycle events recorded yet. Transitions appear here as Sage detects
+        No lifecycle events recorded yet. Transitions appear here as {aiName} detects
         decline / booking / tour signals on this thread, or when a coordinator marks
         the wedding as booked / lost manually.
       </div>

@@ -219,6 +219,7 @@ export async function rebindMirrorBackfilledCouples(
     const { error: upsertErr, count } = await supabase
       .from('touchpoints')
       .upsert(rows, {
+        // onConflict-skip-check: matches table-level UNIQUE (venue_id, channel, external_id) on touchpoints in migration 346 (line 209); guard's CREATE TABLE parser misses it because inline -- comments precede the UNIQUE clause in the table body.
         onConflict: 'venue_id,channel,external_id',
         ignoreDuplicates: true,
         count: 'exact',

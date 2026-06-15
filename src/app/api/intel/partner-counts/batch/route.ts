@@ -21,12 +21,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { redact } from '@/lib/observability/redact'
 
 const MAX_BATCH = 200
 const UUID_RE = /^[0-9a-f-]{36}$/i
 
 export async function POST(request: NextRequest) {
+  const plan = await requirePlan(request, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   let body: { weddingIds?: unknown }
   try {
     body = (await request.json()) as { weddingIds?: unknown }

@@ -100,6 +100,8 @@ export async function POST(request: NextRequest) {
     // FROM the couple. Fire-and-forget — a mirror failure must NOT block
     // the message send (the messages row is the source of truth for the
     // couple-side thread).
+    // signal-class-justified: portal_chat message is a couple->coordinator touchpoint
+    // html-stripped-justified: `trimmed` is plain text typed by the couple, not HTML
     void supabase
       .from('interactions')
       .insert({
@@ -110,6 +112,7 @@ export async function POST(request: NextRequest) {
         subject: 'Message from couple',
         body_preview: trimmed.length > 240 ? trimmed.slice(0, 240) + '…' : trimmed,
         full_body: trimmed,
+        signal_class: 'touchpoint',
         // No gmail_message_id / gmail_thread_id — portal_chat lives outside Gmail.
       })
       .then(({ error: mirrorErr }) => {

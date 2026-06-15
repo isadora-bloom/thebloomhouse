@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   AlertCircle,
   Loader2,
@@ -66,6 +67,7 @@ interface BuildResponse {
 }
 
 export default function MarketingDigestPage() {
+  const aiName = useAiName()
   const [latest, setLatest] = useState<LatestRow | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(
@@ -156,7 +158,7 @@ export default function MarketingDigestPage() {
             Weekly marketing digest
           </h1>
           <p className="mt-1 text-sm text-stone-600">
-            Each Monday, Sage narrates the week: top flags, pending
+            Each Monday, {aiName} narrates the week: top flags, pending
             recommendations, week-over-week metric shifts, A/B tests, and
             validated discoveries.
           </p>

@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   Brain,
   Pin,
@@ -153,6 +154,7 @@ function NoteRowItem({
   onPatch: (id: string, action: 'pin' | 'unpin' | 'archive' | 'unarchive') => void
   muted?: boolean
 }) {
+  const aiName = useAiName()
   const cat = n.category ?? 'misc'
   const sensitive = isSensitive(n)
   const soon = expiresSoon(n)
@@ -189,7 +191,7 @@ function NoteRowItem({
             )}
             {sensitive && (
               <span
-                title="Sensitive note. Sage prompts see this in context but the universal rule forbids verbatim quotation."
+                title={`Sensitive note. ${aiName} prompts see this in context but the universal rule forbids verbatim quotation.`}
                 className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-200 text-slate-700 border border-slate-300"
               >
                 <Lock className="w-2.5 h-2.5" /> do not echo
@@ -204,7 +206,7 @@ function NoteRowItem({
               </span>
             )}
             <span className="text-[10px] text-sage-400 ml-auto">
-              {fmtRelative(n.created_at)}
+              {fmtRelative(n.created_at)}{/* created-at-ok: auto-context note generation time IS the event */}
             </span>
           </div>
           <p
@@ -287,6 +289,7 @@ function NoteList({
 }
 
 export function AutoContextPanel({ weddingId }: { weddingId: string }) {
+  const aiName = useAiName()
   const [data, setData] = useState<ApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -395,7 +398,7 @@ export function AutoContextPanel({ weddingId }: { weddingId: string }) {
             </h2>
           </div>
           <p className="text-xs text-sage-500 mt-1">
-            Auto-extracted soft context. Sage uses these for tone and empathy without quoting them
+            Auto-extracted soft context. {aiName} uses these for tone and empathy without quoting them
             verbatim.
           </p>
         </div>
@@ -428,7 +431,7 @@ export function AutoContextPanel({ weddingId }: { weddingId: string }) {
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Anything Sage should know but shouldn't quote — vendor preferences, family context, mood from the last call…"
+          placeholder={`Anything ${aiName} should know but shouldn't quote — vendor preferences, family context, mood from the last call…`}
           rows={2}
           maxLength={1000}
           className="w-full text-sm rounded-lg border border-sage-200 bg-warm-white px-3 py-2 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-400"

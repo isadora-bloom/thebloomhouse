@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -360,6 +361,7 @@ function DraftCard({
   isProcessing: boolean
   showVenueChip: boolean
 }) {
+  const aiName = useAiName()
   const conf = confidenceColor(draft.confidence_score)
   const brain = brainBadge(draft.brain_used)
   const status = statusBadge(draft.status)
@@ -517,7 +519,7 @@ function DraftCard({
             onClick={() => onRegenerate(draft.id)}
             disabled={isProcessing}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Have Sage re-draft this with the current lead state (tour cancellations, fresh prompts, latest context). Overwrites the existing draft body."
+            title={`Have ${aiName} re-draft this with the current lead state (tour cancellations, fresh prompts, latest context). Overwrites the existing draft body.`}
           >
             <RefreshCw className="w-4 h-4" />
             Regenerate

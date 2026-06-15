@@ -61,7 +61,9 @@ export async function loadDataCompleteness(
     .select('id, primary_contact_email, primary_contact_phone')
     .eq('venue_id', venueId)
     .is('merged_into_id', null)
-    .gte('created_at', cutoff)
+    // Recent = active in window (last_progression_at, set from signal time at
+    // mint). created_at is reset to now() by the Phase-2 reimport.
+    .gte('last_progression_at', cutoff)
     .limit(10000)
   const couples = (coupleData ?? []) as CoupleRow[]
   if (couples.length === 0) return empty

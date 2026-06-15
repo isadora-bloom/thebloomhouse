@@ -199,6 +199,7 @@ function formatTourDateGuidance(eventDatetimeIso: string | null): string | null 
 async function loadTourStateLine(
   supabase: ReturnType<typeof createServiceClient>,
   weddingId: string,
+  venueName: string,
 ): Promise<string | null> {
   try {
     const { data: events } = await supabase
@@ -231,7 +232,7 @@ async function loadTourStateLine(
 
     if (latestType === 'tour_completed') {
       const guidance = formatTourDateGuidance(latestEventDt)
-      return '- TOUR STATUS: Already toured Rixey Manor' +
+      return `- TOUR STATUS: Already toured ${venueName}` +
         (guidance ? ` on ${guidance}` : latestRowDate ? ` on ${latestRowDate}` : '') +
         '. Do NOT push the tour CTA or suggest scheduling another tour. Reference the in-person visit naturally.'
     }
@@ -1023,7 +1024,7 @@ export async function generateInquiryDraft(
     // gap.
     try {
       const supabase = createServiceClient()
-      const tourLine = await loadTourStateLine(supabase, weddingId)
+      const tourLine = await loadTourStateLine(supabase, weddingId, venueName)
       if (tourLine) contextBlock += `\n\n## CURRENT TOUR STATE:\n${tourLine}`
     } catch {
       // Tour-state enrichment must NEVER block draft generation.
@@ -1363,7 +1364,7 @@ export async function generateFollowUp(
     // falls through as a backstop when no engagement_events match —
     // covers the legacy in-person-tour case where the event row may
     // pre-date the engagement_events plumbing.
-    const tourLine = await loadTourStateLine(supabase, weddingId)
+    const tourLine = await loadTourStateLine(supabase, weddingId, venueName)
     if (tourLine) {
       contextBlock += `\n${tourLine}`
     } else if (wedding.has_toured_in_person) {

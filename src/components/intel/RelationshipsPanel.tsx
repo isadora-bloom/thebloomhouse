@@ -25,6 +25,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   AlertCircle,
   Archive,
@@ -233,6 +234,7 @@ function AddPersonForm({
 // ---------------------------------------------------------------------------
 
 export function RelationshipsPanel({ weddingId }: { weddingId: string }) {
+  const aiName = useAiName()
   const [rows, setRows] = useState<RelationshipRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -352,7 +354,7 @@ export function RelationshipsPanel({ weddingId }: { weddingId: string }) {
 
       {rows.length === 0 ? (
         <p className="text-sm text-sage-400 italic">
-          No family or planner mentions captured yet — Sage will add them as they appear in
+          No family or planner mentions captured yet — {aiName} will add them as they appear in
           correspondence.
         </p>
       ) : (

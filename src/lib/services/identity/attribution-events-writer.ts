@@ -71,6 +71,9 @@ export async function insertAttributionEventsIdempotent(
     return { data: [], error: null, skipped: filtered.skipped }
   }
 
+  // signal-class-justified: rows are AttributionEventInsertRow and each carries its
+  // own signal_class, set per-row by every caller (candidate-resolver / backtrack
+  // pass signal_class: 'source'); the class is not a column-level constant here.
   const firstAttempt = await supabase
     .from('attribution_events')
     .insert(filtered.rows)
@@ -95,6 +98,7 @@ export async function insertAttributionEventsIdempotent(
   if (retryFiltered.rows.length === 0) {
     return { data: [], error: null, skipped: rows.length }
   }
+  // signal-class-justified: retry rows carry their own per-row signal_class (see above)
   const retryAttempt = await supabase
     .from('attribution_events')
     .insert(retryFiltered.rows)

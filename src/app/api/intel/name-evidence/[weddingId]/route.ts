@@ -35,6 +35,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { logEvent } from '@/lib/observability/logger'
 import { captureNameEvidence } from '@/lib/services/identity/name-capture'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 interface NameEvidenceEntry {
   source?: string
@@ -81,6 +82,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ weddingId: string }> },
 ) {
+  const plan = await requirePlan(_req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (!auth.venueId) return badRequest('caller has no resolved venue')
@@ -178,6 +182,9 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ weddingId: string }> },
 ) {
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (!auth.venueId) return badRequest('caller has no resolved venue')

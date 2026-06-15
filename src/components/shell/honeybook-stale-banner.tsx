@@ -131,7 +131,7 @@ export function HoneybookStaleBanner() {
         <p className="text-sm text-amber-900">
           Your HoneyBook import is{' '}
           <strong>{state.daysSinceImport} days old</strong>. Re-export from
-          HoneyBook and upload to keep Sage in sync.
+          HoneyBook and upload to keep {venueScope.aiName} in sync.
         </p>
         <Link
           href="/onboarding/crm-import"

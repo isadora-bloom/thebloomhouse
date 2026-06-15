@@ -402,6 +402,7 @@ export async function tourCancellationFallback(
         external_id: signal.external_id,
         raw_payload: signal.raw_payload,
       },
+      // onConflict-skip-check: matches table-level UNIQUE (venue_id, channel, external_id) on touchpoints in migration 346 (line 209); guard's CREATE TABLE parser misses it because inline -- comments precede the UNIQUE clause in the table body.
       { onConflict: 'venue_id,channel,external_id', ignoreDuplicates: true },
     )
   if (upsertErr) {

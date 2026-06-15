@@ -74,7 +74,7 @@ export async function runInboundHaikuDrain(): Promise<InboundHaikuDrainResult> {
     .select('id, venue_id, full_body, subject')
     .is('haiku_classified_at', null)
     .eq('direction', 'inbound')
-    .lt('created_at', bufferCutoff)
+    .lt('created_at', bufferCutoff) // created-at-ok: drain buffer on ingestion time (process settled rows)
     .order('created_at', { ascending: true })
     .limit(ROWS_PER_TICK)
 

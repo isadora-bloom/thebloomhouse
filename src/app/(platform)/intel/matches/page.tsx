@@ -461,7 +461,7 @@ export default function IntelMatchesDashboard() {
                                   )}
                                   &ldquo;{visibleQuote(q)}&rdquo;
                                   <span className="text-[10px] text-sage-400 ml-2">
-                                    {q.source}
+                                    {q.source} {/* source-render-ok: EvidenceQuote.source is the candidate-match evidence channel (where the quote came from), not a lead/wedding acquisition source */}
                                   </span>
                                 </li>
                               ))}

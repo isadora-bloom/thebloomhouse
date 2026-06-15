@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import {
   Settings,
@@ -222,6 +223,7 @@ function AutoSendRuleCard({
 
 export default function AgentSettingsPage() {
   const VENUE_ID = useVenueId()
+  const aiName = useAiName()
   const [activeTab, setActiveTab] = useState<TabKey>('auto-send')
   const [rules, setRules] = useState<AutoSendRule[]>([])
   const [syncState, setSyncState] = useState<EmailSyncState | null>(null)
@@ -1293,7 +1295,7 @@ export default function AgentSettingsPage() {
                       setAiConfig({ ...aiConfig, email_signature: e.target.value })
                     }
                     rows={6}
-                    placeholder={'— Sage\nHawthorne Manor\nhello@hawthorne.com'}
+                    placeholder={`— ${aiName}\nHawthorne Manor\nhello@hawthorne.com`}
                     className="w-full rounded-md border border-border px-3 py-2 text-sm font-mono bg-warm-white focus:ring-2 focus:ring-sage-300 focus:border-sage-500 outline-none transition-colors"
                   />
                   <p className="text-xs text-sage-400">

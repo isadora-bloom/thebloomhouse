@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   Star,
   TrendingUp,
@@ -108,6 +109,7 @@ function monthShort(yyyymm: string): string {
 }
 
 export function ReviewsOverviewPanel() {
+  const aiName = useAiName()
   const [rollup, setRollup] = useState<Rollup | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -389,7 +391,7 @@ export function ReviewsOverviewPanel() {
               Solicitations (last 12 months)
             </h3>
             <p className="text-xs text-sage-500 mt-0.5">
-              Couples Sage asked to review you, and where they landed.
+              Couples {aiName} asked to review you, and where they landed.
             </p>
           </div>
           {rollup.solicitations.gap_count > 0 ? (

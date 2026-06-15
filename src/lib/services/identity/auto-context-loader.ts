@@ -361,8 +361,8 @@ export async function aggregateAutoContextThemes(
         .select('body, category, sensitive, pinned, wedding_id, created_at')
         .eq('venue_id', venueId)
         .eq('is_active', true)
-        .gte('created_at', fromIso)
-      if (toIso) q = q.lt('created_at', toIso)
+        .gte('created_at', fromIso) // created-at-ok: wedding_auto_context generation time IS the event
+      if (toIso) q = q.lt('created_at', toIso) // created-at-ok: wedding_auto_context generation time IS the event
       const { data, error } = await q
       if (error) {
         const message = (error as { message?: string }).message ?? ''
@@ -373,8 +373,8 @@ export async function aggregateAutoContextThemes(
             .select('body, category, pinned, wedding_id, created_at')
             .eq('venue_id', venueId)
             .eq('is_active', true)
-            .gte('created_at', fromIso)
-          if (toIso) lq = lq.lt('created_at', toIso)
+            .gte('created_at', fromIso) // created-at-ok: wedding_auto_context generation time IS the event
+          if (toIso) lq = lq.lt('created_at', toIso) // created-at-ok: wedding_auto_context generation time IS the event
           const legacy = await lq
           return ((legacy.data ?? []) as Array<Omit<Row, 'sensitive'>>).map(
             (r) => ({ ...r, sensitive: null }),

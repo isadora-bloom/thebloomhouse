@@ -676,6 +676,7 @@ export async function syncMeetings(
         { subject, body: transcriptForExtract },
         { ownEmails: new Set<string>() },
       )
+      // html-stripped-justified: Zoom transcript text is plain text, not HTML
       const { data: insertedInteraction, error: iError } = await supabase
         .from('interactions')
         .insert({

@@ -423,7 +423,7 @@ function BriefingHistoryItem({ briefing, showVenue }: { briefing: Briefing; show
         <div className="flex items-center gap-3">
           <FileText className="w-4 h-4 text-sage-400 flex-shrink-0" />
           <span className="text-sm font-medium text-sage-900">
-            {formatDate(briefing.created_at)}
+            {formatDate(briefing.created_at)}{/* created-at-ok: briefing generation time IS the event */}
           </span>
           {showVenue && <VenueChip venueName={briefing.venues?.name} />}
           <span

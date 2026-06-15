@@ -193,8 +193,10 @@ async function loadCoordinatorEmails(
     .eq('venue_id', venueId)
     .eq('type', 'email')
     .eq('direction', 'outbound')
-    .gte('created_at', sinceIso)
-    .order('created_at', { ascending: false })
+    // Window/sort on the email's real send time, not created_at — the latter
+    // is reset to now() by the Phase-2 reimport, skewing the recent-voice sample.
+    .gte('timestamp', sinceIso)
+    .order('timestamp', { ascending: false })
     .limit(Math.max(limit * 2, limit + 30))  // over-pull, post-filter
 
   if (error) return []

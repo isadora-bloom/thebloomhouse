@@ -84,7 +84,7 @@ export async function runInboundIntentDrain(): Promise<InboundIntentDrainResult>
     .select('id, venue_id, type, full_body, subject, from_email')
     .is('intent_classified_at', null)
     .eq('direction', 'inbound')
-    .lt('created_at', bufferCutoff)
+    .lt('created_at', bufferCutoff) // created-at-ok: drain buffer on ingestion time (process settled rows)
     .order('created_at', { ascending: true })
     .limit(ROWS_PER_TICK)
 
