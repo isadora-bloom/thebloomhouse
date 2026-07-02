@@ -1003,6 +1003,8 @@ export async function commitNormalisedRows(args: {
         const backfill: Record<string, unknown> = {}
         if (row.booking_value != null) backfill.booking_value = row.booking_value
         if (row.wedding_date) backfill.wedding_date = row.wedding_date
+        if (row.booked_at) backfill.booked_at = row.booked_at
+        if (row.inquiry_date) backfill.inquiry_date = row.inquiry_date
         if (row.guest_count_estimate != null) backfill.guest_count_estimate = row.guest_count_estimate
         // Commercial detail — backfill only when the existing wedding
         // is missing it, so a re-import never clobbers a richer record.
@@ -1013,10 +1015,13 @@ export async function commitNormalisedRows(args: {
         if (row.refunded_amount != null) backfill.refunded_amount = row.refunded_amount
         if (row.package_name) backfill.package_name = row.package_name
 
-        // Read the existing wedding's status + notes in one round trip.
+        // Read the existing wedding's status + notes + dates in one round trip.
         const { data: cur } = await supabase
-          .from('weddings').select('status, notes').eq('id', weddingId).maybeSingle()
+          .from('weddings').select('status, notes, booked_at, inquiry_date').eq('id', weddingId).maybeSingle()
         const existingStatus = (cur?.status as string | null) ?? null
+        // Fill-only for dates already on the wedding (don't clobber a richer record).
+        if (cur?.booked_at) delete backfill.booked_at
+        if (cur?.inquiry_date) delete backfill.inquiry_date
 
         // STATUS UPGRADE. The import row is the venue's own CRM truth.
         // When it carries a more-progressed status than the wedding
@@ -1046,7 +1051,11 @@ export async function commitNormalisedRows(args: {
           backfill.notes = existing ? `${existing}\n\n[crm_import:${crmSource}]\n${row.notes}` : row.notes
         }
         if (Object.keys(backfill).length > 0) {
-          await supabase.from('weddings').update(backfill).eq('id', weddingId)
+          const { error: backfillErr } = await supabase.from('weddings').update(backfill).eq('id', weddingId)
+          if (backfillErr) {
+            console.error('[crm-import] backfill UPDATE failed', { weddingId, keys: Object.keys(backfill), error: backfillErr.message })
+            result.errors.push(`backfill_update_failed:${weddingId}:${backfillErr.message}`)
+          }
         }
         // A status upgrade to a booked/completed state should reflect
         // on the couples graph too — re-mirror so /intel/couples and
@@ -1122,7 +1131,11 @@ export async function commitNormalisedRows(args: {
         delete crmFields.venue_id
         delete crmFields.inquiry_date
         delete crmFields.source_provenance
-        await supabase.from('weddings').update(crmFields).eq('id', weddingId)
+        const { error: crmFieldsErr } = await supabase.from('weddings').update(crmFields).eq('id', weddingId)
+        if (crmFieldsErr) {
+          console.error('[crm-import] crmFields UPDATE failed', { weddingId, error: crmFieldsErr.message })
+          result.errors.push(`crmfields_update_failed:${weddingId}:${crmFieldsErr.message}`)
+        }
       }
 
       // people: insert primary partner if we have any name/email AND the
