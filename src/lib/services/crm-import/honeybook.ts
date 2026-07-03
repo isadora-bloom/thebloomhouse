@@ -217,7 +217,11 @@ const STATUS_MAP: Record<string, WeddingStatus> = {
 }
 
 function mapStatus(raw: string | null | undefined): WeddingStatus {
-  if (!raw) return 'inquiry'
+  // Return null (not 'inquiry') when raw is absent so the caller's
+  // bookingRaw fallback can fire: `mapStatus(x) ?? (bookingRaw ? 'booked' : null)`.
+  // Returning 'inquiry' here short-circuits that ?? and silently imports every
+  // "Booked projects" report row (which has no Status column) as inquiry.
+  if (!raw) return null
   const key = raw.trim().toLowerCase()
   return STATUS_MAP[key] ?? null
 }
