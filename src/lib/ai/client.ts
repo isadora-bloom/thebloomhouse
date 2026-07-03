@@ -21,7 +21,7 @@ let openaiClient: OpenAI | null = null
 // Pre-fix several services stored 'claude-sonnet' or 'claude-sonnet-4',
 // which drifted from the actual model and made post-hoc audits lie —
 // OPS-21.5.2 partial.
-export const CLAUDE_MODEL = 'claude-sonnet-4-20250514'
+export const CLAUDE_MODEL = 'claude-sonnet-4-6'
 // Haiku tier for classification + small-label extraction. Per Playbook
 // 19.8 model-tier guidance: classifications, small-rubric scoring,
 // embedding generation, structured-output extraction with bounded
@@ -33,7 +33,7 @@ export const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 // Opus tier for one-off premium synthesis (voice DNA corpus analysis,
 // cross-domain strategic insight composition). Slow and expensive;
 // reserved for low-volume / high-stakes work.
-export const OPUS_MODEL = 'claude-opus-4-20250514'
+export const OPUS_MODEL = 'claude-opus-4-8'
 export const OPENAI_FALLBACK_MODEL = 'gpt-4o-mini'
 // Complex NLQ/Sage/briefing calls need headroom beyond the default 10s
 const CLAUDE_TIMEOUT_MS = 30_000
