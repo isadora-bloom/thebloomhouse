@@ -108,7 +108,7 @@ function extractGlobalNotes(wb: XLSX.WorkBook, mainSheet: XLSX.WorkSheet): strin
   const ws = wb.Sheets[notesSheetName]
   if (ws === mainSheet) return null
 
-  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, {
     header: 1,
     defval: null,
     blankrows: false,
