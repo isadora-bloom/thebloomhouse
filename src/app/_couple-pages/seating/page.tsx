@@ -38,6 +38,7 @@ import {
   EMPTY_SEATING_CONFIG,
   type VenueSeatingConfig,
 } from '@/lib/services/couple-portal-config'
+import { SeatingImportDialog } from '@/components/couple/seating-import-dialog'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -391,14 +392,17 @@ export default function SeatingChartPage() {
             View your floor plan, manage tables, and assign guests to their seats.
           </p>
         </div>
-        <button
-          onClick={openAddTable}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: 'var(--couple-primary)' }}
-        >
-          <Plus className="w-4 h-4" />
-          Add Table
-        </button>
+        <div className="flex items-center gap-2">
+          <SeatingImportDialog weddingId={weddingId} onComplete={fetchData} />
+          <button
+            onClick={openAddTable}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: 'var(--couple-primary)' }}
+          >
+            <Plus className="w-4 h-4" />
+            Add Table
+          </button>
+        </div>
       </div>
 
       {/* Venue admin notes */}

@@ -43,7 +43,7 @@ export interface ParsedSeatingChart {
 // ---------------------------------------------------------------------------
 
 export async function parseSeatingFile(buffer: Buffer, filename: string): Promise<ParsedSeatingChart> {
-  const ext = filename.split('.').pop()?.toLowerCase()
+  void filename  // used by callers for MIME validation; xlsx.read handles format detection
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
 
   // Find the most data-rich sheet (exclude obvious notes-only sheets)
@@ -419,20 +419,8 @@ export async function commitSeatingChart(opts: CommitOptions): Promise<CommitRes
     }
   }
 
-  // Add global notes to wedding_worksheets if present
-  if (chart.global_notes) {
-    await supabase.from('wedding_worksheets').upsert(
-      {
-        venue_id: venueId,
-        wedding_id: weddingId,
-        title: 'Seating Notes',
-        content: chart.global_notes,
-        category: 'seating',
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'wedding_id,category' },
-    ).select()
-  }
+  // Global notes from the spreadsheet's Notes sheet are shown in the preview
+  // dialog for the couple to read — no separate persistence needed.
 
   return { tablesCreated, guestsCreated, guestsUpdated, allergiesCreated }
 }
