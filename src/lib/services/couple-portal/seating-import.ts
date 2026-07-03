@@ -148,10 +148,9 @@ async function detectColumns(
     )
     .join('\n')
 
-  const result = await callAIJson<ColumnMap>(
-    `You are mapping spreadsheet columns for a wedding seating chart import.
-
-Headers (index: name): ${headerStr}
+  const result = await callAIJson<ColumnMap>({
+    systemPrompt: 'You are mapping spreadsheet columns for a wedding seating chart import. Return only JSON.',
+    userPrompt: `Headers (index: name): ${headerStr}
 
 Sample data rows:
 ${sampleStr}
@@ -167,8 +166,9 @@ Return a JSON object mapping each logical field to its 0-based column index (nul
 - rsvp: RSVP or attendance status
 
 Only return the JSON object, no explanation.`,
-    { promptVersion: 'seating-import-col-detect-v1' },
-  )
+    promptVersion: 'seating-import-col-detect-v1',
+    tier: 'haiku',
+  })
 
   return result ?? {
     table: null, seat: null, name: null, relationship: null,
