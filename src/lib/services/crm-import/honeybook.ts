@@ -114,7 +114,11 @@ import type {
   CommitResult,
   NormalisedLostDealRow,
 } from './index'
-import { commitNormalisedRows } from './index'
+// commitNormalisedRows is intentionally NOT imported here at the top level.
+// honeybook.ts ↔ index.ts are circular: index imports honeybookAdapter;
+// honeybook imports commitNormalisedRows. A top-level import causes a TDZ
+// error under ESM/tsx. Lazy import inside commitHoneybook() below is safe
+// because it's only called at runtime, never at module-init time.
 import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 
@@ -814,6 +818,7 @@ async function commitHoneybook(args: {
   // hear-source interaction parseHoneybook produces (lines 458-477)
   // overrides this to 'source' on a per-row basis when the
   // coordinator-typed "Source" cell maps to a recognised channel.
+  const { commitNormalisedRows } = await import('./index')
   return commitNormalisedRows({
     ...args,
     crmSource: 'honeybook',
