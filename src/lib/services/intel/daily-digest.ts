@@ -250,12 +250,18 @@ export async function generateDigest(
       .eq('direction', 'inbound')
       .gte('occurred_at', since),
 
-    // Active anomaly alerts
+    // Active anomaly alerts. R2 remediation (2026-07-07): this used to
+    // filter on a `resolved` column that anomaly_alerts has never had
+    // (mig 003 defines only `acknowledged`), so PostgREST 42703'd and the
+    // `?? []` downstream swallowed it — the digest's alerts section has
+    // been silently empty since day one. Filtering on acknowledged=false
+    // matches getActiveAlerts + /intel/anomalies, and is what routes the
+    // new ingestion-volume alerts into the operator email.
     supabase
       .from('anomaly_alerts')
       .select('alert_type, metric_name, ai_explanation')
       .eq('venue_id', venueId)
-      .eq('resolved', false),
+      .eq('acknowledged', false),
 
     // Approval stats for last 24 hours (approved, edited, rejected)
     supabase

@@ -9,6 +9,7 @@ import { autoProposeFromTrendSpikes } from '@/lib/services/insights/cultural-mom
 import { autoProposeCulturalMomentsLlmAllVenues } from '@/lib/services/insights/cultural-moments-llm-propose'
 import { archiveExpiredCulturalMoments } from '@/lib/services/external-context/cultural-moments'
 import { runAllVenueAnomalies } from '@/lib/services/intel/anomaly-detection'
+import { runIngestionVolumeMonitorAllVenues } from '@/lib/services/ingestion-volume-monitor'
 import {
   generateWeeklyBriefing,
   generateMonthlyBriefing,
@@ -107,6 +108,14 @@ const VALID_JOBS = [
   // existing per-venue confirm/dismiss flow handles review.
   'cultural_moments_llm_propose',
   'anomaly_detection',
+  // R2 remediation (2026-07-07). Per-channel inbound ingestion-volume
+  // collapse detector — built so the Apr-Jun 2026 Knot regression class
+  // (one channel silently stops ingesting while totals look fine) can
+  // never go unalerted again. Not registered in vercel.json (Pro at the
+  // 40-cron cap); piggybacks on the daily anomaly_detection handler
+  // below, same precedent as sms_sequences on openphone_poll. Kept as a
+  // valid job name for manual runs: curl /api/cron?job=ingestion_volume_monitor
+  'ingestion_volume_monitor',
   'intelligence_analysis',
   'weekly_briefing',
   'weekly_digest',
@@ -573,8 +582,26 @@ async function runJob(
       // venue per run. Cost-ceiling gated per-venue inside the service.
       return autoProposeCulturalMomentsLlmAllVenues(createServiceClient())
 
-    case 'anomaly_detection':
-      return runAllVenueAnomalies()
+    case 'anomaly_detection': {
+      // R2 remediation (2026-07-07): the ingestion-volume monitor rides
+      // the daily 04:00 anomaly tick (vercel.json is at the 40-cron Pro
+      // cap, so no separate entry). Guarded so a monitor failure can't
+      // nuke the metric/availability detection, and vice versa.
+      const metricAnomalies = await runAllVenueAnomalies()
+      let ingestion: unknown = null
+      try {
+        ingestion = await runIngestionVolumeMonitorAllVenues()
+      } catch (err) {
+        console.error('[cron] ingestion_volume_monitor failed:', err)
+        ingestion = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return { metricAnomalies, ingestion }
+    }
+
+    case 'ingestion_volume_monitor':
+      // Manual/standalone runs only — the daily trigger is the
+      // anomaly_detection piggyback above.
+      return runIngestionVolumeMonitorAllVenues()
 
     case 'intelligence_analysis':
       return runAllVenueIntelligence()

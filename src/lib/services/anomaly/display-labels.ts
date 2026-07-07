@@ -103,13 +103,47 @@ export const ANOMALY_LABELS: Record<string, AnomalyDisplay> = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// Per-channel ingestion-volume metrics (R2 remediation, 2026-07-07).
+// metric_name is dynamic — `ingestion_volume_<channel>` from
+// ingestion-volume-monitor.ts — so a prefix rule beats enumerating every
+// channel key here. Channel display names for the ones we know about:
+// ---------------------------------------------------------------------------
+
+const INGESTION_CHANNEL_TITLES: Record<string, string> = {
+  knot: 'The Knot',
+  weddingwire: 'WeddingWire',
+  zola: 'Zola',
+  calendly: 'Calendly',
+  honeybook: 'HoneyBook',
+  direct_email: 'Direct email',
+  sms: 'SMS',
+  call: 'Phone call',
+  meeting: 'Meeting',
+}
+
+function ingestionVolumeDisplay(metricKey: string): AnomalyDisplay | null {
+  const prefix = 'ingestion_volume_'
+  if (!metricKey.startsWith(prefix)) return null
+  const channel = metricKey.slice(prefix.length)
+  const channelTitle = INGESTION_CHANNEL_TITLES[channel] ?? humanize(channel)
+  return {
+    title: `${channelTitle} ingestion volume`,
+    description:
+      `Inbound ${channelTitle} messages have dropped well below this channel's own baseline. ` +
+      'One channel going quiet while others stay normal usually means an ingestion break, not real demand.',
+    cta: { href: '/settings/integrations', label: 'Check integrations' },
+  }
+}
+
 /**
  * Resolve a metric key to display copy. Returns a humanized fallback
  * for keys not yet mapped — readable but no CTA.
  */
 export function getAnomalyDisplay(metricKey: string): AnomalyDisplay {
   return (
-    ANOMALY_LABELS[metricKey] ?? {
+    ANOMALY_LABELS[metricKey] ??
+    ingestionVolumeDisplay(metricKey) ?? {
       title: humanize(metricKey),
       description: '',
     }
