@@ -1,5 +1,11 @@
 # 25-Day Consolidation Plan — No-Susan-Yet Version
 
+> ## ⚠️ SUPERSEDED — do not execute this plan
+> Superseded by `CONSOLIDATION-PLAN-25-DAY-ANCHORED.md`, itself superseded by
+> `CONSOLIDATION-PLAN-PHASED.md` v2.1 (the single plan of record). Kept for the
+> rationale record only. Banner added 2026-07-07 (remediation R0).
+
+
 **What changed.** You don't have a live operator yet, so I shouldn't optimize for "weekly visible wins." That was the wrong constraint for a pre-product codebase. The right constraint is: get the structure right before the first Susan arrives, even if the UI looks broken for two weeks while I do it.
 
 This lets me do three things the previous plan couldn't:

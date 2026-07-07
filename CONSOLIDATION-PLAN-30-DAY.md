@@ -1,5 +1,11 @@
 # 30-Day Consolidation Plan — Self-Executable, With Parallel Agents
 
+> ## ⚠️ SUPERSEDED — do not execute this plan
+> Superseded by the 25-day variants, all of which are superseded by
+> `CONSOLIDATION-PLAN-PHASED.md` v2.1 (the single plan of record). Kept for the
+> rationale record only. Banner added 2026-07-07 (remediation R0).
+
+
 **Reframed from the previous 30-day plan.** I went back and was critical of it. Two things were wrong:
 
 1. The previous version put architectural consolidation (Phase 1: pick one writer) before Susan-visible improvement. That means 10 days where Susan opens Bloom and still sees 63 Untracked. She doesn't have 10 days of patience and she shouldn't have to. The plan needed to surface visible wins in Week 1, not Week 3.

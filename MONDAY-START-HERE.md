@@ -12,7 +12,7 @@ A 15-minute on-ramp back into the rebuild. Nothing below is urgent; nothing is r
 ## What's true right now (so you can relax)
 - **Nothing in your runtime or prod DB changed.** Everything produced this week is docs + new CI scripts.
 - **The new CI guards are informational only** (`continue-on-error: true`) — push whatever you need this weekend; they print a worklist but **cannot fail your build**. They flip to enforcing in Phase 0, Monday (step 4 below).
-- **The plan of record is `BLOOM-MASTER-PLAN.md`** — checkboxed, guardrailed, drift-proof. Everything else is anchored from it.
+- ~~The plan of record is `BLOOM-MASTER-PLAN.md`~~ **Stale — the plan of record is `CONSOLIDATION-PLAN-PHASED.md` v2.1** (corrected 2026-07-07, remediation R0).
 
 ## Monday, in order (each is small)
 

@@ -201,9 +201,8 @@ When a signal lands, `linkSignal()` (`src/lib/services/identity/forwards-linker.
 - **The two canonical-definition migrations (380 decay window, 381 point-zero + direction) are written, tsc-clean, golden-15/15 on the test branch** — but **not yet applied to prod** (operator step).
 - **Hardening complete:** ~123 swallowed DB writes now route through `writeOrLog`; destructive scripts gated against prod; integration tests that were silently writing to prod were caught and fixed.
 
-### 5.3 Deploy state (verified 2026-07-07)
-- **`master` = production = commit `3ed61d2`** (Jun 17 onwards: CI made honest, all latent guard violations cleared, lockfile synced; subsequent commits: model ID bumps, seating import, crm-import exposure fixes, Phase 2 operator-column re-merge script).
-- **`consolidation` was fast-forwarded into `master`** (June 17). There is no longer a separate consolidation branch — it merged and deployed.
+### 5.3 Deploy state (corrected 2026-07-07, remediation R0)
+- **Correction:** the earlier claim that consolidation was fast-forwarded into master in June was wrong. From Jun 17 to Jul 7, `master` (and prod) sat at `81caf84` while 15 commits accumulated locally on `consolidation` — including the Knot pipeline fix (`68b4277`) and the Q31/Q32b battery fixes (`5da19a1`). The 2026-07-07 R0 push fast-forwarded `master` to the `consolidation` head and deployed. From here, verify `git log origin/master -1` matches `consolidation` before trusting any "prod has X" claim; the audit trail is REMEDIATION-PLAN-2026-07-07.md.
 - **382 migrations** total. Migrations 380 (decay window) and 381 (point-zero + touchpoint direction) are **applied to production**.
 - **Gmail historical backfill:** `status=complete`, `phase=booked`, 18,545 emails processed back to 2021-12-28. This was one of the Phase 2 re-import steps — it has run ahead of the wipe, meaning after the wipe it just needs to re-run from scratch (the backfill tooling is still in place).
 - **Lead source derivation:** `deriveLeadSourceAllVenues` is now wired into the `attribution_refresh` cron (it was built but never called — fixed 2026-07-05). First run resolved 381/400 weddings (95%). Runs daily at 06:00 UTC from here out.
@@ -299,7 +298,7 @@ First full battery run against real Rixey data. Results: **avg 1.553, 38 questio
 ## 8. Survival guide for whoever picks this up
 
 - **Read order:** this doc → `CONSOLIDATION-PLAN-PHASED.md` v2.1 → `ARCHITECTURE-DECISIONS.md` → `PHASE2-GO-CHECKLIST.md`. Ignore the dead plans (§2.2 warning).
-- **`consolidation` was merged into `master` in June 2026.** There is no longer a separate consolidation branch. Work directly on `master` (or a short-lived feature branch) from here. Each phase still gates behind its test suite before deploy.
+- **The `consolidation` branch still exists** and is where phase work lands; `master` is fast-forwarded from it at phase boundaries (last FF: 2026-07-07 R0). Before assuming prod has a commit, check `git log origin/master -1`. Each phase still gates behind its test suite before deploy.
 - **Before touching identity code:** run `npm run test:golden` *after* your change (it needs the test-branch DB credentials in `.env.test`). `npm run test:unit` (vitest, 282 tests) runs in CI. `npm run check:governance` runs the ratchets.
 - **The ratchets only fall.** If you add a swallowed write, a non-venue-scoped RLS table, or a mirror-source read, CI fails. That's intentional — route writes through `writeOrLog` and the cascade chokepoints.
 - **PROD is `jsxxgwprxuqgcauzlxcb`.** `.env.local` points at it. Writing scripts refuse this ref by design — don't override the guard.
