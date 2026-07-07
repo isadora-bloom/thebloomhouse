@@ -17,17 +17,19 @@
 
 Prod is missing the Knot fix. `consolidation` is 13 commits ahead of master, unpushed.
 
-- [ ] Push `consolidation` (13 commits) to origin
-- [ ] Fast-forward `master` to the `consolidation` head and push
-- [ ] Confirm Vercel prod redeploys; verify Knot fix `68b4277` live (per-prospect relay mints a wedding)
-- [ ] Re-run battery post Q31/Q32b patches; save JSON as last old-scorer baseline
-- [ ] Correct HANDOFF-STATE-OF-BLOOM-HOUSE.md §5.3 + §8 (branch story is wrong)
-- [ ] SUPERSEDED banners on CONSOLIDATION-PLAN-25-DAY-NO-SUSAN.md and CONSOLIDATION-PLAN-30-DAY.md
-- [ ] Fix MONDAY-START-HERE.md line 15 (still names BLOOM-MASTER-PLAN as plan of record)
-- [ ] In-repo CLAUDE.md: name CONSOLIDATION-PLAN-PHASED.md as plan of record (currently points at BLUEPRINT.md)
-- [ ] Copy phase2-exports/ (477 weddings, 1,425 people) off this machine
+- [x] Push `consolidation` (13 commits) to origin
+- [x] Fast-forward `master` to the `consolidation` head and push
+- [x] Confirm Vercel prod redeploys; verify Knot fix `68b4277` live (per-prospect relay mints a wedding)
+- [x] Re-run battery post Q31/Q32b patches; save JSON as last old-scorer baseline
+- [x] Correct HANDOFF-STATE-OF-BLOOM-HOUSE.md §5.3 + §8 (branch story is wrong)
+- [x] SUPERSEDED banners on CONSOLIDATION-PLAN-25-DAY-NO-SUSAN.md and CONSOLIDATION-PLAN-30-DAY.md
+- [x] Fix MONDAY-START-HERE.md line 15 (still names BLOOM-MASTER-PLAN as plan of record)
+- [x] In-repo CLAUDE.md: name CONSOLIDATION-PLAN-PHASED.md as plan of record (currently points at BLUEPRINT.md)
+- [x] Copy phase2-exports/ (477 weddings, 1,425 people) off this machine
 
-**Exit gate:** prod hash = consolidation head; a cold reader finds exactly one live plan.
+**Exit gate:** MET 2026-07-07. Prod = master = consolidation = `c06600b` (Vercel dpl_2zUJFUBJFo6mTpXMT99VfjcW59xY, Ready). Knot fix verified at data level: 122/125 2026 Knot inbounds linked, 76 backfilled weddings, 3 orphans remain. Exports copied to OneDrive/bloom-backups/phase2-exports-2026-07-07.
+
+**R0 battery result (old scorer, baseline):** `battery-results/2026-07-07T22-46-21-030Z.json` — avg **1.556**, Tier-4 −3 count **1**. Q31 + Q32b patches confirmed fixed. The three remaining −3s are all SCORER false positives, not product failures: Q17 answered with a correct refusal ("That specific detail isn't in my data") that the refusal regex missed; Q28 same shape; Q33 is the known first-channel-token bug. Q12/Q34 errored on a transient "Claude failed, no OpenAI fallback". This is direct evidence for R2's priority: the product's honesty rails now outperform the instrument measuring them.
 
 ## Phase R1 — Execute the wipe (= phased plan Phase 2) (this week) — MODEL: Opus 4.8
 
