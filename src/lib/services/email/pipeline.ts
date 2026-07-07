@@ -58,6 +58,7 @@ import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/ingestion/form-relay-parsers'
 import {
   extractIdentityFromEmail,
+  isPerProspectRelay,
   isRelayAddress,
   isSyntheticAddress,
   isUnsendableAddress,
@@ -1592,6 +1593,42 @@ export async function processIncomingEmail(
         threadId: email.threadId ?? null,
       })
     } catch { /* swallow — non-fatal for ingest */ }
+    // Stamp first_response_at on the wedding this thread belongs to when
+    // the venue is replying for the first time. The venue's own address is
+    // the FROM here (isOwnOutbound path) so we resolve the wedding via the
+    // thread id rather than from a direct wedding_id on this email.
+    if (email.threadId) {
+      try {
+        const { data: threadRow } = await supabase
+          .from('interactions')
+          .select('wedding_id')
+          .eq('venue_id', venueId)
+          .eq('gmail_thread_id', email.threadId)
+          .not('wedding_id', 'is', null)
+          .limit(1)
+          .maybeSingle()
+        const linkedWeddingId = (threadRow?.wedding_id as string | null) ?? null
+        if (linkedWeddingId) {
+          const { data: weddingRow } = await supabase
+            .from('weddings')
+            .select('inquiry_date, first_response_at')
+            .eq('id', linkedWeddingId)
+            .maybeSingle()
+          if (
+            weddingRow &&
+            (weddingRow.inquiry_date as string | null) &&
+            !(weddingRow.first_response_at as string | null) &&
+            emailDate > (weddingRow.inquiry_date as string)
+          ) {
+            await supabase
+              .from('weddings')
+              .update({ first_response_at: emailDate })
+              .eq('id', linkedWeddingId)
+              .is('first_response_at', null)
+          }
+        }
+      } catch { /* non-fatal — ingest must not block on milestone writes */ }
+    }
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
@@ -2668,9 +2705,15 @@ export async function processIncomingEmail(
   // instead, awaiting a real identifier surfacing on a follow-up
   // signal. The interaction row above is preserved as the audit trail
   // either way.
+  // Per-prospect platform relays (paris.terrell.772357@member.theknot.com,
+  // connect-{uuid}@zola.com) ARE routable — replies reach the couple via the
+  // platform's messaging system. isUnsendableAddress explicitly preserves them.
+  // Only shared relays (leads@theknot.com) and synthetics (.invalid) are truly
+  // sub-zero: no real identifier, can't reach the couple at all.
   const subZeroIdentifier =
     classification.classification === 'new_inquiry' &&
-    (!fromEmail || isSyntheticAddress(fromEmail) || isRelayAddress(fromEmail))
+    (!fromEmail || isSyntheticAddress(fromEmail) ||
+      (isRelayAddress(fromEmail) && !isPerProspectRelay(fromEmail)))
 
   if (
     isNewContact &&
