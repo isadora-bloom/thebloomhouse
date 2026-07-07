@@ -195,7 +195,15 @@ export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSign
   // legacy behaviour for genuine inbound (no formLead, no
   // schedulingEvent) and for outbound (raw From explicitly nulled).
   const primaryEmail = resolvedEmail ?? rawFromEmail
-  const primaryName = resolvedName ?? rawFromName
+  // Normalise CamelCase display names from email From headers. Gmail
+  // lets users set a display name with no space ("JuliaPfund") and
+  // that lands verbatim in rawFromName. Split at lowercase→uppercase
+  // boundaries so "JuliaPfund" becomes "Julia Pfund" before it enters
+  // the couple-minting path. Only fires when no space already exists.
+  const rawPrimaryName = resolvedName ?? rawFromName
+  const primaryName = rawPrimaryName && !rawPrimaryName.includes(' ')
+    ? rawPrimaryName.replace(/([a-z])([A-Z])/g, '$1 $2')
+    : rawPrimaryName
   const primaryPhone = resolvedPhone ?? null
   const identityHint = primaryName ?? primaryEmail ?? null
 

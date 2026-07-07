@@ -1855,12 +1855,38 @@ function formatDataContext(data: VenueDataContext): string {
  * feeds it as context alongside the question to the AI, logs the query and
  * response, and returns the answer.
  */
+// Queries that ask Bloom to NAME specific couples with sensitive themes —
+// grief, family conflict, health issues, etc. The LLM cannot be trusted to
+// redact this from its own context (the couple identity profiles are in the
+// data block). A deterministic gate intercepts before any LLM call.
+const SENSITIVE_THEME_NAMING_RE =
+  /\b(which|who|list|name|identify|show me|tell me which|what couples?)\b[\s\S]{0,120}\b(grief|loss|bereavement|family conflict|conflict|health (issue|problem|concern|scare)|medical|ill(ness)?|financial stress|money trouble|relationship distress|distress|separated|divorce|religion|faith|pregnant|pregnancy|miscarriage)\b/i
+
 export async function answerNaturalLanguageQuery(
   venueId: string,
   userId: string,
   query: string
 ): Promise<NLQResult> {
   const supabase = createServiceClient()
+
+  // Q31 / Wave-4 doctrine: if the question asks us to NAME couples with
+  // sensitive themes, return a hard refusal before touching the data at all.
+  // The LLM cannot be trusted to redact named-couple+emotional-theme data
+  // from its own context; the deterministic gate is the only reliable control.
+  if (SENSITIVE_THEME_NAMING_RE.test(query)) {
+    const refusalText =
+      `Some couples in your data have flagged sensitive themes — ` +
+      `I can't share which ones without their consent. ` +
+      `If you need to follow up with a specific couple you know is going through a difficult time, ` +
+      `navigate to their record directly and I can help you there.`
+    return {
+      response: refusalText,
+      queryId: '',
+      tokensUsed: 0,
+      cost: 0,
+      honestyFlags: [],
+    }
+  }
 
   // TIER 1 / Pattern B (mig-336 era, 2026-05-14): the manifest is the
   // FIRST chunk of the system prompt — before voice DNA, before task

@@ -56,6 +56,7 @@ import {
 import { refreshVoiceDnaForAllVenues } from '@/lib/services/brain/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
 import { computeAttributionParityAllVenues } from '@/lib/services/attribution/parity'
+import { deriveLeadSourceAllVenues } from '@/lib/services/attribution/lead-source-derivation'
 import { mergePeopleAliasesAllVenues } from '@/lib/services/identity/people-merge-aliases'
 import {
   runAgencyActivitySweep,
@@ -593,8 +594,23 @@ async function runJob(
     case 'follow_up_sequences':
       return processAllVenueFollowUps()
 
-    case 'attribution_refresh':
-      return refreshAttributionAllVenues()
+    case 'attribution_refresh': {
+      // refreshAttributionAllVenues computes source_attribution rollups
+      // (inquiries / bookings / revenue / spend per source per year).
+      // deriveLeadSourceAllVenues runs the 7-priority chain to populate
+      // weddings.lead_source — piggybacked here so the derivation fires
+      // daily after the rollup completes and after merge_people_aliases
+      // (04:55) has stabilised the canonical-person view.
+      const supabase = createServiceClient()
+      const attribution = await refreshAttributionAllVenues()
+      let derivation: unknown = null
+      try {
+        derivation = await deriveLeadSourceAllVenues(supabase)
+      } catch (err) {
+        derivation = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return { attribution, derivation }
+    }
 
     case 'compute_attribution_parity':
       // T5-Rixey-BBB. Side-by-side scan: per-wedding chain + cluster
