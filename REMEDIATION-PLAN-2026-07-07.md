@@ -55,20 +55,20 @@ Do NOT start R3 before this lands. Current scorer is regex-only: "evidence" = co
 a number; hedge words defeat −3; 29/38 questions at ceiling every run.
 
 Battery rebuild:
-- [ ] Replace regex scorer (run-battery.ts:141-159) with LLM judge + SQL ground-truth checks wherever truth is computable
-- [ ] Fix Q33 dominantChannel first-token bug (run-battery.ts:373-385) — false −3 in all three runs
-- [ ] Add Q37 (Saturday-morning tours workflow) to the runner — only operator-derived question, never tested
-- [ ] Reconcile Q32b runner-vs-doc divergence ("confirm that for me" suffix)
-- [ ] New tier for built-but-untested surfaces: CAC in currency by channel, capacity/pace vs target, lost-deal reasons, reviews
-- [ ] Run the operator-review pass ONCE for real; record in BLOOM-TEST-FINDINGS.md (empty template since May)
-- [ ] Reconcile question count (doc 37 / runner 38 / findings 36)
-- [ ] Run new battery twice back-to-back; confirm score stability
+- [x] Replace regex scorer with LLM judge + ground-truth probes — `battery-judge.ts` (v1.1) + `battery-ground-truth.ts` (17/43 questions carry a canonical-layer probe); regex demoted to judge-unreachable fallback, tagged `scorer:'regex-fallback'`
+- [x] Fix Q33 dominantChannel first-token bug — now telemetry-only; judge scores consistency on whether the recommendation is coherent
+- [x] Add Q37 (Saturday-morning tours workflow) to the runner — was doc-only
+- [x] Reconcile Q32b runner-vs-doc divergence — dropped the runner-only "confirm that for me" suffix to match the doc
+- [x] New tier for built-but-untested surfaces — Tier 12 (Q38 CAC-in-currency, Q39 capacity/pace, Q40 lost-deals, Q41 reviews)
+- [~] Run the operator-review pass ONCE for real; record in BLOOM-TEST-FINDINGS.md — AUTOMATED HALF DONE: findings F0–F4 seeded, −3s DB-confirmed. **HUMAN HALF STILL OWED (operator only):** open `battery-results/review-sheet-2026-07-08T15-32-14-949Z.md`, verify the +1/+2 calibration scores against ground truth you know, paste verdicts into BLOOM-TEST-FINDINGS.md. `npx tsx scripts/battery-review-sheet.ts` regenerates it for any run.
+- [x] Reconcile question count — 43 everywhere (doc, runner, sanity guard)
+- [x] Run new battery twice back-to-back; confirm score stability — v1.1: avg +1.05 / +0.98, Tier-4 −3 count 1 / 0; judge stable, swings are product non-determinism (F2)
 
 Ingestion monitoring:
-- [ ] Per-channel daily ingestion-volume baseline + anomaly alert → /intel/anomalies + operator email
-- [ ] Backtest against Apr–Jun data; must fire on the Knot regression or it isn't done
+- [x] Per-channel daily ingestion-volume baseline + anomaly alert → /intel/anomalies + operator email — `ingestion-volume-monitor.ts`, rides the 04:00 anomaly_detection cron; also fixed a day-one digest bug (alerts section queried a non-existent `resolved` column, silently empty since launch)
+- [x] Backtest against Apr–Jun data; fires on the Knot regression — `scripts/backtest-ingestion-monitor.ts`: Knot alerts 10 of 14 weeks, continuously from week 1 of April (would have caught in week one what went unnoticed for two months)
 
-**Exit gate:** new battery baseline recorded; backtest fires on the known regression.
+**Exit gate:** MET 2026-07-08. New judge-scored baseline recorded (commit `75f4a2d`); backtest fires on the Knot regression (commit `1fc436f`). Residual: human operator-review pass (owed), and F1–F4 product findings feed R3. NOTE: two DB-confirmed reproducible product findings — F1 Q26 channel-conversion confabulation, F4 possible real HoneyBook ingestion drop — are open and belong to R3 / operator triage respectively.
 
 ## Phase R3 — Reader migration + pipeline decomposition (= phased plan Phase 3, amended) (6–9 wks) — MODEL: FABLE
 
