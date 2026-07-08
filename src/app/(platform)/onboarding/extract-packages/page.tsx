@@ -37,7 +37,7 @@ interface ProposedPackage {
 }
 
 const PROVIDERS: Array<{ provider: string; label: string }> = [
-  { provider: 'rixey_calculator', label: 'Rixey Manor pricing calculator' },
+  { provider: 'rixey_calculator', label: 'Website pricing calculator' },
   { provider: 'typeform', label: 'Typeform' },
   { provider: 'jotform', label: 'Jotform' },
   { provider: 'google_forms', label: 'Google Forms' },

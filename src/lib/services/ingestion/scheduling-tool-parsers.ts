@@ -140,8 +140,12 @@ function firstExternalEmail(body: string, excludeDomains: string[]): string | nu
   for (const raw of matches) {
     const lower = raw.toLowerCase()
     if (excludeDomains.some((d) => lower.endsWith('@' + d) || lower.endsWith('.' + d))) continue
-    // Filter the obvious machine addresses
-    if (/(no-?reply|noreply|notifications?|support|info@(rixeymanor|thebloomhouse))/i.test(lower)) continue
+    // Filter the obvious machine + role addresses. Role local-parts
+    // (info@, hello@, bookings@ …) at ANY domain catch the venue's own
+    // office address without hardcoding a venue — R4 de-Rixey fix; the
+    // old form pinned this to rixeymanor/thebloomhouse so venue #2's own
+    // info@ would have leaked through as a fake invitee.
+    if (/(no-?reply|noreply|notifications?|support|(info|hello|contact|events?|office|bookings?|admin)@)/i.test(lower)) continue
     return lower
   }
   return null

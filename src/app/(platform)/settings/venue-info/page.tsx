@@ -813,7 +813,7 @@ export default function VenueInfoSettingsPage() {
             </label>
             <input
               className={inputCls}
-              placeholder="rixeymanor or 123456789012345"
+              placeholder="yourpage or 123456789012345"
               value={data.facebook_page_id ?? ''}
               onChange={(e) => set('facebook_page_id', e.target.value || null)}
             />

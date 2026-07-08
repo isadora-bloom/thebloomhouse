@@ -287,7 +287,7 @@ export default function OpenPhoneSettingsPage() {
                 type="text"
                 value={workspaceLabel}
                 onChange={(e) => setWorkspaceLabel(e.target.value)}
-                placeholder="e.g. Rixey Manor"
+                placeholder="e.g. Your Venue"
                 className={inputClasses}
               />
             </div>
