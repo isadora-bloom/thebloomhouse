@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
 // run-battery.ts — Bloom Test Question Battery runner.
 //
-// CONSOLIDATION-PLAN-PHASED.md §0.1 (gap #3). Feeds each of the 38 questions
-// in BLOOM-TEST-QUESTIONS.md (1-36 + the 32a/32b variants) through the NLQ
-// brain, captures the answer,
-// scores it against the rubric in that doc + the expected-shapes in
-// `battery-expected.ts`, and emits:
+// CONSOLIDATION-PLAN-PHASED.md §0.1 (gap #3), scorer rebuilt 2026-07-07 per
+// REMEDIATION-PLAN-2026-07-07.md R2. Feeds each of the 43 questions
+// (1-37 + 32a/32b variants + Tier-12 38-41) through the NLQ brain, captures
+// the answer, scores it with the LLM judge in `battery-judge.ts` (ground
+// truth from `battery-ground-truth.ts`; the old regex scorer survives only
+// as the judge-unreachable fallback), and emits:
 //   - a readable per-question table to stdout
 //   - the overall average score
 //   - the count of −3 scores within Tier 4 (the ship-gate honesty check)
@@ -32,6 +33,8 @@ import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
 import { EXPECTED_SHAPES, type ExpectedShape } from './battery-expected'
+import { judgeAnswer, judgeConsistency, JUDGE_PROMPT_VERSION } from './battery-judge'
+import { loadGroundTruth, groundTruthFor } from './battery-ground-truth'
 
 // ---------------------------------------------------------------------------
 // Env — mirror .env.local onto process.env so the brain's createServiceClient
@@ -100,14 +103,26 @@ async function askBrain(
   const { answerNaturalLanguageQuery } = await import(
     '../src/lib/services/brain/intel-brain'
   )
-  const r = await answerNaturalLanguageQuery(venueId, userId, query)
-  return {
-    response: r.response,
-    queryId: r.queryId,
-    tokensUsed: r.tokensUsed,
-    cost: r.cost,
-    honestyFlags: r.honestyFlags ?? [],
+  // One retry on transient failure — the Jul 7 run lost Q12 + Q34 to a
+  // momentary "Claude failed and no OpenAI fallback" blip; a single retry
+  // with backoff keeps a $3 run from carrying holes.
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await answerNaturalLanguageQuery(venueId, userId, query)
+      return {
+        response: r.response,
+        queryId: r.queryId,
+        tokensUsed: r.tokensUsed,
+        cost: r.cost,
+        honestyFlags: r.honestyFlags ?? [],
+      }
+    } catch (err) {
+      lastErr = err
+      if (attempt === 0) await new Promise((res) => setTimeout(res, 5000))
+    }
   }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +189,14 @@ export interface QuestionResult {
   score: RubricScore
   /** Human-readable why for the JSON file + table. */
   reason: string
+  /** Which scorer produced the score (R2: judge primary, regex fallback). */
+  scorer: 'llm-judge' | 'regex-fallback'
+  /** Judge's self-reported 0-1 confidence (absent on regex fallback). */
+  judgeConfidence?: number
+  /** True when ground-truth probes were provided AND the judge used them. */
+  usedGroundTruth?: boolean
+  /** Judge call cost in dollars (absent on regex fallback). */
+  judgeCost?: number
   /** True when the runner's score is a mechanical estimate needing a human. */
   operatorReview: boolean
   refusalDetected: boolean
@@ -187,6 +210,11 @@ export interface QuestionResult {
   error?: string
 }
 
+// LEGACY REGEX SCORER — R2 (2026-07-07) demoted this to the judge-unreachable
+// fallback. Its known failure modes (evidence = "contains a number", hedge
+// words defeat −3, refusals outside REFUSAL_RE scored −3) are why the judge
+// exists; results scored by this path are tagged scorer:'regex-fallback' and
+// must be operator-reviewed.
 function scoreAnswer(shape: ExpectedShape, answer: BrainAnswer): {
   score: RubricScore
   reason: string
@@ -387,7 +415,8 @@ function dominantChannel(text: string): string | null {
 async function runConsistency(
   shape: ExpectedShape,
   venueId: string,
-  userId: string
+  userId: string,
+  groundTruth: string | null
 ): Promise<QuestionResult> {
   const variants = shape.consistencyVariants ?? [shape.question]
   const answers: BrainAnswer[] = []
@@ -399,24 +428,47 @@ async function runConsistency(
       answers.push({ response: `[ERROR] ${msg}`, queryId: '', tokensUsed: 0, cost: 0, honestyFlags: [] })
     }
   }
+  // dominantChannel is TELEMETRY ONLY from R2 on. Its first-token comparison
+  // scored "best channel: X" vs "cut channel: Y" as contradictory — a false
+  // −3 in all three pre-R2 runs. The judge now decides whether the underlying
+  // recommendation is coherent.
   const channels = answers.map((a) => dominantChannel(a.response))
   const distinct = new Set(channels.filter((c): c is string => c !== null))
   const allEvidence = answers.every((a) => EVIDENCE_RE.test(a.response))
 
   let score: RubricScore
   let reason: string
-  if (distinct.size <= 1 && distinct.size > 0 && allEvidence) {
-    score = 2
-    reason = `consistent (${[...distinct][0]}) across all 3 framings, evidence in each (+2)`
-  } else if (distinct.size <= 1) {
-    score = 0
-    reason =
-      distinct.size === 0
-        ? 'no clear channel named in any framing — cannot assess reasoning (0)'
-        : `consistent channel but evidence differs across framings — memorisation not reasoning (0)`
-  } else {
-    score = -3
-    reason = `contradictory answers across framings: ${[...distinct].join(' / ')} (−3)`
+  let scorer: QuestionResult['scorer'] = 'llm-judge'
+  let judgeConfidence: number | undefined
+  let usedGroundTruth: boolean | undefined
+  let judgeCost: number | undefined
+  try {
+    const verdict = await judgeConsistency(
+      shape,
+      variants,
+      answers.map((a) => a.response),
+      groundTruth,
+      venueId
+    )
+    score = verdict.score
+    reason = verdict.reason
+    judgeConfidence = verdict.confidence
+    usedGroundTruth = verdict.usedGroundTruth
+    judgeCost = verdict.judgeCost
+  } catch (err) {
+    // Regex fallback — the pre-R2 logic, tagged so a human knows.
+    scorer = 'regex-fallback'
+    const msg = err instanceof Error ? err.message : String(err)
+    if (distinct.size <= 1 && distinct.size > 0 && allEvidence) {
+      score = 2
+      reason = `JUDGE-UNAVAILABLE (${msg}); regex: consistent (${[...distinct][0]}) w/ evidence (+2)`
+    } else if (distinct.size <= 1) {
+      score = 0
+      reason = `JUDGE-UNAVAILABLE (${msg}); regex: consistent channel, evidence unclear (0)`
+    } else {
+      score = -3
+      reason = `JUDGE-UNAVAILABLE (${msg}); regex: differing first-channels ${[...distinct].join(' / ')} (−3, KNOWN-NOISY)`
+    }
   }
 
   const combined = variants
@@ -431,6 +483,10 @@ async function runConsistency(
     answer: combined,
     score,
     reason,
+    scorer,
+    judgeConfidence,
+    usedGroundTruth,
+    judgeCost,
     operatorReview: true, // consistency judgement benefits from a human re-read
     refusalDetected: answers.some((a) => REFUSAL_RE.test(a.response)),
     hedgeDetected: answers.some((a) => HEDGE_RE.test(a.response)),
@@ -486,17 +542,27 @@ async function main() {
   console.log(`   venue:        ${venueName} (${venueId})`)
   console.log(`   brain target: ${BRAIN_ENTRYPOINT}`)
   console.log(`   questions:    ${EXPECTED_SHAPES.length}`)
+  console.log(`   scorer:       ${JUDGE_PROMPT_VERSION} + ground-truth probes (regex fallback)`)
   console.log('═══════════════════════════════════════════════════════════════')
+
+  // Ground-truth probes: computed once, shared across questions (R2).
+  process.stdout.write('  loading ground-truth probes … ')
+  const probes = await loadGroundTruth(venueId)
+  const probeStatus = [...probes.entries()]
+    .map(([k, v]) => `${k}${v.startsWith('[probe') ? '✗' : '✓'}`)
+    .join(' ')
+  console.log(probeStatus)
 
   const startedAt = new Date()
   const results: QuestionResult[] = []
 
   for (const shape of EXPECTED_SHAPES) {
     process.stdout.write(`  Q${shape.id} (T${shape.tier}) … `)
+    const gt = groundTruthFor(shape.id, probes)
 
     if (shape.kind === 'consistency') {
       try {
-        const r = await runConsistency(shape, venueId, userId)
+        const r = await runConsistency(shape, venueId, userId, gt)
         results.push(r)
         console.log(`${fmtScore(r.score)}  ${r.reason}`)
       } catch (err) {
@@ -509,8 +575,36 @@ async function main() {
 
     try {
       const answer = await askBrain(venueId, userId, shape.question)
-      const { score, reason } = scoreAnswer(shape, answer)
       const text = answer.response ?? ''
+
+      let score: RubricScore
+      let reason: string
+      let scorer: QuestionResult['scorer'] = 'llm-judge'
+      let judgeConfidence: number | undefined
+      let usedGroundTruth: boolean | undefined
+      let judgeCost: number | undefined
+      if (!text.trim()) {
+        // Nothing for a judge to read — mechanical outcome, same as pre-R2.
+        score = 1
+        reason = 'empty answer — treated as appropriate non-answer (+1)'
+        scorer = 'regex-fallback'
+      } else {
+        try {
+          const verdict = await judgeAnswer(shape, text, gt, venueId)
+          score = verdict.score
+          reason = verdict.reason
+          judgeConfidence = verdict.confidence
+          usedGroundTruth = verdict.usedGroundTruth
+          judgeCost = verdict.judgeCost
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          const legacy = scoreAnswer(shape, answer)
+          score = legacy.score
+          reason = `JUDGE-UNAVAILABLE (${msg}); regex: ${legacy.reason}`
+          scorer = 'regex-fallback'
+        }
+      }
+
       const r: QuestionResult = {
         id: shape.id,
         tier: shape.tier,
@@ -519,7 +613,13 @@ async function main() {
         answer: text,
         score,
         reason,
-        operatorReview: Boolean(shape.operatorVerifies),
+        scorer,
+        judgeConfidence,
+        usedGroundTruth,
+        judgeCost,
+        // Regex-fallback scores always need a human; judge scores keep the
+        // question's own operatorVerifies flag.
+        operatorReview: scorer === 'regex-fallback' || Boolean(shape.operatorVerifies),
         refusalDetected: REFUSAL_RE.test(text),
         hedgeDetected: HEDGE_RE.test(text),
         evidenceDetected: EVIDENCE_RE.test(text),
@@ -530,7 +630,7 @@ async function main() {
       }
       results.push(r)
       console.log(
-        `${fmtScore(score)}  ${reason}${shape.operatorVerifies ? '  [operator-review]' : ''}`
+        `${fmtScore(score)}  ${truncate(reason, 90)}${r.operatorReview ? '  [operator-review]' : ''}`
       )
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -549,6 +649,9 @@ async function main() {
   const totalCost = results.reduce((s, r) => s + r.cost, 0)
   const totalTokens = results.reduce((s, r) => s + r.tokensUsed, 0)
   const errors = results.filter((r) => r.error).length
+  const judgeScored = results.filter((r) => r.scorer === 'llm-judge').length
+  const gtChecked = results.filter((r) => r.usedGroundTruth).length
+  const judgeTotalCost = results.reduce((s, r) => s + (r.judgeCost ?? 0), 0)
 
   // Ship gate per BLOOM-TEST-QUESTIONS.md "What ready-to-ship looks like".
   const gatePassAverage = average >= 1.0
@@ -578,7 +681,8 @@ async function main() {
   console.log(`   average score:        ${average.toFixed(3)}   (ship gate: ≥ +1.000)`)
   console.log(`   Tier-4 −3 count:      ${tier4Minus3}        (ship gate: 0)`)
   console.log(`   operator-review qs:   ${results.filter((r) => r.operatorReview).length}`)
-  console.log(`   total tokens / cost:  ${totalTokens}  /  $${totalCost.toFixed(4)}`)
+  console.log(`   judge-scored:         ${judgeScored} / ${results.length}  (${gtChecked} checked against ground truth)`)
+  console.log(`   total tokens / cost:  ${totalTokens}  /  $${totalCost.toFixed(4)}  (+ judge $${judgeTotalCost.toFixed(4)})`)
   console.log('   ─────────────────────────────────────────────────────────────')
   console.log(`   GATE — average ≥ +1.0:    ${gatePassAverage ? 'PASS' : 'FAIL'}`)
   console.log(`   GATE — zero Tier-4 −3:    ${gatePassTier4 ? 'PASS' : 'FAIL'}`)
@@ -591,7 +695,8 @@ async function main() {
   const stamp = startedAt.toISOString().replace(/[:.]/g, '-')
   const outPath = join(outDir, `${stamp}.json`)
   const payload = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    scorer: JUDGE_PROMPT_VERSION,
     venueId,
     venueName,
     brainEntrypoint: BRAIN_ENTRYPOINT,
@@ -605,6 +710,9 @@ async function main() {
       averageScore: Number(average.toFixed(4)),
       tier4Minus3Count: tier4Minus3,
       operatorReviewCount: results.filter((r) => r.operatorReview).length,
+      judgeScoredCount: judgeScored,
+      groundTruthCheckedCount: gtChecked,
+      judgeTotalCost: Number(judgeTotalCost.toFixed(6)),
       totalTokens,
       totalCost: Number(totalCost.toFixed(6)),
       gatePassAverage,
@@ -634,6 +742,7 @@ function errorResult(shape: ExpectedShape, msg: string): QuestionResult {
     answer: '',
     score: 0,
     reason: `brain call errored: ${msg}`,
+    scorer: 'regex-fallback',
     operatorReview: true,
     refusalDetected: false,
     hedgeDetected: false,

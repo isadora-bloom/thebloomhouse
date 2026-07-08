@@ -77,7 +77,71 @@ Add new findings below this line. Order doesn't matter — assistant will cluste
 
 ---
 
-### Finding F1 — [add your first finding here]
+### Finding F0 — Battery scorer rebuilt; the automated half of the review pass has run (2026-07-08, R2)
+
+**Date / time:** 2026-07-08, judge `battery-judge.prompt.v1.1`
+**Page / route:** benchmark harness (`scripts/run-battery.ts`)
+**Severity:** meta / process
+**Test battery question #:** all 43
+**Status:** Open — human half still owed
+
+The regex scorer that put 29/38 answers at ceiling regardless of truth is retired to a fallback. Scores now come from an LLM judge that reads the whole answer against verified database facts (17/43 questions carry a ground-truth probe). Two back-to-back stability runs on v1.1: avg **+1.05** and **+0.98** (was a fake +1.55 on regex), Tier-4 −3 count **1** then **0**. The judge is stable; run-to-run score diffs are either ±1 borderline calibration or the product itself being non-deterministic (see F1–F3). The `review-sheet-*.md` in `battery-results/` is the fillable operator pass — the −3s below are DB-confirmed, but the +1/+2 calibration scores still want your eyes on ground truth you know and I don't.
+
+### Finding F1 — NLQ brain confabulates channel conversion rates (reproducible, highest confidence)
+
+**Date / time:** 2026-07-08, both stability runs
+**Page / route:** intel-brain `answerNaturalLanguageQuery` (Q26, also feeds Q32b/Q38)
+**Severity:** HIGH — confident confabulation on the attribution thesis
+**Pattern lens (assistant fills):** confident-black-box / contradicts-canonical
+**Test battery question #:** 26 (−3 both runs, judge confidence 0.95)
+**Status:** Open
+
+**What you expected:** channel conversion figures that match the canonical attribution data (`getSourceAttribution`).
+
+**What Bloom did:** stated "unknown" source converts at 86% (12/14) in 2026 and ~100% in 2024/2025, with specific revenue ($211,799) and per-channel inquiry counts.
+
+**Evidence / specific case:** the verified attribution probe shows `unknown_acquisition` at 40% conversion over n=392 — a direct same-metric contradiction, not a rounding gap. Reproduced in both runs. This is the confabulation class Phase 3 reader-migration onto the canonical fns is meant to kill: the brain is narrating numbers it isn't reading from the canonical layer.
+
+**Note for the assistant:** prime candidate for the Intel limb of R3 — wire the NLQ answer path onto `getSourceAttribution` so it can't invent conversion rates.
+
+### Finding F2 — Product honesty is non-deterministic on false-premise + workflow questions
+
+**Date / time:** 2026-07-08
+**Page / route:** intel-brain NLQ (Q32b false-premise, Q37 weekend-tour workflow)
+**Severity:** HIGH
+**Test battery question #:** 32b (−3 then +2), 37 (+1 then −3)
+**Status:** Open
+
+**What Bloom did:** on the same question across two runs, once cleanly challenged the false premise / honestly hedged, and once invented specific figures (Q32b: fabricated spend + revenue) or a fake named tour attendee (Q37: "Clay Foley" / "Sadra Duda" — no such tour exists; the only tour is 2026-07-08 for couple 4f1d0f6c).
+
+**Evidence:** the judge scored each answer correctly; the swing is the brain, not the scorer. Inventing a named individual for a tour that doesn't exist is exactly the dangerous failure Q37 was written to catch.
+
+**Note for the assistant:** temperature / grounding issue on the NLQ path. Worth a look independent of R3.
+
+### Finding F3 — Q12 fails deterministically on the AI fallback path
+
+**Date / time:** 2026-07-07 evening run (fixed-ish by retry, still flaky)
+**Page / route:** intel-brain NLQ (Q12, two-part YoY-with-confounders question)
+**Severity:** MEDIUM
+**Test battery question #:** 12
+**Status:** Open
+
+**What Bloom did:** returned "AI unavailable: Claude failed and no OpenAI fallback is configured" — likely the 30s timeout on a long two-part prompt with no `OPENAI_API_KEY` set for fallback. The v1.1 runs got a score via the brain-call retry, but the underlying fragility remains.
+
+**Note for the assistant:** set the fallback key or check the circuit breaker threshold for long prompts.
+
+### Finding F4 — HoneyBook ingestion may be genuinely dropping (surfaced by the new monitor)
+
+**Date / time:** 2026-07-07, ingestion-monitor backtest
+**Page / route:** `scripts/backtest-ingestion-monitor.ts`
+**Severity:** MEDIUM — needs operator confirmation
+**Status:** Open
+
+**What the monitor found:** HoneyBook inbound counts 13/8/11 (Oct–Mar) → 6/2/2 (Apr–Jun), same collapse shape as the Knot regression. The new monitor flags it critical. Could be real, or a change in how HoneyBook routes mail. Wants your eyes.
+
+---
+
+### Finding F5 — [add your next finding here]
 
 **Date / time:**
 **Page / route:**

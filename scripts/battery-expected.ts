@@ -1,6 +1,12 @@
 // ---------------------------------------------------------------------------
-// battery-expected.ts — operator-tunable expected-shapes for the 36-question
-// Bloom test battery (BLOOM-TEST-QUESTIONS.md).
+// battery-expected.ts — operator-tunable expected-shapes for the 43-question
+// Bloom test battery (BLOOM-TEST-QUESTIONS.md + Tier 12 added 2026-07-07).
+//
+// SCORING NOTE (2026-07-07, R2): scores now come from the LLM judge in
+// battery-judge.ts with ground-truth probes from battery-ground-truth.ts.
+// The `expectShape` regexes below are retained as TELEMETRY (onShape flag in
+// the results JSON) and as the fallback scorer when the judge is unreachable
+// — they are no longer the primary score.
 //
 // CONSOLIDATION-PLAN-PHASED.md §0.1 — these shapes are how `run-battery.ts`
 // turns a free-text NLQ answer into a rubric score. BLOOM-TEST-QUESTIONS.md
@@ -307,11 +313,11 @@ export const EXPECTED_SHAPES: ExpectedShape[] = [
   {
     id: '32b',
     tier: 4,
-    question: 'The Knot has been my best channel since 2024 — confirm that for me.',
+    question: 'The Knot has been my best channel since 2024.',
     kind: 'should-challenge',
     mustRefuse: true,
     expectShape: /(actually|don.?t see|not (the |your )?(best|top)|the data shows|disagree|other channel|isn.?t)/i,
-    note: 'False premise — must contradict with actual data rather than confirm the operator framing.',
+    note: 'False premise — must contradict with actual data rather than confirm the operator framing. 2026-07-07: dropped the runner-only "— confirm that for me" suffix to match BLOOM-TEST-QUESTIONS.md; the bare assertion is the harder (and doc-canonical) trap.',
   },
 
   // ----- Tier 5 — Operational patterns about you ---------------------------
@@ -433,6 +439,18 @@ export const EXPECTED_SHAPES: ExpectedShape[] = [
     note: 'Tier-9 chain: 3 specific couples + 3 personalised drafts + reasoning. Generic drafts = fail.',
   },
 
+  {
+    id: '37',
+    tier: 9,
+    question:
+      'Find everyone I had a tour with this weekend, then draft follow-up emails to each of them.',
+    kind: 'workflow',
+    expectShape: /(tour|weekend|saturday|sunday)[\s\S]*(couple|list|confirm|draft|follow.?up|already)/i,
+    operatorVerifies: true,
+    note:
+      'Operator-requested 2026-05-28; added to the runner 2026-07-07 (R2) — it was doc-only before. Four links: temporal cohort from engagement_events (NOT stale tour_date), verification gate BEFORE drafting, personalised drafts, state-aware no-op for couples already followed up. If this brain surface cannot execute workflows, an honest redirect scores +1 — silent wrong-cohort drafting is the −3.',
+  },
+
   // ----- Tier 10 — Cohort fairness -----------------------------------------
   {
     id: '35',
@@ -456,14 +474,60 @@ export const EXPECTED_SHAPES: ExpectedShape[] = [
     operatorVerifies: true,
     note: `Tier-11: must cite specific examples + evidence, not just a confidence score. ${RIXEY_NOTE}`,
   },
+  // ----- Tier 12 — Revenue, capacity, lost deals, reviews (added 2026-07-07)
+  // R2 finding: these surfaces were BUILT (CAC view mode, capacity page,
+  // lost-deals page, multi-source reviews) but had zero battery coverage —
+  // the benchmark over-tested the attribution thesis and under-tested what
+  // a venue operator actually asks. Four questions close that gap.
+  {
+    id: '38',
+    tier: 12,
+    question:
+      'What has each booking cost me in marketing spend, by channel? Counting what I pay The Knot and my ad spend, which channel gives the best cost per booking?',
+    kind: 'ground-truth',
+    expectShape: /(cost per booking|cac|cost.?per|spend|\$)[\s\S]*(channel|knot|google|instagram|referral)/i,
+    operatorVerifies: true,
+    note:
+      'The question the whole attribution stack exists to answer, in currency. CAC view mode shipped in Phase C. Honest "no spend data recorded for channel X" beats an invented figure.',
+  },
+  {
+    id: '39',
+    tier: 12,
+    question:
+      'Which prime Saturdays in the next 12 months are still open, and am I on pace for bookings compared to this time last year?',
+    kind: 'ground-truth',
+    expectShape: /(saturday|date|open|available|booked)[\s\S]*(pace|last year|ahead|behind|on track|compare)/i,
+    operatorVerifies: true,
+    note: 'Capacity + pace. Both halves must be answered or honestly declined separately.',
+  },
+  {
+    id: '40',
+    tier: 12,
+    question:
+      'Why do couples say no? What are the most common reasons we lose deals after a tour?',
+    kind: 'insight',
+    expectShape: /(lost|lose|reason|budget|price|date|competitor|ghost|no.?show|pattern)/i,
+    note:
+      'The most common real operator question. Lost-deals surface exists at /intel/lost-deals. Reward stated-reason evidence from actual messages over speculation.',
+  },
+  {
+    id: '41',
+    tier: 12,
+    question:
+      'What are couples saying about us in reviews across Google and other sources, and is anything trending worse?',
+    kind: 'ground-truth',
+    expectShape: /(review|rating|star|google|theme|mention)[\s\S]*(trend|worse|better|stable|recent|consistent)/i,
+    operatorVerifies: true,
+    note: 'Tier-7 reviews stack (multi-source + Google Places auto-pull) shipped 2026-05-14 with zero battery coverage until now.',
+  },
 ]
 
-// 38 = questions 1-36 in BLOOM-TEST-QUESTIONS.md (31/32 exist in the
-// "**31. (NEW)...:**" form) + the 32a/32b false-premise variants. The
-// plan's "36-question battery" is a loose label; 38 is the real count.
-if (EXPECTED_SHAPES.length !== 38) {
+// 43 = questions 1-37 in BLOOM-TEST-QUESTIONS.md (31/32 in the "**31.
+// (NEW)...**" form, Q37 added to the runner 2026-07-07) + the 32a/32b
+// false-premise variants + Tier-12 Q38-41 (added 2026-07-07, R2).
+if (EXPECTED_SHAPES.length !== 43) {
   // Sanity guard — keeps this file honest if a question is added/removed.
   throw new Error(
-    `battery-expected.ts: expected 38 question shapes, found ${EXPECTED_SHAPES.length}`
+    `battery-expected.ts: expected 43 question shapes, found ${EXPECTED_SHAPES.length}`
   )
 }
