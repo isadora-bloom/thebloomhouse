@@ -85,13 +85,13 @@ Legacy:spine reads in src/app currently ~9:1 (979 vs 106) and widening.
 
 ## Phase R4 — Schema and tenancy hygiene (2–3 wks, overlaps R3) — MODEL: Opus 4.8
 
-- [ ] Flatten 380 migrations to a single baseline post-wipe; adopt tracked migrations (applied-state lives in the DB, not memory)
-- [ ] Delete the 9 root APPLY-*.sql / PASTE-*.sql bundles once confirmed applied
-- [ ] RLS ratchet 74 → 0 venue-scoped tables, most sensitive first (rls-baseline.json may only fall)
-- [ ] Fix scheduling-tool-parsers.ts:144 — machine-address filter reads venue config, not hardcoded rixeymanor|thebloomhouse regex
-- [ ] De-Rixey cosmetics: extract-packages dropdown label; settings/venue-info/page.tsx:816 + settings/openphone/page.tsx:290 placeholders
+- [ ] Flatten 380 migrations to a single baseline post-wipe; adopt tracked migrations (applied-state lives in the DB, not memory) — **GATED ON R1 (post-wipe): the schema isn't final until the wipe+reimport lands. Do NOT do before R1.**
+- [ ] Delete the 9 root APPLY-*.sql / PASTE-*.sql bundles once confirmed applied — **GATED: needs the migration-state tracking that comes with the flatten above; can't confirm "applied" today.**
+- [x] RLS ratchet 74 → 0 → achieved **74 → 1** (2026-07-08, commit `936ef00`). Migration `383_rls_venue_isolation_batch.sql` enables RLS + the prod-proven 377 policy set on 73 tables; static ratchet now 1, baseline updated. **user_profiles excluded** (self-referential policy → RLS recursion risk; bespoke + tested handling = the residual 1). **⚠ 383 is DDL — operator must apply it (service key can't); it's an untested uniform copy, so the Phase-4 live two-venue isolation test is still the real gate.**
+- [x] Fix scheduling-tool-parsers.ts machine-address filter — generalised `info@(rixeymanor|thebloomhouse)` to role local-parts (info/hello/contact/events/office/bookings/admin@) at any domain (commit `936ef00`)
+- [x] De-Rixey cosmetics — extract-packages dropdown label + venue-info + openphone placeholders (commit `936ef00`)
 
-**Exit gate:** RLS baseline 0; `supabase migration list` answers "what's applied" without the founder.
+**Exit gate:** PARTIAL 2026-07-08. Code + RLS-authoring done (RLS 74→1, de-Rixey clean, tsc + guards + parser tests green). REMAINING, both R1-gated: migration flatten + APPLY-*.sql cleanup (post-wipe), plus operator-apply of migration 383 and the Phase-4 live isolation test. "`supabase migration list` answers what's applied" is the flatten deliverable — still owed, post-wipe.
 
 ## Phase R5 — Venue-2 readiness (2–3 wks; gated on R1) — MODEL: split (UI build on Opus; fictional-venue dry-run on Fable)
 
