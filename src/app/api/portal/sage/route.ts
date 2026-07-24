@@ -7,7 +7,7 @@ import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } fr
 import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/email/escalation-detector'
 import { checkEscalationForVenue } from '@/config/escalation-keywords'
-import { callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
+import { callAIVision, CLAUDE_MODEL, AIUnavailableError, COUPLE_AI_UNAVAILABLE_MESSAGE } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth } from '@/lib/api/auth-helpers'
@@ -424,14 +424,83 @@ export async function POST(request: NextRequest) {
         ? currentSection
         : null
 
-    const sageResult = await generateSageResponse({
-      venueId,
-      weddingId: weddingId || venueId, // fallback for non-wedding queries
-      message,
-      conversationHistory,
-      fileContext: resolvedFileContext || undefined,
-      currentSection: safeSection,
-    })
+    let sageResult: Awaited<ReturnType<typeof generateSageResponse>>
+    try {
+      sageResult = await generateSageResponse({
+        venueId,
+        weddingId: weddingId || venueId, // fallback for non-wedding queries
+        message,
+        conversationHistory,
+        fileContext: resolvedFileContext || undefined,
+        currentSection: safeSection,
+      })
+    } catch (err) {
+      // Total AI outage (both providers down / fallback disabled). Never
+      // let this reach the couple as a raw 500 — save the user's message,
+      // reply in a warm in-voice tone, drop it in the coordinator's
+      // uncertain queue and page them via a notification, then return the
+      // warm reply as a normal Sage turn (200) so the UI renders it in the
+      // chat rather than as an error toast.
+      if (!(err instanceof AIUnavailableError)) throw err
+      console.error('[api/portal/sage] AI unavailable:', err.stage, err.message)
+
+      await writeOrLog(supabase.from('sage_conversations').insert({
+        venue_id: venueId,
+        wedding_id: weddingId || null,
+        role: 'user',
+        content: message,
+        confidence_score: null,
+        flagged_uncertain: true,
+      }), { op: 'sage_conversations.insert', venueId })
+
+      const { data: downMsg } = await supabase
+        .from('sage_conversations')
+        .insert({
+          venue_id: venueId,
+          wedding_id: weddingId || null,
+          role: 'assistant',
+          content: COUPLE_AI_UNAVAILABLE_MESSAGE,
+          model_used: null,
+          tokens_used: 0,
+          cost: 0,
+          confidence_score: 0,
+          flagged_uncertain: true,
+        })
+        .select('id')
+        .single()
+
+      await writeOrLog(supabase.from('sage_uncertain_queue').insert({
+        venue_id: venueId,
+        wedding_id: weddingId || null,
+        conversation_id: downMsg?.id ?? null,
+        question: message,
+        sage_answer: COUPLE_AI_UNAVAILABLE_MESSAGE,
+        confidence_score: 0,
+        reason: 'ai_unavailable',
+      }), { op: 'sage_uncertain_queue.insert', venueId })
+
+      try {
+        await createNotification({
+          venueId,
+          weddingId: weddingId || undefined,
+          type: 'sage_uncertain',
+          title: 'Sage could not answer — AI provider outage',
+          body:
+            `Both the primary and fallback AI providers were unavailable, so Sage gave the couple a ` +
+            `holding reply instead of an answer. The question is in the Sage Queue for you to answer ` +
+            `directly: "${message.slice(0, 160)}${message.length > 160 ? '…' : ''}"`,
+        })
+      } catch (notifyErr) {
+        console.warn('[api/portal/sage] outage notification failed (non-blocking):', notifyErr)
+      }
+
+      return NextResponse.json({
+        response: COUPLE_AI_UNAVAILABLE_MESSAGE,
+        confidence: 0,
+        conversationId: downMsg?.id || null,
+        aiUnavailable: true,
+      })
+    }
 
     const { confidence, aiName, coupleFirstName } = sageResult
 

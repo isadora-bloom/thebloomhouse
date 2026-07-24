@@ -10,6 +10,7 @@ import {
   isFallbackForced,
   isFallbackDisabled,
 } from '@/lib/ai/circuit-breaker'
+import { alertFallbackFired } from '@/lib/ai/alert-fallback'
 
 let anthropicClient: Anthropic | null = null
 let openaiClient: OpenAI | null = null
@@ -45,12 +46,54 @@ const CLAUDE_TIMEOUT_MS = 30_000
 // OPS-21.5.6-C.
 const OPENAI_TIMEOUT_MS = 30_000
 
+/**
+ * Thrown when no provider could answer: Claude failed (or was skipped by
+ * the breaker/override) AND the OpenAI fallback also failed, is disabled,
+ * or was never configured. Couple-facing routes catch THIS specifically
+ * and render a warm, in-voice message instead of a raw 500 — a provider
+ * outage must never reach a couple as "Internal server error". Internal
+ * and coordinator callers can let it propagate.
+ */
+export class AIUnavailableError extends Error {
+  readonly stage: 'both_failed' | 'no_fallback' | 'fallback_disabled' | 'config_conflict'
+  constructor(message: string, stage: AIUnavailableError['stage']) {
+    super(message)
+    this.name = 'AIUnavailableError'
+    this.stage = stage
+  }
+}
+
+/**
+ * Couple-safe copy for a total AI outage. Deliberately warm and calm: the
+ * last thing a couple sees when every floor has failed should feel like it
+ * came from someone who cares, not a system apologising for itself.
+ * Name-agnostic so it renders even when we never got far enough to load
+ * the venue's Sage identity.
+ */
+export const COUPLE_AI_UNAVAILABLE_MESSAGE =
+  "I'm having trouble reaching my brain just now, so I'd rather not guess and risk telling you " +
+  "something wrong. I've let your coordinator know, and they'll follow up with you directly. " +
+  'Do try me again in a few minutes.'
+
+// Bounded, deliberate retry (Failure three). The SDK clients retry
+// transient errors (network drops, 408/409/429/5xx) with exponential
+// backoff up to this many times INSIDE a single call, then give up and
+// surface the error, at which point the router changes provider. Setting
+// this explicitly rather than taking the default makes "limited retry" an
+// owned decision, not blind repetition: a struggling dependency gets a
+// small, capped number of second chances, never an unbounded queue of
+// duplicate work.
+const PROVIDER_MAX_RETRIES = 2
+
 function getAnthropic(): Anthropic {
   if (!anthropicClient) {
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new Error('ANTHROPIC_API_KEY is not set')
     }
-    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+    anthropicClient = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      maxRetries: PROVIDER_MAX_RETRIES,
+    })
   }
   return anthropicClient
 }
@@ -60,9 +103,39 @@ function getOpenAI(): OpenAI {
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY is not set')
     }
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    openaiClient = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      maxRetries: PROVIDER_MAX_RETRIES,
+    })
   }
   return openaiClient
+}
+
+/**
+ * Classify a provider error so retry-vs-fallback is a deliberate decision
+ * rather than a blanket "any error means fallback" (Failure three). By the
+ * time an error reaches the router the SDK has already spent its bounded
+ * retries, so this mostly drives observability (the class lands in the log
+ * line), but it also names the intent: which failures a limited retry can
+ * fix, and which mean changing provider.
+ *   retryable  — transient: network drop, timeout, no HTTP status, 5xx,
+ *                408/409. A limited retry is worth it (and the SDK did it).
+ *   rate_limit — 429. Retried a bounded number of times, then treated as a
+ *                provider failure and sent to the fallback path.
+ *   fatal      — 4xx a retry can't fix (bad request, auth, not found).
+ *                Straight to fallback; re-sending the same request is futile.
+ */
+export type ProviderErrorClass = 'retryable' | 'rate_limit' | 'fatal'
+
+export function classifyProviderError(err: unknown): ProviderErrorClass {
+  const rawStatus =
+    typeof err === 'object' && err !== null && 'status' in err
+      ? Number((err as { status?: unknown }).status)
+      : undefined
+  if (rawStatus === 429) return 'rate_limit'
+  if (rawStatus === undefined || Number.isNaN(rawStatus)) return 'retryable'
+  if (rawStatus >= 500 || rawStatus === 408 || rawStatus === 409) return 'retryable'
+  return 'fatal'
 }
 
 /**
@@ -143,6 +216,15 @@ interface CallAIOptions {
    * Per Playbook OPS-21.2.1 / T1-G.
    */
   correlationId?: string
+  /**
+   * Internal: force this call onto the OpenAI fallback, skipping Claude,
+   * for THIS request only (unlike the global AI_FORCE_FALLBACK env). Used
+   * by callAIJson's Failure-four path: when floor one returns unparseable
+   * or schema-invalid output, the retry is forced onto a genuinely
+   * different provider rather than re-rolling the same model. Not for
+   * general callers.
+   */
+  forceFallbackProvider?: boolean
 }
 
 function modelForTier(tier: ModelTier | undefined): string {
@@ -346,7 +428,8 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   // AI_FORCE_FALLBACK skips Claude entirely (degraded-Anthropic
   // incident, or local fallback testing). The breaker also skips
   // Claude when its rolling 5-min error rate is ≥20%.
-  const skipClaude = isFallbackForced() || shouldSkip('anthropic')
+  const skipClaude =
+    options.forceFallbackProvider || isFallbackForced() || shouldSkip('anthropic')
 
   if (!skipClaude) {
     try {
@@ -365,6 +448,7 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     } catch (claudeErr) {
       recordCall('anthropic', false)
       const claudeDuration = Date.now() - started
+      const errorClass = classifyProviderError(claudeErr)
       // Anthropic 4xx errors echo the prompt content in error.message
       // (e.g. "input length exceeded: 'Hi, my email is alice@... (snip)'").
       // For tier-1 calls (transcripts, sage chat with family context),
@@ -377,16 +461,21 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
           fallback: false,
           taskType,
           durationMs: claudeDuration,
+          errorClass,
           error: redactError(claudeErr),
         })
       )
 
       if (isFallbackDisabled()) {
-        throw new Error('AI unavailable: Claude failed and AI_DISABLE_FALLBACK is set.')
+        throw new AIUnavailableError(
+          'AI unavailable: Claude failed and AI_DISABLE_FALLBACK is set.',
+          'fallback_disabled'
+        )
       }
       if (!process.env.OPENAI_API_KEY) {
-        throw new Error(
-          'AI unavailable: Claude failed and no OpenAI fallback is configured.'
+        throw new AIUnavailableError(
+          'AI unavailable: Claude failed and no OpenAI fallback is configured.',
+          'no_fallback'
         )
       }
       // fall through to fallback below
@@ -394,30 +483,34 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   } else if (isFallbackDisabled()) {
     // Forced-fallback + disabled-fallback is a contradiction; surface
     // it loudly rather than silently picking one.
-    throw new Error(
-      'AI config conflict: AI_FORCE_FALLBACK and AI_DISABLE_FALLBACK both set.'
+    throw new AIUnavailableError(
+      'AI config conflict: AI_FORCE_FALLBACK and AI_DISABLE_FALLBACK both set.',
+      'config_conflict'
     )
   }
 
   // Either Claude was skipped (override / breaker) or it failed above.
   if (!process.env.OPENAI_API_KEY) {
-    throw new Error('AI unavailable: no OpenAI fallback configured.')
+    throw new AIUnavailableError('AI unavailable: no OpenAI fallback configured.', 'no_fallback')
   }
   const fallbackStarted = Date.now()
   try {
     const result = await callOpenAIFallback(options)
     recordCall('openai', true)
+    const skipReason = skipClaude
+      ? (isFallbackForced() ? 'force_fallback' : 'breaker_tripped')
+      : 'claude_failed'
     console.log(
       JSON.stringify({
         model: OPENAI_FALLBACK_MODEL,
         fallback: true,
         taskType,
         durationMs: Date.now() - fallbackStarted,
-        skipReason: skipClaude
-          ? (isFallbackForced() ? 'force_fallback' : 'breaker_tripped')
-          : 'claude_failed',
+        skipReason,
       })
     )
+    // Floor two fired — page the operator (rate-limited, fire-and-forget).
+    void alertFallbackFired({ kind: 'fallback_fired', taskType, vision: false, skipReason })
     return result
   } catch (openaiErr) {
     recordCall('openai', false)
@@ -432,21 +525,90 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
         error: redactError(openaiErr),
       })
     )
-    throw new Error('AI unavailable: both Claude and OpenAI fallback failed.')
+    // Both floors down — page the operator (rate-limited, fire-and-forget).
+    void alertFallbackFired({ kind: 'total_outage', taskType, vision: false })
+    throw new AIUnavailableError('AI unavailable: both Claude and OpenAI fallback failed.', 'both_failed')
   }
 }
 
-export async function callAIJson<T = unknown>(options: CallAIOptions): Promise<T> {
-  const result = await callAI({
-    ...options,
-    systemPrompt: options.systemPrompt + '\n\nRespond with valid JSON only. No markdown, no code blocks, no explanation.',
-  })
+/**
+ * JSON entry point with schema-validated fallback (Failure four).
+ *
+ * An HTTP 200 is not success. A provider can return valid JSON in the
+ * wrong shape, JSON wrapped in prose, or text that only stops being valid
+ * JSON at character 4,000. So a response isn't accepted just because
+ * something came back: it's parsed AND (optionally) shape-checked. If
+ * floor one returns unusable output, the task is sent to floor two — a
+ * genuinely different provider, not a re-roll of the same model — and
+ * validated again. If both return unusable output, that's an
+ * AIUnavailableError, same as a total outage, so couple-facing callers
+ * degrade the same graceful way.
+ *
+ * `validate` is an optional predicate over the parsed value. Return false
+ * to reject a structurally-wrong response (missing key, wrong type) and
+ * trigger the fallback. Omit it to accept any parseable JSON.
+ */
+export async function callAIJson<T = unknown>(
+  options: CallAIOptions & { validate?: (parsed: unknown) => boolean }
+): Promise<T> {
+  const { validate, ...rest } = options
+  const jsonInstruction =
+    '\n\nRespond with valid JSON only. No markdown, no code blocks, no explanation.'
+  const systemPrompt = rest.systemPrompt + jsonInstruction
+  const taskType = rest.taskType ?? 'general'
 
-  const cleaned = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-  return JSON.parse(cleaned) as T
+  const tryParse = (text: string): { ok: true; value: T } | { ok: false } => {
+    try {
+      const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+      const parsed = JSON.parse(cleaned)
+      if (validate && !validate(parsed)) return { ok: false }
+      return { ok: true, value: parsed as T }
+    } catch {
+      return { ok: false }
+    }
+  }
+
+  // Floor one — normally Claude (callAI may already have dropped to OpenAI
+  // if Claude was down; that's fine, this layer only cares whether the
+  // OUTPUT is usable).
+  const first = await callAI({ ...rest, systemPrompt })
+  const firstParsed = tryParse(first.text)
+  if (firstParsed.ok) return firstParsed.value
+
+  console.warn(
+    JSON.stringify({ event: 'json_validation_failed', stage: 'primary', taskType })
+  )
+
+  // Floor one produced unusable output. Retry forcing the OpenAI fallback —
+  // a different provider is far more likely to fix a shape/parse problem
+  // than asking the same model again.
+  if (isFallbackDisabled()) {
+    throw new AIUnavailableError(
+      'AI unavailable: primary returned unusable JSON and AI_DISABLE_FALLBACK is set.',
+      'fallback_disabled'
+    )
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    throw new AIUnavailableError(
+      'AI unavailable: primary returned unusable JSON and no fallback is configured.',
+      'no_fallback'
+    )
+  }
+
+  const second = await callAI({ ...rest, systemPrompt, forceFallbackProvider: true })
+  const secondParsed = tryParse(second.text)
+  if (secondParsed.ok) return secondParsed.value
+
+  console.error(
+    JSON.stringify({ event: 'json_validation_failed', stage: 'fallback', taskType })
+  )
+  throw new AIUnavailableError(
+    'AI unavailable: both providers returned unusable JSON.',
+    'both_failed'
+  )
 }
 
-export async function callAIVision(options: {
+interface CallAIVisionOptions {
   systemPrompt: string
   userPrompt: string
   imageBase64: string
@@ -457,7 +619,9 @@ export async function callAIVision(options: {
   contentTier?: ContentTier
   promptVersion?: string
   correlationId?: string
-}): Promise<CallAIResult> {
+}
+
+async function callAnthropicVision(options: CallAIVisionOptions): Promise<CallAIResult> {
   const anthropic = getAnthropic()
   const contentTier = options.contentTier ?? 2
 
@@ -465,18 +629,22 @@ export async function callAIVision(options: {
   // (storefront analytics) which are tier 3, but also tier-1 cases like
   // contract images or family photos. Pass contentTier through so the
   // audit trail tags it correctly.
-  const response = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
-    max_tokens: options.maxTokens ?? 2000,
-    system: options.systemPrompt,
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'image', source: { type: 'base64', media_type: options.mediaType, data: options.imageBase64 } },
-        { type: 'text', text: options.userPrompt },
-      ],
-    }],
-  })
+  const response = await withTimeout(
+    anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: options.maxTokens ?? 2000,
+      system: options.systemPrompt,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: options.mediaType, data: options.imageBase64 } },
+          { type: 'text', text: options.userPrompt },
+        ],
+      }],
+    }),
+    CLAUDE_TIMEOUT_MS,
+    'Anthropic vision call'
+  )
 
   const text = response.content[0].type === 'text' ? response.content[0].text : ''
   const inputTokens = response.usage.input_tokens
@@ -486,4 +654,147 @@ export async function callAIVision(options: {
   logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier, options.promptVersion, options.correlationId)
 
   return { text, inputTokens, outputTokens, cost }
+}
+
+async function callOpenAIVisionFallback(options: CallAIVisionOptions): Promise<CallAIResult> {
+  const openai = getOpenAI()
+  const contentTier = options.contentTier ?? 2
+
+  // Tier-1 (contract images, family photos) → store: false, same
+  // per-request opt-out discipline as the text fallback. gpt-4o-mini
+  // accepts images via a data URL on a chat-completions content part.
+  const store = contentTier === 1 ? false : undefined
+
+  const response = await withTimeout(
+    openai.chat.completions.create({
+      model: OPENAI_FALLBACK_MODEL,
+      max_completion_tokens: options.maxTokens ?? 2000,
+      ...(store === false ? { store: false as const } : {}),
+      messages: [
+        { role: 'system', content: options.systemPrompt },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: options.userPrompt },
+            {
+              type: 'image_url',
+              image_url: { url: `data:${options.mediaType};base64,${options.imageBase64}` },
+            },
+          ],
+        },
+      ],
+    }),
+    OPENAI_TIMEOUT_MS,
+    'OpenAI vision fallback call'
+  )
+
+  const text = response.choices[0]?.message?.content ?? ''
+  const inputTokens = response.usage?.prompt_tokens ?? 0
+  const outputTokens = response.usage?.completion_tokens ?? 0
+  const cost = calculateCost(OPENAI_FALLBACK_MODEL, inputTokens, outputTokens)
+
+  logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, OPENAI_FALLBACK_MODEL, 'openai', contentTier, options.promptVersion, options.correlationId)
+
+  return { text, inputTokens, outputTokens, cost }
+}
+
+/**
+ * Vision entry point. Same resilience contract as callAI: Claude first
+ * (timeout-bounded, circuit-breaker aware), OpenAI gpt-4o-mini vision on
+ * failure, honouring AI_FORCE_FALLBACK / AI_DISABLE_FALLBACK. Pre-fix
+ * this path called Anthropic directly with no timeout and no fallback, so
+ * contract OCR and image classification were floor-one-only — if Claude
+ * was down they failed outright. Throws AIUnavailableError when no
+ * provider can answer, so couple-facing vision paths degrade the same way
+ * as chat. OPS-21.5.6-D.
+ */
+export async function callAIVision(options: CallAIVisionOptions): Promise<CallAIResult> {
+  const taskType = options.taskType ?? 'vision'
+  const started = Date.now()
+
+  const skipClaude = isFallbackForced() || shouldSkip('anthropic')
+
+  if (!skipClaude) {
+    try {
+      const result = await callAnthropicVision(options)
+      recordCall('anthropic', true)
+      console.log(
+        JSON.stringify({ model: CLAUDE_MODEL, vision: true, fallback: false, taskType, durationMs: Date.now() - started })
+      )
+      return result
+    } catch (claudeErr) {
+      recordCall('anthropic', false)
+      console.warn(
+        JSON.stringify({
+          model: CLAUDE_MODEL,
+          vision: true,
+          fallback: false,
+          taskType,
+          durationMs: Date.now() - started,
+          error: redactError(claudeErr),
+        })
+      )
+      if (isFallbackDisabled()) {
+        throw new AIUnavailableError(
+          'AI unavailable: Claude vision failed and AI_DISABLE_FALLBACK is set.',
+          'fallback_disabled'
+        )
+      }
+      if (!process.env.OPENAI_API_KEY) {
+        throw new AIUnavailableError(
+          'AI unavailable: Claude vision failed and no OpenAI fallback is configured.',
+          'no_fallback'
+        )
+      }
+      // fall through to fallback below
+    }
+  } else if (isFallbackDisabled()) {
+    throw new AIUnavailableError(
+      'AI config conflict: AI_FORCE_FALLBACK and AI_DISABLE_FALLBACK both set.',
+      'config_conflict'
+    )
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    throw new AIUnavailableError('AI unavailable: no OpenAI vision fallback configured.', 'no_fallback')
+  }
+  const fallbackStarted = Date.now()
+  try {
+    const result = await callOpenAIVisionFallback(options)
+    recordCall('openai', true)
+    const skipReason = skipClaude
+      ? (isFallbackForced() ? 'force_fallback' : 'breaker_tripped')
+      : 'claude_failed'
+    console.log(
+      JSON.stringify({
+        model: OPENAI_FALLBACK_MODEL,
+        vision: true,
+        fallback: true,
+        taskType,
+        durationMs: Date.now() - fallbackStarted,
+        skipReason,
+      })
+    )
+    // Floor two fired on a vision call — page the operator.
+    void alertFallbackFired({ kind: 'fallback_fired', taskType, vision: true, skipReason })
+    return result
+  } catch (openaiErr) {
+    recordCall('openai', false)
+    console.error(
+      JSON.stringify({
+        model: OPENAI_FALLBACK_MODEL,
+        vision: true,
+        fallback: true,
+        taskType,
+        durationMs: Date.now() - fallbackStarted,
+        error: redactError(openaiErr),
+      })
+    )
+    // Both floors down on a vision call — page the operator.
+    void alertFallbackFired({ kind: 'total_outage', taskType, vision: true })
+    throw new AIUnavailableError(
+      'AI unavailable: both Claude and OpenAI vision fallback failed.',
+      'both_failed'
+    )
+  }
 }

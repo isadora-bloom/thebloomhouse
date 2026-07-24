@@ -79,6 +79,7 @@ import {
 const VALID_JOBS = [
   'email_poll',
   'heat_decay',
+  'model_currency',
   'trends_refresh',
   'weather_forecast',
   // TIER 6+ (2026-05-14). Annual sweep that pulls 20 years of hourly
@@ -530,7 +531,25 @@ async function runJob(
           error: err instanceof Error ? err.message : String(err),
         }
       }
-      return { heat, identity_decay: identityDecay }
+      // Piggyback the daily stale-model check here (Failure one). vercel.json
+      // is at the Pro 40-cron cap, so this rides the 06:00 tick rather than
+      // registering its own entry. Alerts fire from inside checkModelCurrency.
+      let modelCurrency: unknown = null
+      try {
+        const { checkModelCurrency } = await import('@/lib/ai/model-currency')
+        modelCurrency = await checkModelCurrency()
+      } catch (err) {
+        modelCurrency = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return { heat, identity_decay: identityDecay, model_currency: modelCurrency }
+    }
+
+    case 'model_currency': {
+      // Standalone entry point for the stale-model check, so a synthetic
+      // monitor can exercise it on demand and a human can run it ad hoc.
+      // The scheduled run rides the daily heat_decay tick above.
+      const { checkModelCurrency } = await import('@/lib/ai/model-currency')
+      return checkModelCurrency()
     }
 
     case 'trends_refresh':

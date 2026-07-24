@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
-import { callAI, callAIJson, callAIVision } from '@/lib/ai/client'
+import { callAI, callAIJson, callAIVision, AIUnavailableError, COUPLE_AI_UNAVAILABLE_MESSAGE } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
 
@@ -64,18 +64,32 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- Action: analyze — run AI extraction on a contract ----
+    // Awaited (not just returned) so an AIUnavailableError thrown deep in
+    // the analyze pipeline reaches the catch below instead of escaping as
+    // an unhandled rejection Next renders as a bare 500.
     if (action === 'analyze') {
-      return handleAnalyze(body, auth)
+      return await handleAnalyze(body, auth)
     }
 
     // ---- Action: ask — Q&A about a contract ----
     if (action === 'ask') {
-      return handleAsk(body, auth)
+      return await handleAsk(body, auth)
     }
 
     // ---- Default: create a new contract record ----
-    return handleCreate(body, auth)
+    return await handleCreate(body, auth)
   } catch (error) {
+    // Total AI outage — both providers down. Give the couple the same warm
+    // holding message Sage uses rather than "Internal server error". 503
+    // so the client's error path renders the copy (contract analyze/ask is
+    // a one-shot action, not a chat turn we persist).
+    if (error instanceof AIUnavailableError) {
+      console.error('[api/couple/contracts] AI unavailable:', error.stage, error.message)
+      return NextResponse.json(
+        { error: COUPLE_AI_UNAVAILABLE_MESSAGE, aiUnavailable: true },
+        { status: 503 },
+      )
+    }
     return serverError(error)
   }
 }
