@@ -28,7 +28,7 @@ import { cn } from '@/lib/utils'
 // Types & Constants
 // ---------------------------------------------------------------------------
 
-type SectionKey = 'priorities' | 'story' | 'feelings' | 'splurge' | 'skip' | 'memories' | 'values' | 'alignment' | 'happily_skipping'
+type SectionKey = 'priorities' | 'story' | 'feelings' | 'splurge' | 'skip' | 'memories' | 'values' | 'alignment' | 'happily_skipping' | 'budget' | 'guest_rules'
 
 interface WorksheetRecord {
   id: string
@@ -50,6 +50,8 @@ const SECTIONS: SectionConfig[] = [
   { key: 'story', title: 'Our Story', description: 'How you met, your proposal, your journey', icon: BookOpen },
   { key: 'feelings', title: 'Our Vibe', description: 'What feelings do you want on your day?', icon: Sparkles },
   { key: 'splurge', title: 'Splurge vs Skip', description: 'Where to invest and where to save', icon: DollarSign },
+  { key: 'budget', title: 'Budget Starting Point', description: 'Where your budget is coming from', icon: DollarSign },
+  { key: 'guest_rules', title: 'Guest List Ground Rules', description: 'Agree how you will decide who to invite', icon: ListOrdered },
   { key: 'happily_skipping', title: "Happily Skipping", description: 'Traditions you are choosing to skip', icon: XCircle },
   { key: 'alignment', title: 'Alignment Check', description: 'See where you and your partner agree', icon: MessageSquare },
   { key: 'memories', title: 'Memories & Notes', description: 'Personal reminders and reflections', icon: Brain },
@@ -151,6 +153,8 @@ export default function WorksheetsPage() {
     values: null,
     alignment: null,
     happily_skipping: null,
+    budget: null,
+    guest_rules: null,
   })
   const [loading, setLoading] = useState(true)
   const [expandedSection, setExpandedSection] = useState<SectionKey | null>('priorities')
@@ -168,6 +172,18 @@ export default function WorksheetsPage() {
   const [memories, setMemories] = useState('')
   const [valuesData, setValuesData] = useState<ValuesData>({ ...EMPTY_VALUES })
   const [happilySkipping, setHappilySkipping] = useState<string[]>([])
+  const [budgetInputs, setBudgetInputs] = useState({
+    p1_savings: '', p1_future: '', p2_savings: '', p2_future: '', family: '',
+  })
+  const [guestRules, setGuestRules] = useState({
+    count_min: '', count_max: '', count_contracted: '',
+    rule_family: '', rule_friends: '', rule_work: '', rule_plusones: '', rule_children: '',
+  })
+
+  // Sum of the five contribution inputs — pushed to the budget tracker total.
+  const budgetTotal = [budgetInputs.p1_savings, budgetInputs.p1_future, budgetInputs.p2_savings, budgetInputs.p2_future, budgetInputs.family]
+    .map((v) => parseFloat(v) || 0)
+    .reduce((a, b) => a + b, 0)
 
   // Partner priority data for alignment check (partner2 priorities stored under a different key)
   const [partner2Priorities, setPartner2Priorities] = useState<string[] | null>(null)
@@ -227,6 +243,14 @@ export default function WorksheetsPage() {
         const c = bySection.happily_skipping.content as { items?: string[] }
         if (c.items) setHappilySkipping(c.items)
       }
+      if (bySection.budget?.content) {
+        const c = bySection.budget.content as Partial<typeof budgetInputs>
+        setBudgetInputs((b) => ({ ...b, ...c }))
+      }
+      if (bySection.guest_rules?.content) {
+        const c = bySection.guest_rules.content as Partial<typeof guestRules>
+        setGuestRules((g) => ({ ...g, ...c }))
+      }
     }
     setLoading(false)
   }, [supabase, weddingId])
@@ -264,6 +288,12 @@ export default function WorksheetsPage() {
       case 'happily_skipping':
         content = { items: happilySkipping }
         break
+      case 'budget':
+        content = { ...budgetInputs, total: budgetTotal }
+        break
+      case 'guest_rules':
+        content = { ...guestRules }
+        break
       case 'alignment':
         // Alignment is read-only / computed, no save needed
         return
@@ -283,6 +313,18 @@ export default function WorksheetsPage() {
         section,
         content,
       }), { op: 'wedding_worksheets.insert', venueId })
+    }
+
+    // Budget Starting Point auto-populates the budget tracker's overall total
+    // (wedding_config.total_budget), matching Rixey's behaviour.
+    if (section === 'budget' && budgetTotal > 0) {
+      await writeOrLog(
+        supabase.from('wedding_config').upsert(
+          { venue_id: venueId, wedding_id: weddingId, total_budget: budgetTotal },
+          { onConflict: 'venue_id,wedding_id' },
+        ),
+        { op: 'wedding_config.upsert_total', venueId },
+      )
     }
 
     setSavingSection(null)
@@ -838,6 +880,94 @@ export default function WorksheetsPage() {
                             {happilySkipping.length} tradition{happilySkipping.length !== 1 ? 's' : ''} happily skipped
                           </p>
                         )}
+                      </>
+                    )}
+
+                    {/* BUDGET STARTING POINT */}
+                    {section.key === 'budget' && (
+                      <>
+                        <p className="text-sm text-gray-600">
+                          Add up where your budget is coming from. This total becomes the starting point in your Budget tracker.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {([
+                            ['p1_savings', "Partner 1 — savings"],
+                            ['p1_future', "Partner 1 — saving before the day"],
+                            ['p2_savings', "Partner 2 — savings"],
+                            ['p2_future', "Partner 2 — saving before the day"],
+                            ['family', 'Family contributions'],
+                          ] as const).map(([key, label]) => (
+                            <div key={key}>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={budgetInputs[key]}
+                                  onChange={(e) => setBudgetInputs((b) => ({ ...b, [key]: e.target.value }))}
+                                  placeholder="0"
+                                  className="w-full pl-7 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg bg-gray-50 border border-gray-200 px-4 py-3">
+                          <span className="text-sm font-medium text-gray-600">Starting budget total</span>
+                          <span className="text-lg font-bold" style={{ color: 'var(--couple-primary)' }}>
+                            ${budgetTotal.toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-400">Saving this updates your Budget tracker&apos;s overall total.</p>
+                      </>
+                    )}
+
+                    {/* GUEST LIST GROUND RULES */}
+                    {section.key === 'guest_rules' && (
+                      <>
+                        <p className="text-sm text-gray-600">
+                          Agree the numbers and the rules up front, so the guest list is a shared decision, not a running argument.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {([
+                            ['count_min', 'Minimum count'],
+                            ['count_max', 'Maximum count'],
+                            ['count_contracted', 'Contracted count'],
+                          ] as const).map(([key, label]) => (
+                            <div key={key}>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={guestRules[key]}
+                                onChange={(e) => setGuestRules((g) => ({ ...g, [key]: e.target.value }))}
+                                placeholder="0"
+                                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="space-y-3">
+                          {([
+                            ['rule_family', 'Family — how do we decide?'],
+                            ['rule_friends', 'Friends — how do we decide?'],
+                            ['rule_work', 'Work / colleagues — are they invited?'],
+                            ['rule_plusones', 'Plus-ones — what is the rule?'],
+                            ['rule_children', 'Children — are they invited?'],
+                          ] as const).map(([key, label]) => (
+                            <div key={key}>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+                              <textarea
+                                value={guestRules[key]}
+                                onChange={(e) => setGuestRules((g) => ({ ...g, [key]: e.target.value }))}
+                                rows={2}
+                                placeholder="Our rule..."
+                                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471] resize-none"
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </>
                     )}
 
