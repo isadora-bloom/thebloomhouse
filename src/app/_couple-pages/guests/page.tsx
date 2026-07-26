@@ -167,6 +167,66 @@ const CSV_HEADER_MAP: Record<string, string> = {
   'meal preference': 'meal_choice',
   'rsvp': 'rsvp_status',
   'rsvp status': 'rsvp_status',
+  // Synthetic targets (underscore-prefixed) are post-processed in importCsv and
+  // never written to the DB directly.
+  'name': '_full_name',
+  'full name': '_full_name',
+  'guest': '_full_name',
+  'guest name': '_full_name',
+  'plus one': '_plus_one',
+  'plus-one': '_plus_one',
+  '+1': '_plus_one',
+}
+
+/**
+ * Minimal RFC-4180-ish CSV parser: handles a UTF-8 BOM, quoted fields with
+ * embedded commas / newlines, and "" escapes. Returns trimmed cells; fully
+ * empty rows are dropped. Replaces the previous naive split(',') which broke
+ * on any quoted field containing a comma (addresses, "Last, Jr").
+ */
+function parseCsv(input: string): string[][] {
+  const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input
+  const rows: string[][] = []
+  let field = ''
+  let row: string[] = []
+  let inQuotes = false
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++ } else { inQuotes = false }
+      } else {
+        field += c
+      }
+    } else if (c === '"') {
+      inQuotes = true
+    } else if (c === ',') {
+      row.push(field); field = ''
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++
+      row.push(field); field = ''
+      rows.push(row); row = []
+    } else {
+      field += c
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row) }
+
+  return rows
+    .map((r) => r.map((v) => v.trim()))
+    .filter((r) => r.some((v) => v !== ''))
+}
+
+/** Map free-text RSVP values onto the app's statuses; null = leave default. */
+function normalizeRsvp(value: string): string | null {
+  const s = value.trim().toLowerCase()
+  if (!s) return null
+  if (['yes', 'y', 'attending', 'accepted', 'accept', 'confirmed', 'will attend', 'coming'].includes(s)) return 'attending'
+  if (['no', 'n', 'declined', 'decline', 'not attending', 'regrets', 'cant attend', "can't attend", 'not coming'].includes(s)) return 'declined'
+  if (['maybe', 'tentative', 'unsure'].includes(s)) return 'maybe'
+  if (['pending', 'invited', 'no response', 'awaiting'].includes(s)) return 'pending'
+  return null
 }
 
 const EMPTY_FORM: GuestFormData = {
@@ -692,10 +752,10 @@ export default function GuestListPage() {
     reader.onload = (evt) => {
       const text = evt.target?.result as string
       if (!text) return
-      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
-      if (lines.length < 2) return
+      const table = parseCsv(text)
+      if (table.length < 2) return
 
-      const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim())
+      const headers = table[0]
       setCsvHeaders(headers)
 
       // Auto-map headers
@@ -706,10 +766,10 @@ export default function GuestListPage() {
       })
       setCsvMapping(mapping)
 
-      // Parse rows
+      // Parse every data row (no silent cap).
       const rows: CsvRow[] = []
-      for (let i = 1; i < lines.length && i <= 100; i++) {
-        const vals = lines[i].split(',').map((v) => v.replace(/"/g, '').trim())
+      for (let i = 1; i < table.length; i++) {
+        const vals = table[i]
         const row: CsvRow = {}
         headers.forEach((h, idx) => {
           row[h] = vals[idx] || ''
@@ -735,6 +795,27 @@ export default function GuestListPage() {
       Object.entries(csvMapping).forEach(([csvHeader, field]) => {
         if (row[csvHeader]) guest[field] = row[csvHeader]
       })
+
+      // Synthetic: split a combined "name" column into first / last.
+      if (typeof guest._full_name === 'string') {
+        const parts = guest._full_name.trim().split(/\s+/)
+        if (!guest.first_name && parts.length) guest.first_name = parts[0]
+        if (!guest.last_name && parts.length > 1) guest.last_name = parts.slice(1).join(' ')
+        delete guest._full_name
+      }
+
+      // Synthetic: interpret a plus-one column (a name or yes/true counts as yes).
+      if (guest._plus_one !== undefined) {
+        const s = String(guest._plus_one).trim().toLowerCase()
+        guest.has_plus_one = s !== '' && !['no', 'n', 'false', '0'].includes(s)
+        delete guest._plus_one
+      }
+
+      // Normalise free-text RSVP values onto the app's statuses.
+      if (typeof guest.rsvp_status === 'string') {
+        guest.rsvp_status = normalizeRsvp(guest.rsvp_status) ?? 'pending'
+      }
+
       if (!guest.first_name) guest.first_name = 'Unknown'
       return guest
     })
