@@ -211,6 +211,18 @@ export async function GET(request: NextRequest) {
 
     const website = await getPublishedWebsite(supabase, slug)
     if (!website) return err('Wedding website not found or not published', 404)
+
+    // Password gate. If the couple set a shared site password, withhold all
+    // content until the correct password is supplied via ?pw=. Return a 200
+    // flag (not 404) so the client can render a prompt, but leak nothing else.
+    const sitePassword = (website.site_password ?? '').trim()
+    if (sitePassword) {
+      const providedPw = (searchParams.get('pw') ?? '').trim()
+      if (providedPw !== sitePassword) {
+        return json({ password_required: true, couple_names: website.couple_names ?? null })
+      }
+    }
+
     const weddingId = website.wedding_id
     const venueId = website.venue_id
 

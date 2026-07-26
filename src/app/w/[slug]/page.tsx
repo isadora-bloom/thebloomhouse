@@ -262,15 +262,34 @@ export default function WeddingWebsitePage() {
   const [eventDate, setEventDate] = useState<string | null>(null)
   const [rsvpConfig, setRsvpConfig] = useState<RsvpConfigData | null>(null)
 
-  const fetchData = useCallback(async () => {
+  // Password gate. A remembered password is kept in sessionStorage so guests
+  // don't re-enter it on every navigation within the same tab.
+  const pwStorageKey = `wsite_pw_${slug}`
+  const [passwordRequired, setPasswordRequired] = useState(false)
+  const [coupleNamesHint, setCoupleNamesHint] = useState<string | null>(null)
+  const [passwordInput, setPasswordInput] = useState('')
+  const [passwordError, setPasswordError] = useState(false)
+  const [submittingPassword, setSubmittingPassword] = useState(false)
+
+  const fetchData = useCallback(async (pw?: string) => {
     try {
       setLoading(true)
-      const res = await fetch(`/api/public/wedding-website?slug=${encodeURIComponent(slug)}`)
+      const pwParam = pw ? `&pw=${encodeURIComponent(pw)}` : ''
+      const res = await fetch(`/api/public/wedding-website?slug=${encodeURIComponent(slug)}${pwParam}`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || 'Website not found')
       }
       const data = await res.json()
+      if (data.password_required) {
+        setPasswordRequired(true)
+        setCoupleNamesHint(data.couple_names ?? null)
+        // A remembered password that no longer works (couple changed it) —
+        // clear it so the prompt reappears clean.
+        if (pw) sessionStorage.removeItem(pwStorageKey)
+        return
+      }
+      setPasswordRequired(false)
       setWebsite(data.website)
       setMealOptions(data.meal_options ?? [])
       setTimeline(data.timeline ?? [])
@@ -282,11 +301,41 @@ export default function WeddingWebsitePage() {
     } finally {
       setLoading(false)
     }
-  }, [slug])
+  }, [slug, pwStorageKey])
 
   useEffect(() => {
-    if (slug) fetchData()
-  }, [slug, fetchData])
+    if (!slug) return
+    const remembered = typeof window !== 'undefined' ? sessionStorage.getItem(pwStorageKey) : null
+    fetchData(remembered ?? undefined)
+  }, [slug, fetchData, pwStorageKey])
+
+  async function handlePasswordSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const pw = passwordInput.trim()
+    if (!pw) return
+    setSubmittingPassword(true)
+    setPasswordError(false)
+    try {
+      const res = await fetch(`/api/public/wedding-website?slug=${encodeURIComponent(slug)}&pw=${encodeURIComponent(pw)}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.password_required) {
+        setPasswordError(true)
+        return
+      }
+      sessionStorage.setItem(pwStorageKey, pw)
+      setPasswordRequired(false)
+      setWebsite(data.website)
+      setMealOptions(data.meal_options ?? [])
+      setTimeline(data.timeline ?? [])
+      setAccommodations(data.accommodations ?? [])
+      setEventDate(data.event_date ?? null)
+      setRsvpConfig(data.rsvp_config ?? null)
+    } catch {
+      setPasswordError(true)
+    } finally {
+      setSubmittingPassword(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -294,6 +343,44 @@ export default function WeddingWebsitePage() {
         <div className="text-center space-y-3">
           <Loader2 className="w-8 h-8 animate-spin mx-auto text-gray-400" />
           <p className="text-sm text-gray-400">Loading wedding website...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (passwordRequired) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#FAF8F5' }}>
+        <div className="w-full max-w-sm px-6">
+          <div className="text-center space-y-3 mb-6">
+            <Heart className="w-10 h-10 mx-auto text-gray-300" />
+            <h1 className="text-2xl font-light text-gray-600" style={{ fontFamily: "'Playfair Display', serif" }}>
+              {coupleNamesHint || 'This wedding website'}
+            </h1>
+            <p className="text-sm text-gray-400">
+              This website is password protected. Please enter the password from your invitation.
+            </p>
+          </div>
+          <form onSubmit={handlePasswordSubmit} className="space-y-3">
+            <input
+              type="password"
+              value={passwordInput}
+              onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false) }}
+              placeholder="Password"
+              autoFocus
+              className="w-full px-4 py-3 rounded-lg border border-gray-200 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-transparent text-center"
+            />
+            {passwordError && (
+              <p className="text-sm text-red-500 text-center">That password didn&apos;t match. Please try again.</p>
+            )}
+            <button
+              type="submit"
+              disabled={submittingPassword || !passwordInput.trim()}
+              className="w-full py-3 rounded-lg text-sm font-medium text-white bg-gray-700 hover:bg-gray-800 transition-colors disabled:opacity-50"
+            >
+              {submittingPassword ? 'Checking...' : 'View Website'}
+            </button>
+          </form>
         </div>
       </div>
     )

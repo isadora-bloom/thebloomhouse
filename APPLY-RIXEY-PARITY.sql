@@ -23,3 +23,10 @@ ALTER TABLE booked_vendors
 
 COMMENT ON COLUMN booked_vendors.worked_here_before IS
   'Has this vendor worked at the venue before? true / null (unknown). Surfaced day-of so staff know who needs orienting.';
+
+-- ---- 387: public wedding-site password protection --------------------------
+ALTER TABLE wedding_website_settings
+  ADD COLUMN IF NOT EXISTS site_password text;
+
+COMMENT ON COLUMN wedding_website_settings.site_password IS
+  'Optional shared password gating the public site. NULL/empty = open. Plaintext shared code, not a credential; compared server-side only, never sent to unauthenticated clients.';
