@@ -87,6 +87,9 @@ export default function PhotoLibraryPage() {
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null)
   const [guestNames, setGuestNames] = useState<GuestName[]>([])
   const [peopleSearch, setPeopleSearch] = useState('')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -157,6 +160,8 @@ export default function PhotoLibraryPage() {
     setForm(EMPTY_FORM)
     setEditingId(null)
     setPeopleSearch('')
+    setSelectedFile(null)
+    setUploadError(null)
     setShowModal(true)
   }
 
@@ -171,6 +176,8 @@ export default function PhotoLibraryPage() {
     })
     setEditingId(photo.id)
     setPeopleSearch('')
+    setSelectedFile(null)
+    setUploadError(null)
     setShowModal(true)
   }
 
@@ -193,37 +200,64 @@ export default function PhotoLibraryPage() {
   }
 
   async function handleSave() {
-    if (!form.image_url.trim()) return
+    const hasFile = !!selectedFile
+    const hasUrl = !!form.image_url.trim()
+    if (!hasFile && !hasUrl) return
 
-    const payload = {
-      venue_id: venueId,
-      wedding_id: weddingId,
-      image_url: form.image_url.trim(),
-      caption: form.caption.trim() || null,
-      tags: form.tags,
-      is_website: form.is_website,
-      is_hero: form.is_hero,
-      people_tags: form.people_tags,
+    setUploading(true)
+    setUploadError(null)
+
+    try {
+      // Upload a picked file to Storage, else fall back to the pasted URL.
+      let imageUrl = form.image_url.trim()
+      if (hasFile && selectedFile) {
+        const safeName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const path = `${weddingId}/${Date.now()}_${safeName}`
+        const { error: uploadErr } = await supabase.storage
+          .from('couple-photos')
+          .upload(path, selectedFile, { contentType: selectedFile.type })
+        if (uploadErr) throw uploadErr
+        const { data: urlData } = supabase.storage.from('couple-photos').getPublicUrl(path)
+        imageUrl = urlData.publicUrl
+      }
+
+      const payload = {
+        venue_id: venueId,
+        wedding_id: weddingId,
+        image_url: imageUrl,
+        caption: form.caption.trim() || null,
+        tags: form.tags,
+        is_website: form.is_website,
+        is_hero: form.is_hero,
+        people_tags: form.people_tags,
+      }
+
+      // If marking as hero, un-hero all others first
+      if (form.is_hero) {
+        await supabase
+          .from('photo_library')
+          .update({ is_hero: false })
+          .eq('wedding_id', weddingId)
+          .neq('id', editingId || '')
+      }
+
+      if (editingId) {
+        const { error } = await supabase.from('photo_library').update(payload).eq('id', editingId)
+        if (error) throw error
+      } else {
+        await writeOrLog(supabase.from('photo_library').insert(payload), { op: 'photo_library.insert', venueId })
+      }
+
+      setSelectedFile(null)
+      setShowModal(false)
+      setEditingId(null)
+      fetchPhotos()
+    } catch (err) {
+      console.error('Failed to save photo:', err)
+      setUploadError(err instanceof Error ? err.message : 'Failed to save photo. Please try again.')
+    } finally {
+      setUploading(false)
     }
-
-    // If marking as hero, un-hero all others first
-    if (form.is_hero) {
-      await supabase
-        .from('photo_library')
-        .update({ is_hero: false })
-        .eq('wedding_id', weddingId)
-        .neq('id', editingId || '')
-    }
-
-    if (editingId) {
-      await supabase.from('photo_library').update(payload).eq('id', editingId)
-    } else {
-      await writeOrLog(supabase.from('photo_library').insert(payload), { op: 'photo_library.insert', venueId })
-    }
-
-    setShowModal(false)
-    setEditingId(null)
-    fetchPhotos()
   }
 
   async function handleDelete(photo: Photo) {
@@ -664,6 +698,30 @@ export default function PhotoLibraryPage() {
             </div>
 
             <div className="space-y-3">
+              {/* Upload from device */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Upload a photo</label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null
+                    setSelectedFile(f)
+                    setUploadError(null)
+                  }}
+                  className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                />
+                {selectedFile && (
+                  <p className="mt-1 text-xs text-gray-500 truncate">Selected: {selectedFile.name}</p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <span className="flex-1 h-px bg-gray-100" />
+                or paste a link
+                <span className="flex-1 h-px bg-gray-100" />
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
                 <input
@@ -676,7 +734,11 @@ export default function PhotoLibraryPage() {
                 />
               </div>
 
-              {form.image_url && (
+              {uploadError && (
+                <p className="text-sm text-red-500">{uploadError}</p>
+              )}
+
+              {form.image_url && !selectedFile && (
                 <div className="rounded-lg overflow-hidden border border-gray-200">
                   <img
                     src={form.image_url}
@@ -881,11 +943,11 @@ export default function PhotoLibraryPage() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={!form.image_url.trim()}
+                disabled={uploading || (!form.image_url.trim() && !selectedFile)}
                 className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >
-                {editingId ? 'Save Changes' : 'Add Photo'}
+                {uploading ? 'Saving…' : editingId ? 'Save Changes' : 'Add Photo'}
               </button>
             </div>
           </div>
