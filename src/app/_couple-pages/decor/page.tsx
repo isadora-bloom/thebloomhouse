@@ -80,6 +80,7 @@ export default function DecorInventoryPage() {
   const [expandedSpaces, setExpandedSpaces] = useState<Set<string>>(new Set())
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [deleteSpaceConfirm, setDeleteSpaceConfirm] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // Venue-configured spaces (loaded from venue_config.feature_flags.decor_config)
   const [venueSpaces, setVenueSpaces] = useState<string[]>(PRESET_SPACES)
@@ -185,8 +186,14 @@ export default function DecorInventoryPage() {
   async function handleDeleteSpace(spaceName: string) {
     const spaceItems = spaces[spaceName] || []
     for (const item of spaceItems) {
-      await supabase.from('decor_inventory').delete().eq('id', item.id)
+      const { error } = await supabase.from('decor_inventory').delete().eq('id', item.id)
+      if (error) {
+        console.error('Failed to delete decor item:', error)
+        setSaveError("Couldn't remove one or more items. Please try again.")
+        return
+      }
     }
+    setSaveError(null)
     setDeleteSpaceConfirm(null)
     fetchItems()
   }
@@ -218,10 +225,16 @@ export default function DecorInventoryPage() {
     if (debounceRef.current[itemId]) clearTimeout(debounceRef.current[itemId])
 
     debounceRef.current[itemId] = setTimeout(async () => {
-      await supabase
+      const { error } = await supabase
         .from('decor_inventory')
         .update({ [field]: value })
         .eq('id', itemId)
+      if (error) {
+        console.error('Failed to autosave decor change:', error)
+        setSaveError("Couldn't save your latest change. Please check your connection.")
+      } else {
+        setSaveError(null)
+      }
       delete debounceRef.current[itemId]
     }, 400)
   }
@@ -235,7 +248,13 @@ export default function DecorInventoryPage() {
 
   // ---- Delete item ----
   async function handleDeleteItem(id: string) {
-    await supabase.from('decor_inventory').delete().eq('id', id)
+    const { error } = await supabase.from('decor_inventory').delete().eq('id', id)
+    if (error) {
+      console.error('Failed to delete decor item:', error)
+      setSaveError("Couldn't remove that item. Please try again.")
+      return
+    }
+    setSaveError(null)
     setDeleteConfirm(null)
     fetchItems()
   }
@@ -253,6 +272,11 @@ export default function DecorInventoryPage() {
 
   return (
     <div className="space-y-6">
+      {saveError && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">
+          {saveError}
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

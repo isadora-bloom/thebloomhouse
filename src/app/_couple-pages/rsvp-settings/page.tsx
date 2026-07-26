@@ -225,6 +225,7 @@ export default function RsvpSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [hasExisting, setHasExisting] = useState(false)
 
   const supabase = createClient()
@@ -296,12 +297,20 @@ export default function RsvpSettingsPage() {
       updated_at: new Date().toISOString(),
     }
 
-    await supabase
+    const { error } = await supabase
       .from('rsvp_config')
       .upsert(payload, { onConflict: 'venue_id,wedding_id' })
 
-    setHasExisting(true)
     setSaving(false)
+
+    if (error) {
+      console.error('Failed to save RSVP settings:', error)
+      setSaveError('Could not save your settings. Please try again.')
+      return
+    }
+
+    setSaveError(null)
+    setHasExisting(true)
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
   }
@@ -361,24 +370,27 @@ export default function RsvpSettingsPage() {
             Configure what your guests see when they RSVP
           </p>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className={cn(
-            'flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-white transition-all',
-            saved ? 'bg-green-600' : 'hover:opacity-90'
-          )}
-          style={!saved ? { backgroundColor: 'var(--couple-primary, #7D8471)' } : undefined}
-        >
-          {saving ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : saved ? (
-            <CheckCircle2 className="w-4 h-4" />
-          ) : (
-            <Save className="w-4 h-4" />
-          )}
-          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Settings'}
-        </button>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className={cn(
+              'flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-white transition-all',
+              saved ? 'bg-green-600' : 'hover:opacity-90'
+            )}
+            style={!saved ? { backgroundColor: 'var(--couple-primary, #7D8471)' } : undefined}
+          >
+            {saving ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : saved ? (
+              <CheckCircle2 className="w-4 h-4" />
+            ) : (
+              <Save className="w-4 h-4" />
+            )}
+            {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Settings'}
+          </button>
+          {saveError && <span className="text-xs text-red-600">{saveError}</span>}
+        </div>
       </div>
 
       {/* ---- RSVP Deadline ---- */}
