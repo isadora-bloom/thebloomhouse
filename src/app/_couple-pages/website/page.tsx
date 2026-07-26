@@ -74,6 +74,7 @@ interface WebsiteSettings {
   accent_color: string
   url_slug: string
   is_published: boolean
+  site_password: string
   sections: WebsiteSection[]
 }
 
@@ -176,6 +177,7 @@ const DEFAULT_SETTINGS: WebsiteSettings = {
   accent_color: '#8B7355',
   url_slug: '',
   is_published: false,
+  site_password: '',
   sections: DEFAULT_SECTION_ORDER.map((type, i) => ({
     id: `section-${type}`,
     type,
@@ -278,6 +280,9 @@ export default function WeddingWebsitePage() {
       setSettings({
         ...DEFAULT_SETTINGS,
         ...data,
+        // DB stores the public identifier as `slug`; the builder UI uses `url_slug`.
+        url_slug: data.slug ?? '',
+        site_password: data.site_password ?? '',
         sections: data.sections || DEFAULT_SETTINGS.sections,
       })
     }
@@ -292,7 +297,16 @@ export default function WeddingWebsitePage() {
   // ---- Save ----
   async function saveSettings(updated?: Partial<WebsiteSettings>) {
     setSaving(true)
-    const payload = { ...settings, ...updated, wedding_id: weddingId, venue_id: venueId }
+    // Map the builder's `url_slug` onto the real `slug` column and drop any
+    // transient/id fields, so the upsert only carries columns that exist.
+    const { url_slug, id: _id, created_at: _c, updated_at: _u, ...rest } =
+      { ...settings, ...updated } as WebsiteSettings & { id?: string; created_at?: string; updated_at?: string }
+    const payload = {
+      ...rest,
+      slug: url_slug?.trim() ? url_slug.trim() : null,
+      wedding_id: weddingId,
+      venue_id: venueId,
+    }
     // T5-Rixey-XX: matched by uq_wedding_website_settings_wedding_id (mig 188).
     await writeOrLog(supabase.from('wedding_website_settings').upsert(payload, { onConflict: 'wedding_id' }), { op: 'wedding_website_settings.upsert', venueId })
     if (updated) setSettings(prev => ({ ...prev, ...updated }))
@@ -496,6 +510,21 @@ export default function WeddingWebsitePage() {
                   {copiedSlug ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                 </button>
               )}
+            </div>
+
+            {/* Password protection */}
+            <div className="pt-3 border-t border-gray-100">
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Password protect <span className="text-gray-400 font-normal">(optional — guests enter this to view the site)</span>
+              </label>
+              <input
+                type="text"
+                value={settings.site_password}
+                onChange={e => update('site_password', e.target.value)}
+                placeholder="Leave blank for an open site"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              />
             </div>
           </div>
 

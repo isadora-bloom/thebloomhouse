@@ -30,3 +30,13 @@ ALTER TABLE wedding_website_settings
 
 COMMENT ON COLUMN wedding_website_settings.site_password IS
   'Optional shared password gating the public site. NULL/empty = open. Plaintext shared code, not a credential; compared server-side only, never sent to unauthenticated clients.';
+
+-- ---- 388: make the website builder actually persist ------------------------
+-- Builder wrote these columns but none existed, so every save was silently
+-- rejected. url_slug is intentionally NOT added (builder maps it to slug).
+ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS partner1_name text;
+ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS partner2_name text;
+ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS venue_name text;
+ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS venue_address text;
+ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS wedding_date text;
+ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS sections jsonb DEFAULT '[]'::jsonb;
