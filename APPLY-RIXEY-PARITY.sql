@@ -15,3 +15,11 @@ ALTER TABLE wedding_party
 
 COMMENT ON COLUMN wedding_party.blurb IS
   'Short blurb shown on the public wedding website (distinct from bio, the longer profile text).';
+
+-- ---- 386: restore Rixey "worked here before?" vendor flag -------------------
+-- (arrival_time / departure_time / instagram already exist from migration 032)
+ALTER TABLE booked_vendors
+  ADD COLUMN IF NOT EXISTS worked_here_before boolean;
+
+COMMENT ON COLUMN booked_vendors.worked_here_before IS
+  'Has this vendor worked at the venue before? true / null (unknown). Surfaced day-of so staff know who needs orienting.';

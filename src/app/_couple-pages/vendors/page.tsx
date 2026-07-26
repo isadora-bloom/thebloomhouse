@@ -36,6 +36,10 @@ interface BookedVendor {
   vendor_contact: string | null
   notes: string | null
   is_booked: boolean
+  arrival_time: string | null
+  departure_time: string | null
+  instagram: string | null
+  worked_here_before: boolean | null
   contract_uploaded: boolean
   contract_url: string | null
   contract_storage_path: string | null
@@ -50,6 +54,10 @@ interface VendorFormData {
   vendor_contact: string
   notes: string
   is_booked: boolean
+  arrival_time: string
+  departure_time: string
+  instagram: string
+  worked_here_before: boolean
 }
 
 const EMPTY_FORM: VendorFormData = {
@@ -58,6 +66,10 @@ const EMPTY_FORM: VendorFormData = {
   vendor_contact: '',
   notes: '',
   is_booked: false,
+  arrival_time: '',
+  departure_time: '',
+  instagram: '',
+  worked_here_before: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +194,25 @@ function VendorCard({
         {/* Contact */}
         {vendor.vendor_contact && (
           <p className="text-sm text-gray-500 mb-2">{vendor.vendor_contact}</p>
+        )}
+
+        {/* Day-of timing + Instagram */}
+        {(vendor.arrival_time || vendor.departure_time || vendor.instagram || vendor.worked_here_before) && (
+          <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs text-gray-500 mb-2">
+            {(vendor.arrival_time || vendor.departure_time) && (
+              <span>
+                {vendor.arrival_time && `Arrives ${vendor.arrival_time}`}
+                {vendor.arrival_time && vendor.departure_time && ' · '}
+                {vendor.departure_time && `Departs ${vendor.departure_time}`}
+              </span>
+            )}
+            {vendor.instagram && <span className="text-gray-400">{vendor.instagram}</span>}
+            {vendor.worked_here_before && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600">
+                Worked here before
+              </span>
+            )}
+          </div>
         )}
 
         {/* Notes */}
@@ -378,6 +409,10 @@ export default function VendorsPage() {
             vendor_contact: form.vendor_contact || null,
             notes: form.notes || null,
             is_booked: form.is_booked,
+            arrival_time: form.arrival_time || null,
+            departure_time: form.departure_time || null,
+            instagram: form.instagram || null,
+            worked_here_before: form.worked_here_before ? true : null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', editingId)
@@ -396,6 +431,10 @@ export default function VendorsPage() {
             vendor_contact: form.vendor_contact || null,
             notes: form.notes || null,
             is_booked: form.is_booked,
+            arrival_time: form.arrival_time || null,
+            departure_time: form.departure_time || null,
+            instagram: form.instagram || null,
+            worked_here_before: form.worked_here_before ? true : null,
           })
 
         if (insertErr) throw insertErr
@@ -419,6 +458,10 @@ export default function VendorsPage() {
       vendor_contact: vendor.vendor_contact || '',
       notes: vendor.notes || '',
       is_booked: vendor.is_booked,
+      arrival_time: vendor.arrival_time || '',
+      departure_time: vendor.departure_time || '',
+      instagram: vendor.instagram || '',
+      worked_here_before: vendor.worked_here_before === true,
     })
     setEditingId(vendor.id)
     setShowForm(true)
@@ -725,17 +768,56 @@ export default function VendorsPage() {
             </div>
           </div>
 
-          {/* Contact */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Contact Info</label>
-            <input
-              type="text"
-              value={form.vendor_contact}
-              onChange={(e) => setForm({ ...form, vendor_contact: e.target.value })}
-              placeholder="Email or phone number"
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent text-gray-900 placeholder:text-gray-400"
-              style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-            />
+          {/* Contact + Instagram */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Contact Info</label>
+              <input
+                type="text"
+                value={form.vendor_contact}
+                onChange={(e) => setForm({ ...form, vendor_contact: e.target.value })}
+                placeholder="Email or phone number"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent text-gray-900 placeholder:text-gray-400"
+                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Instagram</label>
+              <input
+                type="text"
+                value={form.instagram}
+                onChange={(e) => setForm({ ...form, instagram: e.target.value })}
+                placeholder="@handle"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent text-gray-900 placeholder:text-gray-400"
+                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              />
+            </div>
+          </div>
+
+          {/* Day-of timing */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Time</label>
+              <input
+                type="text"
+                value={form.arrival_time}
+                onChange={(e) => setForm({ ...form, arrival_time: e.target.value })}
+                placeholder="e.g. 11:00 AM"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent text-gray-900 placeholder:text-gray-400"
+                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Departure Time</label>
+              <input
+                type="text"
+                value={form.departure_time}
+                onChange={(e) => setForm({ ...form, departure_time: e.target.value })}
+                placeholder="e.g. 8:00 PM"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent text-gray-900 placeholder:text-gray-400"
+                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              />
+            </div>
           </div>
 
           {/* Notes */}
@@ -770,6 +852,17 @@ export default function VendorsPage() {
             <span className="text-sm text-gray-700 font-medium">
               {form.is_booked ? 'Booked & Confirmed' : 'Not yet booked'}
             </span>
+          </label>
+
+          {/* Worked here before */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.worked_here_before}
+              onChange={(e) => setForm({ ...form, worked_here_before: e.target.checked })}
+              className="rounded border-gray-300"
+            />
+            <span className="text-sm text-gray-700">Worked at this venue before</span>
           </label>
 
           {/* Submit */}
