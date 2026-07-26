@@ -33,6 +33,7 @@ interface PartyMember {
   side: string
   relationship: string | null
   bio: string | null
+  blurb: string | null
   photo_url: string | null
   sort_order: number | null
   created_at: string
@@ -205,7 +206,7 @@ export default function WeddingPartyPage() {
       side: member.side || 'partner_1',
       relationship: member.relationship || '',
       bio: member.bio || '',
-      blurb: (member as PartyMember & { blurb?: string }).blurb || '',
+      blurb: member.blurb || '',
       photo_url: member.photo_url || '',
       guest_id: '',
     })
