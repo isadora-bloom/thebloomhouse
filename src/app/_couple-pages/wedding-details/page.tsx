@@ -43,6 +43,24 @@ interface WeddingDetails {
   reception_notes: string | null
   send_off_type: string | null
   send_off_notes: string | null
+  // Family
+  partner1_parents: string | null
+  partner1_parents_met: boolean
+  partner2_parents: string | null
+  partner2_parents_met: boolean
+  // Per current contract (couple transcribes from their signed contract)
+  contract_checkin: string | null
+  contract_checkout: string | null
+  contract_max_rehearsal: number | null
+  contract_max_wedding: number | null
+  contract_overnights: number | null
+  contract_rehearsal_hours: string | null
+  contract_wedding_hours: string | null
+  // Logistics
+  dog_sitter_name: string | null
+  dog_sitter_time: string | null
+  high_chairs: string | null
+  wedding_party_count: string | null
   // Custom field values stored as JSON
   custom_field_values?: Record<string, string | boolean>
 }
@@ -101,6 +119,21 @@ const EMPTY_DETAILS: WeddingDetails = {
   reception_notes: '',
   send_off_type: null,
   send_off_notes: '',
+  partner1_parents: '',
+  partner1_parents_met: false,
+  partner2_parents: '',
+  partner2_parents_met: false,
+  contract_checkin: '',
+  contract_checkout: '',
+  contract_max_rehearsal: null,
+  contract_max_wedding: null,
+  contract_overnights: null,
+  contract_rehearsal_hours: '',
+  contract_wedding_hours: '',
+  dog_sitter_name: '',
+  dog_sitter_time: '',
+  high_chairs: '',
+  wedding_party_count: '',
   custom_field_values: {},
 }
 
@@ -274,6 +307,8 @@ export default function WeddingDetailsPage() {
         favors_description: detailsResult.data.favors_description ?? '',
         reception_notes: detailsResult.data.reception_notes ?? '',
         send_off_notes: detailsResult.data.send_off_notes ?? '',
+        partner1_parents_met: detailsResult.data.partner1_parents_met ?? false,
+        partner2_parents_met: detailsResult.data.partner2_parents_met ?? false,
         custom_field_values: detailsResult.data.custom_field_values ?? {},
       })
     }
@@ -553,6 +588,130 @@ export default function WeddingDetailsPage() {
               />
             </Field>
           )}
+          {details.dogs_coming && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field label="Dog sitter name" hint="Who's looking after them during the day?">
+                <input
+                  type="text"
+                  value={details.dog_sitter_name ?? ''}
+                  onChange={updateText('dog_sitter_name')}
+                  placeholder="e.g. Aunt Mary"
+                  className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+                />
+              </Field>
+              <Field label="Dog sitter pickup time">
+                <input
+                  type="text"
+                  value={details.dog_sitter_time ?? ''}
+                  onChange={updateText('dog_sitter_time')}
+                  placeholder="e.g. after the ceremony, 5:00 PM"
+                  className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+                />
+              </Field>
+            </div>
+          )}
+        </div>
+      </Section>
+
+      {/* Section: Family */}
+      <Section title="Family" icon={Heart}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Field label="Partner 1's parents" hint="Names, for introductions and seating">
+              <input
+                type="text"
+                value={details.partner1_parents ?? ''}
+                onChange={updateText('partner1_parents')}
+                placeholder="e.g. John & Susan Smith"
+                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+              />
+            </Field>
+            <Toggle
+              value={details.partner1_parents_met}
+              onChange={(v) => updateField('partner1_parents_met', v)}
+              label="Have we met them?"
+            />
+          </div>
+          <div className="space-y-2">
+            <Field label="Partner 2's parents" hint="Names, for introductions and seating">
+              <input
+                type="text"
+                value={details.partner2_parents ?? ''}
+                onChange={updateText('partner2_parents')}
+                placeholder="e.g. David & Maria Lopez"
+                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+              />
+            </Field>
+            <Toggle
+              value={details.partner2_parents_met}
+              onChange={(v) => updateField('partner2_parents_met', v)}
+              label="Have we met them?"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field label="Wedding party count (per side)">
+            <input
+              type="text"
+              value={details.wedding_party_count ?? ''}
+              onChange={updateText('wedding_party_count')}
+              placeholder="e.g. 5 each"
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+            />
+          </Field>
+          <Field label="High chairs / booster seats needed">
+            <input
+              type="text"
+              value={details.high_chairs ?? ''}
+              onChange={updateText('high_chairs')}
+              placeholder="e.g. 2 high chairs, 1 booster"
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]"
+            />
+          </Field>
+        </div>
+      </Section>
+
+      {/* Section: Per Current Contract */}
+      <Section title="Per Current Contract" icon={Church}>
+        <p className="text-xs text-gray-400 -mt-2">
+          Copy these from your signed contract so your day-of team has the agreed times and limits in one place.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field label="Check-in time">
+            <input type="text" value={details.contract_checkin ?? ''} onChange={updateText('contract_checkin')}
+              placeholder="e.g. 10:00 AM"
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]" />
+          </Field>
+          <Field label="Check-out time">
+            <input type="text" value={details.contract_checkout ?? ''} onChange={updateText('contract_checkout')}
+              placeholder="e.g. 11:00 PM"
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]" />
+          </Field>
+          <Field label="Max rehearsal hours">
+            <input type="number" value={details.contract_max_rehearsal ?? ''}
+              onChange={(e) => updateField('contract_max_rehearsal', (e.target.value === '' ? null : Number(e.target.value)) as never)}
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]" />
+          </Field>
+          <Field label="Max wedding-day hours">
+            <input type="number" value={details.contract_max_wedding ?? ''}
+              onChange={(e) => updateField('contract_max_wedding', (e.target.value === '' ? null : Number(e.target.value)) as never)}
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]" />
+          </Field>
+          <Field label="Overnight rooms">
+            <input type="number" value={details.contract_overnights ?? ''}
+              onChange={(e) => updateField('contract_overnights', (e.target.value === '' ? null : Number(e.target.value)) as never)}
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]" />
+          </Field>
+          <Field label="Rehearsal hours (planned)">
+            <input type="text" value={details.contract_rehearsal_hours ?? ''} onChange={updateText('contract_rehearsal_hours')}
+              placeholder="e.g. 4:00–6:00 PM"
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]" />
+          </Field>
+          <Field label="Wedding hours (planned)">
+            <input type="text" value={details.contract_wedding_hours ?? ''} onChange={updateText('contract_wedding_hours')}
+              placeholder="e.g. 2:00–11:00 PM"
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#7D8471]/30 focus:border-[#7D8471]" />
+          </Field>
         </div>
       </Section>
 

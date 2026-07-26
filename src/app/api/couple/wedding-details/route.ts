@@ -30,6 +30,22 @@ const ALLOWED_FIELDS = [
   'send_off_type',
   'send_off_notes',
   'custom_field_values',
+  // Restored from Rixey: family + contract reference + logistics.
+  'partner1_parents',
+  'partner1_parents_met',
+  'partner2_parents',
+  'partner2_parents_met',
+  'contract_checkin',
+  'contract_checkout',
+  'contract_max_rehearsal',
+  'contract_max_wedding',
+  'contract_overnights',
+  'contract_rehearsal_hours',
+  'contract_wedding_hours',
+  'dog_sitter_name',
+  'dog_sitter_time',
+  'high_chairs',
+  'wedding_party_count',
 ] as const
 
 // Internal columns a couple POST should never set directly.
