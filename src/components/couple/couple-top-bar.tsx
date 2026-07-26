@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CoupleUserMenu } from './couple-user-menu'
+import { CoupleNotificationBell } from './couple-notification-bell'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 
 interface CoupleTopBarProps {
@@ -162,7 +163,10 @@ export function CoupleTopBar({
             <Printer className="w-4 h-4" />
           </button>
 
-          {/* 5. Account */}
+          {/* 5. Notifications */}
+          <CoupleNotificationBell base={base} />
+
+          {/* 6. Account */}
           <CoupleUserMenu />
         </div>
       </div>

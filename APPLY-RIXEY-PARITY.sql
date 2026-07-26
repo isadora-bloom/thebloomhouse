@@ -40,3 +40,22 @@ ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS venue_name text;
 ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS venue_address text;
 ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS wedding_date text;
 ALTER TABLE wedding_website_settings ADD COLUMN IF NOT EXISTS sections jsonb DEFAULT '[]'::jsonb;
+
+-- ---- 389: couple-facing notifications --------------------------------------
+CREATE TABLE IF NOT EXISTS couple_notifications (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  venue_id uuid NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  wedding_id uuid NOT NULL REFERENCES weddings(id) ON DELETE CASCADE,
+  type text NOT NULL,
+  title text NOT NULL,
+  body text,
+  link text,
+  read boolean DEFAULT false,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_couple_notifications_wedding
+  ON couple_notifications (wedding_id, read, created_at DESC);
+
+COMMENT ON TABLE couple_notifications IS
+  'Couple-facing notification feed (per wedding). Backs the bell in the couple top bar. type e.g. new_message / planning_reminder; link is a relative couple-portal path.';

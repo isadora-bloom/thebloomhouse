@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, assertCanAccessVenue, forbidden } from '@/lib/api/auth-helpers'
+import { createCoupleNotification } from '@/lib/services/couple-notifications'
 
 /**
  * POST /api/agent/messages/reply (Tier-B #58C)
@@ -92,6 +93,16 @@ export async function POST(request: NextRequest) {
         )
       }
     })
+
+  // Notify the couple that the venue replied. Fire-and-forget.
+  void createCoupleNotification(supabase, {
+    venueId: wedding.venue_id as string,
+    weddingId: body.weddingId,
+    type: 'new_message',
+    title: 'New message from your venue',
+    body: trimmed.length > 140 ? trimmed.slice(0, 140) + '…' : trimmed,
+    link: 'messages',
+  })
 
   return NextResponse.json({ data: insertedMessage }, { status: 201 })
 }
