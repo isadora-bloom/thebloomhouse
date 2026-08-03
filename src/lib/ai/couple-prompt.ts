@@ -252,7 +252,11 @@ async function buildWeddingContextBlock(weddingId: string): Promise<string> {
   if (wedding.wedding_date) parts.push(`Wedding date: ${wedding.wedding_date}`)
   if (wedding.guest_count_estimate) parts.push(`Guest count: ${wedding.guest_count_estimate}`)
   if (wedding.status) parts.push(`Status: ${wedding.status}`)
-  if (wedding.notes) parts.push(`Notes: ${(wedding.notes as string).slice(0, 500)}`)
+  // Cap generously, not tightly. A 500-char cut meant Sage saw only the
+  // first paragraph of a coordinator's notes and nothing after it (same
+  // early-truncation class as the Rixey Zoom first-2k bug). 4k chars is
+  // ~1k tokens, trivial against Claude's window, and covers real notes.
+  if (wedding.notes) parts.push(`Notes: ${(wedding.notes as string).slice(0, 4000)}`)
 
   // Coordinator brain-dump notes (last 14 days, newest first). These are
   // confidential signals — Sage acknowledges them without quoting verbatim.
@@ -278,7 +282,10 @@ async function buildWeddingContextBlock(weddingId: string): Promise<string> {
 
   // Days until wedding — drives day-of mode + final-details mode framing.
   if (wedding.wedding_date) {
-    const weddingDate = new Date(wedding.wedding_date as string)
+    // Parse as local midnight, not UTC midnight — a bare date-only string
+    // (`2026-05-30`) parses as UTC and can shift days-until by one, which
+    // would flip the day-of / final-details mode a day early.
+    const weddingDate = new Date((wedding.wedding_date as string) + 'T00:00:00')
     const now = new Date()
     const daysUntil = Math.ceil((weddingDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     if (daysUntil <= 0) {

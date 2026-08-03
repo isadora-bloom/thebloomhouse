@@ -240,7 +240,7 @@ function VendorCard({
               </button>
               {vendor.contract_date && (
                 <span className="text-[11px] text-gray-400">
-                  Uploaded {new Date(vendor.contract_date).toLocaleDateString()}
+                  Uploaded {new Date(vendor.contract_date + 'T00:00:00').toLocaleDateString()}
                 </span>
               )}
             </>
