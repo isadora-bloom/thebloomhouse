@@ -1,9 +1,18 @@
 -- ============================================================================
 -- APPLY-RIXEY-PARITY.sql
--- Migrations from the Rixey→Bloom parity work. Run in the Supabase SQL editor
--- (or `supabase db push`) in order. Each block is also a numbered migration file
--- under supabase/migrations/ — this file is the convenience "paste it all" copy.
+-- Migrations from the Rixey→Bloom parity work (385-390), plus 382, which a
+-- live schema check on 2026-08-06 found was also missing from prod. Run in the
+-- Supabase SQL editor (or `supabase db push`) in order. Each block is also a
+-- numbered migration file under supabase/migrations/; this file is the
+-- convenience "paste it all" copy.
 -- Safe to re-run: every statement is idempotent (IF EXISTS / IF NOT EXISTS).
+--
+-- 2026-08-06: the 389 block now carries the venue-isolation policy set it
+-- shipped without. Do not paste a copy of this file taken before that date;
+-- it creates couple_notifications with a venue_id column and no RLS.
+--
+-- Verified missing from prod (jsxxgwprxuqgcauzlxcb) on 2026-08-06 by probing
+-- each column via PostgREST: 382 and 385-390 all absent.
 -- ============================================================================
 
 -- ---- 385: wedding_party save fixes -----------------------------------------
@@ -60,6 +69,62 @@ CREATE INDEX IF NOT EXISTS idx_couple_notifications_wedding
 COMMENT ON TABLE couple_notifications IS
   'Couple-facing notification feed (per wedding). Backs the bell in the couple top bar. type e.g. new_message / planning_reminder; link is a relative couple-portal path.';
 
+-- 389 venue isolation (gap G17). Without this the table ships with a venue_id
+-- column and no RLS at all. Canonical policy set, copied from the prod-proven
+-- 377/383 pattern. The service_role policy is the one that keeps the bell
+-- working: every read/write goes through the service key.
+ALTER TABLE public.couple_notifications ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "couple_notifications_select" ON public.couple_notifications;
+CREATE POLICY "couple_notifications_select" ON public.couple_notifications
+  FOR SELECT TO authenticated
+  USING (
+    venue_id IN (
+      SELECT up.venue_id FROM public.user_profiles up
+      WHERE up.id = auth.uid() AND up.venue_id IS NOT NULL
+      UNION
+      SELECT v.id FROM public.venues v
+        JOIN public.user_profiles up ON up.org_id = v.org_id
+      WHERE up.id = auth.uid()
+    )
+    OR public.is_super_admin()
+  );
+
+DROP POLICY IF EXISTS "couple_notifications_modify" ON public.couple_notifications;
+CREATE POLICY "couple_notifications_modify" ON public.couple_notifications
+  FOR ALL TO authenticated
+  USING (
+    venue_id IN (
+      SELECT up.venue_id FROM public.user_profiles up
+      WHERE up.id = auth.uid() AND up.venue_id IS NOT NULL
+      UNION
+      SELECT v.id FROM public.venues v
+        JOIN public.user_profiles up ON up.org_id = v.org_id
+      WHERE up.id = auth.uid()
+    )
+    OR public.is_super_admin()
+  )
+  WITH CHECK (
+    venue_id IN (
+      SELECT up.venue_id FROM public.user_profiles up
+      WHERE up.id = auth.uid() AND up.venue_id IS NOT NULL
+      UNION
+      SELECT v.id FROM public.venues v
+        JOIN public.user_profiles up ON up.org_id = v.org_id
+      WHERE up.id = auth.uid()
+    )
+    OR public.is_super_admin()
+  );
+
+DROP POLICY IF EXISTS "couple_notifications_service" ON public.couple_notifications;
+CREATE POLICY "couple_notifications_service" ON public.couple_notifications
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "demo_anon_select_couple_notifications" ON public.couple_notifications;
+CREATE POLICY "demo_anon_select_couple_notifications" ON public.couple_notifications
+  FOR SELECT TO anon
+  USING (venue_id IN (SELECT id FROM public.venues WHERE is_demo = true));
+
 -- ---- 390: restore wedding-details family + contract + logistics fields -----
 ALTER TABLE wedding_details ADD COLUMN IF NOT EXISTS partner1_parents text;
 ALTER TABLE wedding_details ADD COLUMN IF NOT EXISTS partner1_parents_met boolean;
@@ -76,3 +141,17 @@ ALTER TABLE wedding_details ADD COLUMN IF NOT EXISTS dog_sitter_name text;
 ALTER TABLE wedding_details ADD COLUMN IF NOT EXISTS dog_sitter_time text;
 ALTER TABLE wedding_details ADD COLUMN IF NOT EXISTS high_chairs text;
 ALTER TABLE wedding_details ADD COLUMN IF NOT EXISTS wedding_party_count text;
+
+-- ---- 382: seating table notes ----------------------------------------------
+-- NOT part of the parity work. Folded in on 2026-08-06 because a live schema
+-- check found it missing from prod too, and it is one more paste otherwise.
+-- Canonical source is still supabase/migrations/382_seating_table_notes.sql.
+ALTER TABLE seating_tables
+  ADD COLUMN IF NOT EXISTS notes text;
+
+ALTER TABLE seating_tables
+  DROP CONSTRAINT IF EXISTS seating_tables_table_type_check;
+
+ALTER TABLE seating_tables
+  ADD CONSTRAINT seating_tables_table_type_check
+  CHECK (table_type IN ('round', 'rectangle', 'rectangular', 'head', 'sweetheart', 'farm', 'cocktail'));
