@@ -1753,6 +1753,7 @@ export async function mergeWeddings(
   await reassign('draft_feedback')            // 002_agent_tables.sql
   await reassign('user_profiles')             // 220_share_token_default_and_rls.sql
   await reassign('wedding_lifecycle_events')  // 246_*.sql (parallel agent)
+  await reassign('couple_notifications')      // 389_couple_notifications.sql
   // attribution_events / wedding_touchpoints / candidate_identities are
   // covered by the migration-202 trigger; we still tombstone the loser
   // below so the trigger fires.
