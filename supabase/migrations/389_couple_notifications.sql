@@ -5,7 +5,10 @@
 -- opening the messages section. This wedding-scoped feed backs a bell in the
 -- couple top bar. Producers call createCoupleNotification (lib/services).
 
-CREATE TABLE IF NOT EXISTS couple_notifications (
+-- Schema-qualified on purpose: scripts/run-migration.ts drives public.exec_sql,
+-- which runs with search_path = pg_catalog, public. An unqualified CREATE lands
+-- in the first schema on that path and fails with 42501.
+CREATE TABLE IF NOT EXISTS public.couple_notifications (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   venue_id uuid NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
   wedding_id uuid NOT NULL REFERENCES weddings(id) ON DELETE CASCADE,
@@ -18,9 +21,9 @@ CREATE TABLE IF NOT EXISTS couple_notifications (
 );
 
 CREATE INDEX IF NOT EXISTS idx_couple_notifications_wedding
-  ON couple_notifications (wedding_id, read, created_at DESC);
+  ON public.couple_notifications (wedding_id, read, created_at DESC);
 
-COMMENT ON TABLE couple_notifications IS
+COMMENT ON TABLE public.couple_notifications IS
   'Couple-facing notification feed (per wedding). Backs the bell in the couple top bar. type e.g. new_message / planning_reminder; link is a relative couple-portal path.';
 
 -- ---------------------------------------------------------------------------

@@ -13,10 +13,29 @@
 -- so the generic pattern risks RLS infinite-recursion. Needs a bespoke
 -- (id = auth.uid()) policy authored + tested separately; ratchet stays at 1.
 --
--- THIS IS DDL -- the data-plane service key cannot apply it. Operator applies
--- via the Supabase SQL editor / branch. Uniform copy of a proven pattern but
--- untested here: the Phase-4 live two-venue isolation test is still required
--- before this invariant is trusted.
+-- APPLIED TO PROD 2026-08-06 via `npx tsx scripts/run-migration.ts` (the
+-- public.exec_sql RPC from migration 198 -- the service key CAN apply DDL in
+-- this project, contrary to the note this header used to carry).
+--
+-- 65 of the 73 blocks applied. EIGHT were skipped because the table does not
+-- exist in prod: agency_activity_log, couple_budget,
+-- follow_up_sequence_templates, notifications, rate_limits, tbh_reports,
+-- wedding_sequences, wedding_timeline. The list was built from a static scan
+-- of migration files, so it includes tables that were declared but never
+-- created. Running this file top to bottom therefore aborts at statement 28.
+-- Filter against the live table list first (PostgREST exposes it at
+-- GET /rest/v1/) or the run stops a fifth of the way in.
+--
+-- Note for the Day-1 RLS audit's PII finding: `notifications` and
+-- `wedding_timeline` were flagged as RLS-off tables holding PII. Neither
+-- exists in prod, so that finding is moot there.
+--
+-- Post-apply check, same date: with the anon key, weddings / couples /
+-- interactions / wedding_details / wedding_party / booked_vendors /
+-- seating_tables all return demo-venue rows only. Rixey Manor
+-- (f3d10226-4c5c-47ad-b89b-98ad63842492) is not visible to anon in any of
+-- them. That is one live venue, not the two-venue test, so the Phase-4
+-- isolation test is still owed.
 
 -- accommodations
 ALTER TABLE public.accommodations ENABLE ROW LEVEL SECURITY;
