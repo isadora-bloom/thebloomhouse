@@ -11,6 +11,17 @@ import { writeOrLog } from '@/lib/db/write-or-log'
 
 // ---------------------------------------------------------------------------
 // Cost constants (per million tokens)
+//
+// 2026-08-28 correction. Both current-model rows below were wrong from the
+// day they were added, because each was copied off the legacy row above it
+// rather than looked up: haiku-4-5 carried Haiku 3's 0.25/1.25 (really 1.0/5.0,
+// so every Haiku call was under-costed 4x) and opus-4-8 carried Opus 4's
+// 15.0/75.0 (really 5.0/25.0, over-costed 3x). The ledger recorded every call
+// and priced it wrong in both directions for months, and nothing caught it,
+// because nothing checks a constant against the provider's price list. The
+// legacy rows are correct as-is and are kept so historical api_costs rows
+// still resolve. api_costs.cost is stored at write time, so rows written
+// before this date carry the old arithmetic and need a backfill.
 // ---------------------------------------------------------------------------
 
 export const CLAUDE_COSTS = {
@@ -20,14 +31,14 @@ export const CLAUDE_COSTS = {
     output: 15.0,
   },
   'claude-opus-4-8': {
-    input: 15.0,
-    output: 75.0,
+    input: 5.0,
+    output: 25.0,
   },
-  // Haiku 4.5 — current Haiku tier. ~12× cheaper than Sonnet.
+  // Haiku 4.5, current Haiku tier. ~3x cheaper than Sonnet.
   // Use for classification, small-label extraction, scoring rubrics. Per Playbook 19.8.
   'claude-haiku-4-5-20251001': {
-    input: 0.25,
-    output: 1.25,
+    input: 1.0,
+    output: 5.0,
   },
   // Legacy model IDs kept so historical api_costs audit rows resolve correctly
   'claude-sonnet-4-20250514': {

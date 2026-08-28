@@ -188,7 +188,7 @@ export async function adjudicateAmbiguousMatch(args: {
   // but this is qualitative attribution: first-name + last-initial +
   // state + timing + funnel-depth + recent_email_subjects ("saw you on
   // The Knot"). A wrong call lands the wrong wedding's history on the
-  // wrong couple, and the cost of that error far outweighs the 12x
+  // wrong couple, and the cost of that error far outweighs the 3x
   // per-call delta.
   const response = await callAIJson<AIResponse>({
     systemPrompt: systemPromptWithManifest,

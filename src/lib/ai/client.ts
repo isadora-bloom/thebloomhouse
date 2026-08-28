@@ -26,7 +26,7 @@ export const CLAUDE_MODEL = 'claude-sonnet-4-6'
 // Haiku tier for classification + small-label extraction. Per Playbook
 // 19.8 model-tier guidance: classifications, small-rubric scoring,
 // embedding generation, structured-output extraction with bounded
-// schemas. ~12× cheaper than Sonnet — biggest single cost lever.
+// schemas. ~3x cheaper than Sonnet, biggest single cost lever.
 // Wedgewood-scale (80+ venues × thousands of classifier calls/day)
 // makes the right tier mapping the difference between profitable and
 // not. OPS-21.4.2.
@@ -170,7 +170,7 @@ export type ContentTier = 1 | 2 | 3 | 4
  *            directly drives a coordinator decision.
  *
  * Mapping discipline: a higher tier than necessary is a defect (a
- * Sonnet call where Haiku suffices burns 12× the cost). The audit
+ * Sonnet call where Haiku suffices burns 3x the cost). The audit
  * surfaces tier-mismatches via api_costs.model rollups.
  */
 export type ModelTier = 'haiku' | 'sonnet' | 'opus'
