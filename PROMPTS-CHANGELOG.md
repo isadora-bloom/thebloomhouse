@@ -11,6 +11,12 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-08 (Couple-intel derive — calibration feedback edge, v2 → v3)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| couple-intel-derive (`deriveCoupleIntel`) | v2 | v3 | LOOP-ASSESSMENT.md Loop 2 found the prediction model "never reads its own calibration history" — `analyzeCalibration()` computed Brier/drift/per-persona accuracy but nothing consumed it. `per-couple-derive.ts` now loads a `PersonaBiasSummary` (`src/lib/services/calibration/bias-summary.ts`, new — a pure `buildPersonaBiasSummary()` plus a thin `loadPersonaBiasSummaryForVenue()` I/O wrapper around `analyzeCalibration()`) before building the prompt, and `buildUserPrompt` renders it as an optional `## Calibration correction` section (e.g. "persona Budget-Conscious Planners predictions ran +12 points hot over n=34... adjust DOWN by roughly 12 points") only when a persona has n >= 20 with a bias outside a 2-point neutral band. Empty/no-data venues get no section at all — behaviour is unchanged for them. Output JSON schema unchanged. Fire-and-forget: a calibration load failure logs a warning and derive proceeds with no correction block, same as before this change. |
+
 ## 2026-06-09 (Intel brain — battery-gap grounding Q19/Q30/Q36)
 
 | brain | from | to | change |

@@ -321,6 +321,26 @@ export async function deriveCoupleIntel(
   const { shell, payment, tourStatus } = buildEvidenceShell(wedding, interactions, tour)
   const interactionEvidence = buildInteractionEvidence(interactions)
 
+  // W6 (2026-09-08). Calibration feedback edge (LOOP-ASSESSMENT.md
+  // Loop 2) — load this venue's per-persona bias summary and fold it
+  // into the prompt as a correction term. Never fatal: a venue with no
+  // calibration history yet (n < 20 for every persona, or no
+  // prediction_outcomes at all) just gets an empty block, same as
+  // before this change.
+  let calibrationCorrection: string | undefined
+  try {
+    const { loadPersonaBiasSummaryForVenue } = await import(
+      '@/lib/services/calibration/bias-summary'
+    )
+    const biasSummary = await loadPersonaBiasSummaryForVenue(venueId, { supabase })
+    calibrationCorrection = biasSummary.promptBlock || undefined
+  } catch (err) {
+    console.warn(
+      '[deriveCoupleIntel] calibration bias-summary load failed (non-fatal):',
+      err instanceof Error ? err.message : err,
+    )
+  }
+
   const evidence: CoupleIntelEvidence = {
     weddingId,
     venueLabel,
@@ -329,6 +349,7 @@ export async function deriveCoupleIntel(
     recentInteractions: interactionEvidence,
     tour: tourStatus,
     payment,
+    calibrationCorrection,
   }
 
   // 3. Build prompts.

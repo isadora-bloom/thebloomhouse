@@ -36,6 +36,18 @@
  * the example list with a shape-only PERSONA_STYLE_GUIDE constant
  * shared across all four persona-producing prompts. Output schema is
  * unchanged.
+ *
+ * W6 (November Plan, 2026-09-08) calibration feedback edge
+ * ---------------------------------------------------------
+ * LOOP-ASSESSMENT.md Loop 2 found this prompt "never reads its own
+ * calibration history" — analyzeCalibration() measured Brier/drift/
+ * per-persona accuracy but nothing fed it back in. v3 adds an OPTIONAL
+ * "## Calibration correction" section to the user prompt (see
+ * buildUserPrompt below), populated only when
+ * src/lib/services/calibration/bias-summary.ts finds a persona at
+ * n >= 20 running measurably hot or cold. Output schema is unchanged;
+ * this only adds context the model may use when settling on
+ * predicted_close_probability.
  */
 
 import type { CoupleIdentityProfile } from '@/config/prompts/identity-reconstruction'
@@ -47,8 +59,10 @@ import { PERSONA_STYLE_GUIDE } from '@/config/prompts/persona-style-guide'
 //
 // v1 → v2 (Wave 22, 2026-05-11): strip example persona-label list; import
 // shape-only PERSONA_STYLE_GUIDE. Bias remediation per PROMPT-BIAS-AUDIT.md.
+// v2 → v3 (W6, 2026-09-08): add the optional calibration-correction
+// section to the user prompt. See PROMPTS-CHANGELOG.md.
 export const COUPLE_INTEL_DERIVE_PROMPT_VERSION =
-  'couple-intel-derive.prompt.v2'
+  'couple-intel-derive.prompt.v3'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -145,6 +159,16 @@ export interface CoupleIntelEvidence {
   recentInteractions: IntelInteractionEvidence[]
   tour: IntelTourStatus
   payment: IntelPaymentStatus
+  /**
+   * W6 (2026-09-08). Optional pre-formatted correction block from
+   * src/lib/services/calibration/bias-summary.ts — the PersonaBiasSummary
+   * promptBlock for this venue, or empty/undefined when there is no
+   * persona at n >= 20 with a measurable hot/cold bias yet. Rendered
+   * verbatim as its own section (see buildUserPrompt); never fabricated
+   * here, and never injected when empty so early-stage venues with no
+   * calibration history see no section at all.
+   */
+  calibrationCorrection?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +315,14 @@ function truncate(text: string | null, max: number): string | null {
 
 export function buildUserPrompt(evidence: CoupleIntelEvidence): string {
   const lines: string[] = []
-  const { weddingShell: shell, profile, recentInteractions, tour, payment } = evidence
+  const {
+    weddingShell: shell,
+    profile,
+    recentInteractions,
+    tour,
+    payment,
+    calibrationCorrection,
+  } = evidence
 
   lines.push('# COUPLE TO DERIVE INTEL FOR')
   lines.push('')
@@ -332,6 +363,17 @@ export function buildUserPrompt(evidence: CoupleIntelEvidence): string {
   lines.push(`- total_paid: $${(payment.total_paid_cents / 100).toFixed(2)}`)
   if (payment.last_payment_at) lines.push(`- last_payment_at: ${payment.last_payment_at}`)
   lines.push('')
+
+  // ---- Calibration correction (W6, 2026-09-08) ----
+  // Only rendered when bias-summary.ts found a persona at n >= 20 with a
+  // measurable hot/cold bias for this venue. Read it as background —
+  // it does not change the output schema, only what you weigh when you
+  // settle on predicted_close_probability.pct_0_100.
+  if (calibrationCorrection && calibrationCorrection.trim()) {
+    lines.push('## Calibration correction')
+    lines.push(calibrationCorrection.trim())
+    lines.push('')
+  }
 
   // ---- Forensic profile (Wave 4 output) ----
   lines.push('## Forensic identity profile (from couple_identity_profile)')

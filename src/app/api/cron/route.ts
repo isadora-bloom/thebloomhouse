@@ -488,6 +488,39 @@ const VALID_JOBS = [
   // different-email duplicate class is DEFERRED — needs the AI
   // adjudicator + confidence gate.
   'auto_merge_duplicate_partners',
+  // W6 / November Plan (2026-09-08). Loop 3 half B dispatcher — runs
+  // the six dark marketing-spend sweeps (spend_sync_sweep ->
+  // persona_channel_rollup_sweep -> attribution_role_sweep ->
+  // spend_loop_flag_sweep -> marketing_recommendation_sweep ->
+  // marketing_digest_sweep) in dependency order. NOT registered in
+  // vercel.json (cron_count is at the cleanup-budget ratchet of 49);
+  // piggybacks on the daily re_engagement_attribution tick (30 5 * * *)
+  // below. Operator can curl /api/cron?job=loops_daily for a manual
+  // run of the whole chain. See runLoopsDaily doc comment.
+  'loops_daily',
+  // W6 / November Plan (2026-09-08). Loop 2 + Loop 1-subsystem-B
+  // dispatcher — runs calibration_sweep then voice_dna_sweep. NOT
+  // registered in vercel.json (same cron_count ratchet); piggybacks on
+  // the weekly outcome_measurement tick (0 6 * * 0) below. Operator can
+  // curl /api/cron?job=loops_weekly for a manual run. See
+  // runLoopsWeekly doc comment (includes a correction to
+  // LOOP-ASSESSMENT.md's outcome_measurement claim).
+  'loops_weekly',
+  // W6 / November Plan (2026-09-08). Calibration sweep (Wave 18,
+  // src/lib/services/calibration/sweep.ts) — drains measure_outcome_jobs
+  // + a 30-day catch-up pass turning prediction_snapshots into
+  // prediction_outcomes. Previously only reachable via the admin route
+  // /api/admin/intel/calibration/measure (sweep.ts:21 TODO, never
+  // resolved). Normally runs inside loops_weekly above; kept standalone
+  // for manual curls.
+  'calibration_sweep',
+  // W6 / November Plan (2026-09-08). Voice-DNA drift sweep (Wave 20,
+  // src/lib/services/voice-dna/sweep.ts) — every 60 days, re-derives
+  // voice DNA for venues with a prior applied derivation. Previously
+  // dead code with no caller (sweep.ts:14-17 TODO, never resolved).
+  // Normally runs inside loops_weekly above; kept standalone for
+  // manual curls.
+  'voice_dna_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -699,8 +732,41 @@ async function runJob(
     case 'post_event_feedback_check':
       return checkPostEventFeedback()
 
-    case 'outcome_measurement':
-      return measureOutcomesAllVenues()
+    case 'outcome_measurement': {
+      // W6 (2026-09-08): also runs runLoopsWeekly() (calibration_sweep +
+      // voice_dna_sweep) on the same weekly Sunday tick — see the doc
+      // comment on runLoopsWeekly for why this piggybacks here instead
+      // of getting its own vercel.json row, and for the naming-collision
+      // correction to LOOP-ASSESSMENT.md. Independent try/catch so a
+      // loops_weekly failure never blocks insight-outcome measurement.
+      const insightOutcomes = await measureOutcomesAllVenues()
+      let loopsWeekly: unknown = null
+      try {
+        loopsWeekly = await runLoopsWeekly()
+      } catch (err) {
+        loopsWeekly = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return { insight_outcomes: insightOutcomes, loops_weekly: loopsWeekly }
+    }
+
+    case 'calibration_sweep': {
+      // W6 (2026-09-08). Standalone entry point for the calibration
+      // sweep (LOOP-ASSESSMENT.md Loop 2). Normally piggybacks on
+      // outcome_measurement via runLoopsWeekly above; this case lets
+      // operators curl /api/cron?job=calibration_sweep for manual runs.
+      const { runCalibrationSweep } = await import('@/lib/services/calibration/sweep')
+      return runCalibrationSweep()
+    }
+
+    case 'voice_dna_sweep': {
+      // W6 (2026-09-08). Standalone entry point for the voice-DNA
+      // drift sweep (LOOP-ASSESSMENT.md Loop 1 subsystem B, sweep.ts:14
+      // TODO). Normally piggybacks on outcome_measurement via
+      // runLoopsWeekly above; this case lets operators curl
+      // /api/cron?job=voice_dna_sweep for manual runs.
+      const { voiceDnaDriftSweep } = await import('@/lib/services/voice-dna/sweep')
+      return voiceDnaDriftSweep()
+    }
 
     case 'inbox_filter_learning':
       return learnFiltersForAllVenues()
@@ -916,7 +982,7 @@ async function runJob(
       // script. Cheap (~5-10s per venue) and idempotent.
       return sweepDataIntegrityAllVenues()
 
-    case 're_engagement_attribution':
+    case 're_engagement_attribution': {
       // Phase D Tier 2 / Stage 3 (2026-04-30). Daily — for each
       // sent re_engagement_action whose 60-day window is still
       // open, look for a wedding that arrived within the window
@@ -924,7 +990,22 @@ async function runJob(
       // + last_initial. Unique match → attribute. Ambiguous
       // (2+) → leave for coordinator. Closed window with no
       // match → counted, no attribution. Idempotent; rerun-safe.
-      return sweepReEngagementAttribution()
+      //
+      // W6 (2026-09-08): also runs runLoopsDaily() (the six dark
+      // marketing-spend sweeps) on the same daily 05:30 UTC tick —
+      // see the doc comment on runLoopsDaily for why this piggybacks
+      // here rather than getting its own vercel.json row. Independent
+      // try/catch so a loops_daily failure never blocks re-engagement
+      // attribution.
+      const reEngagement = await sweepReEngagementAttribution()
+      let loopsDaily: unknown = null
+      try {
+        loopsDaily = await runLoopsDaily()
+      } catch (err) {
+        loopsDaily = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return { re_engagement_attribution: reEngagement, loops_daily: loopsDaily }
+    }
 
     case 'cost_ceiling_check':
       // Hourly. Sums today's api_costs per venue, fires 80% notify
@@ -1195,6 +1276,15 @@ async function runJob(
       // narrates flags + recommendations + week-over-week metrics.
       const { runMarketingDigestSweep } = await import('@/lib/services/marketing-spend/loop/digest-sweep')
       return runMarketingDigestSweep()
+    }
+
+    case 'loops_daily': {
+      // W6 (2026-09-08). Standalone entry point for the six-sweep
+      // marketing-spend ROI chain (see runLoopsDaily doc comment).
+      // Normally piggybacks on re_engagement_attribution below; this
+      // case lets operators curl /api/cron?job=loops_daily for manual
+      // runs of the whole dependency-ordered chain.
+      return runLoopsDaily()
     }
 
     case 'external_signals_health_sweep': {
@@ -3097,6 +3187,134 @@ async function runCorrelationAndWeatherCancellation(): Promise<{
   }
 
   return { correlations, weather_cancellations: summary }
+}
+
+/**
+ * W6 / November Plan (2026-09-08). Loop 3 half B — the marketing-spend
+ * ROI chain (LOOP-ASSESSMENT.md Loop 3). All six sweeps already had a
+ * VALID_JOBS entry, a case handler below, and a DESTRUCTIVE_JOBS entry
+ * — but zero rows in vercel.json, so the chain only ever ran on a
+ * manual curl. vercel.json is at the cleanup-budget cron_count ratchet
+ * (49, scripts/cleanup-budget.json, itself already above the "40-cron
+ * Pro cap" this file's older comments assume) and the codebase's own
+ * repeated convention (prune_maintenance, anomaly_detection +
+ * ingestion_volume_monitor, openphone_poll + sms_sequences, email_poll
+ * + historical-backfill, all above) is to fold a new dispatcher into
+ * an existing tick rather than grow the row count. This rides
+ * 're_engagement_attribution' (30 5 * * *, already Loop-3-adjacent —
+ * see the piggyback there) instead of adding a `loops_daily` row.
+ * Kept as its own case so an operator can curl
+ * /api/cron?job=loops_daily directly for manual/ops runs.
+ *
+ * Runs the six sweeps in dependency order (sync -> rollup ->
+ * attribution role -> flag -> recommendation -> digest). Each step is
+ * independently try/caught so one sweep's failure never blocks the
+ * next — mirrors the error-isolation pattern in runPruneMaintenance.
+ */
+async function runLoopsDaily(): Promise<Record<string, unknown>> {
+  const results: Record<string, unknown> = {}
+
+  try {
+    const { runSpendSyncSweep } = await import(
+      '@/lib/services/marketing-spend/spend-sync-sweep'
+    )
+    results.spend_sync_sweep = await runSpendSyncSweep()
+  } catch (err) {
+    results.spend_sync_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  try {
+    const { runPersonaChannelRollupSweep } = await import(
+      '@/lib/services/intel/persona-channel-rollup/sweep'
+    )
+    results.persona_channel_rollup_sweep = await runPersonaChannelRollupSweep()
+  } catch (err) {
+    results.persona_channel_rollup_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  try {
+    const { runRoleSweep } = await import('@/lib/services/attribution-roles/role-sweep')
+    results.attribution_role_sweep = await runRoleSweep()
+  } catch (err) {
+    results.attribution_role_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  try {
+    const { runSpendLoopFlagSweep } = await import(
+      '@/lib/services/marketing-spend/loop/flag-sweep'
+    )
+    results.spend_loop_flag_sweep = await runSpendLoopFlagSweep()
+  } catch (err) {
+    results.spend_loop_flag_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  try {
+    const { runMarketingRecommendationSweep } = await import(
+      '@/lib/services/marketing-spend/recommendations/sweep'
+    )
+    results.marketing_recommendation_sweep = await runMarketingRecommendationSweep()
+  } catch (err) {
+    results.marketing_recommendation_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  try {
+    const { runMarketingDigestSweep } = await import(
+      '@/lib/services/marketing-spend/loop/digest-sweep'
+    )
+    results.marketing_digest_sweep = await runMarketingDigestSweep()
+  } catch (err) {
+    results.marketing_digest_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  return results
+}
+
+/**
+ * W6 / November Plan (2026-09-08). Loop 2 (prediction/calibration) +
+ * Loop 1 subsystem B (voice-DNA drift) — LOOP-ASSESSMENT.md Loop 1 and
+ * Loop 2. Both carried a written TODO ("registered separately" /
+ * "reconciliation stream") and neither had a cron: `calibration_sweep`
+ * (src/lib/services/calibration/sweep.ts) only ever ran from the admin
+ * route /api/admin/intel/calibration/measure, and `voiceDnaDriftSweep`
+ * (src/lib/services/voice-dna/sweep.ts) had no caller at all. Folded
+ * onto 'outcome_measurement' (weekly, Sunday 06:00 UTC) rather than a
+ * new vercel.json row — see the comment on runLoopsDaily above for why.
+ *
+ * CORRECTION to LOOP-ASSESSMENT.md (2026-05-22): it states `measureOutcomes`
+ * is "wired... case 'outcome_measurement' -> measureOutcomesAllVenues".
+ * That is not what the code does. This file's `measureOutcomesAllVenues`
+ * (below) calls `measureInsightOutcomes` from
+ * src/lib/services/intel/insight-tracking.ts — a different subsystem
+ * (did an intelligence-engine INSIGHT turn out useful) that happens to
+ * share almost the same name as calibration's `measureOutcomes`
+ * (src/lib/services/calibration/measure-outcomes.ts — did a PREDICTED
+ * close probability turn out right). Grep confirms calibration's
+ * `measureOutcomes` had exactly one caller before this change: the
+ * admin route above. The two "outcome measurement" cron ideas were
+ * never the same job; this comment exists so the next reader doesn't
+ * repeat the mix-up.
+ *
+ * Kept as its own case so an operator can curl
+ * /api/cron?job=loops_weekly directly for manual/ops runs.
+ */
+async function runLoopsWeekly(): Promise<Record<string, unknown>> {
+  const results: Record<string, unknown> = {}
+
+  try {
+    const { runCalibrationSweep } = await import('@/lib/services/calibration/sweep')
+    results.calibration_sweep = await runCalibrationSweep()
+  } catch (err) {
+    results.calibration_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  try {
+    const { voiceDnaDriftSweep } = await import('@/lib/services/voice-dna/sweep')
+    results.voice_dna_sweep = await voiceDnaDriftSweep()
+  } catch (err) {
+    results.voice_dna_sweep = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  return results
 }
 
 // ---------------------------------------------------------------------------
