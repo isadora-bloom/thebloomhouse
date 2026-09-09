@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
+import { createDefaultAutoSendRules } from '@/lib/services/onboarding/auto-send-defaults'
 import {
   Settings,
   Mail,
@@ -239,6 +240,9 @@ export default function AgentSettingsPage() {
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [emailsSynced7d, setEmailsSynced7d] = useState<number>(0)
+  // T5-W5: a venue with zero auto_send_rules previously had no way to
+  // create one — /agent/settings only ever UPDATEd existing rows.
+  const [creatingDefaultRules, setCreatingDefaultRules] = useState(false)
 
   // Gmail connection state (from API, not just sync state)
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email?: string } | null>(null)
@@ -466,6 +470,31 @@ export default function AgentSettingsPage() {
       }
     } catch {
       // Silently fail
+    }
+  }
+
+  // ---- Create default auto-send rules (T5-W5) ----
+  // Only reachable when rules.length === 0. Seeds one disabled,
+  // shadow-mode rule per default source (matches DEFAULT_AUTO_SEND_SOURCES
+  // in the library so the wizard and this fallback stay in sync) so a
+  // venue that never saw the 15-min wizard's ad-platform picker still
+  // has something to turn on.
+  async function createDefaultRules() {
+    setCreatingDefaultRules(true)
+    setSaveMessage(null)
+    try {
+      const result = await createDefaultAutoSendRules(supabase, VENUE_ID)
+      if (!result.ok) {
+        setSaveMessage(result.error ?? 'Failed to create default auto-send rules.')
+      } else {
+        setSaveMessage(`Created ${result.created} default auto-send rule${result.created === 1 ? '' : 's'} (disabled, shadow mode). Turn one on below to start.`)
+        await fetchData()
+      }
+    } catch (err) {
+      setSaveMessage(err instanceof Error ? err.message : 'Failed to create default auto-send rules.')
+    } finally {
+      setCreatingDefaultRules(false)
+      setTimeout(() => setSaveMessage(null), 5000)
     }
   }
 
@@ -881,9 +910,20 @@ export default function AgentSettingsPage() {
               <Zap className="w-12 h-12 text-sage-300 mx-auto mb-4" />
               <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">No auto-send rules configured</h3>
               <p className="text-sm text-sage-500 max-w-md mx-auto">
-                Auto-send rules are created during onboarding or via the database.
-                They allow the Agent to send responses automatically based on context and source.
+                Auto-send rules are usually seeded during onboarding. If you skipped that
+                step, create a starter set below — one disabled, shadow-mode rule per
+                common inquiry source. Shadow mode means the rule watches and logs what
+                it would have done without actually sending, so you can review accuracy
+                before turning it on for real.
               </p>
+              <button
+                onClick={createDefaultRules}
+                disabled={creatingDefaultRules}
+                className="mt-4 inline-flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+              >
+                <Zap className="w-4 h-4" />
+                {creatingDefaultRules ? 'Creating…' : 'Create default rules'}
+              </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

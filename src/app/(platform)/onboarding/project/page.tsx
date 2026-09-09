@@ -21,6 +21,9 @@ import {
 import { PROJECT_PLAN, TOTAL_DAYS, type DayStep, detectDay1Completion } from '@/lib/services/onboarding/project'
 import { BackfillChecklist } from '@/components/onboarding/backfill-checklist'
 import { useAiName } from '@/lib/hooks/use-ai-name'
+import type { CleanupPipelineResult } from '@/lib/services/onboarding/cleanup'
+import type { ReadinessReport } from '@/lib/services/onboarding/readiness'
+import type { RecoveryReport } from '@/lib/services/booked-data-recovery'
 
 // ---------------------------------------------------------------------------
 // 5-day onboarding project flow (T2-A / Playbook Part 18).
@@ -100,6 +103,16 @@ export default function OnboardingProjectPage() {
    * sub-action.
    */
   const [day1AutoDone, setDay1AutoDone] = useState<Set<string>>(new Set())
+
+  // T5-W5: Day-5 inline action results. Rendered under each step so
+  // the coordinator sees per-step counts without leaving the page —
+  // these three used to be founder-CLI-only (scripts/onboard-data-
+  // cleanup.ts, scripts/onboarding-readiness.ts, the service-role
+  // /api/admin/recover-booked-data route).
+  const [cleanupResult, setCleanupResult] = useState<CleanupPipelineResult | null>(null)
+  const [cleanupApplying, setCleanupApplying] = useState(false)
+  const [readinessReport, setReadinessReport] = useState<ReadinessReport | null>(null)
+  const [recoveryReport, setRecoveryReport] = useState<RecoveryReport | null>(null)
 
   const fetchProject = useCallback(async () => {
     if (!venueId) return
@@ -245,6 +258,112 @@ export default function OnboardingProjectPage() {
       `wrote ${rowsWritten} rows to voice_preferences/phrase_usage/review_language.`
 
     await handleStepComplete(day, step, note)
+  }
+
+  /**
+   * T5-W5: data-cleanup preview + apply. Preview (apply:false) always
+   * runs first and is safe to click repeatedly — it computes counts,
+   * writes nothing. Apply is a second explicit click once the
+   * coordinator has reviewed the preview. Step is marked done only
+   * after a successful apply, matching the voice-DNA pattern above.
+   */
+  async function handleDataCleanupPreview() {
+    if (!project || busy) return
+    setBusy(true)
+    try {
+      const res = await fetch('/api/onboarding/project/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id, apply: false }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+      setCleanupResult(body.result as CleanupPipelineResult)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Cleanup preview failed')
+    } finally { setBusy(false) }
+  }
+
+  async function handleDataCleanupApply(day: number, step: DayStep) {
+    if (!project || cleanupApplying) return
+    if (!window.confirm('Apply the data cleanup pipeline? This writes corrections to interactions, touchpoints, engagement events, and heat scores for this venue.')) return
+    setCleanupApplying(true)
+    try {
+      const res = await fetch('/api/onboarding/project/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id, apply: true }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+      const result = body.result as CleanupPipelineResult
+      setCleanupResult(result)
+      if (result.allOk) {
+        const totalCounts = result.steps.reduce((n, s) => n + Object.values(s.counts).reduce((a, b) => a + b, 0), 0)
+        await handleStepComplete(day, step, `Applied — ${result.steps.length} steps, ${totalCounts} total counted changes.`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Cleanup apply failed')
+    } finally { setCleanupApplying(false) }
+  }
+
+  /**
+   * T5-W5: run the readiness gate inline and persist the verdict
+   * (POST /api/onboarding/project/readiness → recordReadinessEvaluation).
+   * Marks the step done when the gate passes; a failing gate leaves
+   * the step open and the failures render inline so the coordinator
+   * knows exactly what to fix before re-running.
+   */
+  async function handleReadinessCheck(day: number, step: DayStep) {
+    if (!project || busy) return
+    setBusy(true)
+    try {
+      const res = await fetch('/api/onboarding/project/readiness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+      const report = body.report as ReadinessReport
+      setReadinessReport(report)
+      if (report.readyForGoLive) {
+        await handleStepComplete(day, step, `Invariants clean · ${report.smokeWarns} smoke warning${report.smokeWarns === 1 ? '' : 's'} · ${report.smokeFails} smoke failure${report.smokeFails === 1 ? '' : 's'}.`)
+      } else {
+        await fetchProject() // refresh readiness_passed_at even on a failing run
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Readiness check failed')
+    } finally { setBusy(false) }
+  }
+
+  /**
+   * T5-W5: on-demand booked-data recovery sweep
+   * (POST /api/onboarding/project/recover-booked-data). Always marks
+   * the step done once it runs — this is an on-demand trigger for the
+   * same sweep the daily cron runs, not a pass/fail gate, so there's
+   * no "failing" state to block on.
+   */
+  async function handleRecoverBookedData(day: number, step: DayStep) {
+    if (!project || busy) return
+    setBusy(true)
+    try {
+      const res = await fetch('/api/onboarding/project/recover-booked-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+      const report = body.report as RecoveryReport
+      setRecoveryReport(report)
+      await handleStepComplete(
+        day, step,
+        `Recovered ${report.recovered.length} · merged ${report.merged.length} · no match ${report.noMatch.length} · errors ${report.errors.length} (of ${report.totalCandidates} candidates).`,
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Booked-data recovery failed')
+    } finally { setBusy(false) }
   }
 
   async function handleAdvanceDay() {
@@ -460,6 +579,14 @@ export default function OnboardingProjectPage() {
               stepCompletion={stepCompletion}
               onCompleteStep={(step) => handleStepComplete(dp.day, step)}
               onVoiceDnaExtract={(step) => handleVoiceDnaExtract(dp.day, step)}
+              onDataCleanupPreview={handleDataCleanupPreview}
+              onDataCleanupApply={(step) => handleDataCleanupApply(dp.day, step)}
+              onReadinessCheck={(step) => handleReadinessCheck(dp.day, step)}
+              onRecoverBookedData={(step) => handleRecoverBookedData(dp.day, step)}
+              cleanupResult={cleanupResult}
+              cleanupApplying={cleanupApplying}
+              readinessReport={readinessReport}
+              recoveryReport={recoveryReport}
               advanceDay={handleAdvanceDay}
               busy={busy}
               status={project.status}
@@ -558,6 +685,15 @@ interface DayCardProps {
   onCompleteStep: (step: DayStep) => void
   /** T5-θ.3: inline action for the Day-4 voice_dna_extract step. */
   onVoiceDnaExtract: (step: DayStep) => void
+  /** T5-W5: Day-5 inline actions — dry-run preview + apply, readiness gate, booked-data recovery. */
+  onDataCleanupPreview: () => void
+  onDataCleanupApply: (step: DayStep) => void
+  onReadinessCheck: (step: DayStep) => void
+  onRecoverBookedData: (step: DayStep) => void
+  cleanupResult: CleanupPipelineResult | null
+  cleanupApplying: boolean
+  readinessReport: ReadinessReport | null
+  recoveryReport: RecoveryReport | null
   advanceDay: () => void
   busy: boolean
   status: ProjectState['status']
@@ -586,7 +722,12 @@ const READINESS_EXPLAINERS: Record<number, string[] | null> = {
   5: null,
 }
 
-function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, onVoiceDnaExtract, advanceDay, busy, status }: DayCardProps) {
+function DayCard({
+  day, isCurrent, isComplete, stepCompletion, onCompleteStep, onVoiceDnaExtract,
+  onDataCleanupPreview, onDataCleanupApply, onReadinessCheck, onRecoverBookedData,
+  cleanupResult, cleanupApplying, readinessReport, recoveryReport,
+  advanceDay, busy, status,
+}: DayCardProps) {
   const allStepsDone = day.steps.every((s) => stepCompletion.has(`day_${day.day}.${s.key}`))
   const checks = READINESS_EXPLAINERS[day.day]
   return (
@@ -651,6 +792,15 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
                     {completion.note ? ` · ${completion.note}` : ''}
                   </p>
                 )}
+                {s.actionKey === 'data_cleanup_ui' && cleanupResult && (
+                  <CleanupResultPanel result={cleanupResult} />
+                )}
+                {s.actionKey === 'readiness_check' && readinessReport && (
+                  <ReadinessReportPanel report={readinessReport} />
+                )}
+                {s.actionKey === 'recover_booked_data_ui' && recoveryReport && (
+                  <RecoveryReportPanel report={recoveryReport} />
+                )}
               </div>
               <div className="flex items-center gap-1 flex-wrap justify-end">
                 {/* 2026-05-01 (review pass 4): each step links to the
@@ -687,13 +837,63 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
                     {busy ? 'Running…' : 'Run voice DNA from the Gmail history import'}
                   </button>
                 )}
+                {/* T5-W5: data cleanup — preview (dry-run) always
+                    available; apply is a second explicit click once
+                    the coordinator has reviewed the counts. */}
+                {!stepDone && isCurrent && status === 'in_progress' && s.actionKey === 'data_cleanup_ui' && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={onDataCleanupPreview}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1 rounded border border-sage-200 hover:bg-sage-50 disabled:opacity-50 text-xs text-sage-700 px-2 py-1"
+                    >
+                      {busy ? 'Running…' : 'Preview'}
+                    </button>
+                    {cleanupResult && (
+                      <button
+                        onClick={() => onDataCleanupApply(s)}
+                        disabled={cleanupApplying}
+                        className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-xs font-medium px-2 py-1"
+                      >
+                        {cleanupApplying ? 'Applying…' : 'Apply'}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {!stepDone && isCurrent && status === 'in_progress' && s.actionKey === 'recover_booked_data_ui' && (
+                  <button
+                    onClick={() => onRecoverBookedData(s)}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-xs font-medium px-2 py-1"
+                  >
+                    {busy ? 'Running…' : 'Run recovery sweep'}
+                  </button>
+                )}
+                {isCurrent && status === 'in_progress' && s.actionKey === 'readiness_check' && (
+                  <button
+                    onClick={() => onReadinessCheck(s)}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-xs font-medium px-2 py-1"
+                  >
+                    {busy ? 'Running…' : stepDone ? 'Re-run readiness gate' : 'Run readiness gate'}
+                  </button>
+                )}
                 {/* Mark-done shows for any incomplete step of a project
                     that is not finished — NOT only the current day, and
                     NOT only while in_progress. A coordinator who paused
                     the project, or who already did Day-1 work (Gmail,
                     CSV import) before the project advanced, must still
-                    be able to tick those boxes. */}
-                {!stepDone && status !== 'live' && status !== 'archived' && s.actionKey !== 'voice_dna_extract' && (
+                    be able to tick those boxes. Excludes the four steps
+                    above that have their own inline action + a real
+                    pass/fail or applied verdict behind it — "Mark done"
+                    on those would let a coordinator skip past a gate
+                    that never actually ran. */}
+                {!stepDone && status !== 'live' && status !== 'archived'
+                  && s.actionKey !== 'voice_dna_extract'
+                  && s.actionKey !== 'data_cleanup_ui'
+                  && s.actionKey !== 'recover_booked_data_ui'
+                  && s.actionKey !== 'readiness_check'
+                  && (
                   <button
                     onClick={() => onCompleteStep(s)}
                     disabled={busy}
@@ -708,6 +908,67 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
         })}
       </ul>
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// T5-W5: Day-5 inline-action result panels
+// ---------------------------------------------------------------------------
+
+function CleanupResultPanel({ result }: { result: CleanupPipelineResult }) {
+  return (
+    <div className="mt-2 rounded border border-sage-200 bg-warm-white p-2 space-y-1.5">
+      <p className="text-[10px] font-medium text-sage-700">
+        {result.apply ? 'Applied' : 'Preview (dry-run — nothing written yet)'}
+      </p>
+      {result.steps.map((s) => (
+        <div key={s.id} className="text-[10px] text-sage-600">
+          <span className={s.skipped ? 'text-sage-400' : s.ok ? 'text-sage-700' : 'text-red-600'}>
+            {s.skipped ? '○' : s.ok ? '✓' : '✗'}
+          </span>{' '}
+          <span className="font-medium">{s.name}</span>
+          {s.skipped ? (
+            <span className="text-sage-400"> — skipped: {s.skipReason}</span>
+          ) : (
+            <span className="text-sage-500">
+              {' — '}
+              {Object.entries(s.counts).map(([k, v]) => `${k}=${v}`).join(', ') || 'no changes'}
+            </span>
+          )}
+          {s.errors.length > 0 && (
+            <span className="text-red-600"> ({s.errors.length} error{s.errors.length === 1 ? '' : 's'})</span>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ReadinessReportPanel({ report }: { report: ReadinessReport }) {
+  const failingInvariants = report.invariants.filter((i) => i.count > 0)
+  return (
+    <div className="mt-2 rounded border border-sage-200 bg-warm-white p-2 space-y-1.5">
+      <p className={`text-[10px] font-medium ${report.readyForGoLive ? 'text-emerald-700' : 'text-red-600'}`}>
+        {report.readyForGoLive ? 'Invariants clean — Go Live unlocked' : `${failingInvariants.length} invariant${failingInvariants.length === 1 ? '' : 's'} failing — Go Live stays locked`}
+      </p>
+      {failingInvariants.map((i) => (
+        <p key={i.id} className="text-[10px] text-red-600">✗ {i.count} — {i.name}</p>
+      ))}
+      {report.smoke.map((s) => (
+        <p key={s.id} className={`text-[10px] ${s.status === 'pass' ? 'text-sage-500' : s.status === 'warn' ? 'text-amber-700' : 'text-red-600'}`}>
+          {s.status === 'pass' ? '✓' : s.status === 'warn' ? '!' : '✗'} {s.message}
+        </p>
+      ))}
+    </div>
+  )
+}
+
+function RecoveryReportPanel({ report }: { report: RecoveryReport }) {
+  return (
+    <div className="mt-2 rounded border border-sage-200 bg-warm-white p-2 text-[10px] text-sage-600">
+      {report.totalCandidates} candidate wedding{report.totalCandidates === 1 ? '' : 's'} with missing booking data · recovered {report.recovered.length} · merged {report.merged.length} · no match {report.noMatch.length}
+      {report.errors.length > 0 && <span className="text-red-600"> · {report.errors.length} error{report.errors.length === 1 ? '' : 's'}</span>}
+    </div>
   )
 }
 

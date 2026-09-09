@@ -1,19 +1,14 @@
 // Multi-venue onboarding data-cleanup pipeline.
 //
 // Runs every Rixey-derived backfill in dependency order against any
-// venue. After each step, prints a summary so a coordinator can spot
-// anomalies before letting the next step run. Idempotent — already-
-// correct rows are no-ops.
-//
-// Step order matters:
-//   1. Direction reclassification first (everything else depends on
-//      direction + from_email being right).
-//   2. Recover scheduling-event datetimes from metadata (tour timestamps).
-//   3. Re-align booking vs tour timestamps (uses interactions, requires
-//      step 1).
-//   4. Repair touchpoint sources (uses interaction.from_email, requires
-//      step 1).
-//   5. Recompute heat scores (after every other correction).
+// venue. Thin CLI wrapper — the six steps live in
+// src/lib/services/onboarding/cleanup/ (runCleanupPipeline) so the
+// onboarding-project UI can run the identical pipeline from
+// POST /api/onboarding/project/cleanup with no terminal. Previously
+// this script spawned each step as a child process; it now calls the
+// library functions directly in-process, which also means a failure
+// in one step no longer aborts the process — every step's counts are
+// printed so a coordinator sees the whole picture.
 //
 // Usage:
 //   npx tsx scripts/onboard-data-cleanup.ts --venue <uuid>             # dry-run
@@ -22,8 +17,24 @@
 // Run on a fresh venue immediately after Gmail backfill and before
 // "Go Live" is enabled. Run on existing venues whenever the team
 // touches the email pipeline.
-import { spawn } from 'node:child_process'
+import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
+import { CLEANUP_STEPS, runCleanupPipeline } from '../src/lib/services/onboarding/cleanup'
+
+const env = Object.fromEntries(
+  readFileSync('.env.local', 'utf8')
+    .split('\n')
+    .filter((l) => l && !l.startsWith('#') && l.includes('='))
+    .map((l) => {
+      const i = l.indexOf('=')
+      return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^['"]|['"]$/g, '')]
+    }),
+)
+for (const k of Object.keys(env)) if (!process.env[k]) process.env[k] = env[k]
+
+const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+})
 
 const args = process.argv.slice(2)
 const apply = args.includes('--apply')
@@ -34,125 +45,53 @@ if (!venueId) {
   process.exit(2)
 }
 
-interface Step {
-  /** Display name. */
-  name: string
-  /** Path to the underlying script (relative to repo root). */
-  script: string
-  /** Why this step is in this position — surfaced in the log. */
-  rationale: string
-}
-
-const STEPS: Step[] = [
-  {
-    name: '1. Reclassify direction from Gmail labels',
-    script: 'scripts/reclassify-direction-from-gmail.ts',
-    rationale: 'Direction + from_email must be correct before any downstream step can trust them.',
-  },
-  {
-    name: '2. Recover scheduling-event datetimes from metadata',
-    script: 'scripts/backfill-scheduling-event-dates.ts',
-    rationale: 'Tour event timestamps recovered from metadata.event_datetime / subject / sibling rows.',
-  },
-  {
-    name: '3. Re-align booking vs tour timestamps',
-    script: 'scripts/backfill-booking-vs-tour-timestamps.ts',
-    rationale: 'Inquiry / tour_booked land at the booking moment (email arrival), tour_conducted lands at the tour itself.',
-  },
-  {
-    name: '4. Repair touchpoint sources',
-    script: 'scripts/backfill-touchpoint-sources.ts',
-    rationale: 'Touchpoint source matches the actual channel (inferred from interaction.from_email), not the wedding\'s legacy first-touch.',
-  },
-  {
-    name: '5. Recompute attribution buckets',
-    script: 'scripts/recompute-attribution-buckets.ts',
-    rationale: 'After step 3 corrected inquiry_date, bucket / is_first_touch on existing attribution_events may be stale (a signal that\'s now post-inquiry may still be labeled \'attribution\'). Re-derive against current inquiry dates so the journey narrative + first-touch reporting are accurate.',
-  },
-  {
-    name: '6. Recompute heat scores',
-    script: 'scripts/recompute-heat-after-reclassify.ts',
-    rationale: 'Heat may be inflated from now-deleted false-positive engagement events. Reset everything.',
-  },
-]
-
-function ensureScriptExists(path: string): boolean {
-  try {
-    readFileSync(path, 'utf8')
-    return true
-  } catch {
-    return false
-  }
-}
-
-function runStep(step: Step): Promise<{ exitCode: number; output: string }> {
-  return new Promise((resolve) => {
-    const stepArgs = ['tsx', step.script, '--venue', venueId!]
-    if (apply) stepArgs.push('--apply')
-    const child = spawn('npx', stepArgs, { stdio: ['inherit', 'pipe', 'pipe'], shell: true })
-    let output = ''
-    child.stdout.on('data', (chunk: Buffer) => {
-      const s = chunk.toString()
-      output += s
-      process.stdout.write(s)
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      const s = chunk.toString()
-      output += s
-      process.stderr.write(s)
-    })
-    child.on('close', (code) => {
-      resolve({ exitCode: code ?? -1, output })
-    })
-  })
-}
-
 async function main() {
   console.log(`\n=== Onboarding data cleanup — venue ${venueId} ${apply ? '(apply)' : '(dry-run)'} ===\n`)
-  console.log(`Steps: ${STEPS.length}.  Mode: ${apply ? 'WRITE' : 'READ-ONLY'}.`)
+  console.log(`Steps: ${CLEANUP_STEPS.length}.  Mode: ${apply ? 'WRITE' : 'READ-ONLY'}.`)
   console.log(`Each step is idempotent. Already-correct rows are no-ops.\n`)
 
   const startedAt = Date.now()
-  const stepResults: Array<{ step: Step; exitCode: number; durationMs: number }> = []
-  for (const step of STEPS) {
-    if (!ensureScriptExists(step.script)) {
-      console.error(`\n  MISSING: ${step.script} not found. Aborting.`)
-      process.exit(2)
-    }
+  const pipeline = await runCleanupPipeline(sb, venueId!, apply)
+  const totalMs = Date.now() - startedAt
+
+  for (const step of pipeline.steps) {
     console.log('\n' + '─'.repeat(72))
     console.log(step.name)
-    console.log(`why: ${step.rationale}`)
+    const def = CLEANUP_STEPS.find((s) => s.id === step.id)
+    if (def) console.log(`why: ${def.rationale}`)
     console.log('─'.repeat(72))
-    const stepStart = Date.now()
-    const { exitCode } = await runStep(step)
-    const durationMs = Date.now() - stepStart
-    stepResults.push({ step, exitCode, durationMs })
-    if (exitCode !== 0) {
-      console.error(`\n  FAILED: step exited with code ${exitCode}. Aborting subsequent steps.`)
-      break
+    if (step.skipped) {
+      console.log(`  SKIPPED: ${step.skipReason ?? 'no reason given'}`)
+      continue
     }
+    for (const [k, v] of Object.entries(step.counts)) {
+      console.log(`  ${k.padEnd(36)} ${v}`)
+    }
+    if (step.samples.length > 0) {
+      console.log('  samples:')
+      for (const s of step.samples) console.log(`    ${s}`)
+    }
+    for (const e of step.errors) console.error(`  error: ${e}`)
   }
 
-  const totalMs = Date.now() - startedAt
   console.log('\n' + '═'.repeat(72))
   console.log(`SUMMARY — ${apply ? 'applied' : 'dry-run'} in ${(totalMs / 1000).toFixed(1)}s`)
   console.log('═'.repeat(72))
-  for (const r of stepResults) {
-    const status = r.exitCode === 0 ? 'OK' : `FAIL(${r.exitCode})`
-    console.log(`  [${status.padEnd(7)}] ${(r.durationMs / 1000).toFixed(1)}s  ${r.step.name}`)
+  for (const step of pipeline.steps) {
+    const status = step.skipped ? 'SKIP' : step.ok ? 'OK' : 'FAIL'
+    console.log(`  [${status.padEnd(6)}] ${step.name}`)
   }
 
-  const failed = stepResults.find((r) => r.exitCode !== 0)
-  if (failed) {
+  if (!pipeline.allOk) {
     console.log('\nOne or more steps failed. Investigate before re-running with --apply.')
     process.exit(1)
   }
 
   if (!apply) {
     console.log('\nDry-run complete. Re-run with --apply to write.')
-    console.log('After --apply, run scripts/data-integrity-check.ts to verify all invariants pass.')
+    console.log('After --apply, run scripts/onboarding-readiness.ts to verify all invariants pass.')
   } else {
-    console.log('\nNext step: scripts/data-integrity-check.ts --venue ' + venueId)
+    console.log('\nNext step: scripts/onboarding-readiness.ts --venue ' + venueId)
     console.log('Only enable Go Live for this venue if all invariants pass.')
   }
 }

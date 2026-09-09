@@ -1164,7 +1164,7 @@ export const tourSchedulerAdapter: CrmAdapter = {
   name: 'tour_scheduler',
   label: 'Tour scheduler (Calendly / Acuity / iCal)',
   description:
-    'Import historical tour bookings + post-booking touchpoints from your scheduling tool. Calendly is fully supported (validated against the Rixey export); Acuity / Square Appointments / generic .ics are scaffolded. Each event type is classified as a tour, post-booking touchpoint, or service interaction; coordinators override per-event-type during preview.',
+    'Import historical tour bookings + post-booking touchpoints from your scheduling tool. Calendly is fully supported (validated against a real venue export); Acuity / Square Appointments / generic .ics are scaffolded. Each event type is classified as a tour, post-booking touchpoint, or service interaction; coordinators override per-event-type during preview.',
   ready: true,
   parse: parseTourScheduler,
   preview: previewTourScheduler,

@@ -660,13 +660,24 @@ export default function OnboardingPage() {
                 .map((v) => AD_PLATFORM_OPTIONS.find((o) => o.value === v)?.source)
                 .filter((s): s is string => !!s)
             ))
+            // T5-W5: confidence_threshold has been an INTEGER 0-100
+            // column since migration 121 (default 85, CHECK 0..100) —
+            // seeding 0.85 here rounds/truncates to 0 or 1, so a rule
+            // the coordinator later enables fires at ~1% confidence
+            // instead of 85%. shadow_mode=true matches migration 227's
+            // "new rules default to shadow" convention (observe + log
+            // for a probationary period, coordinator promotes with one
+            // click) — this write predates 227 shipping and never set
+            // it. Migration 393 repairs any rows already seeded wrong.
             const rows = sources.map((source) => ({
               venue_id: venueId,
               context: 'inquiry' as const,
               source,
               enabled: false,
-              confidence_threshold: 0.85,
+              confidence_threshold: 85,
               daily_limit: 5,
+              shadow_mode: true,
+              shadow_started_at: new Date().toISOString(),
             }))
             const { error: rulesError } = await supabase
               .from('auto_send_rules')
@@ -729,7 +740,29 @@ export default function OnboardingPage() {
           break
         }
         case 5: {
-          // Go Live — mark venue active and onboarding complete
+          // Go Live — mark venue active and onboarding complete.
+          //
+          // T5-W5: require ai_name + escalation_email before flipping
+          // live, same guard /settings/sage-identity enforces on its
+          // own save. Without escalation_email, Sage's outbound
+          // footer silently falls back to coordinator_email — the
+          // wizard never collects escalation_email itself, so this
+          // is a hard stop that sends the coordinator to set it
+          // rather than a silent fallback.
+          const { data: aiCfgCheck } = await supabase
+            .from('venue_ai_config')
+            .select('ai_name, escalation_email')
+            .eq('venue_id', venueId)
+            .maybeSingle()
+          const aiNameSet = Boolean((aiCfgCheck as { ai_name?: string | null } | null)?.ai_name?.trim())
+          const escalationSet = Boolean((aiCfgCheck as { escalation_email?: string | null } | null)?.escalation_email?.trim())
+          if (!aiNameSet || !escalationSet) {
+            const missing = [!aiNameSet && 'an AI assistant name', !escalationSet && 'an escalation email'].filter(Boolean).join(' and ')
+            throw new Error(
+              `Set ${missing} before going live — open Settings → Sage Identity, save, then come back and try again.`,
+            )
+          }
+
           await supabase
             .from('venues')
             .update({ status: 'active', updated_at: new Date().toISOString() })
@@ -802,6 +835,23 @@ export default function OnboardingPage() {
       // false (no venueId) we duplicate the guard here to be safe.
       const venueId = VENUE_ID
       if (venueId) {
+        // T5-W5: same ai_name + escalation_email guard as saveStep's
+        // case 5 — "Skip" on the launch step must not be a way to
+        // flip the venue live without either set. Errors here are
+        // surfaced (not swallowed like the rest of handleSkip) because
+        // this is the actual activation gate, not a partial-data save.
+        const { data: aiCfgCheck } = await supabase
+          .from('venue_ai_config')
+          .select('ai_name, escalation_email')
+          .eq('venue_id', venueId)
+          .maybeSingle()
+        const aiNameSet = Boolean((aiCfgCheck as { ai_name?: string | null } | null)?.ai_name?.trim())
+        const escalationSet = Boolean((aiCfgCheck as { escalation_email?: string | null } | null)?.escalation_email?.trim())
+        if (!aiNameSet || !escalationSet) {
+          const missing = [!aiNameSet && 'an AI assistant name', !escalationSet && 'an escalation email'].filter(Boolean).join(' and ')
+          setError(`Set ${missing} before going live — open Settings → Sage Identity, save, then come back and try again.`)
+          return
+        }
         await supabase
           .from('venues')
           .update({ status: 'active', updated_at: new Date().toISOString() })
