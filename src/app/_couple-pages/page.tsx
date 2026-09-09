@@ -104,9 +104,10 @@ interface DashboardData {
   guestListCount: number
   contractsCount: number
   bookedVendorsCount: number
-  // Tier-B #50/#51 — owner presence card. ownerNote + ownerPhotoUrl
-  // populated from venue_config (mig 222); ownerName from venue_ai_config.
-  // All optional — card renders only when ownerNote is non-empty.
+  // Tier-B #50/#51 — owner presence card. ownerNote + ownerPhotoUrl +
+  // ownerName (coordinator_name) all populated from venue_config
+  // (mig 222). All optional — card renders only when ownerNote is
+  // non-empty.
   ownerName: string | null
   ownerNote: string | null
   ownerPhotoUrl: string | null
@@ -393,7 +394,6 @@ export default function CoupleDashboard() {
           interactionsRes,
           contractsRes,
           bookedVendorsRes,
-          aiConfigRes,
           venueConfigRes,
           packageRes,
         ] = await Promise.all([
@@ -448,20 +448,18 @@ export default function CoupleDashboard() {
             .from('booked_vendors')
             .select('id', { count: 'exact', head: true })
             .eq('wedding_id', wid),
-          // Owner identity (venue_ai_config). Returns null shape when
-          // venue_id is unresolved or RLS denies — safe.
-          vid
-            ? supabase
-                .from('venue_ai_config')
-                .select('owner_name')
-                .eq('venue_id', vid)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null }),
-          // Owner presence (venue_config: note + photo).
+          // Owner presence (venue_config: name, note + photo).
+          // 2026-09-08 schema-truth fix: venue_ai_config has no
+          // owner_name column (never has — that table holds Sage's AI
+          // identity, ai_name/ai_role_title, not a human owner's name).
+          // The couple-facing "note from the owner" card wants the
+          // coordinator's display name, which lives on venue_config
+          // alongside the note + photo it's already fetching — folded
+          // into one query instead of a second one that always 400'd.
           vid
             ? supabase
                 .from('venue_config')
-                .select('owner_note_to_couples, owner_photo_url')
+                .select('coordinator_name, owner_note_to_couples, owner_photo_url')
                 .eq('venue_id', vid)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
@@ -486,19 +484,12 @@ export default function CoupleDashboard() {
         // surfaced in the UI as a banner so couples know "something
         // didn't load" instead of "the coordinator hasn't filled this."
         const fetchErrors: string[] = []
-        if (aiConfigRes.error) {
-          console.warn(
-            '[couple-dashboard] owner_name fetch failed:',
-            aiConfigRes.error.message,
-          )
-          fetchErrors.push("Couldn't load your venue's owner info.")
-        }
         if (venueConfigRes.error) {
           console.warn(
             '[couple-dashboard] venue_config fetch failed:',
             venueConfigRes.error.message,
           )
-          fetchErrors.push("Couldn't load venue branding.")
+          fetchErrors.push("Couldn't load venue branding or owner info.")
         }
         if (packageRes.error) {
           console.warn(
@@ -509,7 +500,7 @@ export default function CoupleDashboard() {
         }
 
         const ownerName =
-          ((aiConfigRes.data as { owner_name?: string } | null)?.owner_name) ?? null
+          ((venueConfigRes.data as { coordinator_name?: string } | null)?.coordinator_name) ?? null
         const ownerNote =
           ((venueConfigRes.data as { owner_note_to_couples?: string } | null)?.owner_note_to_couples) ?? null
         // Round-6 audit fix: validate owner_photo_url is HTTPS before
@@ -964,8 +955,8 @@ export default function CoupleDashboard() {
       {/* Owner presence card (Tier-B #50/#51).
           Renders only when the venue owner has populated a note via
           /settings/venue-info. Photo is optional and falls through to
-          a text-only card. ownerName comes from venue_ai_config so
-          the heading reads with the venue's actual owner. */}
+          a text-only card. ownerName comes from venue_config.coordinator_name
+          so the heading reads with the venue's actual owner. */}
       {data.ownerNote && (
         <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 flex gap-4">
           {data.ownerPhotoUrl ? (

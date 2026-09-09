@@ -1595,23 +1595,18 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
         setOrgId(resolvedOrgId)
 
         // 4) Load venue_config rows for those venues (still needed for the venue grid below)
+        // 2026-09-08 schema-truth fix: brand_description was never a
+        // venue_config column (it lives on organisations, loaded in step
+        // 5 below) — dropped the always-failing select + its retry.
         const { data: configRows, error: cErr } = await supabase
           .from('venue_config')
-          .select('id, venue_id, business_name, logo_url, primary_color, secondary_color, accent_color, capacity, base_price, coordinator_name, brand_description')
+          .select('id, venue_id, business_name, logo_url, primary_color, secondary_color, accent_color, capacity, base_price, coordinator_name')
           .in('venue_id', ids)
         if (cErr) {
-          // brand_description column may not exist — retry without it
-          console.warn('venue_config query failed, retrying without brand_description:', cErr)
+          console.warn('venue_config query failed:', cErr)
         }
 
-        let safeConfigRows: any[] | null = configRows as any
-        if (cErr) {
-          const retry = await supabase
-            .from('venue_config')
-            .select('id, venue_id, business_name, logo_url, primary_color, secondary_color, accent_color, capacity, base_price, coordinator_name')
-            .in('venue_id', ids)
-          safeConfigRows = (retry.data ?? null) as any[] | null
-        }
+        const safeConfigRows: any[] | null = configRows as any
 
         const configByVenueId = new Map<string, VenueRow>()
         ;(safeConfigRows ?? []).forEach((r: any) => configByVenueId.set(r.venue_id, r))
@@ -1630,7 +1625,9 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
             secondaryColor: c?.secondary_color ?? '#5D7A7A',
             accentColor: c?.accent_color ?? '#A6894A',
             businessName: c?.business_name ?? null,
-            brandDescription: (c as any)?.brand_description ?? null,
+            // Org-level brandDescription (organisations.brand_description)
+            // is set separately in step 5 below and takes precedence.
+            brandDescription: null,
             configId: c?.id ?? null,
           }
         })

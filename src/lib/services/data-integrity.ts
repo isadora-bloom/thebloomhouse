@@ -417,7 +417,7 @@ async function checkPlaceholderFirstName(sb: SupabaseClient, venueId: string): P
 }
 
 async function checkInboundMissingIntentClass(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
-  // Anja Putman / RM-1152. inbound_intent_class shipped in mig 327
+  // Anja Putman / RM-1152. interactions.intent_class shipped in mig 327
   // (2026-05-12). Drain cron classifies new inbounds within ~5 min.
   // Any inbound older than 1h that's still NULL means the drain is
   // stuck OR a writer path bypassed the classifier. Don't probe rows
@@ -425,18 +425,23 @@ async function checkInboundMissingIntentClass(sb: SupabaseClient, venueId: strin
   // expected NULL until the drain finishes.
   const oneHrAgo = new Date(Date.now() - 60 * 60_000).toISOString()
   const twoWeeksAgo = new Date(Date.now() - 14 * 86_400_000).toISOString()
+  // Schema-truth fix 2026-09-08: neither `received_at` nor
+  // `inbound_intent_class` are real columns. Mig 327 named the
+  // classifier column `intent_class`; the occurred-at time is
+  // `timestamp` (same column the other invariant checks in this file
+  // already use).
   const { data } = await sb
     .from('interactions')
-    .select('id, received_at, from_email, subject')
+    .select('id, timestamp, from_email, subject')
     .eq('venue_id', venueId)
     .eq('direction', 'inbound')
-    .is('inbound_intent_class', null)
-    .lt('received_at', oneHrAgo)
-    .gte('received_at', twoWeeksAgo)
+    .is('intent_class', null)
+    .lt('timestamp', oneHrAgo)
+    .gte('timestamp', twoWeeksAgo)
     .limit(SAMPLE_LIMIT * 5)
   const violations = ((data ?? []) as Array<Record<string, unknown>>).map((i) => ({
     interaction_id: i.id,
-    received_at: i.received_at,
+    received_at: i.timestamp,
     from_email: i.from_email,
     subject: typeof i.subject === 'string' ? i.subject.slice(0, 80) : null,
   }))
@@ -521,12 +526,12 @@ async function checkAuthsolicNoWedding(sb: SupabaseClient, venueId: string): Pro
   // wedding creation failed downstream. Pre-pipeline-fix bug class.
   const { data } = await sb
     .from('interactions')
-    .select('id, from_email, subject, received_at, extracted_identity')
+    .select('id, from_email, subject, timestamp, extracted_identity')
     .eq('venue_id', venueId)
     .is('wedding_id', null)
     .not('extracted_identity', 'is', null)
     .limit(500)
-  type Row = { id: string; from_email: string | null; subject: string | null; received_at: string | null; extracted_identity: Record<string, unknown> | null }
+  type Row = { id: string; from_email: string | null; subject: string | null; timestamp: string | null; extracted_identity: Record<string, unknown> | null }
   const violations: Record<string, unknown>[] = []
   for (const r of ((data ?? []) as Row[])) {
     const token = r.extracted_identity?.authsolic
@@ -535,7 +540,7 @@ async function checkAuthsolicNoWedding(sb: SupabaseClient, venueId: string): Pro
       interaction_id: r.id,
       from_email: r.from_email,
       subject: typeof r.subject === 'string' ? r.subject.slice(0, 80) : null,
-      received_at: r.received_at,
+      received_at: r.timestamp,
       authsolic: token,
     })
     if (violations.length >= SAMPLE_LIMIT * 5) break

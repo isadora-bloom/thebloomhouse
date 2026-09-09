@@ -125,28 +125,20 @@ export async function checkFollowUpsDue(
   for (const wedding of weddings) {
     const weddingId = wedding.id as string
 
-    // Get the contact email for this wedding
-    const { data: contact } = await supabase
-      .from('contacts')
+    // Get the contact email for this wedding. contacts has no
+    // wedding_id column (it's keyed by person_id) — this used to query
+    // it that way and 400 on every call, silently falling through to
+    // the people lookup below every single time. people carries email
+    // directly, so that's the real (and only) source here.
+    const { data: person } = await supabase
+      .from('people')
       .select('email')
       .eq('wedding_id', weddingId)
-      .eq('is_primary', true)
+      .not('email', 'is', null)
       .limit(1)
       .single()
 
-    // Fall back to people table if no primary contact
-    let contactEmail = (contact?.email as string) ?? null
-    if (!contactEmail) {
-      const { data: person } = await supabase
-        .from('people')
-        .select('email')
-        .eq('wedding_id', weddingId)
-        .not('email', 'is', null)
-        .limit(1)
-        .single()
-
-      contactEmail = (person?.email as string) ?? null
-    }
+    const contactEmail = (person?.email as string) ?? null
 
     if (!contactEmail) continue
 
@@ -261,30 +253,38 @@ export async function generateFollowUps(venueId: string): Promise<number> {
   // venue with N follow-ups due. One query + in-memory grouping
   // collapses to a single round-trip.
   const wedIds = dueFollowUps.map((f) => f.weddingId)
-  const { data: outboundRows } = await supabase
-    .from('interactions')
-    .select('wedding_id, subject, gmail_thread_id, source, timestamp')
-    .in('wedding_id', wedIds)
-    .eq('direction', 'outbound')
-    .order('timestamp', { ascending: false })
+  // interactions has no `source` column — the lead/marketing source
+  // lives on weddings.source (the same field auto_send_rules and
+  // normalize-source.ts key off). Batch it alongside the outbound
+  // lookup rather than trying to pull it off interactions.
+  const [{ data: outboundRows }, { data: sourceRows }] = await Promise.all([
+    supabase
+      .from('interactions')
+      .select('wedding_id, subject, gmail_thread_id, timestamp')
+      .in('wedding_id', wedIds)
+      .eq('direction', 'outbound')
+      .order('timestamp', { ascending: false }),
+    supabase.from('weddings').select('id, source').in('id', wedIds),
+  ])
+  const sourceByWedding = new Map<string, string | null>()
+  for (const w of (sourceRows ?? []) as Array<{ id: string; source: string | null }>) {
+    sourceByWedding.set(w.id, w.source)
+  }
   // Group: keep only the most recent outbound per wedding_id (the
   // ORDER BY DESC means the first hit per wedding wins).
   const lastOutboundByWedding = new Map<string, {
     subject: string | null
     gmail_thread_id: string | null
-    source: string | null
   }>()
   for (const row of (outboundRows ?? []) as Array<{
     wedding_id: string
     subject: string | null
     gmail_thread_id: string | null
-    source: string | null
   }>) {
     if (!lastOutboundByWedding.has(row.wedding_id)) {
       lastOutboundByWedding.set(row.wedding_id, {
         subject: row.subject,
         gmail_thread_id: row.gmail_thread_id,
-        source: row.source,
       })
     }
   }
@@ -340,7 +340,7 @@ export async function generateFollowUps(venueId: string): Promise<number> {
         ? `Re: ${(lastOutbound.subject as string).replace(/^Re:\s*/i, '')}`
         : 'Following up on your inquiry'
       const threadId = (lastOutbound?.gmail_thread_id as string) ?? undefined
-      const detectedSource = (lastOutbound?.source as string) ?? 'direct'
+      const detectedSource = sourceByWedding.get(followUp.weddingId) ?? 'direct'
 
       // Insert the draft. Pre-fix this used wrong column names
       // (`body`, `contact_email`) and a context_type that violated the
@@ -560,15 +560,8 @@ async function resolveContactEmail(
   supabase: ReturnType<typeof createServiceClient>,
   weddingId: string,
 ): Promise<string | null> {
-  const { data: contact } = await supabase
-    .from('contacts')
-    .select('email')
-    .eq('wedding_id', weddingId)
-    .eq('is_primary', true)
-    .limit(1)
-    .single()
-  if (contact?.email) return contact.email as string
-
+  // contacts has no wedding_id column (person_id-keyed) — see the same
+  // fix in checkFollowUpsDue above. people.email is the real source.
   const { data: person } = await supabase
     .from('people')
     .select('email')
@@ -914,14 +907,19 @@ async function emitExtendedDraft(
 
   // Pull a previous outbound for "Re: <subject>" continuity (best-
   // effort — these triggers may have no prior outbound at all).
-  const { data: lastOutbound } = await supabase
-    .from('interactions')
-    .select('subject, gmail_thread_id, source, timestamp')
-    .eq('wedding_id', weddingId)
-    .eq('direction', 'outbound')
-    .order('timestamp', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // interactions has no `source` column — pull the lead source from
+  // weddings.source instead (see generateFollowUps for the same fix).
+  const [{ data: lastOutbound }, { data: sourceWedding }] = await Promise.all([
+    supabase
+      .from('interactions')
+      .select('subject, gmail_thread_id, timestamp')
+      .eq('wedding_id', weddingId)
+      .eq('direction', 'outbound')
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase.from('weddings').select('source').eq('id', weddingId).maybeSingle(),
+  ])
 
   const result = await generateFollowUp({
     venueId,
@@ -941,7 +939,7 @@ async function emitExtendedDraft(
           : 'Rescheduling your tour')
   const followUpSubject = `Re: ${subjectBase.replace(/^Re:\s*/i, '')}`
   const threadId = (lastOutbound?.gmail_thread_id as string | null) ?? undefined
-  const detectedSource = (lastOutbound?.source as string | null) ?? 'direct'
+  const detectedSource = (sourceWedding?.source as string | null) ?? 'direct'
 
   const { data: draft, error } = await supabase
     .from('drafts')

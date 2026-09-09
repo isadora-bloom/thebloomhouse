@@ -250,9 +250,9 @@ async function loadConfirmedCulturalMoments(
   // Query the per-venue state first.
   const { data: stateRows } = await supabase
     .from('venue_cultural_moment_state')
-    .select('cultural_moment_id, decision')
+    .select('cultural_moment_id, state')
     .eq('venue_id', venueId)
-    .eq('decision', 'confirmed')
+    .eq('state', 'confirmed')
     .limit(200)
   const confirmedIds = new Set<string>(
     (stateRows ?? [])

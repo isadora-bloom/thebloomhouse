@@ -38,7 +38,7 @@ export async function GET() {
   // ---- Gmail connections ----
   const { data: connections } = await supabase
     .from('gmail_connections')
-    .select('id, email_address, is_active, last_sync_at')
+    .select('id, email_address, status, last_sync_at')
     .eq('venue_id', venueId)
 
   // ---- Interactions ----
@@ -106,7 +106,10 @@ export async function GET() {
   // ---- Recent inbound email sample (10) ----
   const { data: recentInbound } = await supabase
     .from('interactions')
-    .select('id, timestamp, from_email, from_name, person_id, wedding_id, subject, classification')
+    // interactions has no `classification` column — the intent
+    // classifier writes to intent_class. Aliased to keep the response
+    // shape stable for existing consumers.
+    .select('id, timestamp, from_email, from_name, person_id, wedding_id, subject, classification:intent_class')
     .eq('venue_id', venueId)
     .eq('type', 'email')
     .eq('direction', 'inbound')
@@ -162,7 +165,7 @@ export async function GET() {
       count: connections?.length ?? 0,
       rows: (connections ?? []).map((c) => ({
         email: c.email_address,
-        active: c.is_active,
+        active: c.status === 'active',
         last_sync_at: c.last_sync_at,
       })),
     },

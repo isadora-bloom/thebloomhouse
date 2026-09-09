@@ -338,11 +338,32 @@ async function findNameWindowMatches(
     const CHUNK = 100
     for (let i = 0; i < candidateWeddingIds.length; i += CHUNK) {
       const chunk = candidateWeddingIds.slice(i, i + CHUNK)
+      // 2026-09-08 schema-truth fix: weddings has no `state` column and
+      // never has (only venues.state exists). This bulk select used to
+      // ask for it anyway, which 400'd the WHOLE chunk — wedMap stayed
+      // empty and every Tier 1.2/1.3 name+state match in that chunk
+      // silently fell through to a weaker tier or the AI adjudicator.
+      // The couple's state lives on people.region for the partner rows;
+      // derive it with a second batched query instead.
       const { data: weds } = await supabase
         .from('weddings')
-        .select('id, venue_id, source, inquiry_date, tour_date, state')
+        .select('id, venue_id, source, inquiry_date, tour_date')
         .in('id', chunk)
-      for (const w of (weds ?? []) as WeddingRow[]) wedMap.set(w.id, w)
+      const stateByWedding = new Map<string, string>()
+      const { data: partnerRows } = await supabase
+        .from('people')
+        .select('wedding_id, region')
+        .in('wedding_id', chunk)
+        .in('role', ['partner1', 'partner2'])
+        .not('region', 'is', null)
+      for (const p of (partnerRows ?? []) as Array<{ wedding_id: string; region: string | null }>) {
+        if (p.region && !stateByWedding.has(p.wedding_id)) {
+          stateByWedding.set(p.wedding_id, p.region)
+        }
+      }
+      for (const w of (weds ?? []) as WeddingRow[]) {
+        wedMap.set(w.id, { ...w, state: stateByWedding.get(w.id) ?? null })
+      }
     }
   }
 

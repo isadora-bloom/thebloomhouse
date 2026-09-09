@@ -278,35 +278,22 @@ async function loadRecentInteractions(
 }
 
 async function loadCalendarEvidenceForTour(
-  supabase: SupabaseClient,
-  weddingId: string,
-  tourScheduledAt: string | null,
+  _supabase: SupabaseClient,
+  _weddingId: string,
+  _tourScheduledAt: string | null,
 ): Promise<{ attendees: string | null; notes: string | null }> {
-  if (!tourScheduledAt) return { attendees: null, notes: null }
-  // external_calendar_events may carry attendees + agenda. Probe a window
-  // around the tour. Tolerates absence — many setups don't carry this.
-  try {
-    const ts = Date.parse(tourScheduledAt)
-    if (!Number.isFinite(ts)) return { attendees: null, notes: null }
-    const from = new Date(ts - 12 * 60 * 60 * 1000).toISOString()
-    const to = new Date(ts + 12 * 60 * 60 * 1000).toISOString()
-    const { data } = await supabase
-      .from('external_calendar_events')
-      .select('title, attendees, description, start_at')
-      .eq('wedding_id', weddingId)
-      .gte('start_at', from)
-      .lte('start_at', to)
-      .limit(3)
-    if (!data || data.length === 0) return { attendees: null, notes: null }
-    const row = data[0] as {
-      title: string | null
-      attendees: string | null
-      description: string | null
-    }
-    return { attendees: row.attendees, notes: row.description }
-  } catch {
-    return { attendees: null, notes: null }
-  }
+  // 2026-09-08 schema-truth fix: this used to query
+  // external_calendar_events for wedding_id/attendees/start_at — none of
+  // which exist on that table. external_calendar_events is the
+  // geo-scoped economic/cultural-moment calendar the correlation engine
+  // uses (id, title, description, start_date, end_date, category,
+  // geo_scope, ...) — there is no wedding_id and no per-tour attendee
+  // list on it. No per-wedding synced-calendar-event table with
+  // attendee data exists anywhere in this schema, so there is nothing
+  // honest to read here yet. Returning the null shape (same as the
+  // old always-failing query resolved to) rather than pretending this
+  // data source exists.
+  return { attendees: null, notes: null }
 }
 
 function stripJsonFences(text: string): string {

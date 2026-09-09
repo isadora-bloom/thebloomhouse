@@ -287,9 +287,11 @@ export async function computeWeatherIntelOverlay(
 
   // Latest weather-correlation insight, if any. weather-cancellation
   // service writes these under signal_class='weather_x_venue'.
+  // intelligence_insights has no `description` column — the free-text
+  // body lives in `body`.
   const { data: insightRows } = await supabase
     .from('intelligence_insights')
-    .select('id, title, description, created_at, data_points')
+    .select('id, title, body, created_at, data_points')
     .eq('venue_id', venueId)
     .eq('insight_type', 'correlation_narration')
     .order('created_at', { ascending: false })
@@ -300,7 +302,7 @@ export async function computeWeatherIntelOverlay(
     const row = r as {
       id: string
       title: string
-      description: string | null
+      body: string | null
       created_at: string
       data_points: Record<string, unknown> | null
     }
@@ -312,7 +314,7 @@ export async function computeWeatherIntelOverlay(
       latest_insight = {
         id: row.id,
         title: row.title,
-        body: row.description,
+        body: row.body,
         generated_at: row.created_at,
       }
       break

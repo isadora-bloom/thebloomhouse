@@ -193,8 +193,10 @@ async function notifyReconstruction(
       // 20 minutes (guards against a drain double-pick).
       const supabase = createServiceClient()
       const twentyMinAgo = new Date(Date.now() - 20 * 60_000).toISOString()
+      // The real table is admin_notifications (createNotification below
+      // writes there) — plain `notifications` never existed.
       const { count } = await supabase
-        .from('notifications')
+        .from('admin_notifications')
         .select('id', { count: 'exact', head: true })
         .eq('venue_id', venueId)
         .eq('type', 'identity_reconstruction_started')

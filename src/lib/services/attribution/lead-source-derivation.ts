@@ -332,13 +332,16 @@ async function tryPriority5UtmFromAttributionEvents(
 
   for (const ev of sorted as Array<Record<string, unknown>>) {
     if (!ev.signal_id) continue
+    // tangential_signals has no raw_payload column — the UTM fields
+    // site-visitors.ts (and the other crm-import writers) stamp onto a
+    // signal land on extracted_identity (see site-visitors.ts:369-371).
     const { data: sig } = await supabase
       .from('tangential_signals')
-      .select('id, raw_payload, source_platform')
+      .select('id, extracted_identity, source_platform')
       .eq('id', ev.signal_id)
       .maybeSingle()
     if (!sig) continue
-    const raw = (sig as { raw_payload?: Record<string, unknown> | null }).raw_payload
+    const raw = (sig as { extracted_identity?: Record<string, unknown> | null }).extracted_identity
     if (raw && typeof raw === 'object') {
       const utm = (raw.utm_source ?? raw.utm_campaign ?? raw.utm_medium) as string | undefined
       if (utm && typeof utm === 'string') {

@@ -27,6 +27,42 @@ import {
   getActiveAnomalies,
 } from '@/lib/services/intel/climate-context'
 
+/**
+ * weddings has no couple_name column (never has). Names live on people
+ * (role partner1/partner2). Batches the lookup for a set of wedding ids
+ * and returns a display string ("Alex & Sam") per wedding, falling back
+ * to 'Unknown' when neither partner is on file.
+ * 2026-09-08 schema-truth fix — this digest used to select the missing
+ * column, 400, and silently render every lead/upcoming wedding as
+ * "Unknown".
+ */
+async function coupleNamesByWedding(
+  supabase: ReturnType<typeof createServiceClient>,
+  weddingIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (weddingIds.length === 0) return out
+  const { data: partners } = await supabase
+    .from('people')
+    .select('wedding_id, first_name, role')
+    .in('wedding_id', weddingIds)
+    .in('role', ['partner1', 'partner2'])
+  const byWedding = new Map<string, { partner1?: string; partner2?: string }>()
+  for (const p of (partners ?? []) as Array<{ wedding_id: string; first_name: string | null; role: string }>) {
+    const entry = byWedding.get(p.wedding_id) ?? {}
+    if (p.first_name) {
+      if (p.role === 'partner1') entry.partner1 = p.first_name
+      else if (p.role === 'partner2') entry.partner2 = p.first_name
+    }
+    byWedding.set(p.wedding_id, entry)
+  }
+  for (const [weddingId, entry] of byWedding) {
+    const names = [entry.partner1, entry.partner2].filter(Boolean)
+    if (names.length > 0) out.set(weddingId, names.join(' & '))
+  }
+  return out
+}
+
 /** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v1.0 (LLM-CALL-INVENTORY backfill): initial versioning for the
  *  weekly-digest executive-summary call. Was previously logging
@@ -148,12 +184,14 @@ async function buildLeadsSection(
   const fiveDaysAgo = daysAgo(5)
   const { data: stalledWeddings } = await supabase
     .from('weddings')
-    .select('id, couple_name, status, updated_at, booking_value')
+    .select('id, status, updated_at, booking_value')
     .eq('venue_id', venueId)
     .in('status', ['inquiry', 'tour_scheduled', 'tour_completed', 'proposal_sent'])
     .lt('updated_at', fiveDaysAgo)
     .order('booking_value', { ascending: false })
     .limit(5)
+
+  const stalledNames = await coupleNamesByWedding(supabase, (stalledWeddings ?? []).map((w) => w.id as string))
 
   for (const w of stalledWeddings ?? []) {
     const daysSince = Math.floor(
@@ -161,7 +199,7 @@ async function buildLeadsSection(
     )
     const value = w.booking_value ? ` ($${Number(w.booking_value).toLocaleString()})` : ''
     items.push({
-      text: `${w.couple_name ?? 'Unknown'} — stalled at "${w.status}" for ${daysSince} days${value}`,
+      text: `${stalledNames.get(w.id as string) ?? 'Unknown'} — stalled at "${w.status}" for ${daysSince} days${value}`,
       priority: daysSince > 10 ? 'high' : 'medium',
       meta: { wedding_id: w.id, days_stalled: daysSince },
     })
@@ -224,7 +262,7 @@ async function buildPerformanceSection(
       .lte('updated_at', thisWeekEnd),
     supabase
       .from('weddings')
-      .select('quoted_price')
+      .select('quoted_value')
       .eq('venue_id', venueId)
       .eq('status', 'booked')
       .gte('booked_at', thisWeekStart)
@@ -272,7 +310,7 @@ async function buildPerformanceSection(
   }
 
   const revenueBooked = (thisRevenue.data ?? []).reduce(
-    (sum, row) => sum + (Number(row.quoted_price) || 0),
+    (sum, row) => sum + (Number(row.quoted_value) || 0),
     0
   )
 
@@ -543,7 +581,7 @@ async function buildEventPrepAlerts(
   // Weddings in the next 14 days
   const { data: upcomingWeddings } = await supabase
     .from('weddings')
-    .select('id, couple_name, wedding_date, status')
+    .select('id, wedding_date, status')
     .eq('venue_id', venueId)
     .eq('status', 'booked')
     .gte('wedding_date', today())
@@ -562,6 +600,8 @@ async function buildEventPrepAlerts(
       items,
     }
   }
+
+  const upcomingNames = await coupleNamesByWedding(supabase, upcomingWeddings.map((w) => w.id as string))
 
   for (const wedding of upcomingWeddings) {
     const weddingDate = new Date(wedding.wedding_date as string)
@@ -602,7 +642,7 @@ async function buildEventPrepAlerts(
     const alertText = alerts.length > 0 ? ` [${alerts.join(', ')}]` : ''
 
     items.push({
-      text: `${wedding.couple_name ?? 'Unknown'} — ${dateLabel} (${daysUntil}d away)${alertText}`,
+      text: `${upcomingNames.get(wedding.id as string) ?? 'Unknown'} — ${dateLabel} (${daysUntil}d away)${alertText}`,
       priority: daysUntil <= 3 ? 'high' : daysUntil <= 7 ? 'medium' : 'low',
       meta: { wedding_id: wedding.id, days_until: daysUntil },
     })

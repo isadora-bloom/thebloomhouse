@@ -515,10 +515,11 @@ async function buildTimeWindows(
   }
 
   // Weather history availability — flag set when we have at least 1 row.
+  // The real table is weather_data (weather_history never existed).
   let weatherAvailable = false
   try {
     const { count } = await sb
-      .from('weather_history')
+      .from('weather_data')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
       .limit(1)
@@ -598,10 +599,14 @@ async function detectUnconnectedIntegrations(
     })
   }
 
-  // Google Ads — table may not exist; treat as unconnected.
+  // Google Ads. The real (not-yet-applied — migration 310) table is
+  // google_ads_connections; google_ads_accounts never existed. Renamed
+  // to match what google-ads-oauth.ts actually writes to, so this
+  // starts reporting "connected" correctly once 310 lands — until
+  // then it degrades the same way (treat as unconnected).
   try {
     const { count } = await sb
-      .from('google_ads_accounts')
+      .from('google_ads_connections')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
     if ((count ?? 0) === 0) {

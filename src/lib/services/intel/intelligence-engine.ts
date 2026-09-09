@@ -1539,6 +1539,42 @@ async function detectLostDealPatterns(
   }
 }
 
+/**
+ * weddings has no partner1_name/partner2_name columns (never has —
+ * names live on people, role partner1/partner2). Detectors 9-12 below
+ * all used to select these directly off weddings, which 400'd the
+ * whole upcoming-weddings query every run — these four detectors have
+ * produced zero insights in production. Batch-derive names from people
+ * instead, keyed by wedding id.
+ * 2026-09-08 schema-truth fix.
+ */
+async function coupleNamesByWeddingId(
+  supabase: SupabaseClient,
+  weddingIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (weddingIds.length === 0) return out
+  const { data: partners } = await supabase
+    .from('people')
+    .select('wedding_id, first_name, role')
+    .in('wedding_id', weddingIds)
+    .in('role', ['partner1', 'partner2'])
+  const byWedding = new Map<string, { partner1?: string; partner2?: string }>()
+  for (const p of (partners ?? []) as Array<{ wedding_id: string; first_name: string | null; role: string }>) {
+    const entry = byWedding.get(p.wedding_id) ?? {}
+    if (p.first_name) {
+      if (p.role === 'partner1') entry.partner1 = p.first_name
+      else if (p.role === 'partner2') entry.partner2 = p.first_name
+    }
+    byWedding.set(p.wedding_id, entry)
+  }
+  for (const [weddingId, entry] of byWedding) {
+    const names = [entry.partner1, entry.partner2].filter(Boolean)
+    out.set(weddingId, names.length > 0 ? names.join(' & ') : 'Unknown couple')
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Detector 9: Portal Engagement → Quality Predictor (Readiness Score)
 // ---------------------------------------------------------------------------
@@ -1555,7 +1591,7 @@ async function detectPortalEngagementQuality(
 
     const { data: upcomingWeddings, error: wErr } = await supabase
       .from('weddings')
-      .select('id, wedding_date, partner1_name, partner2_name, status')
+      .select('id, wedding_date, status')
       .eq('venue_id', venueId)
       .in('status', ['booked', 'confirmed'])
       .gte('wedding_date', now.toISOString().split('T')[0])
@@ -1564,6 +1600,7 @@ async function detectPortalEngagementQuality(
     if (wErr || !upcomingWeddings || upcomingWeddings.length === 0) return []
 
     const weddingIds = upcomingWeddings.map(w => w.id as string)
+    const coupleNames = await coupleNamesByWeddingId(supabase, weddingIds)
 
     // Fetch all planning data in parallel
     const [checklistRes, finalisationsRes, vendorsRes, contractsRes, budgetRes] = await Promise.all([
@@ -1692,9 +1729,7 @@ async function detectPortalEngagementQuality(
         (hasBudget ? 10 : 0) // 10% weight on having a budget
       ))
 
-      const coupleName = [wedding.partner1_name, wedding.partner2_name]
-        .filter(Boolean)
-        .join(' & ') || 'Unknown couple'
+      const coupleName = coupleNames.get(wedding.id as string) ?? 'Unknown couple'
 
       // timeZone: 'UTC' — wedding_date is a DATE column; parses as UTC
       // midnight, local-tz shifts day back in ET. Sophie trace 2026-05-12.
@@ -1813,7 +1848,7 @@ async function detectGuestExperienceRisks(
 
     const { data: upcomingWeddings, error: wErr } = await supabase
       .from('weddings')
-      .select('id, wedding_date, partner1_name, partner2_name')
+      .select('id, wedding_date')
       .eq('venue_id', venueId)
       .in('status', ['booked', 'confirmed'])
       .gte('wedding_date', now.toISOString().split('T')[0])
@@ -1822,6 +1857,7 @@ async function detectGuestExperienceRisks(
     if (wErr || !upcomingWeddings || upcomingWeddings.length === 0) return []
 
     const weddingIds = upcomingWeddings.map(w => w.id as string)
+    const coupleNames = await coupleNamesByWeddingId(supabase, weddingIds)
 
     // Fetch guest, dietary, care, and shuttle data in parallel
     const [guestRes, allergyRes, careRes, shuttleRes] = await Promise.all([
@@ -1900,9 +1936,7 @@ async function detectGuestExperienceRisks(
       // timeZone: 'UTC' — wedding_date is a DATE column; parses as UTC
       // midnight, local-tz shifts day back in ET. Sophie trace 2026-05-12.
       const dateStr = weddingDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' })
-      const coupleName = [wedding.partner1_name, wedding.partner2_name]
-        .filter(Boolean)
-        .join(' & ') || 'the couple'
+      const coupleName = coupleNames.get(wid) ?? 'the couple'
 
       const guests = guestsByWedding.get(wid)
       const allergies = allergyByWedding.get(wid)
@@ -2052,7 +2086,7 @@ async function detectCoupleReadiness(
 
     const { data: upcomingWeddings, error: wErr } = await supabase
       .from('weddings')
-      .select('id, wedding_date, partner1_name, partner2_name')
+      .select('id, wedding_date')
       .eq('venue_id', venueId)
       .in('status', ['booked', 'confirmed'])
       .gte('wedding_date', fourWeeksOut.toISOString().split('T')[0])
@@ -2089,6 +2123,7 @@ async function detectCoupleReadiness(
 
     // Get checklist completion for upcoming weddings
     const weddingIds = upcomingWeddings.map(w => w.id as string)
+    const coupleNames = await coupleNamesByWeddingId(supabase, weddingIds)
     const { data: checklistData } = await supabase
       .from('checklist_items')
       .select('wedding_id, is_completed')
@@ -2119,9 +2154,7 @@ async function detectCoupleReadiness(
         ? Math.round((checklist.completed / checklist.total) * 100)
         : 0
 
-      const coupleName = [wedding.partner1_name, wedding.partner2_name]
-        .filter(Boolean)
-        .join(' & ') || 'This couple'
+      const coupleName = coupleNames.get(wid) ?? 'This couple'
 
       // Compare to average — flag if significantly behind
       const avgRounded = Math.round(overallAvg * 10) / 10
@@ -2198,7 +2231,7 @@ async function detectReviewPrediction(
 
     const { data: relevantWeddings, error: wErr } = await supabase
       .from('weddings')
-      .select('id, wedding_date, partner1_name, partner2_name, status')
+      .select('id, wedding_date, status')
       .eq('venue_id', venueId)
       .in('status', ['booked', 'confirmed', 'completed'])
       .gte('wedding_date', sevenDaysAgo.toISOString().split('T')[0])
@@ -2207,6 +2240,7 @@ async function detectReviewPrediction(
     if (wErr || !relevantWeddings || relevantWeddings.length === 0) return []
 
     const weddingIds = relevantWeddings.map(w => w.id as string)
+    const coupleNames = await coupleNamesByWeddingId(supabase, weddingIds)
 
     // Gather signals in parallel
     const [checklistRes, finalisationsRes, sageRes, vendorsRes, budgetRes, timelineRes] = await Promise.all([
@@ -2267,9 +2301,7 @@ async function detectReviewPrediction(
       const weddingDate = new Date(wedding.wedding_date as string)
       const isPast = weddingDate.getTime() < now.getTime()
 
-      const coupleName = [wedding.partner1_name, wedding.partner2_name]
-        .filter(Boolean)
-        .join(' & ') || 'This couple'
+      const coupleName = coupleNames.get(wid) ?? 'This couple'
 
       // Calculate composite score (0-100)
       let score = 0

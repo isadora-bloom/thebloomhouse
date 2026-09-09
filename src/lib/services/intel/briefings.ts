@@ -498,14 +498,14 @@ async function getWeddingMetrics(
   // Revenue booked in the window
   const { data: revenueRows } = await supabase
     .from('weddings')
-    .select('quoted_price')
+    .select('quoted_value')
     .eq('venue_id', venueId)
     .eq('status', 'booked')
     .gte('booked_at', fromDate)
     .lte('booked_at', toDate)
 
   const revenueBooked = (revenueRows ?? []).reduce(
-    (sum, row) => sum + (Number(row.quoted_price) || 0),
+    (sum, row) => sum + (Number(row.quoted_value) || 0),
     0
   )
 

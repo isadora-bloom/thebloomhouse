@@ -228,22 +228,42 @@ async function loadVenueReviewLinks(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<VenueReviewLinks> {
-  // venue_config may carry per-platform review URLs in a jsonb blob.
-  // Tolerant fallback: empty links shape when nothing is configured.
+  // 2026-09-08 schema-truth fix: venue_config.review_links never existed
+  // (no migration anywhere ever defined it). The real per-platform links
+  // live directly on venues (the_knot_url, wedding_wire_url, zola_url,
+  // yelp_business_id, facebook_page_id, google_place_id) — same columns
+  // reviews-analytics.ts already reads for the reviews dashboard. Reuse
+  // that shape here instead of a jsonb blob that was never built.
   try {
     const { data } = await supabase
-      .from('venue_config')
-      .select('review_links')
-      .eq('venue_id', venueId)
+      .from('venues')
+      .select('google_place_id, the_knot_url, wedding_wire_url, yelp_business_id, facebook_page_id')
+      .eq('id', venueId)
       .maybeSingle()
-    const raw = (data as { review_links?: Record<string, string> | null } | null)?.review_links ?? {}
+    const v = (data ?? null) as {
+      google_place_id: string | null
+      the_knot_url: string | null
+      wedding_wire_url: string | null
+      yelp_business_id: string | null
+      facebook_page_id: string | null
+    } | null
     return {
-      knot: raw.knot ?? null,
-      weddingwire: raw.weddingwire ?? null,
-      google: raw.google ?? null,
-      yelp: raw.yelp ?? null,
-      facebook: raw.facebook ?? null,
-      other: raw.other ?? null,
+      knot: v?.the_knot_url ?? null,
+      weddingwire: v?.wedding_wire_url ?? null,
+      google: v?.google_place_id
+        ? `https://search.google.com/local/reviews?placeid=${encodeURIComponent(v.google_place_id)}`
+        : null,
+      yelp: v?.yelp_business_id
+        ? v.yelp_business_id.startsWith('http')
+          ? v.yelp_business_id
+          : `https://www.yelp.com/biz/${encodeURIComponent(v.yelp_business_id)}`
+        : null,
+      facebook: v?.facebook_page_id
+        ? v.facebook_page_id.startsWith('http')
+          ? v.facebook_page_id
+          : `https://www.facebook.com/${encodeURIComponent(v.facebook_page_id)}/reviews`
+        : null,
+      other: null,
     }
   } catch {
     return {
