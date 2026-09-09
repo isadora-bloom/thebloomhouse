@@ -25,7 +25,7 @@
     "check:pr-section": "node scripts/check-pr-cites-section.mjs",
     "check:rls-venue": "node scripts/check-rls-on-venue-id.mjs",
     "check:legacy-reads": "node scripts/check-no-new-legacy-reads.mjs",
-    "check:governance": "npm run check:cleanup-budget && npm run check:rls-venue && npm run test:golden:dry",
+    "check:governance": "npm run check:cleanup-budget && npm run check:rls-venue && npm run check:legacy-reads && npm run test:golden:dry",
     "gen:sitemap": "node scripts/gen-sitemap.mjs",
     "test:golden:dry": "tsx tests/golden/run-golden-cases.ts --dry",
     "test:golden": "tsx tests/golden/run-golden-cases.ts",
