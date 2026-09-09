@@ -6,6 +6,16 @@ import { createClient } from '@/lib/supabase/client'
 import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 import { Heart, Loader2 } from 'lucide-react'
 
+/**
+ * Couple registration.
+ *
+ * The credential is the ?invite= token from the invitation email, not the
+ * event code. Before W1 (2026-09-08) this page asked for the event code and
+ * the API accepted it, which meant three letters and three digits were all
+ * that stood between a stranger and a real couple's portal. There is now
+ * nothing to type but an email and a password: the link is the proof.
+ */
+
 interface VenueBranding {
   venueName: string
   logoUrl: string | null
@@ -18,8 +28,7 @@ export default function CoupleRegisterPage() {
   const searchParams = useSearchParams()
   const slug = params?.slug || ''
 
-  // Pre-fill event code from URL ?code=XXX
-  const [eventCode, setEventCode] = useState(searchParams?.get('code') || '')
+  const inviteToken = searchParams?.get('invite') || ''
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -69,10 +78,6 @@ export default function CoupleRegisterPage() {
     setError(null)
 
     // Validation
-    if (!eventCode.trim()) {
-      setError('Please enter your event code.')
-      return
-    }
     if (!email.trim()) {
       setError('Please enter your email address.')
       return
@@ -95,7 +100,7 @@ export default function CoupleRegisterPage() {
         body: JSON.stringify({
           email: email.trim(),
           password,
-          eventCode: eventCode.trim().toUpperCase(),
+          invite: inviteToken,
           slug,
         }),
       })
@@ -178,6 +183,45 @@ export default function CoupleRegisterPage() {
     )
   }
 
+  // No token in the URL. Nothing to validate against, so say plainly what
+  // is missing rather than presenting a form that can only ever fail.
+  if (!inviteToken) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center px-4"
+        style={{
+          backgroundColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 6%, white)',
+        }}
+      >
+        <div className="w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 sm:p-10 text-center">
+            <h1
+              className="text-2xl font-bold mb-3"
+              style={{
+                fontFamily: 'var(--couple-font-heading, serif)',
+                color: 'var(--couple-primary, #7D8471)',
+              }}
+            >
+              {venueName}
+            </h1>
+            <p className="text-gray-600 mb-6">
+              Setting up your account starts from the link in your invitation
+              email. Open that link and you will land back here, ready to go.
+              If you cannot find it, ask your coordinator to send another.
+            </p>
+            <a
+              href={`/couple/${slug}/login`}
+              className="inline-block w-full rounded-xl px-4 py-3 text-sm font-semibold text-white transition-all hover:opacity-90"
+              style={{ backgroundColor: 'var(--couple-primary, #7D8471)' }}
+            >
+              Already set up? Sign in
+            </a>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       className="min-h-screen flex items-center justify-center px-4"
@@ -219,47 +263,13 @@ export default function CoupleRegisterPage() {
               className="mt-2 text-center text-sm text-gray-500"
               style={{ fontFamily: 'var(--couple-font-body, sans-serif)' }}
             >
-              Welcome. Let&apos;s set up your account. Both partners can use
-              the same event code to create separate logins.
+              Welcome. Let&apos;s set up your account. Use the email address
+              your invitation was sent to.
             </p>
           </div>
 
           {/* Registration form */}
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Event Code */}
-            <div>
-              <label
-                htmlFor="event-code"
-                className="block text-sm font-medium text-gray-700 mb-1.5"
-              >
-                Event Code
-              </label>
-              <input
-                id="event-code"
-                type="text"
-                value={eventCode}
-                onChange={(e) => setEventCode(e.target.value.toUpperCase())}
-                required
-                autoComplete="off"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:border-transparent transition-shadow font-mono tracking-wider text-center text-lg"
-                style={{
-                  // Dynamic focus ring using venue primary color
-                }}
-                onFocus={(e) => {
-                  e.currentTarget.style.boxShadow = `0 0 0 2px color-mix(in srgb, var(--couple-primary, #7D8471) 30%, transparent)`
-                  e.currentTarget.style.borderColor = 'var(--couple-primary, #7D8471)'
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.boxShadow = 'none'
-                  e.currentTarget.style.borderColor = '#e5e7eb'
-                }}
-                placeholder="HWM-482"
-              />
-              <p className="mt-1 text-xs text-gray-400">
-                This was included in your invitation email from your coordinator.
-              </p>
-            </div>
-
             {/* Email */}
             <div>
               <label
@@ -286,6 +296,9 @@ export default function CoupleRegisterPage() {
                 }}
                 placeholder="your@email.com"
               />
+              <p className="mt-1 text-xs text-gray-400">
+                The address your coordinator sent the invitation to.
+              </p>
             </div>
 
             {/* Password */}
@@ -382,16 +395,6 @@ export default function CoupleRegisterPage() {
               </a>
             </p>
           </div>
-        </div>
-
-        {/* Powered by footer */}
-        <div className="mt-6 text-center">
-          <p className="text-xs text-gray-400 mb-1">Powered by</p>
-          <img
-            src="/brand/wordmark-sage-sm.png"
-            alt="The Bloom House"
-            className="h-5 w-auto mx-auto opacity-60"
-          />
         </div>
       </div>
     </div>

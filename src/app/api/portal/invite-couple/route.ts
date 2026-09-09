@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
+import { mintInviteToken } from '@/lib/services/portal/provision'
 import {
   getPlatformAuth,
   assertCanAccessVenue,
@@ -11,8 +12,8 @@ import {
 /**
  * POST /api/portal/invite-couple
  *
- * Sends an invitation email to a couple with their event code and
- * registration link via Resend. White-label:
+ * Sends an invitation email to a couple with a single-use registration
+ * link via Resend. White-label:
  *   - Display name on the envelope = venue's business name so couples see
  *     "Rixey Manor" in their inbox, not "The Bloom House".
  *   - replyTo = venue's coordinator email so any reply goes to the venue,
@@ -23,11 +24,26 @@ import {
  *   - No "Powered by The Bloom House" footer — couples shouldn't know Bloom
  *     exists.
  *
+ * The credential (W1, 2026-09-08). Each recipient gets their own 128-bit
+ * token, minted here, stored as a sha256 in couple_invites (migration 391),
+ * and sent only inside their link. It is single use and it really does
+ * expire in 14 days, which the email body has claimed since it was written.
+ * The event code is still shown, as a reference a coordinator can read down
+ * the phone; it is no longer what lets anybody in.
+ *
+ * Two partners means two invites and two emails. One token per account
+ * keeps the used_at bookkeeping honest, and partner 2 gets a link addressed
+ * to them rather than one already spent by partner 1.
+ *
  * Infrastructure carry-forward: the full envelope address is still
  * Bloom's verified Resend domain (the brand domain is thebloomhouse.AI).
  * Fully custom `from@venue.com` needs each venue to verify their own
  * domain in Resend — tracked as infra work, not a Phase 2 blocker.
  */
+
+/** How long an invitation is good for. Matches the email copy. */
+const INVITE_TTL_DAYS = 14
+
 export async function POST(request: NextRequest) {
   try {
     // Auth gate. Pre-fix this route would send a Resend-billed branded
@@ -156,10 +172,18 @@ export async function POST(request: NextRequest) {
     const aiName = resolvedAiName
 
     const portalUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://bloom-house-iota.vercel.app'}/couple/${venue.slug}`
-    const registerUrl = `${portalUrl}/register?code=${eventCode}`
 
     const subject = `You've been invited to your ${businessName} wedding portal`
-    const recipients = [email, partnerEmail].filter(Boolean) as string[]
+    // De-duplicate: a couple who share an address should get one invite,
+    // not two tokens racing for the same account.
+    const recipients = Array.from(
+      new Map(
+        ([email, partnerEmail].filter(Boolean) as string[]).map((addr) => [
+          addr.trim().toLowerCase(),
+          addr.trim(),
+        ])
+      ).values()
+    )
     // Fall back to partner1's first name when the caller didn't pass one
     // through. A bare "there" at the top of a personal invitation reads
     // like a mail-merge template that wasn't filled out.
@@ -183,7 +207,8 @@ export async function POST(request: NextRequest) {
       ? `${coordinatorName}<br/><span style="color:rgba(0,0,0,0.6);font-weight:400;">${businessName}</span>`
       : businessName
 
-    const htmlBody = `<!DOCTYPE html>
+    function buildHtml(registerUrl: string): string {
+      return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#FDFAF6;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#2D2D2D;">
@@ -204,19 +229,23 @@ export async function POST(request: NextRequest) {
           It includes ${aiName} (your AI wedding concierge), budget tracking, guest list,
           seating chart, timeline builder, and direct messaging with your coordinator.
         </p>
-        <p style="margin:0 0 20px;font-size:15px;line-height:1.55;">
-          Your event code: <strong style="font-family:monospace;background:#F3F4F6;padding:2px 8px;border-radius:4px;">${eventCode}</strong>
-        </p>
         <p style="margin:0 0 24px;">
           <a href="${registerUrl}" style="display:inline-block;padding:12px 24px;background:${primaryColor};color:#FFFFFF;text-decoration:none;border-radius:8px;font-weight:600;">
             Set up your account
           </a>
         </p>
         <p style="margin:0 0 12px;font-size:13px;color:#6B7280;">
-          Or visit <a href="${registerUrl}" style="color:${primaryColor};">${registerUrl}</a> and enter your code.
+          Or paste this into your browser:
+          <a href="${registerUrl}" style="color:${primaryColor};">${registerUrl}</a>
+        </p>
+        <p style="margin:0 0 12px;font-size:13px;color:#6B7280;">
+          This link is just for you and can only be used once. It expires in
+          ${INVITE_TTL_DAYS} days. If you have any trouble, just reply to this email.
         </p>
         <p style="margin:0 0 24px;font-size:13px;color:#6B7280;">
-          This invitation link expires in 14 days. If you have any trouble, just reply to this email.
+          Your reference for this wedding is
+          <strong style="font-family:monospace;background:#F3F4F6;padding:2px 8px;border-radius:4px;">${eventCode}</strong>
+          — handy if you ring us, but you won't need it to sign up.
         </p>
         <p style="margin:0;font-size:14px;line-height:1.55;color:#2D2D2D;">
           ${signOffLine}
@@ -233,21 +262,61 @@ export async function POST(request: NextRequest) {
   </table>
 </body>
 </html>`
+    }
 
-    const emailResult = await sendEmail({
-      to: recipients,
-      subject,
-      html: htmlBody,
-      from: fromHeader,
-      replyTo: coordinatorEmail,
-    })
+    const expiresAt = new Date(
+      Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000
+    ).toISOString()
 
-    if (!emailResult.ok) {
-      console.error('[invite-couple] Failed to send invitation email:', emailResult.error)
-    } else {
-      console.log(
-        `[invite-couple] Sent invitation to ${recipients.join(', ')} (id: ${emailResult.id ?? 'n/a'})`
-      )
+    const sent: { email: string; ok: boolean; error?: string }[] = []
+    let firstRegisterUrl: string | null = null
+
+    for (const recipient of recipients) {
+      const { token, tokenHash } = mintInviteToken()
+
+      // Store the invite BEFORE sending. If the row does not land, the
+      // link in the email would be dead on arrival, and a couple staring
+      // at "this invitation is not valid" has no way to tell that from
+      // being locked out. Fail loudly instead.
+      const { error: inviteErr } = await supabase.from('couple_invites').insert({
+        venue_id: venueId,
+        wedding_id: weddingId,
+        email: recipient.toLowerCase(),
+        token_hash: tokenHash,
+        expires_at: expiresAt,
+        created_by: auth.userId ?? null,
+      })
+
+      if (inviteErr) {
+        console.error('[invite-couple] Failed to store invitation:', inviteErr)
+        return NextResponse.json(
+          { error: 'Could not create the invitation. Please try again.' },
+          { status: 500 }
+        )
+      }
+
+      const registerUrl = `${portalUrl}/register?invite=${token}`
+      if (!firstRegisterUrl) firstRegisterUrl = registerUrl
+
+      const emailResult = await sendEmail({
+        to: recipient,
+        subject,
+        html: buildHtml(registerUrl),
+        from: fromHeader,
+        replyTo: coordinatorEmail,
+      })
+
+      if (!emailResult.ok) {
+        console.error(
+          `[invite-couple] Failed to send invitation to ${recipient}:`,
+          emailResult.error
+        )
+      } else {
+        console.log(
+          `[invite-couple] Sent invitation to ${recipient} (id: ${emailResult.id ?? 'n/a'})`
+        )
+      }
+      sent.push({ email: recipient, ok: emailResult.ok, error: emailResult.error })
     }
 
     await supabase
@@ -255,12 +324,17 @@ export async function POST(request: NextRequest) {
       .update({ couple_invited_at: new Date().toISOString() })
       .eq('id', weddingId)
 
+    const allSent = sent.every((s) => s.ok)
     return NextResponse.json({
       success: true,
-      registerUrl,
+      // The coordinator can copy this and read it out if the email bounces.
+      // It carries partner 1's token, so it is not a generic link.
+      registerUrl: firstRegisterUrl,
       eventCode,
-      emailSent: emailResult.ok,
-      emailError: emailResult.ok ? undefined : emailResult.error,
+      expiresAt,
+      recipients: sent.map((s) => s.email),
+      emailSent: allSent,
+      emailError: allSent ? undefined : sent.find((s) => !s.ok)?.error,
     })
   } catch (err) {
     console.error('[INVITE EMAIL ERROR]', err)

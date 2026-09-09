@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { createContext, createElement, useContext, useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
@@ -9,10 +9,16 @@ export interface CoupleContext {
   venueId: string | null
   weddingId: string | null
   /**
-   * Per-venue AI assistant name from venue_ai_config.ai_name. Falls back to
-   * 'Sage' so UI that reads this is never undefined. Every user-visible
-   * "Ask Sage" / "Chat with Sage" string in the couple portal must read
-   * from here so white-label venues (Oakwood: "Ivy", etc.) render correctly.
+   * Per-venue AI assistant name from venue_ai_config.ai_name. Every
+   * user-visible "Ask ..." / "Chat with ..." string in the couple portal
+   * must read from here so white-label venues (Oakwood: "Ivy", etc.)
+   * render correctly.
+   *
+   * The fallback is deliberately generic. It used to be 'Sage', which is
+   * Bloom's own house name, so for one paint of every page a venue's
+   * couples were greeted by another company's assistant. A venue that has
+   * named theirs gets the real name on the first render, seeded from the
+   * server layout through CoupleAiNameProvider.
    */
   aiName: string
   /**
@@ -35,7 +41,31 @@ export interface CoupleContext {
 const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201'
 const DEMO_WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const DEMO_SLUG = 'hawthorne-manor'
-const DEFAULT_AI_NAME = 'Sage'
+/**
+ * What we call the assistant before we know what the venue calls it.
+ * Never a real name, and never Bloom's.
+ */
+const DEFAULT_AI_NAME = 'your AI assistant'
+
+/**
+ * Server-seeded AI name.
+ *
+ * The couple layout already queries the venue on the server, so it can
+ * hand the real name down and the first paint is correct. Without this
+ * the hook fetches venue_ai_config in a browser effect and every
+ * "Ask ..." label visibly changes a beat after the page appears.
+ */
+const CoupleAiNameContext = createContext<string | null>(null)
+
+export function CoupleAiNameProvider({
+  aiName,
+  children,
+}: {
+  aiName: string | null
+  children: React.ReactNode
+}) {
+  return createElement(CoupleAiNameContext.Provider, { value: aiName }, children)
+}
 
 /**
  * Synchronously detect demo mode from the document cookie.
@@ -69,17 +99,24 @@ function detectDemoSync(): boolean {
 export function useCoupleContext(): CoupleContext {
   const params = useParams<{ slug?: string }>()
   const slug = params?.slug || DEMO_SLUG
+  const seededAiName = useContext(CoupleAiNameContext)
 
   // Initialize state synchronously for demo mode so the first render
   // already has the right IDs — no flash of wedding_id=null queries.
   const initialDemo = detectDemoSync()
   const [venueId, setVenueId] = useState<string | null>(initialDemo ? DEMO_VENUE_ID : null)
   const [weddingId, setWeddingId] = useState<string | null>(initialDemo ? DEMO_WEDDING_ID : null)
-  const [aiName, setAiName] = useState<string>(DEFAULT_AI_NAME)
+  const [aiName, setAiName] = useState<string>(seededAiName?.trim() || DEFAULT_AI_NAME)
   const [venueName, setVenueName] = useState<string>('')
   const [weddingDate, setWeddingDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(!initialDemo)
   const [isDemo, setIsDemo] = useState(initialDemo)
+
+  // Keep in step if a navigation swaps the seeded value.
+  useEffect(() => {
+    const seeded = seededAiName?.trim()
+    if (seeded) setAiName(seeded)
+  }, [seededAiName])
 
   useEffect(() => {
     // If we already resolved synchronously (demo mode), skip the async path.
@@ -106,9 +143,12 @@ export function useCoupleContext(): CoupleContext {
 
       // Resolve the per-venue AI assistant name + business_name display
       // in a single batched read. Never block on either — fall through to
-      // defaults if the rows are missing.
+      // defaults if the rows are missing. Skipped when the server layout
+      // already seeded a name, which is the common case.
       const [{ data: aiConfig }, { data: cfg }] = await Promise.all([
-        supabase.from('venue_ai_config').select('ai_name').eq('venue_id', venue.id).maybeSingle(),
+        seededAiName?.trim()
+          ? Promise.resolve({ data: null })
+          : supabase.from('venue_ai_config').select('ai_name').eq('venue_id', venue.id).maybeSingle(),
         supabase.from('venue_config').select('business_name').eq('venue_id', venue.id).maybeSingle(),
       ])
       const resolvedAiName = (aiConfig?.ai_name as string | null)?.trim()
@@ -116,26 +156,46 @@ export function useCoupleContext(): CoupleContext {
       const resolvedBusinessName = (cfg?.business_name as string | null)?.trim()
       if (resolvedBusinessName) setVenueName(resolvedBusinessName)
 
-      // Resolve wedding from authenticated couple user
+      // Resolve the wedding for the signed-in couple.
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-        // Try to find a wedding linked to this user via people table
-        const { data: person } = await supabase
-          .from('people')
-          .select('wedding_id')
-          .eq('email', user.email!)
-          .in('role', ['partner1', 'partner2'])
-          .eq('venue_id', venue.id)
-          .maybeSingle()
+        // user_profiles is the truth here. Migration 226's RLS helper
+        // couple_user_wedding_id() reads user_profiles.wedding_id, so
+        // every row the couple can actually see is scoped by it. This
+        // hook used to resolve through people.email instead, which meant
+        // a couple whose people row carried a different address, or none,
+        // got a wedding_id the database would then refuse to serve, or no
+        // wedding at all. people stays as a fallback for accounts created
+        // before the profile row was mandatory.
+        let resolvedWeddingId: string | null = null
 
-        if (person?.wedding_id) {
-          setWeddingId(person.wedding_id as string)
+        const { data: profile } = await supabase
+          .from('user_profiles')
+          .select('wedding_id')
+          .eq('id', user.id)
+          .eq('role', 'couple')
+          .maybeSingle()
+        resolvedWeddingId = (profile?.wedding_id as string | null) ?? null
+
+        if (!resolvedWeddingId && user.email) {
+          const { data: person } = await supabase
+            .from('people')
+            .select('wedding_id')
+            .eq('email', user.email)
+            .in('role', ['partner1', 'partner2'])
+            .eq('venue_id', venue.id)
+            .maybeSingle()
+          resolvedWeddingId = (person?.wedding_id as string | null) ?? null
+        }
+
+        if (resolvedWeddingId) {
+          setWeddingId(resolvedWeddingId)
           // Fetch the wedding_date for visibility-gated UI. Best-
           // effort — falls through to null on missing row.
           const { data: w } = await supabase
             .from('weddings')
             .select('wedding_date')
-            .eq('id', person.wedding_id as string)
+            .eq('id', resolvedWeddingId)
             .maybeSingle()
           if (w?.wedding_date) setWeddingDate(w.wedding_date as string)
         }
@@ -145,7 +205,7 @@ export function useCoupleContext(): CoupleContext {
     }
 
     resolve()
-  }, [slug, initialDemo])
+  }, [slug, initialDemo, seededAiName])
 
   // Mark isDemo on second render in case detection runs before document is ready
   useEffect(() => {
