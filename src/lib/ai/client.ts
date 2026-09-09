@@ -175,7 +175,7 @@ export type ContentTier = 1 | 2 | 3 | 4
  */
 export type ModelTier = 'haiku' | 'sonnet' | 'opus'
 
-interface CallAIOptions {
+export interface CallAIOptions {
   systemPrompt: string
   userPrompt: string
   maxTokens?: number
@@ -225,6 +225,27 @@ interface CallAIOptions {
    * general callers.
    */
   forceFallbackProvider?: boolean
+  /**
+   * Tool definitions for a tool-use turn. Additive: when omitted the call
+   * behaves exactly as before. When present, Claude may answer with
+   * `stop_reason: 'tool_use'` and the caller is responsible for running the
+   * loop — see callAITools in `@/lib/ai/tools`. The OpenAI fallback does NOT
+   * implement function calling, so a tools call that lands on the fallback
+   * provider is refused honestly rather than answered without tools.
+   */
+  tools?: Anthropic.Tool[]
+  /**
+   * Full message history for a multi-turn (tool-use) call. When present it
+   * REPLACES the single `userPrompt` turn. `userPrompt` is still required by
+   * the type so existing callers compile unchanged; pass an empty string when
+   * you supply `messages`.
+   */
+  messages?: Anthropic.MessageParam[]
+  /**
+   * Tool-choice control. Only meaningful alongside `tools`. Left undefined
+   * (Claude decides) for every caller in this repo today.
+   */
+  toolChoice?: Anthropic.ToolChoice
 }
 
 function modelForTier(tier: ModelTier | undefined): string {
@@ -239,11 +260,35 @@ function modelForTier(tier: ModelTier | undefined): string {
   }
 }
 
-interface CallAIResult {
+export interface CallAIResult {
   text: string
   inputTokens: number
   outputTokens: number
   cost: number
+  /**
+   * Why the model stopped. Additive and optional so nothing that only reads
+   * `.text` has to change. A tool-use loop MUST read this: 'tool_use' means
+   * the turn is not an answer, it is a request to run tools.
+   */
+  stopReason?: Anthropic.StopReason | null
+  /**
+   * The raw assistant content blocks, including any `tool_use` blocks. The
+   * flattened `.text` above keeps the old contract; this is what a tool loop
+   * needs to append back to the transcript verbatim.
+   */
+  content?: Anthropic.ContentBlock[]
+  /** Which model actually answered. Set on the Anthropic path. */
+  model?: string
+}
+
+/** First text block of a response, or '' when the turn was tools-only.
+ *  Pre-tools this read content[0] positionally, which is wrong the moment a
+ *  tool_use block comes first. */
+function firstText(content: Anthropic.ContentBlock[]): string {
+  for (const block of content) {
+    if (block.type === 'text') return block.text
+  }
+  return ''
 }
 
 function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
@@ -315,6 +360,9 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
     tier,
     promptVersion,
     correlationId,
+    tools,
+    messages,
+    toolChoice,
   } = options
 
   const anthropic = getAnthropic()
@@ -334,20 +382,44 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
       max_tokens: maxTokens,
       temperature,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
+      messages: messages ?? [{ role: 'user', content: userPrompt }],
+      ...(tools && tools.length > 0 ? { tools } : {}),
+      ...(toolChoice ? { tool_choice: toolChoice } : {}),
     }),
     CLAUDE_TIMEOUT_MS,
     'Anthropic call'
   )
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : ''
+  const text = firstText(response.content)
   const inputTokens = response.usage.input_tokens
   const outputTokens = response.usage.output_tokens
   const cost = calculateCost(model, inputTokens, outputTokens)
 
   logUsage(venueId, taskType, inputTokens, outputTokens, cost, model, 'anthropic', contentTier, promptVersion, correlationId)
 
-  return { text, inputTokens, outputTokens, cost }
+  return {
+    text,
+    inputTokens,
+    outputTokens,
+    cost,
+    stopReason: response.stop_reason,
+    content: response.content,
+    model,
+  }
+}
+
+/**
+ * ONE Anthropic turn, cost-logged, no OpenAI fallback.
+ *
+ * `callAI` owns the two-provider resilience contract; a tool-use loop cannot
+ * use it, because the OpenAI fallback has no function calling and silently
+ * answering a tool-grounded question without tools is exactly the
+ * confabulation this whole workstream exists to stop. So the loop in
+ * `@/lib/ai/tools` drives this instead and refuses honestly when Claude is
+ * unavailable. Cost per turn still lands in api_costs, same as callAI.
+ */
+export async function callAnthropicTurn(options: CallAIOptions): Promise<CallAIResult> {
+  return callAnthropic(options)
 }
 
 async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult> {
@@ -646,7 +718,7 @@ async function callAnthropicVision(options: CallAIVisionOptions): Promise<CallAI
     'Anthropic vision call'
   )
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : ''
+  const text = firstText(response.content)
   const inputTokens = response.usage.input_tokens
   const outputTokens = response.usage.output_tokens
   const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)

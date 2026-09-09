@@ -1,14 +1,31 @@
 /**
  * Bloom House: Intelligence Brain Service
  *
- * The AI backbone for the intelligence dashboard. Handles:
- * - Natural language queries about venue data (NLQ)
+ * Handles:
+ * - Natural language queries about venue data (NLQ) — LEGACY, see below
  * - Marketing positioning suggestions from review language + trends
  * - Query feedback logging
  *
- * NLQ approach: rather than translating natural language to SQL (fragile,
- * injection risk), we pull a summary of recent venue data, feed it as context
- * alongside the question, and let the AI reason over it conversationally.
+ * DEPRECATED PATH: answerNaturalLanguageQuery
+ * ------------------------------------------
+ * W3 of NOVEMBER-PLAN.md replaced this as the product's "Ask your data" path.
+ * It survives only behind NLQ_LEGACY=1 so the two can be scored against each
+ * other on the same battery. `askIntel` in src/lib/intel/canonical.ts is the
+ * live path.
+ *
+ * Why it was replaced, plainly: this function pulls roughly 25 tables into one
+ * prompt and asks the model to reason over the pile at temperature 0.3. It
+ * never calls a canonical reader, so nothing it says is checkable against the
+ * numbers the rest of the product serves. gatherVenueData below computes
+ * channel conversion from attribution_events, denominated by EVENTS rather
+ * than couples and with no minimum sample, which is how it came to report a
+ * channel converting at 86% while getSourceAttribution said 40% over n=392.
+ * The July battery scored Q26 at -3 twice and Q37 at -3, where it invented two
+ * named tour attendees.
+ *
+ * Do not add data sources here. If the brain needs to know something new, the
+ * move is a parameter on one of the six canonical readers, per
+ * INTEL-CANONICAL-API.md §1.
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
@@ -34,6 +51,11 @@ import {
   inspectResponseForHonesty,
   type HonestyFlag,
 } from '@/lib/services/sage/honesty-rails'
+// One definition of the sensitive-theme naming gate, shared with askIntel.
+import {
+  SENSITIVE_THEME_NAMING_RE,
+  SENSITIVE_THEME_REFUSAL,
+} from '@/lib/intel/tools'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
 // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): bumped 1.1 → 1.2.
@@ -45,7 +67,10 @@ import {
 // already plumbed through (T5-θ.2); the narration block closes the loop.
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
-export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v2.1'
+// 2026-09-08 (W3): bumped 2.1 -> 2.2. The ATTRIBUTION BY PLATFORM block is
+// now labelled as raw event counts, not a conversion rate, and renders "no
+// denominator" instead of a fake 0%. Deprecated path either way.
+export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v2.2'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -221,8 +246,15 @@ interface PhraseRow {
 interface AttributionPlatformRow {
   platform: string
   count: number
-  /** booked count / total attribution events on this platform (0..1) */
-  conversion_rate: number
+  /** booked count / total attribution EVENTS on this platform (0..1), or null
+   *  on a zero denominator. This is not the product's conversion number:
+   *  getSourceAttribution is couple-denominated and applies a sufficiency
+   *  gate. Kept only so the legacy path still renders; labelled honestly in
+   *  formatDataContext so the model cannot mistake it for the canonical
+   *  figure. */
+  conversion_rate: number | null
+  /** Distinct weddings behind those events. */
+  booked: number
 }
 
 interface CandidateIdentitySummary {
@@ -948,7 +980,10 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     .map(([platform, v]) => ({
       platform,
       count: v.count,
-      conversion_rate: v.count > 0 ? v.booked / v.count : 0,
+      booked: v.booked,
+      // null, never a fake zero, on an empty denominator. INTEL-CANONICAL-API
+      // §3: every ratio is null on a zero denominator.
+      conversion_rate: v.count > 0 ? v.booked / v.count : null,
     }))
     .sort((a, b) => b.count - a.count)
 
@@ -1509,17 +1544,25 @@ function formatDataContext(data: VenueDataContext): string {
   // T5-θ.2 cross-limb sections
   // ---------------------------------------------------------------------
 
-  // Attribution by platform (last 90d)
+  // Attribution by platform (last 90d).
+  // EVENT-denominated, no minimum sample. Not the product's conversion
+  // figure, and labelled as such so the model does not quote it as one.
   if (data.attributionByPlatform.length > 0) {
     const lines = data.attributionByPlatform
-      .map(
-        (a) =>
-          `  - ${a.platform}: ${a.count} attribution events, ${
-            (a.conversion_rate * 100).toFixed(1)
-          }% booked-conversion`,
-      )
+      .map((a) => {
+        const rate =
+          a.conversion_rate === null
+            ? 'no denominator'
+            : `${(a.conversion_rate * 100).toFixed(1)}% of events`
+        return `  - ${a.platform}: ${a.count} attribution events, ${a.booked} on booked weddings, ${rate}`
+      })
       .join('\n')
-    sections.push(`ATTRIBUTION BY PLATFORM (last 90 days):\n${lines}`)
+    sections.push(
+      'ATTRIBUTION BY PLATFORM (last 90 days) — RAW EVENT COUNTS, NOT THE CANONICAL\n' +
+        'CONVERSION RATE. These are denominated by attribution event, not by couple,\n' +
+        'and carry no minimum sample. Do not quote a percentage from this block as a\n' +
+        `channel conversion rate.\n${lines}`,
+    )
   }
 
   // Candidate identity summary
@@ -1855,13 +1898,11 @@ function formatDataContext(data: VenueDataContext): string {
  * feeds it as context alongside the question to the AI, logs the query and
  * response, and returns the answer.
  */
-// Queries that ask Bloom to NAME specific couples with sensitive themes —
-// grief, family conflict, health issues, etc. The LLM cannot be trusted to
-// redact this from its own context (the couple identity profiles are in the
-// data block). A deterministic gate intercepts before any LLM call.
-const SENSITIVE_THEME_NAMING_RE =
-  /\b(which|who|list|name|identify|show me|tell me which|what couples?)\b[\s\S]{0,120}\b(grief|loss|bereavement|family conflict|conflict|health (issue|problem|concern|scare)|medical|ill(ness)?|financial stress|money trouble|relationship distress|distress|separated|divorce|religion|faith|pregnant|pregnancy|miscarriage)\b/i
+// The sensitive-theme naming gate now lives in @/lib/intel/tools so both the
+// legacy path and askIntel enforce the same rule from one definition.
 
+/** @deprecated Legacy NLQ path. Live behind NLQ_LEGACY=1 only; askIntel in
+ *  src/lib/intel/canonical.ts is the product path. See the module header. */
 export async function answerNaturalLanguageQuery(
   venueId: string,
   userId: string,
@@ -1874,13 +1915,8 @@ export async function answerNaturalLanguageQuery(
   // The LLM cannot be trusted to redact named-couple+emotional-theme data
   // from its own context; the deterministic gate is the only reliable control.
   if (SENSITIVE_THEME_NAMING_RE.test(query)) {
-    const refusalText =
-      `Some couples in your data have flagged sensitive themes — ` +
-      `I can't share which ones without their consent. ` +
-      `If you need to follow up with a specific couple you know is going through a difficult time, ` +
-      `navigate to their record directly and I can help you there.`
     return {
-      response: refusalText,
+      response: SENSITIVE_THEME_REFUSAL,
       queryId: '',
       tokensUsed: 0,
       cost: 0,

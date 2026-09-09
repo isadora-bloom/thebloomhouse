@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import {
-  answerNaturalLanguageQuery,
-  markQueryHelpful,
-} from '@/lib/services/brain/intel-brain'
+import { markQueryHelpful } from '@/lib/services/brain/intel-brain'
+// W3: the brain is now the canonical askIntel, which can only answer from the
+// six canonical readers and refuses when it cannot. NLQ_LEGACY=1 routes back
+// to the old prompt-dump brain for A/B scoring; askIntel owns that switch, so
+// this route does not need to know which path answered.
+import { askIntel } from '@/lib/intel/canonical'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
@@ -92,21 +94,22 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const result = await answerNaturalLanguageQuery(
-      auth.venueId,
-      auth.userId,
-      query.trim()
-    )
+    const result = await askIntel(auth.venueId, query.trim(), { userId: auth.userId })
 
     return NextResponse.json({
-      response: result.response,
-      queryId: result.queryId,
-      tokensUsed: result.tokensUsed,
-      cost: result.cost,
-      // D6: honesty rail flags (advisory). Empty array when nothing
-      // tripped a rule; otherwise the UI renders a "Sage may have
+      response: result.answer,
+      queryId: result.queryId ?? '',
+      tokensUsed: result.tokensUsed ?? 0,
+      cost: result.cost ?? 0,
+      // D6: honesty rail flags (advisory wording checks). Empty array when
+      // nothing tripped a rule; otherwise the UI renders a "Sage may have
       // over-claimed -- double check" ribbon with the reasons.
-      honestyFlags: result.honestyFlags,
+      honestyFlags: result.honestyFlags ?? [],
+      // W3 additions. `confidence` is 'refused' when the enforcing grounding
+      // check could not match a figure in the answer to a tool result;
+      // `evidence` names every canonical reader the answer stands on.
+      confidence: result.confidence,
+      evidence: result.evidence,
     })
   } catch (err) {
     console.error('[api/intel/nlq] POST error:', err)
