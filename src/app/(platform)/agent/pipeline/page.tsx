@@ -11,6 +11,11 @@ import { HeatBadge } from '@/components/intel/heat-badge'
 import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
+// W2 canonical wiring. The triage counts and the lifecycle strip come
+// from getDailyList + getVenueOverview, the same call /agent/leads makes.
+// The board itself stays wedding-keyed: dragging a card writes
+// weddings.status, and the spine has no equivalent write path yet.
+import { TriageRail, LifecycleStrip } from '../../intel/_canonical/triage-rail'
 import {
   DndContext,
   DragOverlay,
@@ -661,6 +666,13 @@ export default function PipelinePage() {
 
       {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity
           risk insights now route to /pulse + /intel/dashboard only. */}
+
+      {/* ---- Today's list (canonical) ----
+           The board tells you where every deal sits. This tells you which
+           ones need you today, from getDailyList — the same reader and the
+           same component /agent/leads renders. */}
+      <TriageRail activeBucket="needsReply" />
+      <LifecycleStrip />
 
       {/* ---- Error ---- */}
       {error && (

@@ -15,6 +15,13 @@ import {
 } from '@/components/intel/auto-context-chip'
 import { SoloPill, useBatchPartnerCounts } from '@/components/intel/solo-pill'
 import { EssentialsSlider } from '@/components/shell/essentials-slider'
+// W2 canonical wiring. The four triage counts an operator opens this
+// page for now come from getDailyList + getVenueOverview through
+// /api/intel/canonical/daily-list, rendered by the same component
+// /agent/pipeline uses. The heat-tier table below stays wedding-keyed:
+// client codes, import warnings and risk flags all hang off the wedding
+// row and the spine does not carry them yet.
+import { TriageRail, useCanonicalDaily } from '../../intel/_canonical/triage-rail'
 import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
@@ -417,6 +424,13 @@ export default function LeadsPage() {
 
   const supabase = createClient()
 
+  // Canonical spine read. Supplies the "Last Activity" column below; the
+  // TriageRail further down makes the same call, and React de-duplicates
+  // neither, so this is one extra request per page load in exchange for
+  // the column no longer being derived from a table that never carried
+  // half the channels.
+  const { lastActivityByWedding } = useCanonicalDaily()
+
   // ---- Fetch leads ----
   const fetchLeads = useCallback(async () => {
     if (scope.loading) return
@@ -506,33 +520,18 @@ export default function LeadsPage() {
         })
         .sort((a: any, b: any) => (b.heat_score ?? 0) - (a.heat_score ?? 0))
 
-      // T5-Rixey-UU Bug F: Last Activity = MAX(interactions.timestamp)
-      // per wedding, NOT weddings.updated_at. The latter gets bumped by
-      // every batch import / reconciliation pass so all rows would
-      // otherwise show today's date. We pull interactions in one batch
-      // keyed on the loaded wedding ids and aggregate client-side.
-      // created-at-ok: interactions.timestamp is the real event-date
-      // column for that table (see src/lib/services/date-windows.ts).
-      const weddingIds = (data ?? []).map((r: any) => r.id as string)
-      const lastActivityByWedding: Record<string, string> = {}
-      if (weddingIds.length > 0) {
-        const { data: interactions } = await supabase
-          .from('interactions')
-          .select('wedding_id, timestamp')
-          .in('wedding_id', weddingIds)
-          .order('timestamp', { ascending: false })
-        for (const row of interactions ?? []) {
-          const wid = row.wedding_id as string | null
-          const ts = row.timestamp as string | null
-          if (!wid || !ts) continue
-          // Only keep the first (most recent) per wedding — the query
-          // ordered desc, so the first hit wins.
-          if (!(wid in lastActivityByWedding)) {
-            lastActivityByWedding[wid] = ts
-          }
-        }
-      }
-
+      // Last Activity = the newest touchpoint on the couple's spine
+      // ribbon, resolved back to this wedding through
+      // couples.source_wedding_id, and computed server-side in
+      // /api/intel/canonical/daily-list.
+      //
+      // It used to be MAX(interactions.timestamp), itself a fix for an
+      // older bug: weddings.updated_at is bumped by every batch import
+      // and reconciliation pass, so sorting by it showed every lead as
+      // active today. The spine answers the same question from the table
+      // that actually receives every channel — `interactions` never
+      // carried Knot views, Calendly bookings or portal clicks, so a
+      // couple could be busy on three channels and read as silent here.
       const mapped: Lead[] = (data ?? []).map((row: any) => {
         const people = row.people ?? []
         // 2026-05-09: collapse Knot-relay nickname rows into the
@@ -573,7 +572,8 @@ export default function LeadsPage() {
           guest_count_estimate: row.guest_count_estimate,
           code_extension: row.code_extension ?? null,
           confidence_flag: (row.confidence_flag as string | null) ?? null,
-          last_activity_at: lastActivityByWedding[row.id as string] ?? null,
+          // Filled in below from the canonical spine map, once it lands.
+          last_activity_at: null,
           import_warnings: importWarnings,
           partner1_name: p1 ? personFullName(p1) : null,
           partner2_name: p2 ? personFullName(p2) : null,
@@ -606,9 +606,23 @@ export default function LeadsPage() {
     }
   }
 
+  // ---- Last activity, from the spine ----
+  // The canonical daily-list call returns the newest touchpoint per
+  // wedding. Overlaying it here rather than inside fetchLeads keeps the
+  // two loads independent: the table renders as soon as the wedding rows
+  // land, and the activity column fills in when the spine map arrives.
+  const leadsWithActivity = useMemo(
+    () =>
+      leads.map((l) => ({
+        ...l,
+        last_activity_at: lastActivityByWedding[l.id] ?? null,
+      })),
+    [leads, lastActivityByWedding],
+  )
+
   // ---- Filtering + sorting ----
   const filteredLeads = useMemo(() => {
-    let result = [...leads]
+    let result = [...leadsWithActivity]
 
     // Tier filter
     if (tierFilter !== 'all') {
@@ -653,7 +667,7 @@ export default function LeadsPage() {
     })
 
     return result
-  }, [leads, tierFilter, searchQuery, sortField, sortDir])
+  }, [leadsWithActivity, tierFilter, searchQuery, sortField, sortDir])
 
   // ---- Summary ----
   const tierCounts = useMemo(() => {
@@ -721,6 +735,12 @@ export default function LeadsPage() {
           </button>
         </div>
       )}
+
+      {/* ---- Today's list (canonical) ----
+           Four counts, one reader, every threshold sourced. Same
+           component as /agent/pipeline, so the two pages cannot tell you
+           different numbers of couples are going cold. */}
+      <TriageRail activeBucket="highIntent" />
 
       {/* ---- Heat Distribution Bar ---- */}
       {loading ? (

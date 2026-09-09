@@ -40,6 +40,14 @@ import type {
   CoupleAttributionRow,
 } from '@/lib/services/attribution/couple-attribution'
 import { ATTRIBUTION_MODELS } from '@/lib/services/attribution/couple-attribution'
+// W2 canonical wiring: the headline channel table is the shared
+// component /intel/sources renders, fed by the same canonical endpoint.
+// The rest of this page stays as it is — the meta strip, content
+// mentions and per-couple drill-down are the audit view, and the raw
+// AttributionResult is what an audit needs. The point of the shared
+// section is that the number a coordinator acts on is the same number on
+// both pages.
+import { ChannelTruthSection } from '../_canonical/channel-truth'
 
 interface ApiResponse {
   ok: boolean
@@ -272,10 +280,30 @@ export default function AttributionPage() {
             </p>
           </Section>
 
-          {/* Channel rollup */}
+          {/* Channel truth — the shared canonical section.
+              Identical component, identical endpoint, identical reader to
+              the one at the top of /intel/sources. A coordinator can put
+              the two pages side by side and read the same conversion for
+              the same channel, which was the whole point. Withheld values
+              are shown here because this is the audit view: an auditor
+              needs to see the under-floor number and the reason it is not
+              trusted, where a coordinator deciding on spend does not. */}
           <Section
             icon={<Share2 className="w-4 h-4" />}
-            title="Channel rollup"
+            title="Channel truth"
+            hint="the same table /intel/sources renders"
+          >
+            <ChannelTruthSection model={model} showWithheldValues />
+          </Section>
+
+          {/* Model working — the weighted credit behind the table above.
+              Same builder, more columns: weighted couples and weighted
+              bookings (which go fractional under linear and time decay)
+              plus the spend that feeds cost per booking. Not a second
+              answer; the arithmetic behind the first one. */}
+          <Section
+            icon={<Layers className="w-4 h-4" />}
+            title="Model working"
             hint={`Q26 — volume vs conversion · ${MODEL_LABEL[model]}`}
           >
             {volumeLeader && conversionLeader && volumeLeader.channel !== conversionLeader.channel && (
@@ -331,6 +359,9 @@ export default function AttributionPage() {
               decay can produce fractions). Booked = same weight applied to
               the couple&apos;s booked outcome. Conversion = booked / couples
               in this cell. Cells with n &lt; 8 distinct couples are dimmed.
+              This is the working behind Channel truth above, not a second
+              opinion: both come from buildCoupleAttribution, which is what
+              getSourceAttribution wraps.
             </p>
           </Section>
 
