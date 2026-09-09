@@ -7,6 +7,7 @@
 import * as XLSX from 'xlsx'
 import { callAIJson } from '@/lib/ai/client'
 import { createServiceClient } from '@/lib/supabase/service'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -403,16 +404,20 @@ export async function commitSeatingChart(opts: CommitOptions): Promise<CommitRes
           .maybeSingle()
 
         if (!existingAllergy) {
-          await supabase.from('allergy_registry').insert({
-            venue_id: venueId,
-            wedding_id: weddingId,
-            guest_name: guest.full_name,
-            guest_id: guestId,
-            allergy_type: guest.dietary_restrictions,
-            severity: 'moderate',
-            notes: null,
-            is_important: false,
-          })
+          const { error } = await writeOrLog(
+            supabase.from('allergy_registry').insert({
+              venue_id: venueId,
+              wedding_id: weddingId,
+              guest_name: guest.full_name,
+              guest_id: guestId,
+              allergy_type: guest.dietary_restrictions,
+              severity: 'moderate',
+              notes: null,
+              is_important: false,
+            }),
+            { op: 'allergy_registry.insert', venueId, actor: 'seating_import' },
+          )
+          if (error) throw new Error(`Failed to create allergy entry for "${guest.full_name}": ${error.message}`)
           allergiesCreated++
         }
       }

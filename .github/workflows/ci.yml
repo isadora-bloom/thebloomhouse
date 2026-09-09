@@ -1,7 +1,6 @@
 # Lightweight pre-deploy gate. Runs on every push to master AND every
-# pull request. Vercel runs `next build` on deploy which already catches
-# TypeScript errors, but this workflow adds pure-function unit tests
-# (normalize-source + booking-signal) that Vercel doesn't exercise.
+# pull request. Includes TypeScript check, next build, and comprehensive
+# unit tests (normalize-source + booking-signal + identity matching).
 #
 # What this does NOT do:
 #  - Run the e2e Playwright suite (needs Supabase secrets + running
@@ -21,7 +20,7 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,6 +31,16 @@ jobs:
 
       - name: TypeScript
         run: npx tsc --noEmit
+
+      - name: Next.js build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          NEXT_PUBLIC_BASE_DOMAIN: localhost
+          NEXT_PUBLIC_POSTHOG_KEY: dummy
+          NEXT_PUBLIC_POSTHOG_HOST: https://example.com
 
       # Includes the mock-driven golden subset (src/lib/spine/__tests__/golden-cascade.test.ts):
       # runs the REAL linkSignal over tests/golden/cases.json against an in-memory Supabase
@@ -241,6 +250,14 @@ jobs:
 
       - name: Plan-trace guard — commits cite a plan §/Phase/mandate (FIX-PLAN §B.2)
         run: node scripts/check-pr-cites-section.mjs
+
+      - name: Legacy-reads ratchet — no new unmotivated legacy reads (W2 gate)
+        if: hashFiles('scripts/check-no-new-legacy-reads.mjs') != ''
+        run: node scripts/check-no-new-legacy-reads.mjs
+
+      - name: Supabase types freshness (informational)
+        continue-on-error: true
+        run: node scripts/check-types-fresh.mjs
 
       - name: Golden-case spec validation — GC-1..GC-9 well-formed (FIX-PLAN Layer C)
         run: npx tsx tests/golden/run-golden-cases.ts --dry
