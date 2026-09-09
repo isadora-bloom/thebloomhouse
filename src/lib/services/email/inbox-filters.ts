@@ -226,36 +226,26 @@ async function learnFiltersForVenue(venueId: string): Promise<number> {
   // RM-Lyndsey-Rivera 2026-05-13: calculator-only inquiry got zero
   // drafts because rixeymanor.com had been auto-learned as no_draft.
   // Collect the set of own-domains here so the loop below skips them.
+  // 2026-09-08 schema-truth fix: this used to hand-roll a
+  // gmail_connections lookup plus a "belt and suspenders" query against
+  // venue_own_emails — a table that never existed (no migration
+  // anywhere defines it), so that second query 400'd on every call and
+  // was silently swallowed. email/pipeline.ts's venueOwnEmails() is the
+  // real, already-canonical source of truth (gmail_connections + the
+  // venue's own observed outbound from_email history + team emails) —
+  // use it directly instead of a redundant, partially-broken copy.
+  // Dynamic import avoids a circular import (pipeline.ts imports this
+  // module for matchFilter).
   const ownDomains = new Set<string>()
   try {
-    const { data: conns } = await supabase
-      .from('gmail_connections')
-      .select('email_address')
-      .eq('venue_id', venueId)
-    for (const c of conns ?? []) {
-      const email = (c as { email_address: string | null }).email_address
-      if (!email) continue
+    const { venueOwnEmails } = await import('@/lib/services/email/pipeline')
+    const emails = await venueOwnEmails(venueId)
+    for (const email of emails) {
       const dom = extractDomain(email.toLowerCase())
       if (dom) ownDomains.add(dom)
     }
   } catch (err) {
-    console.warn(`[inbox-filters] gmail_connections lookup failed for ${venueId}:`, err)
-  }
-  // Belt + suspenders: also check venue_own_emails (manually-curated
-  // alternate sending addresses).
-  try {
-    const { data: own } = await supabase
-      .from('venue_own_emails')
-      .select('email')
-      .eq('venue_id', venueId)
-    for (const c of own ?? []) {
-      const email = (c as { email: string | null }).email
-      if (!email) continue
-      const dom = extractDomain(email.toLowerCase())
-      if (dom) ownDomains.add(dom)
-    }
-  } catch {
-    // venue_own_emails may not exist in older schemas — ignore.
+    console.warn(`[inbox-filters] venueOwnEmails lookup failed for ${venueId}:`, err)
   }
 
   // Look at inbound interactions from the last 60 days with a classification.

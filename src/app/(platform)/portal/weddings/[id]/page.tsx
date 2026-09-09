@@ -805,7 +805,10 @@ function CompletenessTab({ weddingId, guests, vendors, checklist, budgetItems, t
         supabase.from('bedroom_assignments').select('*').eq('wedding_id', weddingId).maybeSingle(),
         safeCount('decor_inventory'),
         safeCount('bar_shopping_list'),
-        supabase.from('staffing_plans').select('*').eq('wedding_id', weddingId).maybeSingle(),
+        // staffing_plans never existed — the real (one-row-per-staffer)
+        // table is staffing_assignments, same multi-row shape as the
+        // other safeCount checks above.
+        safeCount('staffing_assignments'),
         safeCount('contracts'),
         safeCount('wedding_photos'),
       ])
@@ -826,7 +829,7 @@ function CompletenessTab({ weddingId, guests, vendors, checklist, budgetItems, t
       checks.bedrooms = !!(bedrooms.data && Object.values(bedrooms.data).some((v: unknown) => typeof v === 'string' && v.length > 0))
       checks.decor = decor
       checks.bar = bar
-      checks.staffing = !!staffing.data
+      checks.staffing = staffing
       checks.contracts = contracts
       checks.photos = photos
 

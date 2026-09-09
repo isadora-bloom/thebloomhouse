@@ -571,24 +571,23 @@ async function buildJudgeInput(
     // ignore
   }
 
-  // Persona (couple_intel.persona). Tolerant if the row doesn't exist.
+  // Persona. couple_intel has no `persona` column — persona_label is the
+  // denormalized label; the fuller description lives nested inside the
+  // `intel` jsonb blob at intel.persona.description (same path
+  // CoupleIntelPanel.tsx reads). Tolerant if the row doesn't exist.
   let personaLabel: string | null = null
   let personaDescription: string | null = null
   try {
     const { data } = await supabase
       .from('couple_intel')
-      .select('persona')
+      .select('persona_label, intel')
       .eq('wedding_id', weddingId)
       .maybeSingle()
-    const persona = (data as { persona: unknown } | null)?.persona as
-      | { label?: string; description?: string }
-      | null
-      | undefined
-    if (persona && typeof persona === 'object') {
-      personaLabel = typeof persona.label === 'string' ? persona.label : null
-      personaDescription =
-        typeof persona.description === 'string' ? persona.description : null
-    }
+    const row = data as { persona_label: string | null; intel: Record<string, unknown> | null } | null
+    personaLabel = row?.persona_label ?? null
+    const personaObj = (row?.intel as { persona?: { description?: string } } | null | undefined)?.persona
+    personaDescription =
+      personaObj && typeof personaObj.description === 'string' ? personaObj.description : null
   } catch {
     // ignore — persona is optional
   }

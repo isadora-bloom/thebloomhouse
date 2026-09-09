@@ -120,7 +120,7 @@ export interface AgencyROISummary {
   firstTouchTours: number
   /** Of those leads, how many advanced to booked status. */
   firstTouchBookings: number
-  /** Total revenue (estimated_value cents) across the booked leads. */
+  /** Total revenue (quoted_value cents) across the booked leads. */
   bookedRevenueCents: number
   /** True CAC = totalSpendCents / firstTouchBookings (null when no bookings). */
   costPerBookingCents: number | null
@@ -572,7 +572,7 @@ interface AttributionEventRow {
 interface WeddingRow {
   id: string
   status: string | null
-  estimated_value: number | null
+  quoted_value: number | null
 }
 
 interface SpendRow {
@@ -701,7 +701,7 @@ export async function computeAgencyROI(args: {
     if (weddingIds.size > 0) {
       const { data: wRows } = await service
         .from('weddings')
-        .select('id, status, estimated_value')
+        .select('id, status, quoted_value')
         .in('id', [...weddingIds])
       for (const w of (wRows ?? []) as WeddingRow[]) {
         firstTouchLeads += 1
@@ -711,9 +711,9 @@ export async function computeAgencyROI(args: {
         }
         if (w.status === 'booked' || w.status === 'completed') {
           firstTouchBookings += 1
-          // estimated_value is dollars in the legacy schema — convert
+          // quoted_value is dollars in the legacy schema — convert
           // to cents for consistency with spend.
-          const val = Number(w.estimated_value ?? 0)
+          const val = Number(w.quoted_value ?? 0)
           if (Number.isFinite(val) && val > 0) {
             bookedRevenueCents += Math.round(val * 100)
           }
@@ -849,17 +849,17 @@ export async function computeAgencyBreakdown(args: {
   for (const r of attRows) if (r.wedding_id) weddingIds.add(r.wedding_id)
   const statusByWedding = new Map<
     string,
-    { status: string | null; estimated_value: number | null; booked_at: string | null }
+    { status: string | null; quoted_value: number | null; booked_at: string | null }
   >()
   if (weddingIds.size > 0) {
     const { data } = await service
       .from('weddings')
-      .select('id, status, estimated_value, booked_at')
+      .select('id, status, quoted_value, booked_at')
       .in('id', [...weddingIds])
     for (const w of data ?? []) {
       statusByWedding.set(w.id as string, {
         status: (w.status as string | null) ?? null,
-        estimated_value: (w.estimated_value as number | null) ?? null,
+        quoted_value: (w.quoted_value as number | null) ?? null,
         booked_at: (w.booked_at as string | null) ?? null,
       })
     }
@@ -909,7 +909,7 @@ export async function computeAgencyBreakdown(args: {
         }
         if (w.status === 'booked' || w.status === 'completed') {
           row.firstTouchBookings += 1
-          const v = Number(w.estimated_value ?? 0)
+          const v = Number(w.quoted_value ?? 0)
           if (Number.isFinite(v) && v > 0) {
             row.bookedRevenueCents += Math.round(v * 100)
           }

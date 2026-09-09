@@ -57,14 +57,16 @@ export async function GET() {
   )
   const nameById = new Map<string, string>()
   if (userIds.length > 0) {
+    // user_profiles has no email column (email lives on auth.users, not
+    // queryable here off the browser client). Selecting it used to 400
+    // the whole query, so every submitter silently rendered nameless —
+    // first_name/last_name is the only real source available.
     const { data: profiles } = await supabase
       .from('user_profiles')
-      .select('id, first_name, last_name, email')
+      .select('id, first_name, last_name')
       .in('id', userIds)
-    for (const p of (profiles ?? []) as Array<{ id: string; first_name: string | null; last_name: string | null; email: string | null }>) {
+    for (const p of (profiles ?? []) as Array<{ id: string; first_name: string | null; last_name: string | null }>) {
       const display = [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
-        || p.email
-        || ''
       if (display) nameById.set(p.id, display)
     }
   }

@@ -22,11 +22,9 @@ interface AttributionRow {
 interface WeddingRow {
   id: string
   status: string | null
-  estimated_value: number | null
+  quoted_value: number | null
   inquiry_date: string | null
   booked_at: string | null
-  partner1_name: string | null
-  partner2_name: string | null
   wedding_date: string | null
 }
 
@@ -104,7 +102,7 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
     let wq = service
       .from('weddings')
       .select(
-        'id, status, estimated_value, inquiry_date, booked_at, partner1_name, partner2_name, wedding_date',
+        'id, status, quoted_value, inquiry_date, booked_at, wedding_date',
       )
       .in('id', [...weddingIds])
     if (statusFilter) {
@@ -112,17 +110,33 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
     }
     const { data: wRows } = await wq
 
+    // weddings has no partner1_name/partner2_name columns — names live on
+    // people (role partner1/partner2). Batch-derive them alongside the
+    // weddings query rather than N+1.
+    const { data: partnerRows } = await service
+      .from('people')
+      .select('wedding_id, first_name, role')
+      .in('wedding_id', [...weddingIds])
+      .in('role', ['partner1', 'partner2'])
+    const partnerNamesByWedding = new Map<string, { partner1Name: string | null; partner2Name: string | null }>()
+    for (const p of (partnerRows ?? []) as Array<{ wedding_id: string; first_name: string | null; role: string }>) {
+      const entry = partnerNamesByWedding.get(p.wedding_id) ?? { partner1Name: null, partner2Name: null }
+      if (p.role === 'partner1') entry.partner1Name = p.first_name
+      else if (p.role === 'partner2') entry.partner2Name = p.first_name
+      partnerNamesByWedding.set(p.wedding_id, entry)
+    }
+
     const leads = ((wRows ?? []) as WeddingRow[]).map((w) => ({
       id: w.id,
       status: w.status,
       estimatedValueCents:
-        w.estimated_value !== null && Number.isFinite(Number(w.estimated_value))
-          ? Math.round(Number(w.estimated_value) * 100)
+        w.quoted_value !== null && Number.isFinite(Number(w.quoted_value))
+          ? Math.round(Number(w.quoted_value) * 100)
           : null,
       inquiryDate: w.inquiry_date,
       bookedAt: w.booked_at,
-      partner1Name: w.partner1_name,
-      partner2Name: w.partner2_name,
+      partner1Name: partnerNamesByWedding.get(w.id)?.partner1Name ?? null,
+      partner2Name: partnerNamesByWedding.get(w.id)?.partner2Name ?? null,
       weddingDate: w.wedding_date,
       attributedChannel: channelByWeddingId.get(w.id) ?? null,
       firstTouchAt: firstTouchByWeddingId.get(w.id) ?? null,

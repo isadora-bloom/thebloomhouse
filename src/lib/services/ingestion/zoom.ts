@@ -511,25 +511,14 @@ async function matchWeddingByName(
   }
   if (tokens.size === 0) return null
 
-  // Pull weddings for the venue + people. Single round-trip each.
-  const { data: weddings } = await supabase
-    .from('weddings')
-    .select('id, couple_names')
-    .eq('venue_id', venueId)
-
+  // Pull people directly for the venue. weddings has no couple_names
+  // column (never has) — the old code selected it, got a 400, and
+  // silently fell through to zero matches every time. Match on people
+  // rows instead, scoped by venue_id (a real column on people).
   const { data: people } = await supabase
     .from('people')
     .select('wedding_id, first_name, last_name, role')
-    .in('wedding_id', (weddings ?? []).map((w) => w.id as string))
-
-  for (const w of weddings ?? []) {
-    const couple = (w.couple_names as string | null) ?? ''
-    if (couple) {
-      for (const t of tokens) {
-        if (couple.toLowerCase().includes(t)) return w.id as string
-      }
-    }
-  }
+    .eq('venue_id', venueId)
 
   for (const p of people ?? []) {
     const first = ((p.first_name as string | null) ?? '').toLowerCase()

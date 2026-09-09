@@ -97,13 +97,15 @@ export async function POST(req: NextRequest) {
   if (draftRow.interaction_id) {
     const { data: interaction } = await sb
       .from('interactions')
-      .select('subject, body')
+      // interactions has no plain `body` column — full_body carries the
+      // complete message text (body_preview is a truncated summary).
+      .select('subject, full_body')
       .eq('id', draftRow.interaction_id)
       .maybeSingle()
     if (interaction) {
-      const ix = interaction as { subject: string | null; body: string | null }
+      const ix = interaction as { subject: string | null; full_body: string | null }
       inboundSubject = ix.subject ?? inboundSubject
-      inboundBody = (ix.body ?? '').slice(0, 4000)
+      inboundBody = (ix.full_body ?? '').slice(0, 4000)
     }
   }
 

@@ -87,17 +87,11 @@ export async function eraseCouple(args: EraseCoupleArgs): Promise<EraseResult> {
   }
 
   // --- Step 1. Sage chat (couple-personal) -> DELETE ---
-  // sage_messages cascades from sage_conversations(wedding_id), but be
-  // explicit about both for the audit count.
-  await step('sage_messages', 'delete', async () =>
-    await supabase.from('sage_messages').delete({ count: 'exact' })
-      .in(
-        'conversation_id',
-        (await supabase.from('sage_conversations').select('id').eq('wedding_id', args.weddingId)).data?.map(
-          (r) => (r as { id: string }).id,
-        ) ?? [],
-      ),
-  )
+  // 2026-09-08 schema-truth fix: there is no separate sage_messages
+  // child table. sage_conversations IS the message table — one row per
+  // chat message (role/content), scoped directly by wedding_id. The
+  // "cascade from sage_conversations" comment described a thread/
+  // message split that was never built.
   await step('sage_conversations', 'delete', async () =>
     await supabase.from('sage_conversations').delete({ count: 'exact' }).eq('wedding_id', args.weddingId),
   )
@@ -129,9 +123,10 @@ export async function eraseCouple(args: EraseCoupleArgs): Promise<EraseResult> {
       .eq('wedding_id', args.weddingId),
   )
 
-  await step('budget', 'anonymize', async () =>
+  // The real table is budget_items — plain `budget` never existed.
+  await step('budget_items', 'anonymize', async () =>
     await supabase
-      .from('budget')
+      .from('budget_items')
       .update({ notes: null }, { count: 'exact' })
       .eq('wedding_id', args.weddingId),
   )

@@ -240,19 +240,30 @@ export async function GET(request: NextRequest) {
         .eq('wedding_id', weddingId)
         .eq('venue_id', venueId)
         .order('option_name'),
+      // timeline has no start_time/end_time/type columns — the real
+      // shape is a single `time` timestamp + duration_minutes, and
+      // `category` (not `type`). Computed below into the shape the
+      // public site already renders.
       supabase
         .from('timeline')
-        .select('id, title, description, start_time, end_time, type, sort_order')
+        .select('id, title, description, time, duration_minutes, category, sort_order')
         .eq('wedding_id', weddingId)
         .order('sort_order'),
+      // accommodations has no phone/price_range/block_code/
+      // block_deadline/notes columns (no migration ever added them —
+      // see migration 394, prepared but not yet applied). Select only
+      // real columns for now; this used to 400 the whole Promise.all,
+      // taking timeline/weddings/rsvp_config down with it every time
+      // anyone loaded a wedding website with venue-level accommodations
+      // configured.
       supabase
         .from('accommodations')
-        .select('id, name, description, address, phone, website_url, distance_miles, price_range, block_code, block_deadline, notes')
+        .select('id, name, description, address, website_url, distance_miles')
         .eq('venue_id', venueId)
         .order('name'),
       supabase
         .from('weddings')
-        .select('id, wedding_date, guest_count')
+        .select('id, wedding_date, guest_count_estimate')
         .eq('id', weddingId)
         .single(),
       supabase
@@ -284,8 +295,41 @@ export async function GET(request: NextRequest) {
         venue_address: website.venue_address,
       },
       meal_options: mealOptions ?? [],
-      timeline: timeline ?? [],
-      accommodations: accommodations ?? [],
+      timeline: (timeline ?? []).map((t) => {
+        const row = t as {
+          id: string
+          title: string
+          description: string | null
+          time: string | null
+          duration_minutes: number | null
+          category: string | null
+          sort_order: number
+        }
+        const endTime =
+          row.time && row.duration_minutes
+            ? new Date(new Date(row.time).getTime() + row.duration_minutes * 60_000).toISOString()
+            : null
+        return {
+          id: row.id,
+          title: row.title,
+          description: row.description,
+          start_time: row.time,
+          end_time: endTime,
+          type: row.category,
+          sort_order: row.sort_order,
+        }
+      }),
+      accommodations: (accommodations ?? []).map((a) => ({
+        ...a,
+        // Not yet built (migration 394, unapplied): phone, price_range,
+        // block_code, block_deadline, notes. The public site already
+        // renders these conditionally, so null is an honest "not set".
+        phone: null,
+        price_range: null,
+        block_code: null,
+        block_deadline: null,
+        notes: null,
+      })),
       event_date: wedding?.wedding_date ?? null,
       rsvp_config: rsvpConfig
         ? {

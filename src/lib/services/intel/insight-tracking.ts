@@ -170,9 +170,13 @@ async function measureMetric(
 
     case 'team_performance': {
       // Average from consultant_metrics (if exists), fallback to response time
+      // consultant_metrics has no response_time_avg column — the real
+      // name is avg_response_time_minutes. Selecting the wrong name
+      // 400'd this whole query, so team_performance always fell
+      // through to the response-time fallback branch below.
       const { data: metrics } = await supabase
         .from('consultant_metrics')
-        .select('response_time_avg, conversion_rate')
+        .select('avg_response_time_minutes, conversion_rate')
         .eq('venue_id', venueId)
         .order('calculated_at', { ascending: false })
         .limit(1)

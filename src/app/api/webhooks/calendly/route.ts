@@ -480,13 +480,13 @@ export async function POST(request: NextRequest) {
     // Try to find the coordinator who owns this wedding
     const { data: weddingRow } = await supabase
       .from('weddings')
-      .select('assigned_to')
+      .select('assigned_consultant_id')
       .eq('id', weddingId)
       .single()
 
-    if (weddingRow?.assigned_to) {
-      await trackCoordinatorAction(venueId, weddingRow.assigned_to as string, 'tour_booked')
-      console.log(`[webhook/calendly] Tracked tour_booked for consultant ${weddingRow.assigned_to}`)
+    if (weddingRow?.assigned_consultant_id) {
+      await trackCoordinatorAction(venueId, weddingRow.assigned_consultant_id as string, 'tour_booked')
+      console.log(`[webhook/calendly] Tracked tour_booked for consultant ${weddingRow.assigned_consultant_id}`)
     }
 
     // Wave 15 — discovery-source capture from Calendly Q&A.

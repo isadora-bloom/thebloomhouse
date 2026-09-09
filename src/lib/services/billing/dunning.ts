@@ -26,7 +26,6 @@ interface VenueRow {
   past_due_since: string | null
   dunning_stage: string | null
   dunning_extension_until: string | null
-  autonomous_paused: boolean | null
 }
 
 export interface DunningEscalateResult {
@@ -77,9 +76,14 @@ export async function runDunningEscalate(): Promise<DunningEscalateResult> {
   }
 
   const supabase = createServiceClient()
+  // Schema-truth fix 2026-09-08: autonomous_paused lives on venue_config,
+  // not venues (the write below already correctly targets venue_config).
+  // Selecting it here off venues 400'd this ENTIRE query every run, so
+  // no overdue venue was ever scanned — dunning has never fired in
+  // production.
   const { data, error } = await supabase
     .from('venues')
-    .select('id, name, past_due_since, dunning_stage, dunning_extension_until, autonomous_paused')
+    .select('id, name, past_due_since, dunning_stage, dunning_extension_until')
     .not('past_due_since', 'is', null)
   if (error) {
     result.errors.push(`venues read: ${error.message}`)
