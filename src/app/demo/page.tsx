@@ -37,20 +37,22 @@ async function launchDemoAction(formData: FormData) {
 
   // Retain the existing venue + scope cookies so legacy client components
   // (useVenueId, scope selector) continue to work during the migration window.
-  const isCouplePortal = destination.startsWith('/couple/')
-  const scope = isCouplePortal
-    ? {
-        level: 'venue',
-        venueId: DEMO_VENUE_ID,
-        orgId: DEMO_ORG_ID,
-        venueName: 'Hawthorne Manor',
-        companyName: 'The Crestwood Collection',
-      }
-    : {
-        level: 'company',
-        orgId: DEMO_ORG_ID,
-        companyName: 'The Crestwood Collection',
-      }
+  //
+  // Both entry buttons (Platform and Couple Portal) default to venue-level
+  // Hawthorne, not company-level. Sage's Brain nav sections are all
+  // `venueOnly: true` (see nav-config.ts / sidebar-v2.tsx shouldShowSection)
+  // and get hidden outright at company/group scope, so a company-level
+  // default left "Platform" demo visitors with an empty Sage's Brain
+  // sidebar ("Essential 0 / All 0"). The ScopeIndicator in the top bar
+  // still lets a visitor switch to company scope by hand — this only
+  // changes what they land on.
+  const scope = {
+    level: 'venue',
+    venueId: DEMO_VENUE_ID,
+    orgId: DEMO_ORG_ID,
+    venueName: 'Hawthorne Manor',
+    companyName: 'The Crestwood Collection',
+  }
   const scopeOpts = { path: '/', maxAge: 86400, sameSite: 'lax' as const }
   cookieStore.set('bloom_venue', DEMO_VENUE_ID, scopeOpts)
   cookieStore.set('bloom_scope', JSON.stringify(scope), scopeOpts)
