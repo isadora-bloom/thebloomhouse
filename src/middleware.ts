@@ -1,6 +1,14 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import {
+  signDemoToken,
+  DEMO_VENUE_ID as DEMO_TOKEN_VENUE_ID,
+  DEMO_TOKEN_COOKIE,
+  DEMO_HINT_COOKIE,
+  demoTokenCookieOptions,
+  demoHintCookieOptions,
+} from '@/lib/services/demo-token'
 
 // Routes that never require authentication
 const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/forgot-password', '/reset-password', '/couple/login', '/demo', '/join']
@@ -41,30 +49,42 @@ export async function middleware(request: NextRequest) {
     const rewriteUrl = request.nextUrl.clone()
     rewriteUrl.pathname = realPath
 
-    // Couple portal is per-wedding so scope pins to Hawthorne. Platform routes
-    // (everything else) get company-level scope so the intelligence layer
-    // aggregates across all 4 Crestwood venues. bloom_venue stays pinned to
-    // Hawthorne as a fallback for useVenueId on venue-specific pages.
-    const isCouplePortal = realPath.startsWith('/couple/')
-    const demoScope = isCouplePortal
-      ? {
-          level: 'venue',
-          venueId: '22222222-2222-2222-2222-222222222201',
-          orgId: '11111111-1111-1111-1111-111111111111',
-          venueName: 'Hawthorne Manor',
-          companyName: 'The Crestwood Collection',
-        }
-      : {
-          level: 'company',
-          orgId: '11111111-1111-1111-1111-111111111111',
-          companyName: 'The Crestwood Collection',
-        }
+    // Couple portal is per-wedding so scope pins to Hawthorne. Platform
+    // routes (everything else) default to venue-level Hawthorne too — NOT
+    // company-level. Sage's Brain nav (settings/personality/knowledge/etc,
+    // see nav-config.ts) marks its sections `venueOnly: true`, and
+    // sidebar-v2.tsx hides any venueOnly section when scopeLevel !== 'venue'
+    // (shouldShowSection). Company-level scope on demo platform routes was
+    // hiding all of Sage's Brain end to end ("Essential 0 / All 0"). The
+    // company/group selector (ScopeIndicator, top bar) still reads live
+    // venues/org from Supabase and lets a demo visitor switch to company
+    // scope by hand — this only changes the *default* on entry.
+    const demoScope = {
+      level: 'venue',
+      venueId: DEMO_TOKEN_VENUE_ID,
+      orgId: '11111111-1111-1111-1111-111111111111',
+      venueName: 'Hawthorne Manor',
+      companyName: 'The Crestwood Collection',
+    }
+
+    // Mint a signed, HttpOnly demo token — same as the /demo entry Server
+    // Action (see src/app/demo/page.tsx) — so deep links like /demo/pulse
+    // or /demo/intel/dashboard pass server-side auth. Before this fix the
+    // rewrite only set the legacy `bloom_demo=true` value cookie, which
+    // isDemoMode() / requirePlan() / resolvePlatformScope() never trust —
+    // they verify the signed bloom_demo_token via verifyDemoToken(). A
+    // deep link landed on a page whose data loaders saw no verified token,
+    // so they fell through the "not authenticated" branch and redirected
+    // to /login, even though the legacy cookie was present.
+    const demoToken = signDemoToken({ demoVenueId: DEMO_TOKEN_VENUE_ID })
 
     // Set cookies on the REQUEST so server components can read them during SSR
     const demoCookies = {
       bloom_demo: 'true',
-      bloom_venue: '22222222-2222-2222-2222-222222222201',
+      bloom_venue: DEMO_TOKEN_VENUE_ID,
       bloom_scope: JSON.stringify(demoScope),
+      [DEMO_TOKEN_COOKIE]: demoToken,
+      [DEMO_HINT_COOKIE]: '1',
     }
     for (const [name, value] of Object.entries(demoCookies)) {
       request.cookies.set(name, value)
@@ -73,11 +93,17 @@ export async function middleware(request: NextRequest) {
     // Rewrite to the real path, forwarding the modified request
     response = NextResponse.rewrite(rewriteUrl, { request })
 
-    // Also set cookies on the RESPONSE so the browser persists them
+    // Also set cookies on the RESPONSE so the browser persists them. The
+    // legacy trio keeps its existing 24h flat maxAge; the signed token and
+    // its UI hint reuse the same cookie options the /demo Server Action
+    // uses (demoTokenCookieOptions / demoHintCookieOptions) so both entry
+    // paths mint an identical cookie shape.
     const cookieOpts = { path: '/', maxAge: 86400 } as const
-    for (const [name, value] of Object.entries(demoCookies)) {
-      response.cookies.set(name, value, cookieOpts)
-    }
+    response.cookies.set('bloom_demo', demoCookies.bloom_demo, cookieOpts)
+    response.cookies.set('bloom_venue', demoCookies.bloom_venue, cookieOpts)
+    response.cookies.set('bloom_scope', demoCookies.bloom_scope, cookieOpts)
+    response.cookies.set(DEMO_TOKEN_COOKIE, demoToken, demoTokenCookieOptions())
+    response.cookies.set(DEMO_HINT_COOKIE, '1', demoHintCookieOptions())
     return response
   }
 
@@ -353,8 +379,17 @@ function extractSubdomain(hostname: string, baseDomain: string): string | null {
 
 // ---------------------------------------------------------------------------
 // Matcher — skip static assets for performance
+//
+// runtime: 'nodejs' — the /demo/* branch above now calls signDemoToken(),
+// which uses node:crypto (createHmac / randomBytes). That module isn't
+// available on the default Edge runtime. Node.js middleware is stable on
+// Next.js 16 (no experimental flag needed); everything else in this file
+// (createServerClient from @supabase/ssr, NextResponse) already runs fine
+// under the Node runtime, so this is a safe whole-file switch, not a
+// demo-only carve-out.
 // ---------------------------------------------------------------------------
 export const config = {
+  runtime: 'nodejs',
   matcher: [
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
