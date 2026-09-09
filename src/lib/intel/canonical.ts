@@ -658,13 +658,53 @@ export interface TourRef {
   id: string
   coupleId: string
   scheduledAt: string
+  /** Display name of the couple the tour belongs to. Additive — a caller
+   *  typed against the original three fields is unaffected. */
+  names?: string | null
+}
+
+/**
+ * A daily-list row plus the facts behind its placement.
+ *
+ * Every field after `names` is optional and derived from rows
+ * `loadDailyList` has already loaded, so carrying them costs no extra
+ * query. They exist so a coordinator-facing surface can say WHY a couple
+ * is in a bucket without re-deriving the thresholds itself (the surfaces-
+ * are-dumb-renderers rule in INTEL-CANONICAL-API.md §1 — the derivation
+ * belongs here, not in a page).
+ *
+ * `DailyListItem` is a subtype of `CoupleRef`, so existing consumers that
+ * read `{ id, names }` keep compiling unchanged.
+ */
+export interface DailyListItem extends CoupleRef {
+  /** `couples.lifecycle_state` at read time. */
+  lifecycle?: LifecycleState | null
+  /** When their most recent message landed (any direction). */
+  lastTouchpointAt?: string | null
+  /** Channel of that most recent message — 'gmail', 'knot', ... */
+  lastChannel?: string | null
+  /** True when that most recent message was inbound, i.e. the ball is
+   *  with the venue. This is the needsReply test, surfaced. */
+  lastWasInbound?: boolean
+  /** Whole days since `couples.last_progression_at`. Null when the couple
+   *  has never progressed. */
+  quietDays?: number | null
+  /** The decay window those quiet days are measured against, in days. */
+  windowDays?: number | null
+  /** Heat score used for the highIntent cut. Internal scale 0-100; a
+   *  coordinator surface should render it as words, not as the number. */
+  heat?: number | null
 }
 
 export interface DailyList {
-  needsReply: CoupleRef[]
-  goingCold: CoupleRef[]
+  needsReply: DailyListItem[]
+  goingCold: DailyListItem[]
   toursThisWeek: TourRef[]
-  highIntent: CoupleRef[]
+  highIntent: DailyListItem[]
+  /** The soonest scheduled, uncancelled tour within `TOUR_HORIZON_DAYS`,
+   *  including ones beyond this week. Lets an empty `toursThisWeek` say
+   *  when the next tour is rather than dead-ending. Null when none. */
+  nextTourAt?: string | null
   generatedAt: string
 }
 
@@ -704,6 +744,12 @@ const GOING_COLD_FRACTION = 0.75
 const HIGH_INTENT_HEAT_BAR = 60
 /** Cap on the highIntent list (top-N by heat). */
 const HIGH_INTENT_LIMIT = 10
+/** How far ahead the tour query looks. `toursThisWeek` is still the 7-day
+ *  bucket; the rest of the horizon exists only to fill `nextTourAt`, so an
+ *  empty week can name the next tour instead of dead-ending. CHOSEN — a
+ *  venue booking tours more than half a year out is rare enough that
+ *  "no tours on the books" is the honest answer past this point. */
+const TOUR_HORIZON_DAYS = 180
 
 /** Inbound, progression-eligible (channel, action_type) pairs — mirrors
  *  migration 348 §1. A latest touchpoint matching one of these = the
@@ -763,6 +809,7 @@ export async function loadDailyList(
     goingCold: [],
     toursThisWeek: [],
     highIntent: [],
+    nextTourAt: null,
     generatedAt,
   }
   if (!venueId) return empty
@@ -804,21 +851,42 @@ export async function loadDailyList(
     }
   }
 
+  const now = Date.now()
+
+  /** Base row + the already-loaded facts behind its placement. No extra
+   *  query: every field comes from `couples` or the touchpoint map above. */
+  function toItem(c: DailyCoupleRow, heat?: number | null): DailyListItem {
+    const latest = tpByCouple.get(c.id)?.[0]
+    const windowDays = c.decay_window_days ?? 120
+    const quietMs = c.last_progression_at ? now - Date.parse(c.last_progression_at) : null
+    return {
+      id: c.id,
+      names: coupleNames(c.primary_contact_name, c.partner_contact_name),
+      lifecycle: (c.lifecycle_state as LifecycleState) ?? null,
+      lastTouchpointAt: latest?.occurred_at ?? null,
+      lastChannel: latest?.channel ?? null,
+      lastWasInbound: latest ? isInboundTouchpoint(latest.channel, latest.action_type) : false,
+      quietDays:
+        quietMs !== null && Number.isFinite(quietMs) ? Math.floor(quietMs / 86_400_000) : null,
+      windowDays,
+      heat: heat ?? (typeof c.heat_score === 'number' ? c.heat_score : null),
+    }
+  }
+
   // needsReply: latest touchpoint (desc → [0]) is inbound.
-  const needsReply: CoupleRef[] = []
+  const needsReply: DailyListItem[] = []
   for (const c of couples) {
     if (c.lifecycle_state === 'booked' || c.lifecycle_state === 'ghost') continue
     const tps = tpByCouple.get(c.id)
     if (!tps || tps.length === 0) continue
     if (isInboundTouchpoint(tps[0].channel, tps[0].action_type)) {
-      needsReply.push({ id: c.id, names: coupleNames(c.primary_contact_name, c.partner_contact_name) })
+      needsReply.push(toItem(c))
     }
   }
 
   // goingCold: decay arithmetic from decay.ts, at GOING_COLD_FRACTION of the
   // window and BEFORE the full window.
-  const now = Date.now()
-  const goingCold: CoupleRef[] = []
+  const goingCold: DailyListItem[] = []
   for (const c of couples) {
     if (c.lifecycle_state !== 'resolved' && c.lifecycle_state !== 'channel_scoped') continue
     if (!c.last_progression_at) continue
@@ -826,33 +894,46 @@ export async function loadDailyList(
     // Canonical v1.0 §3.4: default 120 (migration 380; was 180).
     const windowMs = (c.decay_window_days ?? 120) * 86_400_000
     if (ageMs >= GOING_COLD_FRACTION * windowMs && ageMs < windowMs) {
-      goingCold.push({ id: c.id, names: coupleNames(c.primary_contact_name, c.partner_contact_name) })
+      goingCold.push(toItem(c))
     }
   }
 
   // toursThisWeek: [now, now+7d], not cancelled/no_show, resolved to a couple.
   const weekFromNow = new Date(now + 7 * 86_400_000).toISOString()
   const nowIso = new Date(now).toISOString()
+  // Same query, wider horizon: rows past this week are NOT added to
+  // toursThisWeek (that bucket's meaning is unchanged) — they only supply
+  // `nextTourAt`, so an empty week can say when the next tour actually is
+  // instead of a dead-end "none". One query, not two.
+  const tourHorizon = new Date(now + TOUR_HORIZON_DAYS * 86_400_000).toISOString()
   const { data: tourData, error: tourErr } = await supabase
     .from('tours')
     .select('id, wedding_id, scheduled_at, outcome')
     .eq('venue_id', venueId)
     .gte('scheduled_at', nowIso)
-    .lte('scheduled_at', weekFromNow)
+    .lte('scheduled_at', tourHorizon)
     .order('scheduled_at', { ascending: true })
     .limit(2000)
   if (tourErr) throw new Error(`getDailyList: tours ${tourErr.message}`)
   const toursThisWeek: TourRef[] = []
+  let nextTourAt: string | null = null
   for (const t of (tourData ?? []) as DailyTourRow[]) {
     if (t.outcome === 'cancelled' || t.outcome === 'no_show') continue
     if (!t.scheduled_at || !t.wedding_id) continue
     const couple = byWedding.get(t.wedding_id)
     if (!couple) continue
-    toursThisWeek.push({ id: t.id, coupleId: couple.id, scheduledAt: t.scheduled_at })
+    if (nextTourAt === null) nextTourAt = t.scheduled_at
+    if (t.scheduled_at > weekFromNow) continue
+    toursThisWeek.push({
+      id: t.id,
+      coupleId: couple.id,
+      scheduledAt: t.scheduled_at,
+      names: coupleNames(couple.primary_contact_name, couple.partner_contact_name),
+    })
   }
 
   // highIntent: heat_score (cached) or recomputed, above the 'hot' bar, top N.
-  const scored: Array<{ ref: CoupleRef; heat: number }> = []
+  const scored: Array<{ ref: DailyListItem; heat: number }> = []
   for (const c of couples) {
     if (c.lifecycle_state === 'ghost' || c.lifecycle_state === 'agent') continue
     let heat = typeof c.heat_score === 'number' ? c.heat_score : null
@@ -864,16 +945,13 @@ export async function loadDailyList(
       )
     }
     if (heat >= HIGH_INTENT_HEAT_BAR) {
-      scored.push({
-        ref: { id: c.id, names: coupleNames(c.primary_contact_name, c.partner_contact_name) },
-        heat,
-      })
+      scored.push({ ref: toItem(c, heat), heat })
     }
   }
   scored.sort((a, b) => b.heat - a.heat)
   const highIntent = scored.slice(0, HIGH_INTENT_LIMIT).map((s) => s.ref)
 
-  return { needsReply, goingCold, toursThisWeek, highIntent, generatedAt }
+  return { needsReply, goingCold, toursThisWeek, highIntent, nextTourAt, generatedAt }
 }
 
 export async function getDailyList(venueId: string): Promise<DailyList> {
@@ -883,6 +961,7 @@ export async function getDailyList(venueId: string): Promise<DailyList> {
       goingCold: [],
       toursThisWeek: [],
       highIntent: [],
+      nextTourAt: null,
       generatedAt: new Date().toISOString(),
     }
   }
