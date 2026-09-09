@@ -3,9 +3,9 @@
  *
  * Four top-level modes plus a gear menu for org admin. Every page in
  * src/app/(platform)/**\/page.tsx is accounted for here — the comments
- * note where each lives. Map verified 2026-04-24 against the full glob
- * (80 pages enumerated). DO NOT add a page to the codebase without
- * adding it here, or it becomes orphan navigation.
+ * note where each lives. Platform pages (183 enumerated, 2026-09-08) are
+ * listed in comments; reachable-from-nav constraint is verified by script.
+ * DO NOT add a page without adding it here or it becomes orphan.
  *
  * The shape mirrors the legacy sidebar.tsx so nothing is lost in the
  * switch — same icons, same labels, same hrefs. What changes is the
@@ -320,16 +320,14 @@ export const MODE_INTEL: ModeConfig = {
     {
       title: 'People & deduplication',
       items: [
-        // Identity-First entry points (Phase E). /intel/couples is the
-        // doctrine-canonical operator view. /intel/clients remains for
-        // the legacy weddings-keyed surfaces until Phase D-7 migrates
-        // them. See IDENTITY-FIRST-ARCHITECTURE.md §6.
+        // Identity-First consolidated view. /intel/couples is the
+        // doctrine-canonical operator view. /intel/candidates was superseded
+        // by /intel/identity-review in the W9 2026-09-08 hygiene pass.
+        // See IDENTITY-FIRST-ARCHITECTURE.md §6.
         { label: 'Couples', href: '/intel/couples', icon: UserCheck },
         { label: 'Identity Review', href: '/intel/identity-review', icon: Sparkles },
         { label: 'Data Fields', href: '/intel/data-fields', icon: Database },
-        { label: 'All Clients (legacy)', href: '/intel/clients', icon: UserCheck },
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
-        { label: 'Candidate Review (legacy)', href: '/intel/candidates', icon: Sparkles },
         { label: 'Re-engagement', href: '/intel/reengagement', icon: Send },
       ],
     },
@@ -698,4 +696,4 @@ export function modeForPath(pathname: string): NavMode | null {
  * If you add a new page, add it to the relevant section + bump the
  * enumeration date in the file header.
  */
-export const NAV_CONFIG_VERIFIED_AT = '2026-04-24'
+export const NAV_CONFIG_VERIFIED_AT = '2026-09-08'

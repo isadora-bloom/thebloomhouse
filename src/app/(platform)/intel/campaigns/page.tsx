@@ -1,33 +1,15 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
-import {
-  Megaphone,
-  Plus,
-  X,
-  DollarSign,
-  TrendingUp,
-  Award,
-} from 'lucide-react'
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts'
-
-// ---------------------------------------------------------------------------
-// Supabase
-// ---------------------------------------------------------------------------
-
-
-
-// ---------------------------------------------------------------------------
+/**
+ * Legacy redirect: /intel/campaigns was manual campaign CRUD.
+ * Redirect to /intel/sources (the attribution view supersedes manual campaigns).
+ *
+ * Removed from nav 2026-05-03 (Stream ZZZ). Old bookmarks and direct links
+ * redirect to the sources surface, which provides multi-touch attribution.
+ */
+export default function LegacyCampaignsPage() {
+  redirect('/intel/sources')
+}
 // Types
 // ---------------------------------------------------------------------------
 

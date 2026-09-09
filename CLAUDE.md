@@ -7,7 +7,7 @@ Unified wedding venue intelligence platform. Three product areas (Agent, Intelli
 - **Repo:** `C:\Users\Ismar\bloom-house`
 - **Stack:** Next.js (App Router) + TypeScript + Tailwind v4 + shadcn/ui + Supabase + Claude API
 - **Supabase:** `https://jsxxgwprxuqgcauzlxcb.supabase.co` (fresh project)
-- **Plan of record:** `CONSOLIDATION-PLAN-PHASED.md` v2.1 — read this first to know what is being worked and why. Active checklist overlay: `REMEDIATION-PLAN-2026-07-07.md` (carries per-phase model choice). Current state: `HANDOFF-STATE-OF-BLOOM-HOUSE.md`.
+- **Plan of record:** `CONSOLIDATION-PLAN-PHASED.md` v2.1 (architecture authority) + `NOVEMBER-PLAN.md` (current execution plan, deadline ~2026-11-08). Current state: `HANDOFF-STATE-OF-BLOOM-HOUSE.md`. New daily landing `/today` surfaces once W8 lands.
 - **Full blueprint:** `BLUEPRINT.md` — original architecture, schema, AI system, build order (doctrine, not the live plan)
 
 ## Key Principles
