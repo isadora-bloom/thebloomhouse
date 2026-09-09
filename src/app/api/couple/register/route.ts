@@ -308,7 +308,10 @@ export async function POST(request: NextRequest) {
       .from('people')
       .select('id')
       .eq('wedding_id', wedding.id)
-      .ilike('email', String(email))
+      // Escaped before it goes into ilike: % and _ are legal in an email
+      // local part and are wildcards in LIKE, so an unescaped address
+      // would match rows it has nothing to do with.
+      .ilike('email', String(email).replace(/[\\%_]/g, (ch) => `\\${ch}`))
       .maybeSingle()
 
     return NextResponse.json({
