@@ -115,3 +115,40 @@ Shared rules for every agent:
 Dubsado / Aisle Planner adapters, Meta/Google/TikTok spend connectors, per-venue Resend
 domains, cross-venue benchmarks (needs a second tenant), native contracts inside Bloom,
 the marketing-site demo becoming live, custom app domain.
+
+## Wave 2 (launched 2026-09-09 morning)
+
+Wave 1 closed the confabulation class: Ask your data can only state a number a tool
+returned. The cost is about twenty battery questions now get an honest refusal even though
+the data is in the database. Wave 2 turns each of those into a tool source behind the
+plug-in contract in `src/lib/intel/tool-sources/`, and pulls forward the independent
+code work from weeks 4 to 6 that does not need the reimport to land first.
+
+State going in: `consolidation` 1134261f, master not yet fast-forwarded, migrations 392 and
+394 applied to prod on 2026-09-09, 391 still missing on prod, 393 a no-op (thresholds
+already 85). Gmail still disconnected. Rixey reimport paused. Two live SMS inquiries have
+been minted since the wipe (identity resolver, 2026-09-09), so Rixey is not at zero rows.
+
+| # | Workstream | Model | Owns (files) | Battery |
+|---|---|---|---|---|
+| W12 | Tool sources: time series + operator patterns | Opus | new `src/lib/intel/tool-sources/time-series.ts`, `operator-patterns.ts`, their tests, one line each in `tool-sources/index.ts` | Q1 Q7 Q11 Q12 Q14 Q22 Q23 Q24 |
+| W13 | Tool sources: built but unexposed (ghost risk, completeness, identity precision, signals) | Opus | new `tool-sources/ghost-risk.ts`, `completeness.ts`, `identity-precision.ts`, `signals.ts`, tests, index lines | Q6 Q19 Q25 Q28 Q29 Q30 Q36 |
+| W14 | Tool sources: reviews, lost deals, weather x tours, open Saturdays and pace | Sonnet | new `tool-sources/reviews.ts`, `lost-deals.ts`, `weather-tours.ts`, `capacity.ts`, tests, index lines | Q10 Q39 Q40 Q41 |
+| W15 | Tool sources: drafting + follow-up state (proposal only, no writes) | Opus | new `tool-sources/follow-ups.ts`, tests, index line; pure compose path split out of `src/lib/services/cohort/bulk-follow-up.ts` if needed | Q34 Q37 |
+| W16 | Coordinator-facing "Sage" literals onto the AI-name provider; subdomain couple layout provider | Sonnet | the 24 literal sites under `src/app/(platform)/**` and `src/components/**`, `src/app/_couple-pages/**` layout only | none |
+| W17 | Honest errors on the daily surfaces: heat fetch errors on /agent/leads, tour times in venue timezone, inbox send failures not swallowed | Sonnet | `src/app/(platform)/agent/leads/page.tsx`, `src/app/(platform)/today/**`, `src/app/(platform)/intel/tours/**`, `src/app/api/inbox/**`, `src/lib/services/inbox/**` | none |
+| W18 | Billing enforcement: real plan tier, honest tierHasFeature, capacity caps, trial expiry, dunning cron verified | Sonnet | `src/lib/services/billing/**`, `src/app/(platform)/settings/billing/**`, `src/app/api/billing/**`, cap-hit UI | none |
+| W19 | Demo reseed through linkSignal with a live clock (DEMO-RESEED-DESIGN.md) | Opus | new `scripts/demo-reseed.ts` + `scripts/demo-reseed/**`, tests; dry-run default | none |
+| W20 | HoneyBook parents and planners imported as Agent-class people, not dropped | Opus | `src/lib/services/crm-import/**` (HoneyBook adapter + person linking), tests | none |
+| W21 | `npm run lint` works again on Next 16 (eslint CLI), wired into CI | Haiku | `package.json` lint script, `eslint.config.*`, `.github/workflows/ci.yml` lint step only | none |
+
+Integrator (this session): wire `TOOL_SOURCES` into `CANONICAL_TOOLS` and the dispatcher in
+`src/lib/intel/tools.ts`; rewrite `CANONICAL_TOOL_SCOPE_SUMMARY` and prune
+`OUT_OF_SCOPE_SUBJECTS` (weather, reviews, lost deals leave the list once W14 lands); add
+ground-truth probes in `scripts/battery-ground-truth.ts` for every question a new source
+covers; gate (tsc, vitest, governance, links, golden); push `consolidation`; Isadora FF master.
+
+Same shared rules as wave 1. Two additions: every worktree starts with
+`git reset --hard consolidation` (the worktree tool may fork from master) and `npm ci`; and
+no tool source may read a legacy table where the spine (`couples`, `touchpoints`) holds the
+same fact.
