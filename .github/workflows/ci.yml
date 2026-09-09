@@ -41,6 +41,9 @@ jobs:
           NEXT_PUBLIC_BASE_DOMAIN: localhost
           NEXT_PUBLIC_POSTHOG_KEY: dummy
           NEXT_PUBLIC_POSTHOG_HOST: https://example.com
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_ANON_KEY: dummy
+          SUPABASE_SERVICE_ROLE_KEY: dummy
 
       # Includes the mock-driven golden subset (src/lib/spine/__tests__/golden-cascade.test.ts):
       # runs the REAL linkSignal over tests/golden/cases.json against an in-memory Supabase
