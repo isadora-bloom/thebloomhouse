@@ -125,8 +125,13 @@ describe('evaluateReadiness', () => {
   it('readyForGoLive stays true even when a smoke test fails outright (invariants are the hard gate)', async () => {
     runDataIntegrityChecksMock.mockResolvedValue(cleanInvariants())
     const sb = makeSupabaseMock((table, fields) => {
-      if (table === 'weddings' && fields.includes('heat_score')) {
-        // 90% hot -> smokeHeatDistribution returns 'fail'
+      // Heat lives on wedding_heat; smokeHeatDistribution first lists the
+      // active wedding ids, then reads their heat rows.
+      if (table === 'weddings' && fields === 'id') {
+        return { data: Array.from({ length: 10 }, (_, i) => ({ id: `w${i}` })) }
+      }
+      if (table === 'wedding_heat') {
+        // 100% hot -> smokeHeatDistribution returns 'fail'
         return { data: Array.from({ length: 10 }, () => ({ heat_score: 95, temperature_tier: 'hot' })) }
       }
       if (table === 'weddings' && fields.includes('source')) return { data: [{ source: 'website' }] }
