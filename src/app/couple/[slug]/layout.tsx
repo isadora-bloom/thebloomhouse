@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
 import { FloatingSage } from '@/components/couple/floating-sage'
+import { CoupleAiNameProvider } from '@/lib/hooks/use-couple-context'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 
 /**
@@ -41,6 +42,7 @@ async function getVenueBranding(slug: string) {
       logoUrl: null as string | null,
       portalTagline: null as string | null,
       clientCode: null as string | null,
+      aiName: null as string | null,
     }
   }
 
@@ -49,6 +51,16 @@ async function getVenueBranding(slug: string) {
     .select('primary_color, secondary_color, accent_color, font_pair, logo_url, business_name, portal_tagline')
     .eq('venue_id', venue.id)
     .single()
+
+  // The AI assistant's name, fetched here rather than in a browser effect
+  // so the very first paint says what the venue calls theirs. The hook
+  // used to default to 'Sage' and correct itself a beat later, which put
+  // Bloom's house name in front of another venue's couples on every load.
+  const { data: aiConfig } = await supabase
+    .from('venue_ai_config')
+    .select('ai_name')
+    .eq('venue_id', venue.id)
+    .maybeSingle()
 
   // For the demo, fetch the first wedding's client code so the top bar can
   // display a reference code unobtrusively. In real use this would be scoped
@@ -98,6 +110,7 @@ async function getVenueBranding(slug: string) {
     portalTagline: config?.portal_tagline || null,
     clientCode,
     weddingDate: weddingDateRow?.wedding_date || null,
+    aiName: (aiConfig?.ai_name as string | null | undefined)?.trim() || null,
   }
 }
 
@@ -136,18 +149,22 @@ export default async function CoupleSlugLayout({
       <link href={fontUrl} rel="stylesheet" />
 
       <div style={cssVars} className="min-h-screen bg-[#FAFAF8]">
-        <CoupleShell
-          venueName={branding.venueName}
-          logoUrl={branding.logoUrl}
-          base={`/couple/${slug}`}
-          clientCode={branding.clientCode}
-          weddingDate={branding.weddingDate}
-        >
-          {children}
-        </CoupleShell>
+        {/* Seeds useCoupleContext().aiName so the top bar and the floating
+            assistant render the venue's own name on first paint. */}
+        <CoupleAiNameProvider aiName={branding.aiName}>
+          <CoupleShell
+            venueName={branding.venueName}
+            logoUrl={branding.logoUrl}
+            base={`/couple/${slug}`}
+            clientCode={branding.clientCode}
+            weddingDate={branding.weddingDate}
+          >
+            {children}
+          </CoupleShell>
 
-        {/* Floating Sage button on every page */}
-        <FloatingSage venueSlug={slug} />
+          {/* Floating assistant button on every page */}
+          <FloatingSage venueSlug={slug} />
+        </CoupleAiNameProvider>
       </div>
     </>
   )

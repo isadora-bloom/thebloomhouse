@@ -1,9 +1,8 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Heart } from 'lucide-react'
 
 /**
  * Extract the venue slug from the current URL path.
@@ -23,6 +22,15 @@ function getSlugFromPath(): string {
   return ''
 }
 
+/**
+ * Slug from the query string, for the subdomain layout where the path
+ * carries no slug. Only ever a fallback; never a default.
+ */
+function getSlugFromQuery(): string {
+  if (typeof window === 'undefined') return ''
+  return new URLSearchParams(window.location.search).get('venue')?.trim() || ''
+}
+
 interface VenueBranding {
   venueName: string
   logoUrl: string | null
@@ -36,6 +44,19 @@ export default function CoupleLoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [branding, setBranding] = useState<VenueBranding | null>(null)
+  // W1 (2026-09-08): the slug used to come from `?venue=` with
+  // 'hawthorne-manor' as the default, so every venue's couples signed in
+  // under the demo venue's name and logo. The path is the truth here; the
+  // query param only helps the subdomain layout, where the path has no
+  // slug in it. State rather than a useMemo with [] deps, because both
+  // readers need `window` and so return '' during the server render, and
+  // a useMemo captured that empty string forever, producing links like
+  // "/couple//register".
+  const [currentSlug, setCurrentSlug] = useState('')
+
+  useEffect(() => {
+    setCurrentSlug(getSlugFromPath() || getSlugFromQuery())
+  }, [])
 
   // Load venue branding from the CSS custom properties set by the couple layout
   useEffect(() => {
@@ -45,10 +66,17 @@ export default function CoupleLoginPage() {
       // skeleton spinning forever. Form area renders regardless; this
       // protects the brand area from looking frozen.
       try {
-        const supabase = createClient()
-        const params = new URLSearchParams(window.location.search)
-        const slug = params.get('venue') || 'hawthorne-manor'
+        const slug = getSlugFromPath() || getSlugFromQuery()
+        if (!slug) {
+          setBranding({
+            venueName: 'Wedding Portal',
+            logoUrl: null,
+            portalTagline: null,
+          })
+          return
+        }
 
+        const supabase = createClient()
         const { data: venue } = await supabase
           .from('venues')
           .select('id, name, slug')
@@ -122,13 +150,14 @@ export default function CoupleLoginPage() {
       }
     }
 
-    // Redirect to couple dashboard
-    router.push('/')
+    // Redirect to couple dashboard. On the path-based portal that is
+    // /couple/<slug>; on the subdomain portal the root is already theirs.
+    router.push(currentSlug ? `/couple/${currentSlug}` : '/')
     router.refresh()
   }
 
   const venueName = branding?.venueName || 'Your Venue'
-  const currentSlug = useMemo(() => getSlugFromPath(), [])
+  const base = currentSlug ? `/couple/${currentSlug}` : ''
 
   return (
     <div
@@ -294,40 +323,33 @@ export default function CoupleLoginPage() {
             </button>
           </form>
 
-          {/* Forgot password */}
+          {/* Forgot password. Was an alert saying "coming soon"; couples
+              locked out had to ring the venue. */}
           <div className="mt-5 text-center">
-            <button
-              type="button"
+            <a
+              href={`${base}/forgot-password`}
               className="text-sm transition-colors hover:underline"
               style={{ color: 'var(--couple-secondary, #5D7A7A)' }}
-              onClick={() => {
-                // TODO: Implement password reset flow
-                alert('Password reset coming soon. Please contact your coordinator.')
-              }}
             >
               Forgot your password?
-            </button>
+            </a>
           </div>
 
-          {/* Register link */}
+          {/* Register link. Registration needs the token from the
+              invitation email, so this points at the page that explains
+              that rather than at a form nobody can complete. */}
           <div className="mt-4 pt-4 border-t border-gray-100 text-center">
             <p className="text-sm text-gray-500">
               Don&apos;t have an account?{' '}
               <a
-                href={`/couple/${currentSlug}/register`}
+                href={`${base}/register`}
                 className="font-medium transition-colors hover:underline"
                 style={{ color: 'var(--couple-primary, #7D8471)' }}
               >
-                Register with your event code
+                Use the link in your invitation email
               </a>
             </p>
           </div>
-        </div>
-
-        {/* Powered by footer */}
-        <div className="mt-6 text-center">
-          <p className="text-xs text-gray-400 mb-1">Powered by</p>
-          <img src="/brand/wordmark-sage-sm.png" alt="The Bloom House" className="h-5 w-auto mx-auto opacity-60" />
         </div>
       </div>
     </div>

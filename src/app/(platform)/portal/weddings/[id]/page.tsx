@@ -1883,24 +1883,16 @@ function InviteStatusBadge({
 
     setSending(true)
     try {
-      const supabase = createClient()
-
-      // Generate event code if not already set
-      let eventCode = wedding.event_code
-      if (!eventCode) {
-        const prefix = (venueSlug || 'BLM').slice(0, 3).toUpperCase()
-        eventCode = `${prefix}-${Math.floor(100 + Math.random() * 900)}`
-        await supabase
-          .from('weddings')
-          .update({ event_code: eventCode })
-          .eq('id', weddingId)
-      }
-
       const coupleName = partner2
         ? `${partner1.first_name} & ${partner2.first_name}`
         : partner1.first_name
 
-      await fetch('/api/portal/invite-couple', {
+      // No event code is minted or written here any more. This used to
+      // generate one in the browser and push it straight into weddings
+      // without checking the result, which is both a fourth copy of the
+      // format and a silent write. /api/portal/invite-couple provisions
+      // the code server-side when the wedding has none.
+      const res = await fetch('/api/portal/invite-couple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1908,15 +1900,23 @@ function InviteStatusBadge({
           venueId,
           email: partner1.email,
           partnerEmail: partner2?.email || null,
-          eventCode,
           coupleName,
         }),
       })
+      if (!res.ok) {
+        let body: { error?: string } = {}
+        try { body = await res.json() } catch { /* noop */ }
+        throw new Error(body?.error || `invite failed (${res.status})`)
+      }
 
       onUpdated()
     } catch (err) {
       console.error('Failed to send invite:', err)
-      alert('Failed to send invitation. Please try again.')
+      alert(
+        err instanceof Error
+          ? `Failed to send invitation. ${err.message}`
+          : 'Failed to send invitation. Please try again.'
+      )
     } finally {
       setSending(false)
     }

@@ -587,12 +587,10 @@ function NewBookingModal({
     setSaving(true)
 
     try {
-      // Generate event code (3 letter venue prefix + 3 digits).
-      // The /api/portal/mint-wedding endpoint retries on a unique-index
-      // collision so we don't need a client-side retry loop anymore.
-      const prefix = (venueSlug || 'BLM').slice(0, 3).toUpperCase()
-      const code = `${prefix}-${Math.floor(100 + Math.random() * 900)}`
-
+      // The event code is minted server-side by /api/portal/mint-wedding,
+      // through the one generator in lib/services/portal/provision.ts. The
+      // browser used to make its own copy of the format and post it.
+      //
       // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
       // POST to the server endpoint instead of the browser-side direct
       // INSERT. The endpoint routes through the canonical chokepoint so
@@ -626,7 +624,6 @@ function NewBookingModal({
             : null,
           notes: form.notes || null,
           status: 'booked',
-          eventCode: code,
         }),
       })
       if (!mintRes.ok) {

@@ -33,11 +33,40 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
+// W1 (2026-09-08) expansion. Two of the three places the couple portal
+// actually renders the assistant's name were outside the scan:
+//   - src/lib/hooks   holds useCoupleContext, whose DEFAULT_AI_NAME was
+//                     'Sage' and therefore put Bloom's house name in front
+//                     of every other venue's couples on first paint.
+//   - src/app/couple  is the path-based couple portal (layout, login,
+//                     register, the re-export stubs).
 const SCAN_DIRS = [
   'src/app/_couple-pages',
+  'src/app/couple',
   'src/app/(platform)',
   'src/components',
+  'src/lib/hooks',
 ]
+
+// Couple-facing code, where the strict rules apply. A couple must never
+// see Bloom's house name: to them the assistant belongs to their venue.
+// Everything else in SCAN_DIRS is coordinator-facing admin, where the
+// pre-W1 leniency still applies (see the skips below). That leniency is
+// hiding 23 real 'Sage' literals in /settings/sage-identity, /onboarding,
+// /agent/rules and friends; those are venue-staff-facing white-label leaks
+// and they are owed a fix, but they belong to the workstreams that own
+// those pages, not to this one.
+const STRICT_DIRS = [
+  'src/app/_couple-pages',
+  'src/app/couple',
+  'src/components/couple',
+  'src/lib/hooks',
+]
+
+function isStrict(file) {
+  const normalized = file.replace(/\\/g, '/')
+  return STRICT_DIRS.some((d) => normalized.startsWith(d))
+}
 
 // T5-Rixey-FFF: separate scan for prompt templates + brain services.
 // These files are the LAST place a venue-specific string can leak
@@ -116,6 +145,7 @@ const violations = []
 for (const file of files) {
   const fileText = readFileSync(file, 'utf8')
   const fileUsesAiName = /aiName/.test(fileText)
+  const strict = isStrict(file)
   const lines = fileText.split(/\r?\n/)
 
   // Track multi-line block comment state so a "Sage" inside the body
@@ -152,15 +182,24 @@ for (const file of files) {
     if (!/\bSage\b/.test(line)) continue
     // Variable / identifier usages (onAskSage, handleAskSage, isSageActive, etc)
     if (/(?:on|handle|is)Sage\w*/.test(line)) continue
-    // Same-line aiName reference (explicit render-time swap)
-    if (/aiName/.test(line)) continue
-    // DEFAULT_AI_NAME = 'Sage' fallback definition
-    if (/DEFAULT_AI_NAME/.test(line)) continue
-    // If the file as a whole uses aiName, assume the author wired this
-    // literal through .replaceAll('Sage', aiName) or similar — don't
-    // over-flag. Fall back to allowlist for files that genuinely need
-    // literal 'Sage' (color swatches).
-    if (fileUsesAiName) continue
+
+    // W1 (2026-09-08): three blanket skips no longer apply in the couple
+    // portal. The check was waving through exactly the lines it existed
+    // to catch.
+    //   - any line containing 'aiName': a line can mention aiName AND
+    //     carry a separate hardcoded 'Sage'.
+    //   - any line containing DEFAULT_AI_NAME: that constant IS the
+    //     default rendered before the venue's own name loads, so 'Sage'
+    //     is exactly what must not be in it. useCoupleContext's was.
+    //   - any file that mentions aiName anywhere: this exempted whole
+    //     files on the assumption the author had wired the swap up.
+    // Outside STRICT_DIRS they still apply, so coordinator admin pages
+    // are unchanged by this. What is genuinely fine goes in ALLOWLIST.
+    if (!strict) {
+      if (/aiName/.test(line)) continue
+      if (/DEFAULT_AI_NAME/.test(line)) continue
+      if (fileUsesAiName) continue
+    }
 
     const displayLine = line.trim()
     const key = `${file.replace(/\\/g, '/')}:${displayLine.slice(0, 60)}`
