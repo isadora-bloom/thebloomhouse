@@ -399,10 +399,45 @@ export async function POST(request: NextRequest) {
             `Sage skipped generation because the message hit the forbidden-topic list ` +
             `(matched "${forbidden.matchedKeyword}"). Excerpt: ` +
             `"${message.slice(0, 160)}${message.length > 160 ? '…' : ''}"`,
+          // Finding 3 (November plan W10): pulse-aggregator's type-based
+          // fallback treats 'sage_uncertain' as 'high', but that fallback
+          // only fires when the stored priority column is NULL. This
+          // call previously left priority unset, so createNotification's
+          // 'normal' default landed it as 'medium' on /pulse — a coordinator
+          // skimming by priority would see this below genuinely medium
+          // items. Set explicitly so a forbidden-topic block reads as
+          // high-priority, matching its actual urgency.
+          priority: 'high',
         })
       } catch (err) {
         console.warn('[api/portal/sage] notification failed (non-blocking):', err)
       }
+
+      // Finding 3 (November plan W10): the pitch deck promises "a Sage
+      // chat turning tense triggers a Pulse flag" — that's runEscalationCheck
+      // below, at step 6, which fires an admin_notifications row with
+      // type='escalation', priority='urgent' (resolves to Pulse 'critical').
+      // But step 6 never runs for THIS message: it calls
+      // checkEscalationForVenue(message, venueId) — the exact same
+      // matcher, on the exact same text, as `forbidden` above — so any
+      // message that reaches this branch would also match at step 6,
+      // except we've already returned before getting there. The result
+      // was that every tense/urgent/legal keyword hit (frustrated,
+      // disappointed, terrible, lawyer, refund, urgent, ...) only ever
+      // produced the 'sage_uncertain' notification above, never the
+      // 'escalation' one — the promised critical Pulse flag was
+      // unreachable for Sage-portal chat. Firing it here restores that
+      // path without touching Sage's answer to the couple (the canned
+      // response above is unchanged): both notifications land, dedup'd
+      // independently by type, so a coordinator sees the topic was
+      // withheld (sage_uncertain) AND that it was a tense/urgent match
+      // (escalation, higher priority).
+      void runEscalationCheck({
+        text: message,
+        venueId,
+        weddingId: weddingId || null,
+        sourceType: 'sage_conversation',
+      })
 
       return NextResponse.json({
         response: cannedResponse,
@@ -489,6 +524,8 @@ export async function POST(request: NextRequest) {
             `Both the primary and fallback AI providers were unavailable, so Sage gave the couple a ` +
             `holding reply instead of an answer. The question is in the Sage Queue for you to answer ` +
             `directly: "${message.slice(0, 160)}${message.length > 160 ? '…' : ''}"`,
+          // Finding 3: explicit priority, see the forbidden-topic call above.
+          priority: 'high',
         })
       } catch (notifyErr) {
         console.warn('[api/portal/sage] outage notification failed (non-blocking):', notifyErr)
@@ -542,6 +579,16 @@ export async function POST(request: NextRequest) {
     // Escalation scan on the couple's message — fire-and-forget so a notif
     // failure can't break the chat. Only scans user content; the assistant
     // reply is never scanned to avoid Sage's own paraphrases tripping it.
+    //
+    // Note (finding 3, November plan W10): this only actually fires for a
+    // message that reached generation, i.e. did NOT match at the step-3a
+    // forbidden-topic check — and that check calls the identical
+    // checkEscalationForVenue(message, venueId) on the identical text, so
+    // by construction nothing that would trip this scan gets past step 3a
+    // to reach here. The forbidden-topic branch above now fires this same
+    // check directly (see the comment there) so the escalation path isn't
+    // silently unreachable. This call stays as the correct behaviour for
+    // callers where no such pre-check exists.
     void runEscalationCheck({
       text: message,
       venueId,
@@ -608,6 +655,8 @@ export async function POST(request: NextRequest) {
           type: 'sage_uncertain',
           title: `${aiName} flagged a question (${tierLabel})`,
           body: `"${message.slice(0, 120)}${message.length > 120 ? '...' : ''}" — Confidence: ${confidence}%. Check the Sage Queue to review and respond.`,
+          // Finding 3: explicit priority, see the forbidden-topic call above.
+          priority: 'high',
         })
       } catch (err) {
         console.warn('[api/portal/sage] Failed to create notification (non-blocking):', err)

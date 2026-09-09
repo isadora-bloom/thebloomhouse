@@ -71,6 +71,20 @@ const REALERT_COOLDOWN_DAYS = 14
 export const INGESTION_ALERT_TYPE = 'ingestion_volume_drop'
 export const INGESTION_METRIC_PREFIX = 'ingestion_volume_'
 
+/**
+ * November plan finding 1 (W10): the per-channel volume monitor above
+ * only fires once inbound volume has visibly collapsed against a
+ * ~90-day baseline, which can take days to register and never fires at
+ * all for a low-volume mailbox. Gmail sat in `gmail_connections`
+ * status='error' for weeks in June/July 2026 before anyone noticed — a
+ * connection-status flip is the honest, immediate signal, not a
+ * downstream volume symptom. This alert type checks the column
+ * directly so a broken connection reaches Pulse on the very next cron
+ * tick instead of waiting on the symptom to build up.
+ */
+export const CONNECTION_ERROR_ALERT_TYPE = 'ingestion_connection_error'
+const GMAIL_CONNECTION_METRIC_NAME = 'ingestion_connection_gmail'
+
 // ---------------------------------------------------------------------------
 // Channel classification
 // ---------------------------------------------------------------------------
@@ -230,6 +244,145 @@ async function fetchInboundRows(
 }
 
 // ---------------------------------------------------------------------------
+// Gmail connection-health check (finding 1)
+// ---------------------------------------------------------------------------
+
+/** Minimal slice of a gmail_connections row the health check needs. */
+interface GmailConnectionErrorRow {
+  id: string
+  email_address: string | null
+  error_message: string | null
+}
+
+function buildConnectionExplanation(rows: GmailConnectionErrorRow[]): string {
+  const addresses = rows
+    .map((r) => r.email_address ?? 'an unnamed mailbox')
+    .join(', ')
+  const firstError = rows.find((r) => r.error_message)?.error_message
+  const plural = rows.length > 1
+  return (
+    `Gmail is not syncing: the connection${plural ? 's' : ''} for ${addresses} ` +
+    `${plural ? 'are' : 'is'} in an error state${firstError ? ` (${firstError})` : ''}. ` +
+    `No inbound mail is being captured while a connection sits in error — reconnect it at ` +
+    `/settings/gmail. This is the same failure mode that let Gmail sit broken for weeks in ` +
+    `June/July 2026 before anyone noticed.`
+  )
+}
+
+/**
+ * Direct connection-status check, run alongside the volume monitor for
+ * every venue. Queries `gmail_connections` for status='error' rows and
+ * writes a critical anomaly_alert when found — one row per venue
+ * (metric_name is fixed, not per-mailbox), idempotent and cooldown-gated
+ * the same way the per-channel volume alerts above are.
+ *
+ * Deliberately does NOT auto-resolve when the error clears — no detector
+ * in this file does; the operator acknowledges via /intel/anomalies and
+ * the REALERT_COOLDOWN_DAYS window keeps it quiet after that.
+ */
+export async function runGmailConnectionHealthCheck(
+  venueId: string,
+  asOf: Date = new Date(),
+): Promise<WrittenAlert[]> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('gmail_connections')
+    .select('id, email_address, error_message')
+    .eq('venue_id', venueId)
+    .eq('status', 'error')
+
+  if (error) {
+    console.error(`[ingestion-monitor] Error checking gmail_connections status:`, error.message)
+    return []
+  }
+
+  const erroring = (data ?? []) as GmailConnectionErrorRow[]
+  if (erroring.length === 0) return []
+
+  const explanation = buildConnectionExplanation(erroring)
+  const causes = [
+    {
+      source: 'ingestion_connection',
+      channel: 'gmail',
+      erroringCount: erroring.length,
+      cause: 'A Gmail connection is in an error state and has stopped syncing.',
+      likelihood: 'high' as const,
+      action: 'Reconnect the mailbox at /settings/gmail; check the error message on the connection row.',
+    },
+  ]
+
+  const { data: existingRows, error: existingErr } = await supabase
+    .from('anomaly_alerts')
+    .select('id, acknowledged, created_at')
+    .eq('venue_id', venueId)
+    .eq('alert_type', CONNECTION_ERROR_ALERT_TYPE)
+    .eq('metric_name', GMAIL_CONNECTION_METRIC_NAME)
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (existingErr) {
+    console.error(`[ingestion-monitor] Error checking existing connection alert:`, existingErr.message)
+    return []
+  }
+
+  const existing = existingRows?.[0]
+  if (existing) {
+    if (!existing.acknowledged) {
+      const { data: updated, error: updateErr } = await supabase
+        .from('anomaly_alerts')
+        .update({
+          current_value: erroring.length,
+          baseline_value: 0,
+          severity: 'critical',
+          ai_explanation: explanation,
+          causes,
+          explanation_source: 'rule',
+        })
+        .eq('id', existing.id)
+        .select('id, venue_id, metric_name, severity')
+        .single()
+      if (updateErr) {
+        console.error(`[ingestion-monitor] Failed to update connection alert:`, updateErr.message)
+        return []
+      }
+      return updated ? [updated as WrittenAlert] : []
+    }
+    const ageDays = (asOf.getTime() - new Date(existing.created_at as string).getTime()) / DAY_MS
+    if (ageDays < REALERT_COOLDOWN_DAYS) return [] // operator saw it recently
+  }
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from('anomaly_alerts')
+    .insert({
+      venue_id: venueId,
+      alert_type: CONNECTION_ERROR_ALERT_TYPE,
+      metric_name: GMAIL_CONNECTION_METRIC_NAME,
+      current_value: erroring.length,
+      baseline_value: 0,
+      severity: 'critical',
+      ai_explanation: explanation,
+      causes,
+      acknowledged: false,
+      explanation_source: 'rule',
+    })
+    .select('id, venue_id, metric_name, severity')
+    .single()
+
+  if (insertErr) {
+    console.error(`[ingestion-monitor] Failed to insert connection alert:`, insertErr.message)
+    return []
+  }
+  if (inserted) {
+    console.log(
+      `[ingestion-monitor] CRITICAL: gmail connection error for venue ${venueId} ` +
+        `(${erroring.length} mailbox(es))`,
+    )
+    return [inserted as WrittenAlert]
+  }
+  return []
+}
+
+// ---------------------------------------------------------------------------
 // Alert writer
 // ---------------------------------------------------------------------------
 
@@ -385,6 +538,12 @@ export async function runIngestionVolumeMonitor(
 /**
  * Run the monitor for every active venue. Per-venue failures are contained
  * so one venue can't nuke the cron tick (same shape as runAllVenueAnomalies).
+ *
+ * Also runs runGmailConnectionHealthCheck per venue (finding 1) — folded
+ * in here rather than added as a separate cron entry so a status='error'
+ * gmail_connections row reaches Pulse on the SAME daily anomaly_detection
+ * tick that already calls this function (src/app/api/cron/route.ts case
+ * 'anomaly_detection', owned by W6 — not touched by this change).
  */
 export async function runIngestionVolumeMonitorAllVenues(): Promise<
   Record<string, WrittenAlert[]>
@@ -403,12 +562,19 @@ export async function runIngestionVolumeMonitorAllVenues(): Promise<
   const results: Record<string, WrittenAlert[]> = {}
   for (const v of venues) {
     const id = v.id as string
+    let volumeAlerts: WrittenAlert[] = []
     try {
-      results[id] = await runIngestionVolumeMonitor(id)
+      volumeAlerts = await runIngestionVolumeMonitor(id)
     } catch (err) {
       console.error(`[ingestion-monitor] Failed for venue ${id}:`, err)
-      results[id] = []
     }
+    let connectionAlerts: WrittenAlert[] = []
+    try {
+      connectionAlerts = await runGmailConnectionHealthCheck(id)
+    } catch (err) {
+      console.error(`[ingestion-monitor] Connection health check failed for venue ${id}:`, err)
+    }
+    results[id] = [...volumeAlerts, ...connectionAlerts]
   }
   return results
 }
