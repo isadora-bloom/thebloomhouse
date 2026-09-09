@@ -39,7 +39,7 @@ export interface CoupleContext {
 }
 
 const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201'
-const DEMO_WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
+const DEMO_WEDDING_ID = '44444444-4444-4444-4444-444444000109'
 const DEMO_SLUG = 'hawthorne-manor'
 /**
  * What we call the assistant before we know what the venue calls it.
