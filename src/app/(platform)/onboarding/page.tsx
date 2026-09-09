@@ -430,7 +430,7 @@ export default function OnboardingPage() {
       // Load venue basics
       const { data: venue } = await supabase
         .from('venues')
-        .select('name, address_line1, city, state, zip, timezone, owner_email')
+        .select('name, address_line1, city, state, zip, owner_email')
         .eq('id', VENUE_ID!)
         .maybeSingle()
 
