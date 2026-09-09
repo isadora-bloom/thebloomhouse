@@ -28,24 +28,35 @@ export async function recomputeHeatAfterCleanup(
     return result
   }
 
+  // Heat is not a column on weddings; it lives on wedding_heat (one row per
+  // wedding). Read the current scores there so "changed" is measured
+  // against what the venue actually sees.
   const { data: weddings, error } = await sb
     .from('weddings')
-    .select('id, heat_score')
+    .select('id')
     .eq('venue_id', venueId)
   if (error) {
     result.ok = false
     result.errors.push(error.message)
     return result
   }
+  const { data: heatRows } = await sb
+    .from('wedding_heat')
+    .select('wedding_id, heat_score')
+    .eq('venue_id', venueId)
+  const currentHeat = new Map<string, number | null>()
+  for (const h of (heatRows ?? []) as Array<{ wedding_id: string; heat_score: number | null }>) {
+    currentHeat.set(h.wedding_id, h.heat_score)
+  }
 
   let total = 0
   let updated = 0
   const errors: string[] = []
-  for (const w of (weddings ?? []) as Array<{ id: string; heat_score: number }>) {
+  for (const w of (weddings ?? []) as Array<{ id: string }>) {
     total++
     try {
       const res = await recalculateHeatScore(venueId, w.id)
-      if (res.newScore !== w.heat_score) updated++
+      if (res.newScore !== (currentHeat.get(w.id) ?? null)) updated++
     } catch (err) {
       errors.push(`${w.id}: ${err instanceof Error ? err.message : String(err)}`)
     }

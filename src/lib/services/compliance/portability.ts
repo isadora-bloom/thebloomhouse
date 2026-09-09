@@ -80,27 +80,16 @@ export async function exportCouple(args: ExportCoupleArgs): Promise<PortabilityE
     supabase.from('guest_list').select('*').eq('wedding_id', args.weddingId),
     supabase.from('planning_notes').select('*').eq('wedding_id', args.weddingId),
     supabase.from('timeline').select('*').eq('wedding_id', args.weddingId),
-    supabase.from('budget').select('*').eq('wedding_id', args.weddingId),
+    supabase.from('budget_items').select('*').eq('wedding_id', args.weddingId),
     supabase.from('messages').select('*').eq('wedding_id', args.weddingId),
     supabase.from('sage_conversations').select('*').eq('wedding_id', args.weddingId),
     supabase.from('interactions').select('*').eq('wedding_id', args.weddingId),
   ])
 
-  // For each sage conversation, attach its messages.
-  const convoIds = ((sageConvos.data as Array<{ id: string }> | null) ?? []).map((c) => c.id)
-  let sageMessages: Array<Record<string, unknown>> = []
-  if (convoIds.length > 0) {
-    const { data } = await supabase.from('sage_messages').select('*').in('conversation_id', convoIds)
-    sageMessages = (data as Array<Record<string, unknown>> | null) ?? []
-  }
-  const conversationsWithMessages = ((sageConvos.data as Array<Record<string, unknown>> | null) ?? []).map(
-    (c) => ({
-      ...c,
-      messages: sageMessages.filter(
-        (m) => (m as { conversation_id: string }).conversation_id === (c as { id: string }).id,
-      ),
-    }),
-  )
+  // sage_conversations holds one row per message (role/content) scoped by
+  // wedding_id; there is no separate sage_messages table. Export the rows
+  // as they are.
+  const conversationsWithMessages = (sageConvos.data as Array<Record<string, unknown>> | null) ?? []
 
   // Drafts are FK-joined via interactions.
   const interactionIds = ((interactions.data as Array<{ id: string }> | null) ?? []).map((i) => i.id)

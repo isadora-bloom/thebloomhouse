@@ -457,7 +457,7 @@ export default function OnboardingPage() {
           zip: venue?.zip || prev.zip,
           capacity: config?.capacity?.toString() || prev.capacity,
           base_price: config?.base_price?.toString() || prev.base_price,
-          timezone: config?.timezone || venue?.timezone || prev.timezone,
+          timezone: config?.timezone || prev.timezone,
           venue_prefix: loadedPrefix || derivePrefix(loadedName) || prev.venue_prefix,
           max_events_per_day: (config?.max_events_per_day as number | null)?.toString() || prev.max_events_per_day,
           owner_email: loadedOwnerEmail || prev.owner_email,

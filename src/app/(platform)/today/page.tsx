@@ -44,15 +44,16 @@ function todayLabel(now: Date, timeZone: string): string {
   }
 }
 
-/** The venue's `venues.timezone`, defaulted the same way the cohort
- *  loader defaults it. A display setting, not a derived metric, so
- *  reading it here does not make the page a deriving surface. */
+/** The venue's `venue_config.timezone` (venues has no timezone column),
+ *  defaulted the same way the cohort loader defaults it. A display
+ *  setting, not a derived metric, so reading it here does not make the
+ *  page a deriving surface. */
 async function venueTimeZone(venueId: string): Promise<string> {
   try {
     const { data } = await createServiceClient()
-      .from('venues')
+      .from('venue_config')
       .select('timezone')
-      .eq('id', venueId)
+      .eq('venue_id', venueId)
       .maybeSingle<{ timezone: string | null }>()
     const tz = data?.timezone?.trim()
     return tz && tz.length > 0 ? tz : DEFAULT_TIME_ZONE

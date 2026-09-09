@@ -86,14 +86,24 @@ async function smokeRecentActivity(sb: SupabaseClient, venueId: string): Promise
 }
 
 async function smokeHeatDistribution(sb: SupabaseClient, venueId: string): Promise<SmokeTest> {
-  const { data: weddings } = await sb
+  // Heat and tier live on wedding_heat, keyed by wedding_id; weddings has
+  // no heat columns. Filter to active weddings first, then read their heat.
+  const { data: active } = await sb
     .from('weddings')
-    .select('heat_score, temperature_tier')
+    .select('id')
     .eq('venue_id', venueId)
     .neq('status', 'completed')
     .neq('status', 'lost')
     .neq('status', 'cancelled')
-  const rows = (weddings ?? []) as Array<{ heat_score: number; temperature_tier: string }>
+  const activeIds = ((active ?? []) as Array<{ id: string }>).map((w) => w.id)
+  const { data: heat } = activeIds.length > 0
+    ? await sb
+        .from('wedding_heat')
+        .select('heat_score, temperature_tier')
+        .eq('venue_id', venueId)
+        .in('wedding_id', activeIds)
+    : { data: [] as unknown[] }
+  const rows = (heat ?? []) as Array<{ heat_score: number; temperature_tier: string }>
   const total = rows.length
   if (total === 0) {
     return {

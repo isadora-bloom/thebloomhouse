@@ -114,7 +114,7 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
     // people (role partner1/partner2). Batch-derive them alongside the
     // weddings query rather than N+1.
     const { data: partnerRows } = await service
-      .from('people')
+      .from('people') // legacy-read-ok: replaces the phantom weddings.partner1_name column; agencies suite awaits migration 304
       .select('wedding_id, first_name, role')
       .in('wedding_id', [...weddingIds])
       .in('role', ['partner1', 'partner2'])

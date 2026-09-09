@@ -576,6 +576,36 @@ async function venueSageEmail(venueId: string): Promise<string | null> {
  * our own email?" should call this, not hardcode addresses or check
  * one config field.
  */
+const TEAM_EMAIL_TTL_MS = 10 * 60 * 1000
+const teamEmailCache = new Map<string, { at: number; emails: string[] }>()
+
+/** Team members' login emails for a venue, via auth.users (user_profiles has
+ *  no email column). Cached ten minutes per venue; failures degrade to []. */
+async function teamEmailsForVenue(
+  supabase: ReturnType<typeof createServiceClient>,
+  venueId: string,
+): Promise<string[]> {
+  const hit = teamEmailCache.get(venueId)
+  if (hit && Date.now() - hit.at < TEAM_EMAIL_TTL_MS) return hit.emails
+  const emails: string[] = []
+  try {
+    const { data: team } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .eq('venue_id', venueId)
+      .in('role', ['coordinator', 'manager', 'org_admin', 'group_admin', 'super_admin'])
+    for (const t of (team ?? []) as Array<{ id: string }>) {
+      const { data } = await supabase.auth.admin.getUserById(t.id)
+      const e = (data?.user?.email ?? '').toLowerCase().trim()
+      if (e) emails.push(e)
+    }
+  } catch (err) {
+    console.warn(`[venueOwnEmails] team email lookup failed for ${venueId}:`, err)
+  }
+  teamEmailCache.set(venueId, { at: Date.now(), emails })
+  return emails
+}
+
 export async function venueOwnEmails(venueId: string): Promise<Set<string>> {
   const supabase = createServiceClient()
   const own = new Set<string>()
@@ -612,14 +642,10 @@ export async function venueOwnEmails(venueId: string): Promise<Set<string>> {
   // email the venue inbox (CC'ing themselves on replies, forwarding,
   // internal notes). Including them here prevents them being created
   // as ghost "couple" rows.
-  const { data: team } = await supabase
-    .from('user_profiles')
-    .select('email')
-    .eq('venue_id', venueId)
-  for (const t of (team ?? []) as Array<{ email: string | null }>) {
-    const e = (t.email || '').toLowerCase().trim()
-    if (e) own.add(e)
-  }
+  // user_profiles carries no email column (2026-09-08 schema-truth check);
+  // the address lives on auth.users, keyed by the same id. Resolved through
+  // the admin API and cached per venue so the per-email call stays cheap.
+  for (const e of await teamEmailsForVenue(supabase, venueId)) own.add(e)
   // Venue's own calculator / form-relay senders recorded in
   // venue_config.automation_emails. Any custom automation that sends
   // from an external service (e.g. the Rixey pricing calculator at

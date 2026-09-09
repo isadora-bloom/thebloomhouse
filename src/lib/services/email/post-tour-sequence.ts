@@ -332,15 +332,10 @@ async function loadContact(
   supabase: SupabaseClient,
   weddingId: string,
 ): Promise<ContactInfo | null> {
-  // Primary contact first.
-  const { data: contact } = await supabase
-    .from('contacts')
-    .select('email')
-    .eq('wedding_id', weddingId)
-    .eq('is_primary', true)
-    .limit(1)
-    .maybeSingle()
-  let email = (contact?.email as string | null) ?? null
+  // contacts is keyed by person_id with type/value columns, so the old
+  // wedding_id + email pre-check never returned a row. people.email is the
+  // working source.
+  let email: string | null = null
   if (!email) {
     const { data: person } = await supabase
       .from('people')
