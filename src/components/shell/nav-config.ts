@@ -22,6 +22,7 @@ import {
 } from '@/components/brand-icons'
 import {
   // Agent
+  Sunrise,
   Mail, FileCheck, Kanban, Flame, Workflow, BarChart3,
   HelpCircle, UsersRound, ListOrdered, Inbox, Newspaper, Activity, Brain,
   // Weddings
@@ -108,13 +109,17 @@ export const MODE_AGENT: ModeConfig = {
   label: 'Agent',
   description: 'Email drafting, inquiry funnel, and follow-up cadence.',
   icon: AgentMark,
-  matchPrefixes: ['/agent'],
+  matchPrefixes: ['/agent', '/today'],
   defaultHref: '/agent/inbox',
   sections: [
     {
       title: 'Daily',
       subtitle: 'What you open every morning',
       items: [
+        // The post-login landing page. Four plain-English lists off the
+        // canonical readers — who needs a reply, who is going quiet, who
+        // is touring, who looks ready to book.
+        { label: 'Today', href: '/today', icon: Sunrise, daily: true },
         { label: 'Inbox', href: '/agent/inbox', icon: Mail, daily: true },
         { label: 'Approval Queue', href: '/agent/drafts', icon: FileCheck, daily: true },
         { label: 'Pipeline', href: '/agent/pipeline', icon: Kanban, daily: true },
@@ -234,7 +239,7 @@ export const MODE_INTEL: ModeConfig = {
   label: 'Intel',
   description: 'Demand signals, ROI, reviews, and what your market is doing.',
   icon: IntelMark,
-  matchPrefixes: ['/intel'],
+  matchPrefixes: ['/intel', '/dashboard'],
   defaultHref: '/intel/dashboard',
   sections: [
     {
@@ -242,6 +247,10 @@ export const MODE_INTEL: ModeConfig = {
       subtitle: 'Pulse + alerts',
       items: [
         { label: 'Dashboard', href: '/intel/dashboard', icon: LayoutDashboard, daily: true },
+        // The old post-login dashboard, kept whole when /today took over
+        // the landing slot. Not flagged `daily` — it is the deeper read,
+        // not the morning one.
+        { label: 'Venue dashboard', href: '/dashboard', icon: Gauge },
         { label: 'Insights', href: '/intel/insights', icon: Lightbulb, daily: true },
         { label: 'Anomalies', href: '/intel/anomalies', icon: AlertTriangle, daily: true },
         { label: 'Market Pulse', href: '/intel/market-pulse', icon: Activity, daily: true },
