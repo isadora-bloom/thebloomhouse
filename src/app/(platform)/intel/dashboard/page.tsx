@@ -23,6 +23,11 @@ import { VenueChip } from '@/components/intel/venue-chip'
 import { WeeklyLearnedCard } from '@/components/intel/WeeklyLearnedCard'
 import { PostTourBrowsingCard } from '@/components/intel/PostTourBrowsingCard'
 import { BriefingsPanel } from '@/components/intel/BriefingsPanel'
+// W2 canonical wiring. The venue's own top-line counts come from
+// getVenueOverview. The alert tile, the FRED demand score and the
+// recommendation queue below are untouched: they answer other questions
+// and have their own sources.
+import { VenueStatsStrip } from '../_canonical/venue-stats'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -636,6 +641,10 @@ export default function IntelligenceDashboardPage() {
           /intel/briefings. Latest briefing renders here; the archive
           of past briefings is collapsed inside the panel. */}
       <BriefingsPanel />
+
+      {/* ---- Couples on the spine (canonical) ----
+           One reader, one answer, with the sample size attached. */}
+      <VenueStatsStrip />
 
       {/* ---- Quick Stats Row ---- */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -19,6 +19,15 @@ import {
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+// W2 canonical wiring: channel truth (conversion, cost per booking,
+// revenue per dollar) now comes from getSourceAttribution via
+// /api/intel/canonical/source-attribution, rendered by the same
+// component /intel/attribution uses. The Source Comparison table below
+// keeps the volume + spend columns the reader does not carry, and no
+// longer computes its own conversion / cost-per-booking / ROI: those
+// were a second answer to a question the canonical reader already
+// answers.
+import { ChannelTruthSection } from '../_canonical/channel-truth'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { SpendImporter } from '@/components/intel/spend-importer'
 import { ReEngagementROIPanel } from '@/components/intel/ReEngagementROIPanel'
@@ -116,9 +125,6 @@ interface SourceRow {
   revenue: number
   cost_per_inquiry: number
   cost_per_tour: number
-  cost_per_booking: number
-  conversion_rate: number
-  roi: number
 }
 
 type SortKey = keyof SourceRow
@@ -439,10 +445,16 @@ function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTou
         set.add(e.source_platform)
         platformsByWedding.set(e.wedding_id, set)
       }
-      // Filter to BOOKED weddings so this matches what coordinators
-      // care about — "of the leads that became real customers, how
-      // multi-platform was their journey?" Need to fetch wedding
-      // statuses for the IDs.
+      // Filter to BOOKED couples so this matches what coordinators care
+      // about — "of the leads that became real customers, how
+      // multi-platform was their journey?"
+      //
+      // The booked test used to read weddings.status. It now reads the
+      // spine: couples.lifecycle_state, resolved back to a wedding id
+      // through source_wedding_id (which is how the attribution_events
+      // rows above are keyed). Same question, asked of the table that
+      // owns the answer. Merged-away couples are excluded so a deduped
+      // HoneyBook pair is not counted twice.
       const weddingIds = Array.from(platformsByWedding.keys())
       const bookedSet = new Set<string>()
       if (weddingIds.length > 0) {
@@ -450,12 +462,14 @@ function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTou
         for (let i = 0; i < weddingIds.length; i += CHUNK) {
           const chunk = weddingIds.slice(i, i + CHUNK)
           const { data } = await sb
-            .from('weddings')
-            .select('id, status')
-            .in('id', chunk)
-            .in('status', ['booked', 'completed'])
-          for (const w of ((data ?? []) as Array<{ id: string }>)) {
-            bookedSet.add(w.id)
+            .from('couples')
+            .select('source_wedding_id')
+            .eq('venue_id', venueId)
+            .in('source_wedding_id', chunk)
+            .in('lifecycle_state', ['booked', 'completed'])
+            .is('merged_into_id', null)
+          for (const c of ((data ?? []) as Array<{ source_wedding_id: string | null }>)) {
+            if (c.source_wedding_id) bookedSet.add(c.source_wedding_id)
           }
         }
       }
@@ -1649,9 +1663,11 @@ export default function SourceAttributionPage() {
         revenue: data.revenue,
         cost_per_inquiry: data.inquiries > 0 ? data.spend / data.inquiries : 0,
         cost_per_tour: data.tours_booked > 0 ? data.spend / data.tours_booked : 0,
-        cost_per_booking: data.bookings > 0 ? data.spend / data.bookings : 0,
-        conversion_rate: data.inquiries > 0 ? data.bookings / data.inquiries : 0,
-        roi: data.spend > 0 ? (data.revenue - data.spend) / data.spend : 0,
+        // conversion_rate, cost_per_booking and roi used to be derived
+        // here. They are gone on purpose: getSourceAttribution already
+        // answers all three, from the couple spine, with a sample size
+        // and a reporting floor attached. Two derivations of one number
+        // is how this page and /intel/attribution came to disagree.
       })
     }
 
@@ -1779,13 +1795,18 @@ export default function SourceAttributionPage() {
       }
     }
 
-    // Worst ROI source (among those with spend)
-    const withSpend = sourceRows.filter((r) => r.spend > 0)
-    if (withSpend.length > 1) {
-      const worst = [...withSpend].sort((a, b) => a.roi - b.roi)[0]
+    // Spend with nothing to show for it. This used to be a "lowest ROI"
+    // item computed from a page-local roi field; the return-on-spend
+    // question now belongs to the canonical Channel truth panel, which
+    // answers it as revenue per dollar with a sample size. What is left
+    // here is the part the canonical reader does not cover: money going
+    // out of a channel that has produced no booking at all.
+    const spendNoBookings = sourceRows.filter((r) => r.spend > 0 && r.bookings === 0)
+    if (spendNoBookings.length > 0) {
+      const worst = [...spendNoBookings].sort((a, b) => b.spend - a.spend)[0]
       items.push({
         icon: 'trend_down',
-        text: `${worst.source_name} has the lowest ROI at ${worst.roi >= 0 ? '+' : ''}${(worst.roi * 100).toFixed(0)}% — consider reallocating spend`,
+        text: `${worst.source_name} has taken ${fmt$(worst.spend)} of spend and produced no booking yet — check revenue per dollar in Channel truth before reallocating`,
         priority: 'medium',
       })
     }
@@ -1894,6 +1915,36 @@ export default function SourceAttributionPage() {
           </Link>
         </div>
       </div>
+
+      {/* ---- Channel truth (canonical) ----
+           The authoritative answer to "which channel is working".
+           getSourceAttribution reads the couple spine, applies the model
+           selected above, and returns conversion / cost per booking /
+           revenue per dollar with a sample size on every cell.
+           /intel/attribution renders this exact component from this exact
+           endpoint, so the two pages cannot disagree. Everything below
+           this section is the operational funnel — volumes and spend the
+           reader does not carry. */}
+      <section className="bg-surface border border-border rounded-xl shadow-sm">
+        <div className="px-6 py-4 border-b border-border">
+          <h2 className="font-heading text-base font-semibold text-sage-900">
+            Channel truth
+          </h2>
+          <p className="text-xs text-sage-500 mt-0.5">
+            One reader, one answer. Shared with{' '}
+            <Link
+              href="/intel/attribution"
+              className="underline underline-offset-2 hover:text-sage-800"
+            >
+              the attribution audit view
+            </Link>
+            .
+          </p>
+        </div>
+        <div className="px-6 py-4">
+          <ChannelTruthSection model={model} />
+        </div>
+      </section>
 
       {/* ---- Spend importer — Phase 3 Task 33 ---- */}
       <SpendImporter onImported={() => window.location.reload()} />
@@ -2067,9 +2118,6 @@ export default function SourceAttributionPage() {
                     ['revenue', 'Revenue'],
                     ['cost_per_inquiry', 'Cost / Lead'],
                     ['cost_per_tour', 'Cost / Tour'],
-                    ['cost_per_booking', 'Cost / Booking'],
-                    ['conversion_rate', 'Conv. Rate'],
-                    ['roi', 'ROI'],
                   ] as [SortKey, string][]).map(([key, label]) => (
                     <th
                       key={key}
@@ -2162,17 +2210,10 @@ export default function SourceAttributionPage() {
                     <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">{fmt$(row.revenue)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_inquiry)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{row.tours_booked > 0 ? fmt$(costPerTour) : '—'}</td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_booking)}</td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtPct(row.conversion_rate)}</td>
-                    <td className="px-4 py-3 tabular-nums">
-                      <span className={`font-semibold ${row.roi >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                        {row.roi > 0 ? '+' : ''}{fmtPct(row.roi)}
-                      </span>
-                    </td>
                   </tr>
                   {isExpanded && (
                     <tr className="bg-sage-50/30">
-                      <td colSpan={14} className="px-6 py-5">
+                      <td colSpan={11} className="px-6 py-5">
                         <div className="space-y-5">
                           {/* Funnel — relocated from the deleted "Funnel
                               by Source" section. Same 5-step visual,
@@ -2214,8 +2255,10 @@ export default function SourceAttributionPage() {
                             </div>
                             {row.inquiries > 0 && (
                               <div className="mt-2 text-xs text-sage-600">
-                                <span className="font-medium text-sage-900">{fmtPct(row.conversion_rate)}</span>{' '}
-                                inquiry-to-booking conversion
+                                <span className="text-sage-500">
+                                  Inquiry-to-booking conversion lives in Channel truth at the
+                                  top of this page, where it carries its sample size.
+                                </span>
                                 {row.tours_booked > 0 && (
                                   <>
                                     {' · '}
@@ -2238,43 +2281,36 @@ export default function SourceAttributionPage() {
                             )}
                           </div>
 
-                          {/* Cost per booking math — relocated from the
-                              deleted bar chart. Show the explicit
-                              spend / bookings = $X calculation. */}
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          {/* Spend against this channel. The three
+                              return metrics that used to sit here
+                              (cost per booking, conversion rate, ROI)
+                              were computed from these funnel counts;
+                              getSourceAttribution computes the same
+                              three from the couple spine, with an n and
+                              a reporting floor. Keeping both meant the
+                              page argued with itself, so the derived
+                              trio now lives only in Channel truth. */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div className="bg-white border border-border rounded-lg p-3">
-                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">Cost per Booking</div>
-                              {row.bookings > 0 ? (
-                                <div className="text-sm text-sage-700">
-                                  <span className="font-semibold text-sage-900 tabular-nums">{fmt$(row.spend)}</span>
-                                  <span className="text-sage-500"> spend</span>
-                                  <span className="text-sage-400"> ÷ </span>
-                                  <span className="font-semibold text-sage-900 tabular-nums">{fmtCount(row.bookings)}</span>
-                                  <span className="text-sage-500"> booked</span>
-                                  <span className="text-sage-400"> = </span>
-                                  <span className="font-bold text-sage-900 tabular-nums">{fmt$(row.cost_per_booking)}</span>
-                                </div>
-                              ) : (
-                                <div className="text-sm text-sage-500">No bookings attributed yet — cost-per-booking unavailable.</div>
-                              )}
-                            </div>
-                            <div className="bg-white border border-border rounded-lg p-3">
-                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">Conversion Rate</div>
+                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">Spend and revenue on this channel</div>
                               <div className="text-sm text-sage-700">
-                                <span className="font-bold text-sage-900 tabular-nums">{fmtPct(row.conversion_rate)}</span>
-                                <span className="text-sage-500"> inquiries → booked</span>
+                                <span className="font-semibold text-sage-900 tabular-nums">{fmt$(row.spend)}</span>
+                                <span className="text-sage-500"> logged spend</span>
+                                <span className="text-sage-400"> · </span>
+                                <span className="font-semibold text-sage-900 tabular-nums">{fmt$(row.revenue)}</span>
+                                <span className="text-sage-500"> attributed revenue</span>
+                                <span className="text-sage-400"> · </span>
+                                <span className="font-semibold text-sage-900 tabular-nums">{fmtCount(row.bookings)}</span>
+                                <span className="text-sage-500"> booked</span>
                               </div>
                             </div>
                             <div className="bg-white border border-border rounded-lg p-3">
-                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">ROI</div>
-                              <div className="text-sm text-sage-700">
-                                <span className={`font-bold tabular-nums ${row.roi >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                  {row.roi > 0 ? '+' : ''}{fmtPct(row.roi)}
-                                </span>
-                                <span className="text-sage-500">
-                                  {' '}
-                                  ({fmt$(row.revenue)} revenue {row.spend > 0 ? `vs ${fmt$(row.spend)} spend` : '— no spend recorded'})
-                                </span>
+                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">Return on this channel</div>
+                              <div className="text-sm text-sage-600">
+                                Cost per booking, conversion and revenue per dollar are in
+                                Channel truth at the top of this page. They are read from
+                                the couple spine and withheld when the sample is too small,
+                                which is why they are not repeated here.
                               </div>
                             </div>
                           </div>

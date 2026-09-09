@@ -6,10 +6,36 @@
  * returns a typed CoupleListItem[] suitable for the verification UI.
  *
  * Step 2 of the cohort-action chain (BLOOM-TEST-QUESTIONS.md Q37). The
- * brain interprets intent; this executor runs the query against the
- * authoritative tables (weddings, engagement_events, interactions,
- * drafts, post_tour_sequence, people). NO LLM here — the executor must
- * be auditable + reproducible against the same inputs.
+ * brain interprets intent; this executor runs the query. NO LLM here —
+ * the executor must be auditable + reproducible against the same inputs.
+ *
+ * W2 spine migration (2026-09)
+ * ----------------------------
+ * This ran entirely off the legacy stack: `weddings` for lifecycle and
+ * source, `people` for names, `interactions` for the no-reply anchor.
+ * Meanwhile the cohort module beside it (`data.ts`) had been reading the
+ * identity spine for months, so the same operator asking the same
+ * question through two doors got two answers.
+ *
+ * It now reads `couples` / `touchpoints` / `couple_progression_events` /
+ * `tours`, the same rows the canonical readers use, and follows
+ * `data.ts` as the pattern.
+ *
+ * Two things deliberately did NOT change, because callers depend on them:
+ *
+ *   1. `CoupleListItem.weddingId` is still a wedding id. The next step in
+ *      the chain (`bulkDraftFollowUps`) drafts against weddings, so the
+ *      executor resolves each spine couple back through
+ *      `couples.source_wedding_id` and skips couples that have no
+ *      mirrored wedding — they cannot be drafted to yet, and returning
+ *      them would put un-actionable rows on the verification UI.
+ *
+ *   2. The brain still speaks wedding-status vocabulary in its filters
+ *      ('lost', 'cancelled', 'inquiry', ...) because its prompt says so.
+ *      `matchesLifecycle` accepts BOTH vocabularies and maps between
+ *      them, so the brain's contract holds without a prompt change. If
+ *      the prompt is ever rewritten in spine vocabulary, the alias map
+ *      keeps working and can then be deleted.
  *
  * Doctrine fit: structured signals decide ([[bloom-classifier-
  * unification]]). Whatever the brain returns, this is the deterministic
@@ -17,8 +43,10 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { parseFlexibleEventDatetime } from '@/lib/services/event-time-flex'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CohortQuery } from '@/lib/services/brain/cohort-query'
+import { isOutbound } from './direction'
+import { isAcquisitionChannel } from '@/lib/services/attribution/couple-attribution'
 
 /**
  * One row on the verification UI. The operator looks at this list,
@@ -26,19 +54,24 @@ import type { CohortQuery } from '@/lib/services/brain/cohort-query'
  * back to `bulkDraftFollowUps`.
  */
 export interface CoupleListItem {
+  /** Legacy wedding id. Still a wedding id because the drafter needs one. */
   weddingId: string
-  /** "Anya Brown & Brian Jones" — empty string when no people row exists. */
+  /** "Anya Brown & Brian Jones" — from couples, not from people rows. */
   displayName: string
-  /** Lifecycle state (weddings.status). */
+  /** Lifecycle state. Now `couples.lifecycle_state` (spine vocabulary:
+   *  channel_scoped / resolved / booked / completed / ghost / agent). */
   lifecycleState: string | null
-  /** Source label (weddings.source). */
+  /** Derived first-touch channel: the earliest acquisition touchpoint on
+   *  the couple's ribbon. Not `weddings.source`, which is a stamped
+   *  field a later import can overwrite. Null when every touchpoint is
+   *  plumbing (gmail / sms / calendly / honeybook). */
   source: string | null
-  /** The datetime the anchor event resolved to — tour completion time
-   *  for tour anchors, inquiry timestamp for inquiry_received, etc. ISO. */
+  /** The datetime the anchor event resolved to — tour time for tour
+   *  anchors, first-touchpoint time for inquiry_received, etc. ISO. */
   anchorAt: string | null
   /** Human display string for the anchor — e.g. "Toured Sat May 24 1:15 PM". */
   anchorLabel: string
-  /** Wedding's own date if known (weddings.wedding_date). */
+  /** Wedding date if known (couples.wedding_date). */
   weddingDate: string | null
   /** Last time we (the venue) sent a FOLLOW-UP draft to this couple.
    *  Distinct from "last time we replied to their inquiry" — the
@@ -50,13 +83,81 @@ export interface CoupleListItem {
   inPostTourSequence: boolean
 }
 
-interface RawWedding {
+// ---------------------------------------------------------------------------
+// Spine row shapes
+// ---------------------------------------------------------------------------
+
+interface SpineCouple {
   id: string
-  status: string | null
-  source: string | null
-  inquiry_date: string | null
-  booked_at: string | null
+  source_wedding_id: string | null
+  primary_contact_name: string | null
+  partner_contact_name: string | null
+  lifecycle_state: string | null
   wedding_date: string | null
+}
+
+interface SpineTouchpoint {
+  couple_id: string | null
+  channel: string
+  action_type: string
+  occurred_at: string
+  raw_payload: Record<string, unknown> | null
+  /** Present on the row but unused by direction(); typed so the shared
+   *  isOutbound helper accepts it. */
+  id: string
+  signal_tier: string
+  confidence_tier: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle vocabulary
+// ---------------------------------------------------------------------------
+
+/** Legacy `weddings.status` value → the spine lifecycle state it means.
+ *  The brain's prompt is written in the left-hand vocabulary. */
+const LEGACY_STATUS_TO_SPINE: Record<string, string[]> = {
+  inquiry: ['channel_scoped', 'resolved'],
+  tour_scheduled: ['resolved'],
+  tour_completed: ['resolved'],
+  proposal_sent: ['resolved'],
+  contracted: ['booked'],
+  booked: ['booked'],
+  completed: ['completed'],
+  lost: ['ghost'],
+  cancelled: ['ghost'],
+}
+
+/** True when a spine lifecycle state satisfies one of the filter terms,
+ *  in either vocabulary. An unrecognised term matches nothing, which is
+ *  the safe direction for an exclude list and the safe direction for an
+ *  include list too (an include list of nonsense returns nobody rather
+ *  than everybody). */
+function matchesLifecycle(spineState: string | null, terms: string[]): boolean {
+  if (!spineState) return false
+  const state = spineState.toLowerCase()
+  for (const raw of terms) {
+    const term = raw.toLowerCase()
+    if (term === state) return true
+    if (LEGACY_STATUS_TO_SPINE[term]?.includes(state)) return true
+  }
+  return false
+}
+
+/** Channel aliases so a brain filter of 'the_knot' still matches a spine
+ *  touchpoint on channel 'knot'. */
+const CHANNEL_ALIASES: Record<string, string> = {
+  the_knot: 'knot',
+  knot: 'knot',
+  wedding_wire: 'weddingwire',
+  weddingwire: 'weddingwire',
+  venue_calculator: 'website',
+  website: 'website',
+}
+
+function normaliseChannel(raw: string | null): string | null {
+  if (!raw) return null
+  const c = raw.toLowerCase()
+  return CHANNEL_ALIASES[c] ?? c
 }
 
 // ---------------------------------------------------------------------------
@@ -70,9 +171,7 @@ function withinWindow(
   if (!win) return true
   if (!dt) return false
   const ms = dt.getTime()
-  return (
-    ms >= Date.parse(win.fromIso) && ms <= Date.parse(win.toIso)
-  )
+  return ms >= Date.parse(win.fromIso) && ms <= Date.parse(win.toIso)
 }
 
 function buildWindowIso(
@@ -113,6 +212,11 @@ function formatAnchorLabel(anchor: string, dt: Date | null): string {
   }
 }
 
+function coupleName(primary: string | null, partner: string | null): string {
+  if (primary && partner) return `${primary} & ${partner}`
+  return primary ?? partner ?? '(no name)'
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -123,6 +227,8 @@ export interface ExecuteCohortQueryOptions {
   /** Cap on the number of couples returned. The verification UI gets
    *  unwieldy past a couple dozen. */
   limit?: number
+  /** Injectable client, for tests. Defaults to the service client. */
+  supabase?: SupabaseClient
 }
 
 export interface CohortExecutionResult {
@@ -139,238 +245,280 @@ export async function executeCohortQuery(
 ): Promise<CohortExecutionResult> {
   const { query, venueId } = options
   const limit = Math.max(1, Math.min(options.limit ?? 50, 200))
-  const sb = createServiceClient()
+  const sb = options.supabase ?? createServiceClient()
   const windowIso = buildWindowIso(query.time_window)
 
-  // 1. Resolve wedding_ids that match the anchor + window.
-  const weddingIds = await resolveAnchorWeddings(sb, venueId, query, windowIso)
-  if (weddingIds.size === 0) {
-    return { couples: [], totalMatched: 0, query }
-  }
-
-  // 2. Pull weddings for lifecycle + source filtering + display.
-  const idArray = [...weddingIds.keys()]
-  const { data: weddings } = await sb
-    .from('weddings')
-    .select('id, status, source, inquiry_date, booked_at, wedding_date')
+  // 1. The venue's live couples. Merged-away couples are tombstones
+  //    (migration 379) and never appear on an action list.
+  const { data: coupleData } = await sb
+    .from('couples')
+    .select(
+      'id, source_wedding_id, primary_contact_name, partner_contact_name, lifecycle_state, wedding_date',
+    )
     .eq('venue_id', venueId)
-    .in('id', idArray)
-  const weddingsById = new Map<string, RawWedding>()
-  for (const w of (weddings ?? []) as RawWedding[]) {
-    weddingsById.set(w.id, w)
+    .is('merged_into_id', null)
+    .limit(5000)
+  const couples = (coupleData ?? []) as SpineCouple[]
+  if (couples.length === 0) return { couples: [], totalMatched: 0, query }
+
+  const byCoupleId = new Map(couples.map((c) => [c.id, c]))
+
+  // 2. The full touchpoint stream for the venue, indexed per couple in
+  //    occurred_at order. Every anchor except estimate_submitted is
+  //    answerable from this plus tours and progression events.
+  const { data: tpData } = await sb
+    .from('touchpoints')
+    .select(
+      'id, couple_id, channel, action_type, occurred_at, signal_tier, confidence_tier, raw_payload',
+    )
+    .eq('venue_id', venueId)
+    .not('couple_id', 'is', null)
+    .order('occurred_at', { ascending: true })
+    .limit(50000)
+  const tpByCouple = new Map<string, SpineTouchpoint[]>()
+  for (const t of (tpData ?? []) as SpineTouchpoint[]) {
+    if (!t.couple_id || !byCoupleId.has(t.couple_id)) continue
+    const arr = tpByCouple.get(t.couple_id)
+    if (arr) arr.push(t)
+    else tpByCouple.set(t.couple_id, [t])
   }
 
-  // 3. Apply lifecycle + source filters.
-  const passes = (w: RawWedding | undefined): boolean => {
-    if (!w) return false
-    const state = (w.status ?? '').toLowerCase()
-    if (
-      query.include_lifecycle_states.length > 0 &&
-      !query.include_lifecycle_states.includes(state)
-    ) {
+  // 3. Anchor resolution → Map<couple_id, anchorIso>.
+  const anchorByCouple = await resolveAnchorCouples(
+    sb,
+    venueId,
+    query,
+    windowIso,
+    couples,
+    tpByCouple,
+  )
+  if (anchorByCouple.size === 0) return { couples: [], totalMatched: 0, query }
+
+  // 4. Lifecycle + source filters, in spine terms.
+  const passes = (c: SpineCouple): boolean => {
+    if (query.include_lifecycle_states.length > 0) {
+      if (!matchesLifecycle(c.lifecycle_state, query.include_lifecycle_states)) {
+        return false
+      }
+    } else if (matchesLifecycle(c.lifecycle_state, query.exclude_lifecycle_states)) {
       return false
     }
-    if (
-      query.include_lifecycle_states.length === 0 &&
-      query.exclude_lifecycle_states.includes(state)
-    ) {
-      return false
-    }
-    if (
-      query.source_filter.length > 0 &&
-      (!w.source || !query.source_filter.includes(w.source.toLowerCase()))
-    ) {
-      return false
+    if (query.source_filter.length > 0) {
+      const derived = normaliseChannel(firstTouchChannel(tpByCouple.get(c.id) ?? []))
+      if (!derived) return false
+      const wanted = query.source_filter
+        .map((s) => normaliseChannel(s))
+        .filter((s): s is string => s !== null)
+      if (!wanted.includes(derived)) return false
     }
     return true
   }
-  const filteredIds = idArray.filter((id) => passes(weddingsById.get(id)))
-  const totalMatched = filteredIds.length
-  const visibleIds = filteredIds.slice(0, limit)
 
-  if (visibleIds.length === 0) {
-    return { couples: [], totalMatched, query }
+  const matched: Array<{ couple: SpineCouple; anchorAt: string }> = []
+  for (const [coupleId, anchorAt] of anchorByCouple) {
+    const c = byCoupleId.get(coupleId)
+    if (!c) continue
+    // No mirrored wedding means the drafter has nothing to draft against.
+    // Dropping the row is honest; showing an un-actionable one is not.
+    if (!c.source_wedding_id) continue
+    if (!passes(c)) continue
+    matched.push({ couple: c, anchorAt })
   }
 
-  // 4. Pull display names from people.
-  const { data: people } = await sb
-    .from('people')
-    .select('wedding_id, first_name, last_name')
-    .in('wedding_id', visibleIds)
-  const namesByWedding = new Map<string, string[]>()
-  for (const p of people ?? []) {
-    const arr = namesByWedding.get(p.wedding_id as string) ?? []
-    const name = `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim()
-    if (name) arr.push(name)
-    namesByWedding.set(p.wedding_id as string, arr)
-  }
+  const totalMatched = matched.length
+  // Most recent anchor first, then truncate — so the limit keeps the
+  // rows an operator most likely wants rather than an arbitrary slice.
+  matched.sort((a, b) => b.anchorAt.localeCompare(a.anchorAt))
+  const visible = matched.slice(0, limit)
+  if (visible.length === 0) return { couples: [], totalMatched, query }
+
+  const visibleWeddingIds = visible.map((m) => m.couple.source_wedding_id as string)
 
   // 5. Per-couple state checks: prior follow-up + in-flight post-tour
-  //    sequence. The bulk-drafter reads these to decide skip vs draft;
-  //    surfacing them on the verification UI lets the operator see the
-  //    decision tree BEFORE confirming.
-  const fourteenDaysAgoIso = new Date(
-    Date.now() - 14 * 24 * 60 * 60 * 1000,
-  ).toISOString()
-  const { data: priorDrafts } = await sb
-    .from('drafts')
-    .select('wedding_id, sent_at, follow_up_step')
-    .in('wedding_id', visibleIds)
-    .eq('status', 'sent')
-    .not('follow_up_step', 'is', null)
-    .gte('sent_at', fourteenDaysAgoIso)
+  //    sequence. Both are drafter state, keyed on wedding_id, and have
+  //    no spine equivalent — the drafter itself is still wedding-keyed.
+  //    Surfacing them lets the operator see the decision tree BEFORE
+  //    confirming.
+  const fourteenDaysAgoIso = new Date(Date.now() - 14 * 86_400_000).toISOString()
+  const [draftsRes, seqRes] = await Promise.all([
+    sb
+      .from('drafts')
+      .select('wedding_id, sent_at, follow_up_step')
+      .in('wedding_id', visibleWeddingIds)
+      .eq('status', 'sent')
+      .not('follow_up_step', 'is', null)
+      .gte('sent_at', fourteenDaysAgoIso),
+    sb
+      .from('post_tour_sequence')
+      .select('wedding_id, paused_at, sequence_completed_at')
+      .in('wedding_id', visibleWeddingIds),
+  ])
+
   const priorFollowUpByWedding = new Map<string, string>()
-  for (const d of priorDrafts ?? []) {
+  for (const d of draftsRes.data ?? []) {
     const wid = d.wedding_id as string
     const sentAt = (d.sent_at as string) ?? null
     if (!sentAt) continue
     const existing = priorFollowUpByWedding.get(wid)
     if (!existing || sentAt > existing) priorFollowUpByWedding.set(wid, sentAt)
   }
-  // post_tour_sequence (mig 376) tracks the in-flight 3-email sequence
-  // per tour. The sequence is "active" when the row exists AND neither
-  // `paused_at` nor `sequence_completed_at` is set — the proactive cron
-  // is still going to send another email; the operator-initiated path
-  // should defer.
-  const { data: sequences } = await sb
-    .from('post_tour_sequence')
-    .select('wedding_id, paused_at, sequence_completed_at')
-    .in('wedding_id', visibleIds)
+
   const inSeqWeddings = new Set<string>()
-  for (const row of sequences ?? []) {
+  for (const row of seqRes.data ?? []) {
     if (!row.paused_at && !row.sequence_completed_at) {
       inSeqWeddings.add(row.wedding_id as string)
     }
   }
 
   // 6. Assemble CoupleListItem rows.
-  const couples: CoupleListItem[] = visibleIds.map((id) => {
-    const w = weddingsById.get(id)!
-    const anchorAt = weddingIds.get(id) ?? null
+  const out: CoupleListItem[] = visible.map(({ couple: c, anchorAt }) => {
+    const weddingId = c.source_wedding_id as string
     const anchorDt = anchorAt ? new Date(anchorAt) : null
-    const names = namesByWedding.get(id) ?? []
     return {
-      weddingId: id,
-      displayName: names.length > 0 ? names.join(' & ') : '(no name)',
-      lifecycleState: w.status ?? null,
-      source: w.source ?? null,
+      weddingId,
+      displayName: coupleName(c.primary_contact_name, c.partner_contact_name),
+      lifecycleState: c.lifecycle_state ?? null,
+      source: firstTouchChannel(tpByCouple.get(c.id) ?? []),
       anchorAt,
       anchorLabel: formatAnchorLabel(query.anchor, anchorDt),
-      weddingDate: w.wedding_date ?? null,
-      priorFollowUpAt: priorFollowUpByWedding.get(id) ?? null,
-      inPostTourSequence: inSeqWeddings.has(id),
+      weddingDate: c.wedding_date ?? null,
+      priorFollowUpAt: priorFollowUpByWedding.get(weddingId) ?? null,
+      inPostTourSequence: inSeqWeddings.has(weddingId),
     }
   })
 
-  // Stable display ordering — most recent anchor first.
-  couples.sort((a, b) => {
-    if (!a.anchorAt && !b.anchorAt) return 0
-    if (!a.anchorAt) return 1
-    if (!b.anchorAt) return -1
-    return b.anchorAt.localeCompare(a.anchorAt)
-  })
-
-  return { couples, totalMatched, query }
+  return { couples: out, totalMatched, query }
 }
 
 // ---------------------------------------------------------------------------
-// Anchor → wedding_id resolution
+// Derived first touch
 // ---------------------------------------------------------------------------
 
+/** The earliest acquisition (non-plumbing) channel on the ribbon. The
+ *  touchpoint list arrives occurred_at-ascending, so the first match
+ *  wins. Null when the couple only ever appeared through plumbing —
+ *  honest, rather than crediting gmail with the acquisition. */
+function firstTouchChannel(tps: SpineTouchpoint[]): string | null {
+  for (const t of tps) {
+    if (isOutbound(t)) continue
+    if (isAcquisitionChannel(t.channel)) return t.channel
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Anchor → couple resolution
+// ---------------------------------------------------------------------------
+
+interface TourRow {
+  wedding_id: string | null
+  scheduled_at: string | null
+  outcome: string | null
+}
+
+const DEAD_TOUR_OUTCOMES = new Set(['cancelled', 'no_show'])
+
 /**
- * Map an anchor + window to a Map<wedding_id, anchorIso>. The anchorIso
- * value is what we display + sort on. Each anchor has its own resolution
- * because they live in different tables.
+ * Map an anchor + window to a Map<couple_id, anchorIso>. The anchorIso
+ * value is what we display and sort on.
  */
-async function resolveAnchorWeddings(
-  sb: ReturnType<typeof createServiceClient>,
+async function resolveAnchorCouples(
+  sb: SupabaseClient,
   venueId: string,
   query: CohortQuery,
   windowIso: { fromIso: string; toIso: string } | null,
+  couples: SpineCouple[],
+  tpByCouple: Map<string, SpineTouchpoint[]>,
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>()
+  const coupleByWedding = new Map<string, SpineCouple>()
+  for (const c of couples) {
+    if (c.source_wedding_id) coupleByWedding.set(c.source_wedding_id, c)
+  }
 
   switch (query.anchor) {
     case 'tour_completed':
     case 'tour_scheduled': {
-      // Both tour anchors are stored on engagement_events.event_type with
-      // the actual tour datetime on metadata.event_datetime (raw scheduling-
-      // tool string) OR occurred_at (for tour_completed promoted by
-      // chooseEventTime). We pull a broader set and filter in-memory by
-      // window because metadata.event_datetime is jsonb text in any of
-      // four formats (parseFlexibleEventDatetime handles them).
-      const targetTypes =
-        query.anchor === 'tour_completed'
-          ? ['tour_completed', 'tour_scheduled']
-          : ['tour_scheduled']
-      const { data: events } = await sb
-        .from('engagement_events')
-        .select('wedding_id, event_type, metadata, occurred_at')
+      // `tours` is where the real scheduled_at lives, and it is the same
+      // table getDailyList reads for "tours this week". It has no
+      // couple_id column, so it joins through couples.source_wedding_id.
+      const { data } = await sb
+        .from('tours')
+        .select('wedding_id, scheduled_at, outcome')
         .eq('venue_id', venueId)
-        .in('event_type', targetTypes)
+        .limit(5000)
       const now = Date.now()
-      for (const e of events ?? []) {
-        const wid = e.wedding_id as string | null
-        if (!wid) continue
-        const meta = (e.metadata ?? {}) as Record<string, unknown>
-        const rawDt =
-          (typeof meta.event_datetime === 'string' && meta.event_datetime) ||
-          (e.occurred_at as string | null) ||
-          null
-        const parsed = parseFlexibleEventDatetime(rawDt)
-        if (!parsed) continue
-        // Tour_completed: include events that already fired as completed
-        // AND tour_scheduled events whose eventDatetime is in the past
-        // (the lifecycle cron hasn't promoted them yet but the tour
-        // happened).
+      for (const t of (data ?? []) as TourRow[]) {
+        if (!t.wedding_id || !t.scheduled_at) continue
+        if (t.outcome && DEAD_TOUR_OUTCOMES.has(t.outcome)) continue
+        const couple = coupleByWedding.get(t.wedding_id)
+        if (!couple) continue
+        const dt = new Date(t.scheduled_at)
+        if (Number.isNaN(dt.getTime())) continue
         if (query.anchor === 'tour_completed') {
-          if (e.event_type !== 'tour_completed' && parsed.getTime() > now) {
-            continue
-          }
-        } else {
-          // tour_scheduled: only future scheduled tours.
-          if (parsed.getTime() <= now) continue
+          // Held, or scheduled for a time that has now passed. The
+          // lifecycle cron may not have stamped an outcome yet; the
+          // clock is the more reliable signal.
+          const held = t.outcome === 'completed' || t.outcome === 'attended'
+          if (!held && dt.getTime() > now) continue
+        } else if (dt.getTime() <= now) {
+          continue // tour_scheduled means still ahead of us
         }
-        if (!withinWindow(parsed, windowIso)) continue
-        const iso = parsed.toISOString()
-        const existing = out.get(wid)
-        // Most recent anchor wins per wedding (a couple might have
-        // multiple tour events; show the latest).
-        if (!existing || iso > existing) out.set(wid, iso)
+        if (!withinWindow(dt, windowIso)) continue
+        const iso = dt.toISOString()
+        const existing = out.get(couple.id)
+        if (!existing || iso > existing) out.set(couple.id, iso)
       }
       break
     }
+
     case 'inquiry_received': {
-      let q = sb
-        .from('weddings')
-        .select('id, inquiry_date')
-        .eq('venue_id', venueId)
-        .not('inquiry_date', 'is', null)
-      if (windowIso) {
-        q = q.gte('inquiry_date', windowIso.fromIso).lte('inquiry_date', windowIso.toIso)
-      }
-      const { data } = await q
-      for (const w of data ?? []) {
-        out.set(w.id as string, w.inquiry_date as string)
+      // The couple's first inbound touchpoint. This is when they
+      // actually reached out, as opposed to weddings.inquiry_date, which
+      // a CSV re-import can restamp.
+      for (const c of couples) {
+        const tps = tpByCouple.get(c.id) ?? []
+        const first = tps.find((t) => !isOutbound(t))
+        if (!first) continue
+        const dt = new Date(first.occurred_at)
+        if (Number.isNaN(dt.getTime())) continue
+        if (!withinWindow(dt, windowIso)) continue
+        out.set(c.id, dt.toISOString())
       }
       break
     }
+
     case 'booked': {
-      let q = sb
-        .from('weddings')
-        .select('id, booked_at')
-        .eq('venue_id', venueId)
-        .not('booked_at', 'is', null)
-      if (windowIso) {
-        q = q.gte('booked_at', windowIso.fromIso).lte('booked_at', windowIso.toIso)
-      }
-      const { data } = await q
-      for (const w of data ?? []) {
-        out.set(w.id as string, w.booked_at as string)
+      // The signing event on the progression log, which is inbound-only
+      // by doctrine and therefore records the couple's own act rather
+      // than an operator's status edit.
+      const coupleIds = couples.map((c) => c.id)
+      const CHUNK = 300
+      for (let i = 0; i < coupleIds.length; i += CHUNK) {
+        const slice = coupleIds.slice(i, i + CHUNK)
+        const { data } = await sb
+          .from('couple_progression_events')
+          .select('couple_id, occurred_at, event_type')
+          .in('couple_id', slice)
+          .eq('event_type', 'contract_signed')
+        for (const e of data ?? []) {
+          const cid = e.couple_id as string
+          const occurredAt = (e.occurred_at as string) ?? null
+          if (!occurredAt) continue
+          if (!withinWindow(new Date(occurredAt), windowIso)) continue
+          const existing = out.get(cid)
+          if (!existing || occurredAt > existing) out.set(cid, occurredAt)
+        }
       }
       break
     }
+
     case 'estimate_submitted': {
+      // Calculator submissions still land on engagement_events; the
+      // spine has no equivalent action type yet. Kept as-is rather than
+      // guessed at, and resolved back through the wedding mirror. When
+      // the calculator writes touchpoints this branch folds into the
+      // touchpoint scan above.
       let q = sb
         .from('engagement_events')
         .select('wedding_id, occurred_at')
@@ -382,58 +530,38 @@ async function resolveAnchorWeddings(
       const { data } = await q
       for (const e of data ?? []) {
         const wid = e.wedding_id as string | null
-        if (!wid) continue
         const occurredAt = (e.occurred_at as string | null) ?? null
-        if (!occurredAt) continue
-        const existing = out.get(wid)
-        if (!existing || occurredAt > existing) out.set(wid, occurredAt)
+        if (!wid || !occurredAt) continue
+        const couple = coupleByWedding.get(wid)
+        if (!couple) continue
+        const existing = out.get(couple.id)
+        if (!existing || occurredAt > existing) out.set(couple.id, occurredAt)
       }
       break
     }
+
     case 'no_reply': {
-      // Couples with an inbound in the window AND no operator-authored
-      // outbound after that inbound. Pulled as: inbound interactions in
-      // window → group by wedding_id → check for a later outbound.
-      let inboundQ = sb
-        .from('interactions')
-        .select('wedding_id, timestamp')
-        .eq('venue_id', venueId)
-        .eq('direction', 'inbound')
-        .not('wedding_id', 'is', null)
-      if (windowIso) {
-        inboundQ = inboundQ
-          .gte('timestamp', windowIso.fromIso)
-          .lte('timestamp', windowIso.toIso)
-      }
-      const { data: inbounds } = await inboundQ
-      const latestInbound = new Map<string, string>()
-      for (const r of inbounds ?? []) {
-        const wid = r.wedding_id as string
-        const ts = r.timestamp as string
-        const existing = latestInbound.get(wid)
-        if (!existing || ts > existing) latestInbound.set(wid, ts)
-      }
-      if (latestInbound.size === 0) break
-      const wIds = [...latestInbound.keys()]
-      const { data: outs } = await sb
-        .from('interactions')
-        .select('wedding_id, timestamp, author_class')
-        .eq('venue_id', venueId)
-        .eq('direction', 'outbound')
-        .in('wedding_id', wIds)
-        .in('author_class', ['operator', 'sage', 'unknown'])
-      const latestOut = new Map<string, string>()
-      for (const r of outs ?? []) {
-        const wid = r.wedding_id as string
-        const ts = r.timestamp as string
-        const existing = latestOut.get(wid)
-        if (!existing || ts > existing) latestOut.set(wid, ts)
-      }
-      for (const [wid, inboundTs] of latestInbound) {
-        const outTs = latestOut.get(wid)
-        if (!outTs || outTs < inboundTs) {
-          out.set(wid, inboundTs)
+      // Couples whose latest inbound touchpoint has no venue-originated
+      // touchpoint after it. Direction is derived by the shared
+      // `isOutbound` helper — touchpoints have no direction column and
+      // this is the one place the rule lives.
+      for (const c of couples) {
+        const tps = tpByCouple.get(c.id) ?? []
+        let latestInbound: string | null = null
+        let latestOutbound: string | null = null
+        for (const t of tps) {
+          if (isOutbound(t)) {
+            if (!latestOutbound || t.occurred_at > latestOutbound) {
+              latestOutbound = t.occurred_at
+            }
+          } else if (!latestInbound || t.occurred_at > latestInbound) {
+            latestInbound = t.occurred_at
+          }
         }
+        if (!latestInbound) continue
+        if (latestOutbound && latestOutbound >= latestInbound) continue
+        if (!withinWindow(new Date(latestInbound), windowIso)) continue
+        out.set(c.id, latestInbound)
       }
       break
     }

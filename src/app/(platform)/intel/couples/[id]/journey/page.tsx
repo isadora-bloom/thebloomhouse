@@ -12,102 +12,31 @@
  *  - Operator deep-review when investigating a specific couple
  *  - Embedding via iframe in coordinator daily briefings
  *
- * Reads the same data the embedded ribbon reads: couples row, all
- * touchpoints for the couple, all couple_progression_events as anchors.
+ * W2 canonical wiring: this page used to repeat the couple-detail page's
+ * three-query load by hand, so the two routes could and did drift about
+ * which touchpoints belonged to a couple. Both now call
+ * getCoupleJourney through the same hook, so the ribbon here and the
+ * ribbon there are the same rows in the same order.
  */
 
-import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { ArrowLeft, Loader2, AlertCircle } from 'lucide-react'
-import {
-  JourneyRibbon,
-  type JourneyTouchpoint,
-  type JourneyAnchor,
-} from '@/components/identity/JourneyRibbon'
+import { JourneyRibbon } from '@/components/identity/JourneyRibbon'
 import { JourneyActionChip } from '@/components/identity/JourneyActionChip'
-
-interface CoupleRow {
-  id: string
-  primary_contact_name: string | null
-  primary_contact_email: string | null
-  lifecycle_state: string
-  wedding_date: string | null
-  heat_score: number | null
-}
+import { WhyThisCard } from '@/components/ui/why-this-card'
+import { useCoupleJourney } from '../../../_canonical/use-journey'
 
 export default function JourneyStandalonePage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
   const coupleId = params?.id ?? null
 
-  const supabase = useMemo(() => createClient(), [])
-  const [couple, setCouple] = useState<CoupleRow | null>(null)
-  const [touchpoints, setTouchpoints] = useState<JourneyTouchpoint[]>([])
-  const [anchors, setAnchors] = useState<JourneyAnchor[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!coupleId) return
-    let cancelled = false
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const [coupleResp, tpsResp, progsResp] = await Promise.all([
-          supabase
-            .from('couples')
-            .select(
-              'id, primary_contact_name, primary_contact_email, lifecycle_state, wedding_date, heat_score',
-            )
-            .eq('id', coupleId)
-            .maybeSingle(),
-          supabase
-            .from('touchpoints')
-            .select(
-              'id, channel, signal_tier, action_type, occurred_at, confidence_tier, raw_payload',
-            )
-            .eq('couple_id', coupleId)
-            .order('occurred_at', { ascending: true })
-            .limit(1000),
-          supabase
-            .from('couple_progression_events')
-            .select('event_type, occurred_at')
-            .eq('couple_id', coupleId)
-            .order('occurred_at', { ascending: true }),
-        ])
-        if (cancelled) return
-        if (coupleResp.error || !coupleResp.data) {
-          setError(coupleResp.error?.message ?? 'Couple not found')
-          return
-        }
-        setCouple(coupleResp.data as CoupleRow)
-        setTouchpoints((tpsResp.data ?? []) as JourneyTouchpoint[])
-        setAnchors(
-          ((progsResp.data ?? []) as Array<{
-            event_type: string
-            occurred_at: string
-          }>).map((p, i) => ({
-            id: `${p.event_type}-${i}`,
-            occurred_at: p.occurred_at,
-            event_type: p.event_type,
-          })),
-        )
-      } catch (err) {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [coupleId, supabase])
+  const { journey, contact, heat, touchpoints, anchors, loading, error } =
+    useCoupleJourney(coupleId)
 
   if (!coupleId) return null
+
+  const couple = journey?.couple ?? null
 
   return (
     <div className="mx-auto max-w-6xl p-8">
@@ -143,12 +72,12 @@ export default function JourneyStandalonePage() {
         <div className="space-y-6">
           <div>
             <h1 className="font-serif text-3xl text-stone-900">
-              {couple.primary_contact_name ?? '(no name)'}
+              {couple.names ?? '(no name)'}
             </h1>
             <p className="mt-1 text-sm text-stone-600">
-              {couple.lifecycle_state}
-              {couple.wedding_date ? ` · ${couple.wedding_date}` : ''}
-              {couple.heat_score !== null ? ` · heat ${couple.heat_score}` : ''}
+              {couple.lifecycle ?? 'unknown'}
+              {contact?.wedding_date ? ` · ${contact.wedding_date}` : ''}
+              {heat ? ` · heat ${heat.displayScore} (${heat.label})` : ''}
               {touchpoints.length > 0 ? ` · ${touchpoints.length} touchpoints` : ''}
               {anchors.length > 0 ? ` · ${anchors.length} progression events` : ''}
             </p>
@@ -157,12 +86,12 @@ export default function JourneyStandalonePage() {
           {touchpoints.length > 0 && (
             <JourneyActionChip
               input={{
-                lifecycle_state: couple.lifecycle_state,
+                lifecycle_state: couple.lifecycle ?? 'channel_scoped',
                 last_progression_at:
                   anchors.length > 0
                     ? anchors[anchors.length - 1]!.occurred_at
                     : touchpoints[touchpoints.length - 1]!.occurred_at,
-                wedding_date: couple.wedding_date,
+                wedding_date: contact?.wedding_date ?? null,
               }}
             />
           )}
@@ -186,6 +115,29 @@ export default function JourneyStandalonePage() {
               />
             </div>
           </section>
+
+          {heat && heat.contributingCount > 0 && (
+            <section className="rounded-xl border border-stone-200 bg-white shadow-sm">
+              <div className="px-6 py-4">
+                <div className="flex flex-wrap items-baseline gap-3">
+                  <h2 className="text-base font-semibold text-stone-900">Heat</h2>
+                  <span className="text-2xl font-bold tabular-nums text-stone-900">
+                    {heat.displayScore}
+                  </span>
+                  <span className="rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-xs text-stone-600">
+                    {heat.label}
+                  </span>
+                </div>
+                <WhyThisCard
+                  title="Why this couple is at this temperature"
+                  reasoning={heat.reasoning}
+                  evidence={heat.evidence}
+                  source="computeHeatBreakdown (src/lib/services/identity/heat-score.ts)"
+                  defaultOpen
+                />
+              </div>
+            </section>
+          )}
         </div>
       )}
     </div>

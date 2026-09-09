@@ -32,7 +32,6 @@ import {
   Phone,
   Calendar,
   AlertTriangle,
-  Sparkles,
   Inbox,
   HelpCircle,
   Scissors,
@@ -44,6 +43,16 @@ import { JourneyActionChip } from '@/components/identity/JourneyActionChip'
 import { UnmergeModal } from '@/components/identity/UnmergeModal'
 import { ResurrectionBanner } from '@/components/identity/ResurrectionBanner'
 import { humanActionLabel } from '@/lib/services/identity/action-labels'
+import { WhyThisCard } from '@/components/ui/why-this-card'
+// W2 canonical wiring. The couple, the ribbon, the progression anchors,
+// the look-alike cohort and the forensic profile all now arrive from
+// getCoupleJourney through /api/intel/canonical/journey. The page used
+// to assemble them itself from three queries, one of which asked
+// couple_identity_profile for couple_id — a column that table does not
+// have (it is keyed on wedding_id, migration 260), so the request
+// returned 400 and the profile card silently never rendered.
+import { useCoupleJourney } from '../../_canonical/use-journey'
+import { IdentityProfileCard } from '../../_canonical/identity-profile-card'
 
 type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
 
@@ -60,19 +69,6 @@ interface CoupleDetail {
   wedding_date: string | null
   source_wedding_id: string | null
   last_progression_at: string | null
-  updated_at: string
-  created_at: string
-}
-
-interface Touchpoint {
-  id: string
-  channel: string
-  signal_tier: string
-  action_type: string
-  external_id: string
-  occurred_at: string
-  raw_payload: Record<string, unknown> | null
-  confidence_tier: string | null
 }
 
 interface CandidateMatch {
@@ -94,21 +90,6 @@ interface Fragment {
   external_id: string
   occurred_at: string
   raw_payload: Record<string, unknown> | null
-}
-
-interface IdentityProfile {
-  couple_id: string
-  primary_first_name: string | null
-  primary_last_name: string | null
-  partner_first_name: string | null
-  partner_last_name: string | null
-  primary_occupation: string | null
-  partner_occupation: string | null
-  primary_city: string | null
-  primary_state: string | null
-  emotional_themes: string[] | null
-  family_dynamics_summary: string | null
-  updated_at: string
 }
 
 function channelLabel(channel: string): string {
@@ -152,81 +133,96 @@ export default function CoupleDetailPage() {
   const coupleId = String(params?.id ?? '')
   const supabase = useMemo(() => createClient(), [])
 
-  const [couple, setCouple] = useState<CoupleDetail | null>(null)
-  const [touchpoints, setTouchpoints] = useState<Touchpoint[]>([])
   const [candidates, setCandidates] = useState<CandidateMatch[]>([])
   const [fragments, setFragments] = useState<Fragment[]>([])
-  const [profile, setProfile] = useState<IdentityProfile | null>(null)
   // Operator-tracked custom fields (data-fields feature): value lives in
   // the wedding's raw_import_row, read through a tracked_data_fields def.
   const [trackedFields, setTrackedFields] = useState<
     Array<{ label: string; data_type: string; value: string }>
   >([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [showUnmerge, setShowUnmerge] = useState(false)
   // Most recent resurrection event with no later resurrection_rejected.
   const [resurrectedAt, setResurrectedAt] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
+  // The canonical read. Identity, ordered ribbon, progression anchors,
+  // look-alike cohort and forensic profile — one call, one reader.
+  const {
+    journey,
+    contact,
+    heat,
+    touchpoints,
+    loading: journeyLoading,
+    error: journeyError,
+  } = useCoupleJourney(coupleId || null, reloadKey)
+
+  // The rest of this page is the identity-review furniture: open
+  // candidate matches, the fragments behind them, the resurrection
+  // banner and the operator's tracked import columns. None of that is a
+  // number, none of it belongs to one of the six readers, and all of it
+  // stays a direct read.
+  const [sideLoading, setSideLoading] = useState(true)
+  const [sideError, setSideError] = useState<string | null>(null)
+
+  const couple: CoupleDetail | null =
+    journey?.couple && contact
+      ? {
+          id: journey.couple.id,
+          venue_id: contact.venue_id,
+          primary_contact_name: contact.primary_contact_name,
+          primary_contact_email: contact.primary_contact_email,
+          primary_contact_phone: contact.primary_contact_phone,
+          partner_contact_name: contact.partner_contact_name,
+          partner_contact_email: contact.partner_contact_email,
+          partner_contact_phone: contact.partner_contact_phone,
+          lifecycle_state: (journey.couple.lifecycle as LifecycleState | null) ?? null,
+          wedding_date: contact.wedding_date,
+          source_wedding_id: contact.source_wedding_id,
+          last_progression_at: contact.last_progression_at,
+        }
+      : null
+
+  const loading = journeyLoading || sideLoading
+  const error = journeyError ?? sideError
+
   useEffect(() => {
     if (!coupleId) return
     let cancelled = false
     const load = async () => {
-      setLoading(true)
-      setError(null)
-      // 1. Couple
+      setSideLoading(true)
+      setSideError(null)
+
       const { data: c, error: cErr } = await supabase
         .from('couples')
-        .select(
-          'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, partner_contact_email, partner_contact_phone, lifecycle_state, wedding_date, source_wedding_id, last_progression_at, updated_at, created_at',
-        )
+        .select('venue_id, source_wedding_id')
         .eq('id', coupleId)
         .maybeSingle()
       if (cancelled) return
-      if (cErr || !c) {
-        setError(cErr?.message ?? 'Couple not found')
-        setLoading(false)
+      if (cErr) {
+        setSideError(cErr.message)
+        setSideLoading(false)
         return
       }
-      setCouple(c as CoupleDetail)
 
-      // 2. Touchpoints + candidates + identity profile in parallel.
-      const [tpRes, candRes, profRes] = await Promise.all([
-        supabase
-          .from('touchpoints')
-          .select(
-            'id, channel, signal_tier, action_type, external_id, occurred_at, raw_payload, confidence_tier',
-          )
-          .eq('couple_id', coupleId)
-          .order('occurred_at', { ascending: true })
-          .limit(500),
-        supabase
-          .from('candidate_matches')
-          .select(
-            'id, primary_record_id, primary_record_type, secondary_record_id, secondary_record_type, confidence_tier, matcher_reason, resolution, created_at',
-          )
-          .or(`primary_record_id.eq.${coupleId},secondary_record_id.eq.${coupleId}`)
-          .is('resolution', null)
-          .order('created_at', { ascending: false })
-          .limit(50),
-        supabase
-          .from('couple_identity_profile')
-          .select('*')
-          .eq('couple_id', coupleId)
-          .maybeSingle(),
-      ])
+      const candRes = await supabase
+        .from('candidate_matches')
+        .select(
+          'id, primary_record_id, primary_record_type, secondary_record_id, secondary_record_type, confidence_tier, matcher_reason, resolution, created_at',
+        )
+        .or(`primary_record_id.eq.${coupleId},secondary_record_id.eq.${coupleId}`)
+        .is('resolution', null)
+        .order('created_at', { ascending: false })
+        .limit(50)
       if (cancelled) return
-
-      setTouchpoints(((tpRes.data ?? []) as Touchpoint[]))
       setCandidates(((candRes.data ?? []) as CandidateMatch[]))
-      const prof = profRes.data as IdentityProfile | null
-      setProfile(prof)
 
       // Tracked custom fields: definitions are venue-scoped; values
       // live in the source wedding's raw_import_row. Only meaningful
       // when this couple mirrors a wedding (source_wedding_id set).
-      const coupleRow = c as CoupleDetail
+      const coupleRow = (c ?? { venue_id: '', source_wedding_id: null }) as {
+        venue_id: string
+        source_wedding_id: string | null
+      }
       if (coupleRow.source_wedding_id) {
         const [defRes, wedRes] = await Promise.all([
           supabase
@@ -341,7 +337,7 @@ export default function CoupleDetailPage() {
         }))
         setFragments([...fragRows, ...tpRows])
       }
-      setLoading(false)
+      setSideLoading(false)
     }
     void load()
     return () => {
@@ -481,78 +477,55 @@ export default function CoupleDetailPage() {
         </div>
       )}
 
-      {profile && (
-        <div className="mb-8 rounded-lg border border-violet-200 bg-violet-50/50 p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-violet-700" />
-            <h2 className="text-sm font-semibold text-violet-900">
-              Identity profile
-            </h2>
+      {heat && heat.contributingCount > 0 && (
+        <div className="mb-6 rounded-lg border border-stone-200 bg-white p-4">
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h2 className="text-sm font-semibold text-stone-800">Heat</h2>
+            <span className="text-2xl font-bold tabular-nums text-stone-900">
+              {heat.displayScore}
+            </span>
+            <span className="rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-xs text-stone-600">
+              {heat.label}
+            </span>
+            <span className="text-xs text-stone-400">
+              from {heat.contributingCount} scoring{' '}
+              {heat.contributingCount === 1 ? 'signal' : 'signals'}
+            </span>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm text-stone-700">
-            {(profile.primary_first_name || profile.primary_last_name) && (
-              <div>
-                <span className="text-xs uppercase text-stone-500">Primary</span>
-                <div>
-                  {[profile.primary_first_name, profile.primary_last_name]
-                    .filter(Boolean)
-                    .join(' ')}
-                  {profile.primary_occupation && (
-                    <span className="text-stone-500">
-                      {' · '}
-                      {profile.primary_occupation}
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-            {(profile.partner_first_name || profile.partner_last_name) && (
-              <div>
-                <span className="text-xs uppercase text-stone-500">Partner</span>
-                <div>
-                  {[profile.partner_first_name, profile.partner_last_name]
-                    .filter(Boolean)
-                    .join(' ')}
-                  {profile.partner_occupation && (
-                    <span className="text-stone-500">
-                      {' · '}
-                      {profile.partner_occupation}
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-            {(profile.primary_city || profile.primary_state) && (
-              <div>
-                <span className="text-xs uppercase text-stone-500">Location</span>
-                <div>
-                  {[profile.primary_city, profile.primary_state]
-                    .filter(Boolean)
-                    .join(', ')}
-                </div>
-              </div>
-            )}
-            {profile.emotional_themes && profile.emotional_themes.length > 0 && (
-              <div className="col-span-2">
-                <span className="text-xs uppercase text-stone-500">Themes</span>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {profile.emotional_themes.map((t) => (
-                    <span
-                      key={t}
-                      className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {profile.family_dynamics_summary && (
-              <div className="col-span-2 text-sm italic text-stone-700">
-                "{profile.family_dynamics_summary}"
-              </div>
-            )}
+          <WhyThisCard
+            title="Why this couple is at this temperature"
+            reasoning={heat.reasoning}
+            evidence={heat.evidence}
+            source="computeHeatBreakdown (src/lib/services/identity/heat-score.ts)"
+          />
+        </div>
+      )}
+
+      <IdentityProfileCard
+        profile={journey?.identityProfile ?? null}
+        hasSourceWedding={Boolean(couple.source_wedding_id)}
+      />
+
+      {journey && journey.lookAlikeCohort.length > 0 && (
+        <div className="mb-6 rounded-lg border border-stone-200 bg-white p-4">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-700">
+            Couples at the same stage
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {journey.lookAlikeCohort.map((c) => (
+              <a
+                key={c.id}
+                href={`/intel/couples/${c.id}`}
+                className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs text-stone-700 hover:border-stone-300 hover:bg-stone-100"
+              >
+                {c.names ?? '(no name yet)'}
+              </a>
+            ))}
           </div>
+          <p className="mt-2 text-xs text-stone-400">
+            Same venue, same lifecycle state, nearest wedding dates. A deliberately
+            plain definition rather than a similarity score, so you can check it.
+          </p>
         </div>
       )}
 

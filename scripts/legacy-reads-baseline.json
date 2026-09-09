@@ -1,0 +1,13 @@
+{
+  "_comment": "W2 ratchet baseline. Counts of legacy-table reads under src/app. These numbers may only fall. Regenerate with: node scripts/check-no-new-legacy-reads.mjs --write",
+  "scanDir": "src/app",
+  "tables": {
+    "weddings": 132,
+    "people": 52,
+    "interactions": 62,
+    "attribution_events": 25,
+    "wedding_touchpoints": 1
+  },
+  "total": 272,
+  "updatedAt": "2026-09-09"
+}
