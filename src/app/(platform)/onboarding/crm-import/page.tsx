@@ -119,6 +119,12 @@ const AI_MAPPABLE_FIELDS = [
 
 export default function CrmImportPage() {
   const [adapters, setAdapters] = useState<AdapterManifest[]>([])
+  // T5-W5: scaffold (ready:false) adapters — Dubsado, Aisle Planner —
+  // used to sit in the picker looking exactly as clickable as
+  // HoneyBook, disabled only by a greyed-out style a coordinator could
+  // easily miss. Hidden by default now; a toggle reveals them for
+  // anyone who wants to see what's planned.
+  const [showPlanned, setShowPlanned] = useState(false)
   const [selectedAdapter, setSelectedAdapter] = useState<string>('generic_csv')
   const [csv, setCsv] = useState('')
   // site-visitors adapter: optional second file (per-pageview detail).
@@ -355,9 +361,20 @@ export default function CrmImportPage() {
 
       <section className="bg-white border border-sage-200 rounded-xl p-5 shadow-sm space-y-4">
         <div className="space-y-2">
-          <label className="text-xs font-medium text-sage-700">Provider</label>
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-sage-700">Provider</label>
+            {adapters.some((a) => !a.ready) && (
+              <button
+                type="button"
+                onClick={() => setShowPlanned((v) => !v)}
+                className="text-[11px] text-sage-500 hover:text-sage-800 underline underline-offset-2"
+              >
+                {showPlanned ? 'Hide planned adapters' : 'Show planned adapters'}
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            {adapters.map((a) => (
+            {adapters.filter((a) => a.ready || showPlanned || a.name === selectedAdapter).map((a) => (
               <button
                 key={a.name}
                 type="button"

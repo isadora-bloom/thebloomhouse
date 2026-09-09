@@ -47,7 +47,7 @@ const PROVIDERS: ProviderManifest[] = [
   {
     hint: 'calendly',
     label: 'Calendly',
-    description: 'Validated against the Rixey export. Account → Export → Scheduled events.',
+    description: 'Validated against a real venue export. Account → Export → Scheduled events.',
     ready: true,
   },
   {

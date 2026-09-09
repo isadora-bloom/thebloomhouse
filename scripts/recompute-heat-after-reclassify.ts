@@ -1,13 +1,15 @@
 // Recompute heat for every wedding at the venue after the
 // direction-reclassification deleted false-positive engagement
-// events. The 72 deleted tour_requested / high_specificity / etc.
-// events were inflating heat by up to +15 each.
+// events. Thin CLI wrapper — logic lives in
+// src/lib/services/onboarding/cleanup/heat-recompute.ts so the
+// onboarding-project UI can run the identical check without a
+// terminal.
 //
 // Usage:
 //   npx tsx scripts/recompute-heat-after-reclassify.ts [--venue <uuid>]
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { recalculateHeatScore } from '../src/lib/services/heat-mapping'
+import { recomputeHeatAfterCleanup } from '../src/lib/services/onboarding/cleanup/heat-recompute'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -31,28 +33,15 @@ const venueId = venueIdx >= 0 ? args[venueIdx + 1] : 'f3d10226-4c5c-47ad-b89b-98
 
 async function main() {
   console.log(`\n=== Recompute heat — venue ${venueId} ${apply ? '(apply)' : '(dry-run, skipped)'} ===\n`)
-  if (!apply) {
-    console.log('Heat recompute is not run in dry-run because recalculateHeatScore is')
-    console.log('inherently mutating (it writes the recomputed score back). Re-run with --apply.')
+  const result = await recomputeHeatAfterCleanup(sb, venueId, apply)
+  if (result.skipped) {
+    console.log(result.skipReason)
     return
   }
-  const { data: weddings } = await sb
-    .from('weddings')
-    .select('id, heat_score, temperature_tier')
-    .eq('venue_id', venueId)
-  let updated = 0
-  let total = 0
-  for (const w of (weddings ?? []) as Array<{ id: string; heat_score: number; temperature_tier: string }>) {
-    total++
-    try {
-      const result = await recalculateHeatScore(venueId, w.id)
-      if (result.newScore !== w.heat_score) updated++
-    } catch (err) {
-      console.error(`  ${w.id}: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-  console.log(`weddings recomputed: ${total}`)
-  console.log(`scores changed:      ${updated}`)
+  console.log(`weddings recomputed: ${result.counts.weddings_recomputed}`)
+  console.log(`scores changed:      ${result.counts.scores_changed}`)
+  for (const e of result.errors) console.error(`  error: ${e}`)
+  if (!result.ok) process.exit(1)
 }
 
 main().catch((err) => { console.error(err); process.exit(1) })

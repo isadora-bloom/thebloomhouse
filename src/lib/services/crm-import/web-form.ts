@@ -152,10 +152,10 @@ export interface FormHint {
 
 export const RIXEY_CALCULATOR_HINT: FormHint = {
   provider: 'rixey_calculator',
-  label: 'Rixey Manor pricing calculator',
+  label: 'Pricing calculator CSV',
   description:
-    'Pre-configured for the Rixey Manor pricing-calculator export. Maps Partner One/Two name+email+phone, '
-    + 'wedding-season tier, guest count, overnight stay, upgrades, discounts, and the calculated total.',
+    'Pre-configured for a pricing-calculator export shaped like the reference build (Partner One/Two '
+    + 'name+email+phone, wedding-season tier, guest count, overnight stay, upgrades, discounts, and the calculated total).',
   dateColumn: 'Received',
   referenceColumn: 'Reference Number',
   contactNameColumn: 'Partner One Name',
@@ -906,7 +906,7 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       // to weddings.import_warnings via commitNormalisedRows.
       import_warnings: importWarnings.length > 0 ? importWarnings : null,
       source_detail: hint.provider === 'rixey_calculator'
-        ? 'Rixey pricing calculator'
+        ? 'Pricing calculator'
         : `web_form_${hint.provider}`,
       inquiry_date: submissionIso,
       booked_at: null,
@@ -1262,10 +1262,10 @@ export async function stitchWebFormVisits(args: {
 
 export const webFormAdapter: CrmAdapter = {
   name: 'web_form',
-  label: 'Web form (Rixey calculator, Typeform, Jotform, Google Forms, custom)',
+  label: 'Web form (pricing calculator, Typeform, Jotform, Google Forms, custom)',
   description:
-    'Import submissions from your own pricing calculator or web form. Pre-built hints for Rixey, '
-    + 'Typeform, Jotform, and Google Forms; supply a column-mapping JSON for any other form. '
+    'Import submissions from your own pricing calculator or web form. Pre-built hints for a '
+    + 'pricing-calculator export, Typeform, Jotform, and Google Forms; supply a column-mapping JSON for any other form. '
     + 'Each submission becomes weddings + interactions(type=web_form) + tangential_signals(form_submission). '
     + 'Tagged confidence_flag=imported_high (first-party) and source_provenance=web_form_import.',
   ready: true,

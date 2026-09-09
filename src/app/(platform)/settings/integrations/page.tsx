@@ -86,9 +86,20 @@ interface ResolvedAdapter {
   status: IntegrationStatus
 }
 
-export default async function IntegrationsHubPage() {
+interface PageProps {
+  // T5-W5: hide scaffold (ready:false) adapters by default so a
+  // second venue never sees "Configure" on something that throws
+  // "not yet implemented" — the founder's own onboarding used to be
+  // the only proof these cards worked. ?showPlanned=1 reveals them.
+  searchParams: Promise<{ showPlanned?: string }>
+}
+
+export default async function IntegrationsHubPage({ searchParams }: PageProps) {
   const auth = await getPlatformAuth()
   if (!auth) redirect('/login?redirect=/settings/integrations')
+
+  const sp = await searchParams
+  const showPlanned = sp.showPlanned === '1'
 
   const supabase = createServiceClient()
   const { data: aiCfg } = await supabase
@@ -123,8 +134,11 @@ export default async function IntegrationsHubPage() {
     }),
   )
 
+  const visible = showPlanned ? resolved : resolved.filter((r) => r.adapter.ready)
+  const plannedCount = resolved.length - resolved.filter((r) => r.adapter.ready).length
+
   const byCategory = new Map<IntegrationCategory, ResolvedAdapter[]>()
-  for (const r of resolved) {
+  for (const r of visible) {
     const arr = byCategory.get(r.adapter.category) ?? []
     arr.push(r)
     byCategory.set(r.adapter.category, arr)
@@ -134,16 +148,26 @@ export default async function IntegrationsHubPage() {
 
   return (
     <div className="max-w-5xl space-y-10">
-      <header className="flex items-start gap-3">
-        <Link2 className="w-6 h-6 text-sage-600 mt-1" />
-        <div>
-          <h1 className="text-2xl font-serif text-sage-900">Integrations</h1>
-          <p className="text-sm text-sage-600 mt-1 max-w-2xl">
-            Everywhere your couples and vendors reach you, connected to
-            {aiName}&apos;s forensic record. Pick the provider you already use;
-            ask for the one you wish was on this list.
-          </p>
+      <header className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <Link2 className="w-6 h-6 text-sage-600 mt-1" />
+          <div>
+            <h1 className="text-2xl font-serif text-sage-900">Integrations</h1>
+            <p className="text-sm text-sage-600 mt-1 max-w-2xl">
+              Everywhere your couples and vendors reach you, connected to
+              {aiName}&apos;s forensic record. Pick the provider you already use;
+              ask for the one you wish was on this list.
+            </p>
+          </div>
         </div>
+        <Link
+          href={showPlanned ? '/settings/integrations' : '/settings/integrations?showPlanned=1'}
+          className="shrink-0 text-xs font-medium text-sage-600 hover:text-sage-900 underline underline-offset-2"
+        >
+          {showPlanned
+            ? 'Hide planned integrations'
+            : `Show planned integrations${plannedCount > 0 ? ` (${plannedCount})` : ''}`}
+        </Link>
       </header>
 
       {renderedCategories.map((category) => {

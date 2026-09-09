@@ -8,7 +8,7 @@
  * Day-by-day structure (per Playbook 18):
  *   Day 1: OAuth + email backfill           — Gmail connection, 12mo backfill seeded
  *   Day 2: Marketing channels + pricing     — channel registry, pricing reconstruction
- *   Day 3: CRM exports + ingestion          — HoneyBook / Dubsado / Aisle Planner adapters
+ *   Day 3: CRM exports + ingestion          — HoneyBook / generic CSV adapters
  *   Day 4: Voice DNA + coordinator confirm  — transcript-voice-learning over imports
  *   Day 5: KB seeding + readiness gate      — knowledge base, gate evaluates, Go Live
  *
@@ -25,6 +25,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export const TOTAL_DAYS = 5
 
@@ -45,7 +46,7 @@ export interface DayStep {
     | 'kb_seed' | 'readiness_check' | 'manual' | 'pricing_history_ui'
     | 'crm_import_ui' | 'sage_identity' | 'forbidden_topics' | 'tone_preferences'
     | 'web_form_import_ui' | 'extract_packages_ui' | 'tour_scheduler_import_ui'
-    | 'utm_tagging' | 'seed_agencies'
+    | 'utm_tagging' | 'seed_agencies' | 'data_cleanup_ui' | 'recover_booked_data_ui'
   /** External admin surface where the coordinator does the actual
    *  work for this step. Page renders this as a "Go to surface" link
    *  so coordinators don't have to memorise where each piece lives.
@@ -109,7 +110,7 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'crm_export',
         label: 'Upload everything you have on your booked couples',
         description:
-          'Import your booked couples FIRST — before the email backfill. Upload a HoneyBook / Dubsado / Aisle Planner export (or the Generic CSV adapter with a column mapping). Include every column your CRM offers: revenue, deposit, booked date, guest count, package — all of it is read and recorded, and any column Bloom has no field for is preserved and surfaced on the Data Fields page. These booked couples are the anchors the whole reconstruction is built from. Imported rows are tagged confidence_flag=imported_medium. Completes once weddings has 1+ row tagged imported_medium.',
+          'Import your booked couples FIRST — before the email backfill. Upload a HoneyBook export, or use the Generic CSV / Smart import adapter with any other CRM\'s export (a column mapping, hand-picked or AI-proposed). Include every column your CRM offers: revenue, deposit, booked date, guest count, package — all of it is read and recorded, and any column Bloom has no field for is preserved and surfaced on the Data Fields page. These booked couples are the anchors the whole reconstruction is built from. Imported rows are tagged confidence_flag=imported_medium. Completes once weddings has 1+ row tagged imported_medium.',
         actionKey: 'crm_import_ui',
         linkHref: '/onboarding/crm-import',
         linkLabel: 'Open CRM import',
@@ -166,7 +167,7 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'web_form_import',
         label: 'Import web-form submissions',
         description:
-          'Upload submissions from your own pricing calculator or web form (Rixey calculator, Typeform, Jotform, Google Forms, custom HTML). Each becomes a wedding row + interaction + tangential signal, tagged confidence_flag=imported_high (first-party data). Independent from CRM-import on Day 3 — a venue with both a calculator AND HoneyBook can use both.',
+          'Upload submissions from your own pricing calculator or web form (a pricing-calculator CSV, Typeform, Jotform, Google Forms, custom HTML). Each becomes a wedding row + interaction + tangential signal, tagged confidence_flag=imported_high (first-party data). Independent from CRM-import on Day 3 — a venue with both a calculator AND HoneyBook can use both.',
         actionKey: 'web_form_import_ui',
         linkHref: '/onboarding/web-form-import',
         linkLabel: 'Open web-form import',
@@ -277,24 +278,33 @@ export const PROJECT_PLAN: DayPlan[] = [
         linkLabel: 'Open knowledge base',
       },
       {
+        // T5-W5: previously ran only as scripts/onboard-data-cleanup.ts
+        // by the founder, by hand, against production. Now a per-step
+        // preview (dry-run counts) + apply button, inline on this page —
+        // POST /api/onboarding/project/cleanup. Must run after the Day-1
+        // Gmail backfill and before the readiness gate below (the gate's
+        // invariants check for exactly the corruption patterns this
+        // pipeline repairs).
+        key: 'data_cleanup',
+        label: 'Run data cleanup',
+        description:
+          'Six repair passes over the imported data, in order: reclassify interaction direction from Gmail labels, recover scheduling-event datetimes, re-align booking-vs-tour timestamps, repair touchpoint sources, recompute attribution buckets, recompute heat scores. Preview shows per-step counts before anything writes.',
+        actionKey: 'data_cleanup_ui',
+        linkHref: null,
+      },
+      {
         key: 'recover_booked_data',
         label: 'Recover historical booking values',
         description:
-          'Walks every booked / completed wedding with missing booking_value and tries three recovery paths: dedup against HoneyBook duplicates, calculator-estimate email extract, and HoneyBook export-payload recover. The daily booked_data_recovery cron handles the bulk; this step surfaces the residual count so the coordinator can mark the unrecoverable ones as coordinator-supplied. (Per-row "Mark coordinator-supplied" affordance lands in a follow-up stream — for now the readiness page links here and shows the count.)',
-        actionKey: 'manual',
-        // No linkHref yet — the per-row "Mark coordinator-supplied" UI is a
-        // follow-up stream. Setting linkHref breaks the onboarding step
-        // because /onboarding/recover-booked-data does not exist; the
-        // server route at /api/admin/recover-booked-data is service-role
-        // only. The cron handles the bulk; this step is informational
-        // until the coordinator UI lands.
+          'Walks every booked / completed wedding with missing booking_value and tries three recovery paths: dedup against HoneyBook duplicates, calculator-estimate email extract, and HoneyBook export-payload recover. The daily booked_data_recovery cron handles the bulk; this step runs it on demand and shows the residual count so the coordinator knows what to mark coordinator-supplied. (Per-row "Mark coordinator-supplied" affordance is still a follow-up stream — this step runs the sweep and shows the count inline.)',
+        actionKey: 'recover_booked_data_ui',
         linkHref: null,
       },
       {
         key: 'readiness_gate',
         label: 'Run readiness gate',
         description:
-          'Evaluates minimum data-volume thresholds across Internal Context (channels, absences, pricing), Forensic Record (interactions, weddings), and Voice DNA. All limbs must pass before Go Live unlocks. (Library-side runner landing in T2-A follow-up; for now run scripts/onboarding-readiness.ts manually and paste the verdict into a coordinator note.)',
+          'Evaluates 14 structural invariants (must all pass) plus 4 advisory smoke tests across Internal Context, Forensic Record, and Voice DNA. Passing persists readiness_passed_at, which unlocks Go Live below. Run it again any time — each run re-evaluates and overwrites the prior verdict.',
         actionKey: 'readiness_check',
         linkHref: null,
       },
@@ -474,14 +484,17 @@ export async function recordReadinessEvaluation(
     passed: boolean
   },
 ): Promise<void> {
-  await supabase
-    .from('onboarding_projects')
-    .update({
-      readiness_state: args.state,
-      readiness_failures: args.failures,
-      readiness_passed_at: args.passed ? new Date().toISOString() : null,
-    })
-    .eq('id', projectId)
+  await writeOrLog(
+    supabase
+      .from('onboarding_projects')
+      .update({
+        readiness_state: args.state,
+        readiness_failures: args.failures,
+        readiness_passed_at: args.passed ? new Date().toISOString() : null,
+      })
+      .eq('id', projectId),
+    { op: 'onboarding_projects.recordReadinessEvaluation', venueId: null },
+  )
 }
 
 /**
@@ -582,6 +595,26 @@ export async function activateLive(
     })
     .eq('id', projectId)
   if (error) return { ok: false, error: error.message }
+
+  // T5-W5: write the SAME completion fields the 15-min wizard writes
+  // on its Go Live step (venues.status='active',
+  // venue_config.onboarding_completed=true). Pre-fix, a venue that
+  // went live through this 5-day project flow never got
+  // onboarding_completed flipped, so the dashboard's mount-time check
+  // (venue_config.onboarding_completed === false → redirect to
+  // /onboarding) sent them back to the 15-min wizard on every load —
+  // the two flows disagreed about what "done" means. Non-fatal:
+  // logged but doesn't fail the activation, since onboarding_projects
+  // is already the source of truth for THIS flow's own gate.
+  await writeOrLog(
+    supabase.from('venues').update({ status: 'active', updated_at: new Date().toISOString() }).eq('id', row.venue_id as string),
+    { op: 'venues.activateLive_status_sync', venueId: row.venue_id as string },
+  )
+  await writeOrLog(
+    supabase.from('venue_config').update({ onboarding_completed: true, updated_at: new Date().toISOString() }).eq('venue_id', row.venue_id as string),
+    { op: 'venue_config.activateLive_onboarding_completed_sync', venueId: row.venue_id as string },
+  )
+
   return { ok: true }
 }
 
