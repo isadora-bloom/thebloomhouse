@@ -297,7 +297,7 @@ export default function ChannelIntelHubPage() {
 
       <div className="mt-6">
         <Link
-          href="/intel"
+          href="/intel/dashboard"
           className="inline-flex items-center gap-1 text-sm text-stone-600 hover:text-stone-900"
         >
           <ArrowLeft className="w-4 h-4" />
