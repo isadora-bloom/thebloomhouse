@@ -76,8 +76,14 @@ Shared rules for every agent:
 
 ## Operator items (Isadora)
 
-- [ ] Run `node scripts/phase2-wipe-finish.mjs --apply --allow-prod` (interactions + people)
-- [ ] Import the five HoneyBook CSVs through `/onboarding/crm-import`, oldest first
+- [ ] **RECONNECT GMAIL FIRST.** `gmail_connections` for Rixey has been `status=error`
+  ("Token refresh failed") since **2026-07-24**. No email has been ingested for six weeks.
+  The backfill and the live poll both need it. Settings → Gmail → Connect. (Found 2026-09-08.)
+- [ ] Do NOT re-enable auto-send until the reimport is complete. All four `auto_send_rules`
+  are `enabled=false` today (verified 2026-09-08). After a wipe the new-contact, per-thread
+  and daily-limit gates all read empty tables and pass everything; `enabled` is the only gate.
+- [x] Run `node scripts/phase2-wipe-finish.mjs --apply --allow-prod` (interactions + people) — done 2026-09-08, all Rixey pipeline tables 0
+- [ ] Import the five HoneyBook CSVs through `/onboarding/crm-import`, oldest first — PAUSED by Isadora until wave-1 fixes land; parse verified offline (281 couples, 136 distinct emails)
 - [ ] Download a fresh HoneyBook "Booked clients" report (newest on disk ends Jun 2026)
 - [ ] Fast-forward `master` after each integration I hand you
 - [ ] Decide: fix Hawthorne's `venue_config.business_name` by SQL (one line, I will give it)
