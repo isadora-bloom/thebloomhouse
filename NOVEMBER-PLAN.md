@@ -42,6 +42,16 @@ Venue-2 dry run (W5 output) is the gate for signing a client.
 | 7 (Oct 20-26) | Two-venue isolation battery. Phil's onboarding walkthrough with a friendly venue. | Zero cross-tenant reads; walkthrough completes |
 | 8 (Oct 27-Nov 8) | Rehearsal, investor materials on measured numbers, freeze. | Golden journey passes twice on two venues |
 
+## Wave 1 status (integrated 2026-09-08 evening, `consolidation` 51dcbac9)
+
+All eleven workstreams (W1 to W11) merged. Gate on the integrated head: tsc 0, vitest
+521/521, all twelve governance checks pass, links resolve, golden 15/15 valid, askIntel
+grounding test passes. Migrations 391, 392, 393 dry-run clean on the prod snapshot branch.
+W11 (added mid-wave) classified the 21 phantom tables and 62 phantom columns from
+`scripts/check-schema-truth.mjs`; migrations 291/304/305/307/308/309/310 were never applied
+to production and 394 is new. Remaining phantoms after the wave are exactly those unapplied
+migrations plus the parked Meta connector.
+
 ## Workstreams and agents (wave 1, launched 2026-09-08)
 
 Model rule: Haiku for mechanical sweeps, Sonnet for bounded code work, Opus for anything
@@ -59,6 +69,7 @@ integrates, and decides.
 | W7 | CI and governance green + typed DB | Haiku | `.github/workflows/ci.yml`, `scripts/cleanup-budget.json`, `scripts/check-*.mjs` (baselines), `src/lib/services/couple-portal/seating-import.ts:406`, `src/lib/ai/alert-fallback.ts`, `src/lib/supabase/types.ts` + `types.generated.ts` | none |
 | W8 | UX for non-technical clients: the morning landing | Opus | new `src/app/(platform)/today/**`, `src/components/shell/nav-config.ts` (Essential rail + landing), `src/components/ui/*` additive, `src/app/(platform)/page.tsx` | none |
 | W9 | Hygiene: orphans, legacy nav, doc truth | Haiku | `src/components/shell/nav-config.ts` (legacy entries only, coordinate with W8), `SITEMAP.md`, `CLAUDE.md`, `MONDAY-START-HERE.md`, `src/lib/intel/canonical.ts` header comment, stale plan banners | none |
+| W11 | Schema truth: phantom tables/columns classified and fixed (added mid-wave) | Sonnet | files outside other workstreams' ownership | 394 |
 | W10 | Ingestion health + missing signals | Sonnet | `src/lib/services/intel/pulse-aggregator.ts`, `src/lib/services/ingestion-volume-monitor.ts`, `src/app/api/portal/sage/route.ts` (alert emission only), `src/lib/services/identity/replay/reviews.ts`, new `scripts/diag-honeybook-drop.mjs` (read-only) | none |
 
 Shared rules for every agent:
