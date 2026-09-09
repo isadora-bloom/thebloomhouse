@@ -81,6 +81,7 @@ export async function alertFallbackFired(alert: FallbackAlert): Promise<void> {
       `Further alerts of this kind are muted for ${ALERT_INTERVAL_MS / 60000} minutes.`,
     ].filter(Boolean)
 
+    // disclosure-justified: operator alert email, not couple-facing Sage content
     await sendEmail({
       to,
       subject,
@@ -125,6 +126,7 @@ export async function alertModelStale(
       `Further alerts of this kind are muted for ${ALERT_INTERVAL_MS / 60000} minutes.`,
     ]
 
+    // disclosure-justified: operator alert email, not couple-facing Sage content
     await sendEmail({
       to,
       subject: 'Bloom AI model stale: configured model not served by provider',

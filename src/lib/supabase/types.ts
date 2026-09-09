@@ -1,9 +1,17 @@
 /**
  * Bloom House: Supabase Database Types (Placeholder)
  *
- * Replace with `supabase gen types typescript` output for full type safety.
  * This file provides basic type coverage for the most-used tables so that
  * service files can reference column shapes without `as unknown`.
+ *
+ * Comprehensive auto-generated types live in types.generated.ts. Generated via:
+ *   npx supabase gen types typescript --linked > src/lib/supabase/types.generated.ts
+ *
+ * TODO: Wire the Database generic from types.generated.ts into the clients
+ * (createBrowserClient, createServerClient, createServiceClient) for full
+ * type safety throughout the codebase. This was deferred to avoid the
+ * widespread Client<Database> wiring in this wave (too invasive), but is
+ * a high-value follow-up for future phases.
  */
 
 // ---------------------------------------------------------------------------

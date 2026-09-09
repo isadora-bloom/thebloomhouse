@@ -2,7 +2,9 @@
   "_README": "Anti-bandaid ratchet (Mandate M1). Baseline = audit-measured 2026-05-28 truth. Each number may only DECREASE; CI (check-cleanup-budget.mjs) fails if any rises. Lower these at every phase boundary. Phase-4 ship-gate targets: cron_count<=~24, duplicate_identity_modules=0, resolver_reassign_calls=0, grandfather_entries=0, migration_files=1 (post-flatten). Re-snapshot deliberately with --update; the diff is the human decision point.",
   "cron_count": 49,
   "duplicate_identity_modules": 5,
-  "resolver_reassign_calls": 34,
+  "resolver_reassign_calls": 35,
+  "resolver_reassign_calls_justification": "couple_notifications table (mig 389) added to mergeWeddings reassign list",
   "grandfather_entries": 28,
-  "migration_files": 379
+  "migration_files": 393,
+  "migration_files_justification": "wipe + reimport 2026-09-08; W1 (mig 391), W4 (mig 392), W5 (mig 393) migrations pending; flatten to tracked baseline still owed post-reimport"
 }

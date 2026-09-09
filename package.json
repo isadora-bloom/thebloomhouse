@@ -24,6 +24,7 @@
     "check:cleanup-budget": "node scripts/check-cleanup-budget.mjs",
     "check:pr-section": "node scripts/check-pr-cites-section.mjs",
     "check:rls-venue": "node scripts/check-rls-on-venue-id.mjs",
+    "check:legacy-reads": "node scripts/check-no-new-legacy-reads.mjs",
     "check:governance": "npm run check:cleanup-budget && npm run check:rls-venue && npm run test:golden:dry",
     "test:golden:dry": "tsx tests/golden/run-golden-cases.ts --dry",
     "test:golden": "tsx tests/golden/run-golden-cases.ts",
