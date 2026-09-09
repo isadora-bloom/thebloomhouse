@@ -98,6 +98,23 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   'referral_extraction_sweep',
   // Wave 14 (2026-05-10). Alumni cohort generator (Sonnet aggregator).
   'alumni_cohort_sweep',
+  // W6 / November Plan (2026-09-08). Loop-closure dispatchers — each
+  // fans out to sweeps that are already individually destructive
+  // (spend_sync_sweep, attribution_role_sweep, persona_channel_rollup_sweep,
+  // marketing_recommendation_sweep, spend_loop_flag_sweep,
+  // marketing_digest_sweep, voice_dna_refresh's sibling voice_dna_sweep)
+  // or spend Sonnet budget (calibration_sweep's catch-up pass is cheap
+  // but the whole chain adds up). Same conservative bias as the rest
+  // of this file.
+  'loops_daily',
+  'loops_weekly',
+  // W6 (2026-09-08). Drains measure_outcome_jobs + writes
+  // prediction_outcomes. Data-mutation class, same treatment as its
+  // sibling sweeps above.
+  'calibration_sweep',
+  // W6 (2026-09-08). Mutates voice_dna_derivations + spends Sonnet
+  // budget per venue, same class as voice_dna_refresh above.
+  'voice_dna_sweep',
 ])
 
 export type CronAuthResult =
