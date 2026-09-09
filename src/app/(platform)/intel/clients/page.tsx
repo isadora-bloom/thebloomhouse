@@ -1,32 +1,15 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
-import {
-  Users,
-  Search,
-  ChevronDown,
-  ChevronUp,
-  DollarSign,
-  Calendar,
-  Mail,
-  Phone,
-  ArrowRight,
-} from 'lucide-react'
-import { UpgradeGate } from '@/components/ui/upgrade-gate'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
-import { formatSourceLabel } from '@/lib/utils/format-source-label'
-
-// ---------------------------------------------------------------------------
-// Supabase
-// ---------------------------------------------------------------------------
-
-
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+/**
+ * Legacy redirect: /intel/clients was the pre-identity-first couples view.
+ * Redirect to /intel/couples (the identity-first, consolidated view).
+ *
+ * Removed from nav 2026-09-08 as part of W9 consolidation hygiene pass.
+ * This redirect ensures old bookmarks and direct links still work.
+ */
+export default function LegacyClientsPage() {
+  redirect('/intel/couples')
+}
 
 interface WeddingRow {
   id: string

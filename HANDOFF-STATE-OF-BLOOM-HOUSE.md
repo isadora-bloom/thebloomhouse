@@ -1,10 +1,12 @@
 # The Bloom House — State of the Project (Engineering Handoff)
 
 **Audience:** Phil (and anyone picking this up cold — assume the whole team has left).
-**Written:** 2026-06-13 · **Updated:** 2026-07-07
+**Written:** 2026-06-13 · **Updated:** 2026-09-08
 **Purpose:** A single, human-readable map of *what Bloom House is*, *how data flows through it*, *what has been achieved*, *what is next*, and *the things you need to know that aren't obvious from the code*.
 
-> **How to use this doc.** Read §1–§3 for the mental model, §4 for the pipelines (the heart of the system), §5 for the state of the codebase, §6 for the one big in-flight effort (the consolidation), §7 for exactly what to do next, and §8 for survival tips. If you only read one other file after this, read `CONSOLIDATION-PLAN-PHASED.md` (the single plan of record) and `ARCHITECTURE-DECISIONS.md` (the three decisions that gate everything).
+> **2026-09-08 UPDATE:** Phase 2 (the wipe + reimport) ran 2026-09-08. Work is now sequenced by `NOVEMBER-PLAN.md` (current execution plan for W1–W10, deadline ~2026-11-08). §7 below is now superseded; read `NOVEMBER-PLAN.md` for current priorities.
+
+> **How to use this doc.** Read §1–§3 for the mental model, §4 for the pipelines (the heart of the system), §5 for the state of the codebase, §6 for the one big in-flight effort (the consolidation), §7 for historical context, and §8 for survival tips. Current work: read `NOVEMBER-PLAN.md` + `CONSOLIDATION-PLAN-PHASED.md`.
 
 ---
 

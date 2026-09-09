@@ -1,11 +1,9 @@
 # Monday — Start Here
 
-> ## ⚠️ STALE — this on-ramp is from 2026-05-29 and is DONE
-> Everything below was executed (some of it weeks late): D-1 verified 05-29, guards
-> flipped to enforcing 06-11, Phase 1.1 shipped 05-29, Phase 3.3 readers complete 06-02..04.
-> **To resume today: read `CONSOLIDATION-PLAN-PHASED.md` (the execution authority) +
-> `CHANGELOG.md` (current ship record).** `BLOOM-MASTER-PLAN.md` is retired as the live
-> tracker (see its banner); its §3 decision ledger remains the rationale record.
+> ## ⚠️ SUPERSEDED — Phase 2 wipe ran 2026-09-08
+> This on-ramp is from 2026-05-29. **Current plan: `NOVEMBER-PLAN.md`** (execution phases W1–W10,
+> deadline ~2026-11-08). Phase 2 (wipe + reimport, REMEDIATION-PLAN R1) completed 2026-09-08.
+> **To resume: read `NOVEMBER-PLAN.md` + `CONSOLIDATION-PLAN-PHASED.md` + `HANDOFF-STATE-OF-BLOOM-HOUSE.md`.**
 
 A 15-minute on-ramp back into the rebuild. Nothing below is urgent; nothing is running against you over the weekend.
 

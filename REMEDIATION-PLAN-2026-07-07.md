@@ -1,5 +1,10 @@
 # Remediation Plan — 2026-07-07 audit follow-up
 
+> ## ⚠️ R1 COMPLETE — Phase 2 wipe ran 2026-09-08
+> Phase R1 (the wipe + reimport) executed 2026-09-08. Subsequent phases R2–R6 are now
+> sequenced by `NOVEMBER-PLAN.md` (current execution plan, deadline ~2026-11-08).
+> This doc remains as the rationale record; work items continue R2 onwards.
+
 > Status: ACTIVE checklist overlay. Subordinate to CONSOLIDATION-PLAN-PHASED.md v2.1,
 > which remains the plan of record. This doc sequences the fixes from the 2026-07-07
 > five-persona audit (engineer / CEO / group analyst / single-venue client / investor)

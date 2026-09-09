@@ -1,183 +1,67 @@
 # The Bloom House — Complete Sitemap
 
 **Stack:** Next.js 16 (App Router) + TypeScript + Supabase
-**Total:** ~147 pages, ~81 API routes
+**Total pages:** 295 page.tsx + 386 route.ts files
+**Generated:** 2026-09-09
+
+Breakdown:
+- 183 platform pages (agent, intel, portal, settings, admin, onboarding, setup, sage, system, org)
+- 48 couple portal re-exports (_couple-pages)
+- 49 couple portal pages (/couple/[slug]/...)
+- 15 other pages (auth, public, special)
 
 ---
 
-## Public / Auth
+## Platform pages — Authenticated shell (183 total)
 
-| URL | Description |
-|-----|-------------|
-| `/` | Landing / home page |
-| `/demo` | Demo page |
-| `/login` | Login |
-| `/signup` | Sign up |
+| Segment | Pages | Purpose |
+|---------|-------|---------|
+| agent | 24 | Email AI, drafts, pipeline, leads, learning, rules, sequences, audio-inbox, analytics |
+| intel | 65 | Analytics, trends, reviews, ROI, cohort, identity, matches, NLQ, anomalies, etc. |
+| portal | 33 | Couple-facing planning app + coordinator config (bar, seating, vendors, etc.) |
+| settings | 27 | Venue settings, personality, voice, integrations, team, billing |
+| admin | 15 | Identity audit, tracer runs, telemetry, data integrity, calibration |
+| onboarding | 8 | Venue onboarding flows |
+| sage | 2 | Sage main + voice DNA |
+| setup | 1 | Setup flow |
+| system | 1 | Consolidation status |
+| org | 1 | Org info |
 
----
-
-## Platform — Agent (Email AI)
-
-| URL | Description |
-|-----|-------------|
-| `/agent` | Agent workspace home |
-| `/agent/analytics` | Agent performance analytics |
-| `/agent/codes` | Discount/promo codes |
-| `/agent/drafts` | Email drafts |
-| `/agent/errors` | Agent error log |
-| `/agent/inbox` | Email inbox |
-| `/agent/knowledge-gaps` | Knowledge gaps detected by agent |
-| `/agent/leads` | Lead management |
-| `/agent/learning` | Agent learning/training |
-| `/agent/notifications` | Notifications |
-| `/agent/pipeline` | Sales pipeline |
-| `/agent/relationships` | Relationship tracking |
-| `/agent/rules` | Agent rules/behavior config |
-| `/agent/sequences` | Email sequences |
-| `/agent/settings` | Agent settings |
+API routes: **386 total** (agent, intel, portal, couple, auth, cron, webhooks, public)
 
 ---
 
-## Platform — Intel (Analytics & CRM)
+## Couple portal (`/couple/[slug]/...`) — Couple-facing
 
-| URL | Description |
-|-----|-------------|
-| `/intel/dashboard` | Intel dashboard home |
-| `/intel/annotations` | Data annotations |
-| `/intel/briefings` | AI-generated briefings |
-| `/intel/campaigns` | Marketing campaigns (hidden from sidebar 2026-05-03; superseded by `/intel/sources`) |
-| `/intel/capacity` | Retired 2026-05-03 — redirects to `/intel/portfolio` |
-| `/intel/clients` | Client list |
-| `/intel/clients/[id]` | Individual client detail |
-| `/intel/company` | Company overview |
-| `/intel/cross` | Cross-selling insights |
-| `/intel/forecasts` | Revenue forecasts |
-| `/intel/health` | Business health metrics |
-| `/intel/lost-deals` | Lost deal analysis |
-| `/intel/market-pulse` | Market trends |
-| `/intel/matching` | Client-venue matching |
-| `/intel/nlq` | Natural language query |
-| `/intel/portfolio` | Portfolio overview |
-| `/intel/regions` | Regional breakdown |
-| `/intel/reviews` | Review management |
-| `/intel/social` | Social media intel |
-| `/intel/sources` | Lead source tracking |
-| `/intel/team` | Team performance |
-| `/intel/team-compare` | Team comparison |
-| `/intel/tours` | Tour analytics |
-| `/intel/trends` | Trend analysis |
+| Segment | Pages | Purpose |
+|---------|-------|---------|
+| couple | 49 | Wedding planning: timeline, budget, guests, seating, messages, chat, resources |
+| _couple-pages | 48 | Re-exports for couple-portal routing |
 
 ---
 
-## Platform — Portal (Venue Config)
+## Public & Authentication
 
-| URL | Description |
-|-----|-------------|
-| `/portal` | Portal home |
-| `/portal/weddings` | All weddings list |
-| `/portal/weddings/[id]/portal` | Individual wedding portal view |
-| `/portal/bar-config` | Bar/beverage configuration |
-| `/portal/checklist-config` | Checklist template config |
-| `/portal/decor-config` | Decor options config |
-| `/portal/guest-care-config` | Guest care config |
-| `/portal/kb` | Knowledge base |
-| `/portal/messages` | Messages / comms |
-| `/portal/rehearsal-config` | Rehearsal config |
-| `/portal/rooms-config` | Room block config |
-| `/portal/sage-queue` | Sage AI response queue |
-| `/portal/seating-config` | Seating config |
-| `/portal/section-settings` | Portal section visibility |
-| `/portal/shuttle-config` | Shuttle/transport config |
-| `/portal/staffing-config` | Staffing config |
-| `/portal/tables-config` | Tables & linens config |
-| `/portal/vendors` | Preferred vendor management |
-| `/portal/wedding-details-config` | Wedding details config |
+| Segment | Pages | Purpose |
+|---------|-------|---------|
+| root | 1 | Home page |
+| demo | 1 | Demo entry |
+| login | 1 | Login |
+| signup | 1 | Sign up |
+| forgot-password | 1 | Password reset flow |
+| reset-password | 1 | Password reset confirmation |
+| join | 1 | Invite acceptance |
+| billing | 1 | Billing page |
+| contact | 1 | Contact |
+| pricing | 1 | Pricing |
+| welcome | 1 | Welcome |
+| pulse | 1 | Pulse page |
+| preview | 1 | Portal preview |
+| vendor-portal | 1 | Vendor portal (token-based) |
+| vendor | 1 | Vendor pages |
+| w | 2 | Short URL for wedding websites |
+| super-admin | 4 | Super admin surfaces |
 
 ---
 
-## Platform — Settings & Admin
-
-| URL | Description |
-|-----|-------------|
-| `/settings` | Settings home |
-| `/settings/personality` | AI personality config |
-| `/settings/voice` | Venue voice training |
-| `/onboarding` | Venue onboarding flow |
-| `/super-admin` | Super admin panel |
-
----
-
-## Couple Portal (`/couple/[slug]/...`)
-
-Each couple gets a unique slug. All pages below are under `/couple/[slug]/`.
-
-| URL | Description |
-|-----|-------------|
-| `/couple/[slug]` | Couple portal home |
-| `/couple/[slug]/login` | Couple login |
-| `/couple/[slug]/getting-started` | Getting started guide |
-| `/couple/[slug]/chat` | Chat with Sage AI |
-| `/couple/[slug]/messages` | Messages with venue |
-| `/couple/[slug]/checklist` | Planning checklist |
-| `/couple/[slug]/timeline` | Day-of timeline |
-| `/couple/[slug]/budget` | Budget tracker |
-| `/couple/[slug]/contracts` | Contracts & docs |
-| `/couple/[slug]/guests` | Guest list |
-| `/couple/[slug]/rsvp-settings` | RSVP settings |
-| `/couple/[slug]/seating` | Seating chart |
-| `/couple/[slug]/tables` | Table assignments |
-| `/couple/[slug]/party` | Wedding party |
-| `/couple/[slug]/ceremony` | Ceremony details |
-| `/couple/[slug]/rehearsal` | Rehearsal details |
-| `/couple/[slug]/bar` | Bar selections |
-| `/couple/[slug]/decor` | Decor choices |
-| `/couple/[slug]/photos` | Photo planning |
-| `/couple/[slug]/couple-photo` | Couple photo |
-| `/couple/[slug]/inspo` | Inspiration board |
-| `/couple/[slug]/picks` | Couple's picks |
-| `/couple/[slug]/beauty` | Beauty/hair/makeup |
-| `/couple/[slug]/vendors` | Vendor contacts |
-| `/couple/[slug]/preferred-vendors` | Venue preferred vendors |
-| `/couple/[slug]/rooms` | Room blocks |
-| `/couple/[slug]/stays` | Guest accommodations |
-| `/couple/[slug]/transportation` | Transportation/shuttles |
-| `/couple/[slug]/allergies` | Allergy tracking |
-| `/couple/[slug]/guest-care` | Guest care info |
-| `/couple/[slug]/staffing` | Staffing/day-of contacts |
-| `/couple/[slug]/venue-inventory` | Venue inventory |
-| `/couple/[slug]/wedding-details` | Wedding details |
-| `/couple/[slug]/worksheets` | Planning worksheets |
-| `/couple/[slug]/downloads` | Downloadable resources |
-| `/couple/[slug]/resources` | Resources & guides |
-| `/couple/[slug]/website` | Wedding website builder |
-| `/couple/[slug]/booking` | Booking info |
-| `/couple/[slug]/final-review` | Final review before event |
-
----
-
-## Special / Public Routes
-
-| URL | Description |
-|-----|-------------|
-| `/preview/[slug]` | Portal preview (non-authenticated) |
-| `/vendor-portal/[token]` | Vendor portal (token-based access) |
-| `/w/[slug]` | Short wedding website link |
-
----
-
-## API Routes (81 total)
-
-### Agent API (`/api/agent/`)
-`analytics` · `codes` · `drafts` · `errors` · `gmail` · `heat` · `knowledge-gaps` · `leads` · `pipeline` · `relationships` · `reply` · `send` · `sequences`
-
-### Couple API (`/api/couple/`)
-`allergies` · `bar` · `beauty` · `borrow` · `budget` · `ceremony` · `checklist` · `contracts` · `decor` · `details` · `finalization` · `guest-care` · `guests` · `inspo` · `messages` · `onboarding` · `party` · `photos` · `rehearsal` · `rooms` · `seating` · `staffing` · `stays` · `tables` · `timeline` · `transportation` · `vendors` · `website` · `wedding-details` · `worksheets`
-
-### Intel API (`/api/intel/`)
-`annotations` · `anomalies` · `attribution` · `briefings` · `campaigns` · `clients` · `forecasts` · `health` · `lost-deals` · `matching` · `nlq` · `positioning` · `recommendations` · `reviews` · `social` · `sources` · `team` · `tours` · `trends`
-
-### Portal API (`/api/portal/`)
-`borrow` · `contracts` · `finalization` · `kb` · `messages` · `reminders` · `sage` · `section-config` · `vendors` · `wedding-detail-config` · `weddings`
-
-### Other API
-`/api/auth/callback` · `/api/platform/notifications` · `/api/public/sage-preview` · `/api/public/vendor-portal` · `/api/public/wedding-website` · `/api/cron` · `/api/webhooks/calendly` · `/api/webhooks/stripe`
+**Note:** This sitemap was auto-generated by `scripts/gen-sitemap.mjs` (run to refresh counts).
