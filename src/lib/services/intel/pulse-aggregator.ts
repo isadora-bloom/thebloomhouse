@@ -59,6 +59,37 @@ const PRIORITY_RANK: Record<PulsePriority, number> = {
   low: 3,
 }
 
+/**
+ * November plan finding 5 (W10): the demo showed a "Critical" insight
+ * aged 145 days still pinned at the top of /pulse. Critical items
+ * bypass the sinceDays floor deliberately (T5-iota.7 — an unresolved
+ * risk-flag must not silently age out), but nothing kept an item that
+ * old from monopolising the top of the feed forever. Age-aware
+ * demotion: a critical item that has sat unacted-on for longer than
+ * CRITICAL_DEMOTION_DAYS drops to 'medium' for sort/display purposes.
+ * It still shows up (nothing is hidden by demotion, only re-ranked and
+ * re-labelled) — only an explicit snooze/dismiss removes it from the
+ * feed. Configurable via the `demotionDays` option so a call site can
+ * tune the window without a code change.
+ */
+export const DEFAULT_CRITICAL_DEMOTION_DAYS = 30
+
+/**
+ * Pure demotion rule — exported for unit tests. `ageDays` is the age of
+ * the item in days; `priority` is its stored/resolved priority before
+ * demotion. Only 'critical' ages out (to 'medium'); high/medium/low are
+ * left alone — those tiers already respect the sinceDays floor upstream
+ * so they don't accumulate the same way an unbounded-critical item does.
+ */
+export function demoteByAge(
+  priority: PulsePriority,
+  ageDays: number,
+  demotionDays: number = DEFAULT_CRITICAL_DEMOTION_DAYS,
+): PulsePriority {
+  if (priority === 'critical' && ageDays >= demotionDays) return 'medium'
+  return priority
+}
+
 interface NotificationRow {
   id: string
   type: string
@@ -168,10 +199,11 @@ export async function aggregatePulse(
 export async function aggregatePulseFull(
   supabase: SupabaseClient,
   venueId: string,
-  opts: { limit?: number; sinceDays?: number } = {},
+  opts: { limit?: number; sinceDays?: number; demotionDays?: number } = {},
 ): Promise<PulseAggregateResult> {
   const limit = opts.limit ?? 50
   const sinceDays = opts.sinceDays ?? 14
+  const demotionDays = opts.demotionDays ?? DEFAULT_CRITICAL_DEMOTION_DAYS
   const sinceIso = new Date(Date.now() - sinceDays * 86_400_000).toISOString()
 
   // Pull active snoozes + dismissals up front so we can filter
@@ -375,7 +407,20 @@ export async function aggregatePulseFull(
     })
   }
 
-  // Subtract snoozed/dismissed items.
+  // Age-aware demotion (finding 5): a critical item that has sat
+  // unacted-on longer than demotionDays no longer outranks fresh
+  // critical items. Re-labels priority in place — does not remove the
+  // item, only changes where it sorts and how it's badged.
+  const nowMs = Date.now()
+  for (const it of items) {
+    const ageDays = (nowMs - new Date(it.createdAt).getTime()) / 86_400_000
+    it.priority = demoteByAge(it.priority, ageDays, demotionDays)
+  }
+
+  // Subtract snoozed/dismissed items. Snoozed-until-future and
+  // dismissed-within-90-days items are excluded regardless of priority
+  // or age — demotion only changes ranking, it never overrides an
+  // explicit snooze/dismiss.
   const visible = items.filter((it) => !hiddenKeys.has(it.id))
 
   // Sort by priority then recency. Stable ordering: same priority +

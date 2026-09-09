@@ -23,6 +23,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { replayReviewRows, type ReviewRow } from '@/lib/services/identity/replay/reviews'
 
 const PLACES_V1_ENDPOINT = 'https://places.googleapis.com/v1/places'
 
@@ -209,7 +210,13 @@ export async function pollGooglePlacesForVenue(
     }
   }
 
-  const { error: insertErr } = await supabase.from('reviews').insert(toInsert)
+  const { data: insertedRows, error: insertErr } = await supabase
+    .from('reviews')
+    .insert(toInsert)
+    .select(
+      'id, source, source_review_id, reviewer_name, rating, title, body, ' +
+        'review_date, response_text, is_featured, themes, created_at',
+    )
   if (insertErr) {
     return {
       venue_id: venueId,
@@ -217,6 +224,27 @@ export async function pollGooglePlacesForVenue(
       reviews_fetched: fetched.length,
       reviews_inserted: 0,
       error: insertErr.message,
+    }
+  }
+
+  // Reviews previously never reached the identity spine (see
+  // lib/services/identity/replay/reviews.ts header). Replay just the
+  // rows this poll inserted through linkSignal — best-effort: a replay
+  // failure must not make the poll look failed, the reviews are already
+  // safely in the DB and an operator-triggered replayReviews() catch-up
+  // can pick them up later.
+  if (insertedRows && insertedRows.length > 0) {
+    try {
+      await replayReviewRows({
+        supabase,
+        venueId,
+        rows: insertedRows as unknown as ReviewRow[],
+      })
+    } catch (err) {
+      console.warn(
+        `[google-places] reviews replay failed for venue ${venueId}:`,
+        err instanceof Error ? err.message : err,
+      )
     }
   }
 

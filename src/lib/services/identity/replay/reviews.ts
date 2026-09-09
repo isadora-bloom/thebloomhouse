@@ -38,6 +38,20 @@
  * Contract: accepts the Supabase service client as a parameter — it
  * does NOT construct one. See scripts/data-integrity-check.ts for the
  * createClient + .env.local pattern a CLI caller would use.
+ *
+ * Callers (November plan finding 4)
+ * ----------------------------------
+ * replayAllOrigins (./index.ts) calls replayReviews for a full
+ * historical catch-up, but as of the 2026-07 origin-replay build had no
+ * caller of its own — a full replay only ran if something invoked the
+ * orchestrator, and nothing did. `pollGooglePlacesForVenue`
+ * (lib/services/reviews/google-places.ts, the handler behind the weekly
+ * `google_places_reviews_refresh` cron) now calls replayReviewRows with
+ * just the newly-inserted rows after each poll, so new Google reviews
+ * reach the spine on the same cadence they reach the reviews table.
+ * Paste-only sources (Knot/WW/Zola/Yelp/Facebook, via /intel/reviews/paste)
+ * still only reach the spine via a manual replayAllOrigins/replayReviews
+ * run — no live write path calls it for those.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -48,8 +62,11 @@ export const REVIEWS_ADAPTER_ACTION = 'review_left' as const
 
 /** Shape we read from `reviews` (migration 031). `wedding_id` is
  *  optional because the shipped schema has no such column — we select
- *  it defensively for deployments that added one. */
-interface ReviewRow {
+ *  it defensively for deployments that added one. Exported so callers
+ *  that already hold freshly-inserted review rows (e.g. the Google
+ *  Places poller) can pass them straight to replayReviewRows without a
+ *  round-trip re-fetch. */
+export interface ReviewRow {
   id: string
   source: string | null
   source_review_id: string | null
@@ -188,21 +205,31 @@ export interface ReplayReviewsResult {
   linked: number
 }
 
+export interface ReplayReviewRowsArgs {
+  supabase: SupabaseClient
+  venueId: string
+  rows: ReviewRow[]
+}
+
 /**
- * Iterate every review for the venue, build a signal, and route it
- * through linkSignal. Idempotent via external_id (re-runs return
- * 'duplicate'). `linked` counts signals that bound to a couple —
- * either attached (high tier / legacy_wedding_id) or minted a new
- * channel-scoped couple. candidate_medium / candidate_low / fragment
- * outcomes are counted as processed-but-not-linked: the review landed
- * on the spine (as an orphan touchpoint + candidate queue row) but did
- * not yet bind to a couple, which is the correct conservative result.
+ * Route a given set of review rows through linkSignal. Idempotent via
+ * external_id (re-runs return 'duplicate'). `linked` counts signals
+ * that bound to a couple — either attached (high tier / legacy_wedding_id)
+ * or minted a new channel-scoped couple. candidate_medium / candidate_low /
+ * fragment outcomes are counted as processed-but-not-linked: the review
+ * landed on the spine (as an orphan touchpoint + candidate queue row) but
+ * did not yet bind to a couple, which is the correct conservative result.
+ *
+ * Extracted out of replayReviews (which now just fetches all rows and
+ * delegates here) so a caller that already holds a small, known set of
+ * rows — the Google Places poller inserting this week's new reviews,
+ * for instance — can replay just those rows instead of re-running the
+ * matcher over the venue's entire review history on every call.
  */
-export async function replayReviews(
-  args: ReplayReviewsArgs,
+export async function replayReviewRows(
+  args: ReplayReviewRowsArgs,
 ): Promise<ReplayReviewsResult> {
-  const { supabase, venueId } = args
-  const rows = await fetchReviews(supabase, venueId)
+  const { supabase, venueId, rows } = args
 
   let processed = 0
   let linked = 0
@@ -233,4 +260,17 @@ export async function replayReviews(
   }
 
   return { processed, linked }
+}
+
+/**
+ * Iterate every review for the venue and replay all of them. Used by
+ * the Phase-2 origin-replay orchestrator (replayAllOrigins) for a
+ * full historical catch-up run.
+ */
+export async function replayReviews(
+  args: ReplayReviewsArgs,
+): Promise<ReplayReviewsResult> {
+  const { supabase, venueId } = args
+  const rows = await fetchReviews(supabase, venueId)
+  return replayReviewRows({ supabase, venueId, rows })
 }
