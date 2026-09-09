@@ -303,6 +303,26 @@ describe('composeIntelAnswer — pure grounding contract', () => {
     expect(r.confidence).toBe('refused')
   })
 
+  it('checks a currency amount rather than skipping it', async () => {
+    const r = composeIntelAnswer({
+      question: 'what is my cost per booking on knot?',
+      text: 'Knot costs you $4,200 per booking.',
+      calls: [
+        {
+          name: 'get_source_attribution',
+          args: { model: 'first_touch' },
+          result: JSON.stringify({
+            channels: [{ channel: 'knot', n: 392, cac: { value: null, n: 0, enoughData: false } }],
+          }),
+          isError: false,
+        },
+      ],
+      truncated: false,
+    })
+    expect(r.confidence).toBe('refused')
+    expect(r.answer).toContain('4,200')
+  })
+
   it('allows a figure the operator supplied in their own question', async () => {
     const r = composeIntelAnswer({
       question: 'why did inquiry volume spike 40% in March 2024?',

@@ -550,7 +550,11 @@ export function findUngroundedClaims(
     residual = residual.replace(m[0], ' '.repeat(m[0].length))
   }
 
-  for (const m of residual.matchAll(/(?<![\w.$])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![\w%])/g)) {
+  // The lookbehind excludes a word character (so a uuid segment is not read as
+  // a statistic) and a full stop (so "3.14" is not also read as "14"). It does
+  // NOT exclude a currency symbol: "$4,200" must be checkable, or a fabricated
+  // CAC walks straight through.
+  for (const m of residual.matchAll(/(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![\w%])/g)) {
     const value = parseNumeric(m[1])
     if (value !== null && !isGrounded(value, grounded) && !seen.has(`n${m[1]}`)) {
       seen.add(`n${m[1]}`)
