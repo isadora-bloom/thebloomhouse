@@ -11,6 +11,13 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-08 (Ask your data moves onto tool calling — W3 of NOVEMBER-PLAN.md)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| askIntel (`src/lib/intel/canonical.ts`) | — | `ask-intel.tools.prompt.v1.0` | New prompt for the tool-calling NLQ path. The model starts with no data and can only get some by calling one of five canonical readers (`src/lib/intel/tools.ts`), so every figure in an answer is traceable to a tool result. Short contract: state no number that did not come back from a tool call; every figure carries its n; if `enoughData` is false, say so and stop; refuse honestly and name what you can answer when the readers do not hold the data (weather, FRED, trends, spend by month); names come from tool results only, an empty list is an empty list. Temperature 0, six-turn cap. Enforced after generation by `findUngroundedClaims`, which compares every percentage and count in the answer against the recorded tool results and turns an unmatched figure into a refusal that names the claim. The four wording rails in `sage/honesty-rails.ts` still run, as advisory flags alongside it. |
+| intel-brain (`answerNaturalLanguageQuery`) | v2.1 | v2.2 | DEPRECATED, live only behind `NLQ_LEGACY=1` for A/B scoring against askIntel. Prompt change in this bump: the ATTRIBUTION BY PLATFORM block is now labelled as raw event counts rather than a conversion rate, shows the booked count alongside the event count, and renders "no denominator" instead of a fake 0%. It was event-denominated with no minimum sample, which is how the July battery got "unknown converts 86%" while `getSourceAttribution` said 40% over n=392. |
+
 ## 2026-06-09 (Intel brain — battery-gap grounding Q19/Q30/Q36)
 
 | brain | from | to | change |

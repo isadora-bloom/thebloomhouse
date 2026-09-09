@@ -13,14 +13,19 @@
 //   - a JSON results file at battery-results/<timestamp>.json so phase
 //     gates can diff runs.
 //
-// PHASE 3.3 RETARGET POINT
-// ------------------------
-// The plan targets the EXISTING intel-brain NLQ path for the Phase 0
-// baseline. The canonical `askIntel` in src/lib/intel/canonical.ts is a stub
-// that refuses everything until Phase 3.3 makes it real. The brain entrypoint
-// is isolated in ONE place — the `askBrain` constant below. At Phase 3.3,
-// retarget by changing only that constant's implementation; nothing else in
-// this file needs to move.
+// BRAIN TARGET
+// ------------
+// `askBrain` below calls the canonical `askIntel` (src/lib/intel/canonical.ts),
+// which answers only by calling the canonical readers as tools and refuses
+// when it cannot ground a figure. Retargeted from intel-brain's
+// answerNaturalLanguageQuery by W3 of NOVEMBER-PLAN.md.
+//
+// A/B: set NLQ_LEGACY=1 and askIntel routes back to the old prompt-dump brain,
+// so both paths can be scored on the same questions against the same ground
+// truth. Before the retarget the runner called the legacy brain directly while
+// battery-ground-truth.ts grounded the judge in the canonical readers, so the
+// battery was measuring the gap between two code paths rather than the quality
+// of one.
 //
 // USAGE
 //   npx tsx scripts/run-battery.ts [venueId]
@@ -69,12 +74,9 @@ const DEFAULT_VENUE_ID = 'f3d10226-4c5c-47ad-b89b-98ad63842492' // Rixey Manor
 const FALLBACK_USER_ID = 'a2ab53b8-a02b-409d-b32d-4add75852d33' // matches 12-nlq.ts fallback
 
 // ---------------------------------------------------------------------------
-// THE BRAIN ENTRYPOINT — single retarget point for Phase 3.3.
+// THE BRAIN ENTRYPOINT — the one place the runner knows which brain answers.
 //
-// `BrainAnswer` is the minimal shape the scorer needs. The current
-// implementation calls answerNaturalLanguageQuery from the existing
-// intel-brain. At Phase 3.3, swap the body of `askBrain` to call the (by then
-// real) canonical askIntel — the rest of this file is brain-agnostic.
+// `BrainAnswer` is the minimal shape the scorer needs.
 // ---------------------------------------------------------------------------
 
 interface BrainAnswer {
@@ -88,34 +90,44 @@ interface BrainAnswer {
   cost: number
   /** Advisory honesty flags from the brain's own post-call inspector. */
   honestyFlags: unknown[]
+  /** askIntel's own verdict on its answer. 'refused' means the grounding
+   *  check could not match a figure to a tool result, or the question was
+   *  out of scope. Recorded so a run can be read for refusal rate as well as
+   *  score. */
+  confidence?: 'high' | 'hedged' | 'refused'
+  /** How many canonical readers the answer stands on. */
+  evidenceCount?: number
 }
 
-const BRAIN_ENTRYPOINT = 'intel-brain.answerNaturalLanguageQuery' as const
+const BRAIN_ENTRYPOINT =
+  process.env.NLQ_LEGACY === '1'
+    ? ('canonical.askIntel (NLQ_LEGACY=1 -> intel-brain)' as const)
+    : ('canonical.askIntel' as const)
 
 async function askBrain(
   venueId: string,
   userId: string,
   query: string
 ): Promise<BrainAnswer> {
-  // --- Phase 0 baseline target: the existing intel-brain NLQ path. ---
-  // Dynamic import so env is already mirrored onto process.env before the
-  // brain module (and its service-role Supabase client) initialises.
-  const { answerNaturalLanguageQuery } = await import(
-    '../src/lib/services/brain/intel-brain'
-  )
+  // Dynamic import so loadEnv() has already mirrored .env.local onto
+  // process.env before the canonical module's service client initialises.
+  const { askIntel } = await import('../src/lib/intel/canonical')
   // One retry on transient failure — the Jul 7 run lost Q12 + Q34 to a
   // momentary "Claude failed and no OpenAI fallback" blip; a single retry
   // with backoff keeps a $3 run from carrying holes.
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const r = await answerNaturalLanguageQuery(venueId, userId, query)
+      // skipLog: a scoring run must not fill the operator's query history.
+      const r = await askIntel(venueId, query, { userId, skipLog: true })
       return {
-        response: r.response,
-        queryId: r.queryId,
-        tokensUsed: r.tokensUsed,
-        cost: r.cost,
+        response: r.answer,
+        queryId: r.queryId ?? '',
+        tokensUsed: r.tokensUsed ?? 0,
+        cost: r.cost ?? 0,
         honestyFlags: r.honestyFlags ?? [],
+        confidence: r.confidence,
+        evidenceCount: r.evidence.length,
       }
     } catch (err) {
       lastErr = err
@@ -206,6 +218,12 @@ export interface QuestionResult {
   tokensUsed: number
   cost: number
   brainHonestyFlags: number
+  /** askIntel's own verdict. Lets a run be read for refusal rate, not just
+   *  score: a battery where everything refuses scores badly for a reason
+   *  worth telling apart from confabulation. */
+  brainConfidence?: 'high' | 'hedged' | 'refused'
+  /** Canonical readers the answer stands on. Zero on a refusal. */
+  evidenceCount?: number
   /** Set when the brain call threw. */
   error?: string
 }
@@ -627,6 +645,8 @@ async function main() {
         tokensUsed: answer.tokensUsed,
         cost: answer.cost,
         brainHonestyFlags: answer.honestyFlags.length,
+        brainConfidence: answer.confidence,
+        evidenceCount: answer.evidenceCount,
       }
       results.push(r)
       console.log(

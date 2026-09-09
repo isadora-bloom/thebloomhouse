@@ -26,6 +26,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AttributionResult } from '@/lib/services/attribution/couple-attribution'
 import type { CohortIntel } from '@/lib/services/cohort'
 import { computeHeatScore } from '@/lib/services/identity/heat-score'
+// askIntel only (§6). The manifest and the grounding check live in
+// `@/lib/intel/tools`; it imports the readers back dynamically, so the two
+// modules are not a load-time cycle. Namespaced so the test can stub it.
+import * as intelTools from '@/lib/intel/tools'
+import type { ToolCallRecord } from '@/lib/ai/tools'
+import { callAITools } from '@/lib/ai/tools'
+import { CLAUDE_MODEL } from '@/lib/ai/client'
+import { inspectResponseForHonesty, type HonestyFlag } from '@/lib/services/sage/honesty-rails'
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared types
@@ -905,30 +913,235 @@ export interface IntelAnswer {
   evidence: EvidenceRef[]
   confidence: 'high' | 'hedged' | 'refused'
   generatedAt: string
+  // — telemetry, additive and optional. The NLQ surface renders the honesty
+  //   ribbon and the helpful/not-helpful control from these; nothing that
+  //   only reads answer/evidence/confidence has to change.
+  /** natural_language_queries row id, when the query was logged. */
+  queryId?: string
+  tokensUsed?: number
+  cost?: number
+  /** Advisory wording flags from the four legacy regex rails. Kept as an
+   *  extra signal alongside the enforcing grounding check, not instead. */
+  honestyFlags?: HonestyFlag[]
+  /** Which path answered: the tool-calling brain, or the legacy prompt-dump
+   *  brain behind NLQ_LEGACY=1. */
+  path?: 'tools' | 'legacy'
 }
 
 /** Nil UUID used as the actor when a canonical askIntel call has no user
- *  context. The NLQ brain logs each query to natural_language_queries with
- *  this user_id; the log insert is best-effort (non-fatal on failure), so a
- *  sentinel actor never blocks the answer. */
+ *  context. Both paths log to natural_language_queries with this user_id;
+ *  the insert is best-effort, so a sentinel actor never blocks an answer. */
 const ASK_INTEL_SYSTEM_USER = '00000000-0000-0000-0000-000000000000'
 
-/** Pure mapping from the NLQ brain's result to the canonical IntelAnswer.
- *  Exported for unit testing without the LLM. The brain answers
- *  conversationally with inline citations (no structured evidence refs), so
- *  `evidence` is []; confidence is derived from the post-call honesty
- *  inspector — any tripped honesty flag means the answer hedged. */
-export function mapNLQToAnswer(nlq: { response: string; honestyFlags: readonly unknown[] }): IntelAnswer {
+/** Prompt revision for the tool-calling brain. Logged to
+ *  api_costs.prompt_version, per PROMPTS-CHANGELOG.md. */
+export const ASK_INTEL_PROMPT_VERSION = 'ask-intel.tools.prompt.v1.0'
+
+/** Turn budget headroom. The loop caps at 6 model turns; 4000 output tokens
+ *  is enough for several parallel tool calls plus a full prose answer. */
+const ASK_INTEL_MAX_TOKENS = 4000
+
+export interface AskIntelOpts {
+  /** Actor for the natural_language_queries log row. */
+  userId?: string
+  /** Skip the DB log write. The battery runner sets this so a scoring run
+   *  does not pollute the operator's query history. */
+  skipLog?: boolean
+  /** Dependency seam for unit tests: swap the five data readers for fakes so
+   *  the whole loop can run with no database. Production never passes this. */
+  readers?: intelTools.CanonicalReaders
+}
+
+/**
+ * The system contract. Short on purpose. The old brain's system prompt ran to
+ * a manifest plus a venue voice plus task instructions plus rails, and then
+ * the user turn carried a dump of roughly 25 legacy tables; with that much
+ * context the model had no way to tell a canonical figure from a stale one.
+ * Here the model starts with no data at all and can only get some by calling
+ * a reader, which makes "did this number come from a tool" a question with an
+ * answer.
+ */
+function buildAskIntelSystemPrompt(): string {
+  const { CANONICAL_TOOL_SCOPE_SUMMARY, OUT_OF_SCOPE_SUBJECTS } = intelTools
+  return [
+    'You answer questions about one wedding venue for the person who runs it.',
+    '',
+    'You start with no data. The only way to get any is to call one of the tools. They read the',
+    'venue database directly and they are the single source of truth for this product.',
+    '',
+    'The rules, in order of importance:',
+    '',
+    '1. State no number that did not come back from a tool call in this conversation. Not a',
+    '   remembered one, not an industry average, not one you worked out from two others. If you',
+    '   want to say a figure, it has to have been in a tool result.',
+    '2. Every figure carries its sample size. Write it as "40% (n=392)", never bare. If a tool',
+    '   returned a Distribution with a null value, that is a real answer: there is no denominator,',
+    '   so say there is no denominator.',
+    '3. If enoughData is false on the figure you were going to quote, say so and stop. Do not give',
+    '   the number with a caveat; the number is not reliable enough to be the answer.',
+    '4. If the tools cannot answer the question, say what you cannot answer and name what you can.',
+    `   You have access to: ${CANONICAL_TOOL_SCOPE_SUMMARY}.`,
+    `   You have NO data on: ${OUT_OF_SCOPE_SUBJECTS.join('; ')}. A question that is only about one`,
+    '   of those gets an honest refusal, not a guess and not a general-knowledge answer.',
+    '5. Names come from tool results only. If a list comes back empty, the answer is that it is',
+    '   empty. Never invent a couple, a tour, or an attendee.',
+    '6. If the question contains a premise the data does not support, say what the data actually',
+    '   shows and ask what led to the premise. Do not explain an event that did not happen.',
+    '7. Volume and conversion are different questions. get_source_attribution returns topByVolume',
+    '   and topByConversion separately for that reason; do not collapse them into one "best".',
+    '8. Do not assert cause. Describe what moved together, name what you could not rule out.',
+    '',
+    'Call the tools you need, in parallel where they are independent. Then answer in plain',
+    'English, briefly, in the second person. Refusing is a good outcome when refusing is correct.',
+  ].join('\n')
+}
+
+/** Evidence trail from the recorded tool calls. Each call becomes one metric
+ *  ref naming the reader and the arguments it ran with; the quote is the head
+ *  of the raw result so an operator can see the shape of what was read. */
+function evidenceFromCalls(calls: readonly ToolCallRecord[]): EvidenceRef[] {
+  return calls.map((c) => {
+    const args = Object.entries(c.args)
+      .map(([k, v]) => `${k}=${String(v)}`)
+      .join(', ')
+    return {
+      kind: 'metric' as const,
+      ref: `canonical:${c.name}(${args})`,
+      quote: c.result.length > 600 ? `${c.result.slice(0, 600)}…` : c.result,
+    }
+  })
+}
+
+/** Pure mapping from the legacy NLQ brain's result to the canonical
+ *  IntelAnswer. Kept for the NLQ_LEGACY=1 A/B path and its unit test. The
+ *  legacy brain cites inline and returns no structured refs, so `evidence` is
+ *  []; confidence comes from the advisory wording rails. */
+export function mapNLQToAnswer(nlq: {
+  response: string
+  honestyFlags: readonly unknown[]
+}): IntelAnswer {
   return {
     answer: nlq.response,
     evidence: [],
     confidence: (nlq.honestyFlags?.length ?? 0) > 0 ? 'hedged' : 'high',
     generatedAt: new Date().toISOString(),
+    path: 'legacy',
   }
 }
 
-export async function askIntel(venueId: string, question: string): Promise<IntelAnswer> {
-  if (!venueId || !question.trim()) {
+/**
+ * Assemble the final IntelAnswer from a completed tool loop. Pure, so the
+ * grounding contract is unit-testable without an API key or a database.
+ *
+ * The order matters. The enforcing grounding check runs first and can veto
+ * the whole answer; the four legacy wording rails run after and only ever
+ * downgrade 'high' to 'hedged'. An advisory rail must never be able to
+ * rescue an answer the grounding check rejected.
+ */
+export function composeIntelAnswer(input: {
+  question: string
+  text: string
+  calls: readonly ToolCallRecord[]
+  truncated: boolean
+}): IntelAnswer {
+  const generatedAt = new Date().toISOString()
+  const evidence = evidenceFromCalls(input.calls)
+  const honestyFlags = inspectResponseForHonesty(input.question, input.text)
+
+  const answerText = input.text.trim()
+  if (!answerText) {
+    return {
+      answer:
+        'I could not get to an answer within my working budget for that question. Try asking it in ' +
+        'smaller pieces, one figure at a time.',
+      evidence,
+      confidence: 'refused',
+      generatedAt,
+      honestyFlags,
+      path: 'tools',
+    }
+  }
+
+  const ungrounded = intelTools.findUngroundedClaims(answerText, input.calls, input.question)
+  if (ungrounded.length > 0) {
+    return {
+      answer: intelTools.buildGroundingRefusal(ungrounded),
+      evidence,
+      confidence: 'refused',
+      generatedAt,
+      honestyFlags,
+      path: 'tools',
+    }
+  }
+
+  // A truncated loop means the model was still asking for data when the turn
+  // cap hit, so whatever it said is incomplete by construction.
+  if (input.truncated) {
+    return {
+      answer: `${answerText}\n\n(I ran out of working turns before I finished gathering everything, so treat this as partial.)`,
+      evidence,
+      confidence: 'hedged',
+      generatedAt,
+      honestyFlags,
+      path: 'tools',
+    }
+  }
+
+  return {
+    answer: answerText,
+    evidence,
+    confidence: honestyFlags.length > 0 ? 'hedged' : 'high',
+    generatedAt,
+    honestyFlags,
+    path: 'tools',
+  }
+}
+
+/** Best-effort query log. Never blocks or fails an answer. */
+async function logIntelQuery(
+  venueId: string,
+  userId: string,
+  question: string,
+  answer: IntelAnswer,
+  tokensUsed: number,
+  cost: number,
+): Promise<string> {
+  try {
+    const { createServiceClient } = await import('@/lib/supabase/service')
+    const { data } = await createServiceClient()
+      .from('natural_language_queries')
+      .insert({
+        venue_id: venueId,
+        user_id: userId,
+        query_text: question,
+        response_text: answer.answer,
+        model_used: CLAUDE_MODEL,
+        tokens_used: tokensUsed,
+        cost,
+      })
+      .select('id')
+      .single()
+    return (data?.id as string) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The natural-language reader. Answers only from the other five canonical
+ * functions, by calling them as tools, and refuses when it cannot.
+ *
+ * Set NLQ_LEGACY=1 to route back to the prompt-dump brain instead. That path
+ * is kept only so the two can be scored against each other on the same
+ * battery; it is not the product path.
+ */
+export async function askIntel(
+  venueId: string,
+  question: string,
+  opts: AskIntelOpts = {},
+): Promise<IntelAnswer> {
+  const trimmed = question.trim()
+  if (!venueId || !trimmed) {
     return {
       answer: 'Ask a question about this venue’s performance, bookings, sources, or trends.',
       evidence: [],
@@ -936,7 +1149,83 @@ export async function askIntel(venueId: string, question: string): Promise<Intel
       generatedAt: new Date().toISOString(),
     }
   }
-  const { answerNaturalLanguageQuery } = await import('@/lib/services/brain/intel-brain')
-  const nlq = await answerNaturalLanguageQuery(venueId, ASK_INTEL_SYSTEM_USER, question)
-  return mapNLQToAnswer(nlq)
+
+  const userId = opts.userId ?? ASK_INTEL_SYSTEM_USER
+
+  // Deterministic privacy gate, before any model call. The identity profiles
+  // are reachable through get_couple_journey, and a model cannot be trusted
+  // to redact from its own context. Battery Q31.
+  if (intelTools.SENSITIVE_THEME_NAMING_RE.test(trimmed)) {
+    return {
+      answer: intelTools.SENSITIVE_THEME_REFUSAL,
+      evidence: [],
+      confidence: 'refused',
+      generatedAt: new Date().toISOString(),
+      path: 'tools',
+    }
+  }
+
+  // A/B escape hatch. Legacy brain, unchanged behaviour, so the battery can
+  // score both paths against the same ground truth.
+  if (process.env.NLQ_LEGACY === '1') {
+    const { answerNaturalLanguageQuery } = await import('@/lib/services/brain/intel-brain')
+    const nlq = await answerNaturalLanguageQuery(venueId, userId, trimmed)
+    return {
+      ...mapNLQToAnswer(nlq),
+      queryId: nlq.queryId,
+      tokensUsed: nlq.tokensUsed,
+      cost: nlq.cost,
+      honestyFlags: nlq.honestyFlags,
+    }
+  }
+
+  const { dispatch, calls } = intelTools.createCanonicalDispatcher(venueId, opts.readers)
+  const loop = await callAITools(
+    {
+      systemPrompt: buildAskIntelSystemPrompt(),
+      userPrompt: trimmed,
+      maxTokens: ASK_INTEL_MAX_TOKENS,
+      // Zero. There is one right set of figures; sampling around it is not a
+      // feature. The old path ran at 0.3.
+      temperature: 0,
+      venueId,
+      taskType: 'ask_intel',
+      promptVersion: ASK_INTEL_PROMPT_VERSION,
+      contentTier: 2,
+      tools: intelTools.CANONICAL_TOOLS,
+    },
+    dispatch,
+  )
+
+  if (loop.refused) {
+    return {
+      answer: loop.reason,
+      evidence: evidenceFromCalls(calls),
+      confidence: 'refused',
+      generatedAt: new Date().toISOString(),
+      tokensUsed: loop.inputTokens + loop.outputTokens,
+      cost: loop.cost,
+      path: 'tools',
+    }
+  }
+
+  const answer = composeIntelAnswer({
+    question: trimmed,
+    text: loop.text,
+    calls,
+    truncated: loop.truncated,
+  })
+  answer.tokensUsed = loop.inputTokens + loop.outputTokens
+  answer.cost = loop.cost
+  if (!opts.skipLog) {
+    answer.queryId = await logIntelQuery(
+      venueId,
+      userId,
+      trimmed,
+      answer,
+      answer.tokensUsed,
+      answer.cost,
+    )
+  }
+  return answer
 }
