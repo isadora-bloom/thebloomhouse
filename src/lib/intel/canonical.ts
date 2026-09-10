@@ -30,6 +30,7 @@ import { computeHeatScore } from '@/lib/services/identity/heat-score'
 // `@/lib/intel/tools`; it imports the readers back dynamically, so the two
 // modules are not a load-time cycle. Namespaced so the test can stub it.
 import * as intelTools from '@/lib/intel/tools'
+import type { IntelToolSource } from '@/lib/intel/tool-sources/types'
 import type { ToolCallRecord } from '@/lib/ai/tools'
 import { callAITools } from '@/lib/ai/tools'
 import { CLAUDE_MODEL } from '@/lib/ai/client'
@@ -1014,7 +1015,7 @@ const ASK_INTEL_SYSTEM_USER = '00000000-0000-0000-0000-000000000000'
 
 /** Prompt revision for the tool-calling brain. Logged to
  *  api_costs.prompt_version, per PROMPTS-CHANGELOG.md. */
-export const ASK_INTEL_PROMPT_VERSION = 'ask-intel.tools.prompt.v1.0'
+export const ASK_INTEL_PROMPT_VERSION = 'ask-intel.tools.prompt.v1.1'
 
 /** Turn budget headroom. The loop caps at 6 model turns; 4000 output tokens
  *  is enough for several parallel tool calls plus a full prose answer. */
@@ -1029,6 +1030,9 @@ export interface AskIntelOpts {
   /** Dependency seam for unit tests: swap the five data readers for fakes so
    *  the whole loop can run with no database. Production never passes this. */
   readers?: intelTools.CanonicalReaders
+  /** Same seam for the wave-2 tool sources: fakes and a pinned clock. With
+   *  nothing passed the registry in ./tool-sources is used. */
+  sources?: intelTools.ToolSourceOptions
 }
 
 /**
@@ -1040,8 +1044,9 @@ export interface AskIntelOpts {
  * a reader, which makes "did this number come from a tool" a question with an
  * answer.
  */
-function buildAskIntelSystemPrompt(): string {
-  const { CANONICAL_TOOL_SCOPE_SUMMARY, OUT_OF_SCOPE_SUBJECTS } = intelTools
+function buildAskIntelSystemPrompt(sources: readonly IntelToolSource[]): string {
+  const { OUT_OF_SCOPE_SUBJECTS } = intelTools
+  const CANONICAL_TOOL_SCOPE_SUMMARY = intelTools.scopeSummaryFor(sources)
   return [
     'You answer questions about one wedding venue for the person who runs it.',
     '',
@@ -1258,10 +1263,14 @@ export async function askIntel(
     }
   }
 
-  const { dispatch, calls } = intelTools.createCanonicalDispatcher(venueId, opts.readers)
+  const sources = opts.sources?.sources ?? (await intelTools.loadToolSources())
+  const { dispatch, calls } = intelTools.createCanonicalDispatcher(venueId, opts.readers, {
+    sources,
+    deps: opts.sources?.deps,
+  })
   const loop = await callAITools(
     {
-      systemPrompt: buildAskIntelSystemPrompt(),
+      systemPrompt: buildAskIntelSystemPrompt(sources),
       userPrompt: trimmed,
       maxTokens: ASK_INTEL_MAX_TOKENS,
       // Zero. There is one right set of figures; sampling around it is not a
@@ -1271,7 +1280,7 @@ export async function askIntel(
       taskType: 'ask_intel',
       promptVersion: ASK_INTEL_PROMPT_VERSION,
       contentTier: 2,
-      tools: intelTools.CANONICAL_TOOLS,
+      tools: intelTools.allTools(sources),
     },
     dispatch,
   )

@@ -28,6 +28,7 @@
 
 import type Anthropic from '@anthropic-ai/sdk'
 import type { ToolCallRecord, ToolDispatcher } from '@/lib/ai/tools'
+import type { IntelToolSource, ToolSourceDeps } from './tool-sources/types'
 
 // ---------------------------------------------------------------------------
 // Manifest
@@ -255,9 +256,45 @@ export type CanonicalReaders = Pick<
  * keeps this module a leaf: canonical.ts imports the manifest from here, and
  * importing canonical.ts back at module load would be a cycle.
  */
+// ---------------------------------------------------------------------------
+// Wave-2 tool sources (NOVEMBER-PLAN.md wave 2, W12 to W15)
+// ---------------------------------------------------------------------------
+
+/** What a dispatcher may reach beyond the five readers. Tests pass fakes and
+ *  a pinned clock; production leaves this empty and the registry in
+ *  ./tool-sources is loaded on first use. */
+export interface ToolSourceOptions {
+  sources?: readonly IntelToolSource[]
+  deps?: Partial<ToolSourceDeps>
+}
+
+/** The registry, imported lazily. A source is free to reuse a reader from
+ *  canonical.ts, and canonical.ts imports this module, so a static import
+ *  here would close a cycle at module load. */
+export async function loadToolSources(): Promise<readonly IntelToolSource[]> {
+  const mod = await import('./tool-sources')
+  return mod.TOOL_SOURCES
+}
+
+/** The full manifest handed to the model: the five readers plus every
+ *  registered source. */
+export function allTools(sources: readonly IntelToolSource[]): Anthropic.Tool[] {
+  return [...CANONICAL_TOOLS, ...sources.map((s) => s.tool)]
+}
+
+/** What the model is told it can answer. The readers' summary plus each
+ *  source's subjects, so a question a source covers is not refused as out
+ *  of scope. OUT_OF_SCOPE_SUBJECTS is pruned by hand as sources land. */
+export function scopeSummaryFor(sources: readonly IntelToolSource[]): string {
+  const extra = sources.flatMap((s) => s.subjects)
+  if (extra.length === 0) return CANONICAL_TOOL_SCOPE_SUMMARY
+  return `${CANONICAL_TOOL_SCOPE_SUMMARY}, ${extra.join(', ')}`
+}
+
 export function createCanonicalDispatcher(
   venueId: string,
   readers?: CanonicalReaders,
+  sourceOpts?: ToolSourceOptions,
 ): {
   dispatch: ToolDispatcher
   calls: ToolCallRecord[]
@@ -346,10 +383,27 @@ export function createCanonicalDispatcher(
         return JSON.stringify({ [bucket]: full[bucket], generatedAt: full.generatedAt })
       }
 
-      default:
+      default: {
+        // Not one of the five readers. A registered source runs with the
+        // venue bound here, the same way the readers do; the model never
+        // chooses the tenant.
+        const sources = sourceOpts?.sources ?? (await loadToolSources())
+        const source = sources.find((s) => s.tool.name === name)
+        if (source) {
+          const deps: ToolSourceDeps = {
+            supabase:
+              sourceOpts?.deps?.supabase ??
+              (await import('@/lib/supabase/service')).createServiceClient(),
+            today: sourceOpts?.deps?.today ?? new Date().toISOString().slice(0, 10),
+          }
+          return JSON.stringify(await source.run(venueId, args, deps))
+        }
         return JSON.stringify({
-          error: `Unknown tool "${name}". Available: ${CANONICAL_TOOLS.map((t) => t.name).join(', ')}.`,
+          error: `Unknown tool "${name}". Available: ${allTools(sources)
+            .map((t) => t.name)
+            .join(', ')}.`,
         })
+      }
     }
   }
 
