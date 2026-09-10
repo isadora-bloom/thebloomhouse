@@ -6,11 +6,18 @@
 import type { IntelToolSource } from './types'
 import { timeSeriesSource } from './time-series'
 import { operatorPatternsSource } from './operator-patterns'
+import { reviewsToolSource } from './reviews'
+import { lostDealsToolSource } from './lost-deals'
+import { weatherToursToolSource } from './weather-tours'
+import { capacityToolSource } from './capacity'
 
 export const TOOL_SOURCES: readonly IntelToolSource[] = [
   timeSeriesSource,
   operatorPatternsSource,
   // W13 (built-but-unexposed: ghost risk, completeness, identity precision, signals) appends here
-  // W14 (reviews, lost deals, weather x tours, open Saturdays) appends here
+  reviewsToolSource, // W14 Q41
+  lostDealsToolSource, // W14 Q40
+  weatherToursToolSource, // W14 Q10
+  capacityToolSource, // W14 Q39
   // W15 (drafting + follow-up state) appends here
 ]
