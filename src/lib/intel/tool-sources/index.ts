@@ -20,6 +20,19 @@ export const TOOL_SOURCES: readonly IntelToolSource[] = [
   lostDealsToolSource, // W14 Q40
   weatherToursToolSource, // W14 Q10
   capacityToolSource, // W14 Q39
+import { ghostRiskSource } from './ghost-risk'
+import { completenessSource } from './completeness'
+import { identityPrecisionSource } from './identity-precision'
+import { signalsSource } from './signals'
+
+export const TOOL_SOURCES: readonly IntelToolSource[] = [
+  // W12 (time series + operator patterns) appends here
+  // W13 (built-but-unexposed: ghost risk, completeness, identity precision, signals)
+  ghostRiskSource,
+  completenessSource,
+  identityPrecisionSource,
+  signalsSource,
+  // W14 (reviews, lost deals, weather x tours, open Saturdays) appends here
   // W15 (drafting + follow-up state) appends here
   // W14 (reviews, lost deals, weather x tours, open Saturdays) appends here
   ...FOLLOW_UP_SOURCES, // W15 (drafting + follow-up state)
