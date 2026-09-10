@@ -569,7 +569,9 @@ export default function OnboardingPage() {
           const aiEmailTrim = basics.ai_email.trim()
           const ownerEmailTrim = basics.owner_email.trim()
           if (!aiEmailTrim || !isEmailValid(aiEmailTrim)) {
-            setError('Enter a valid email address for Sage to send from (e.g., concierge@yourvenue.com).')
+            setError(
+              `Enter a valid email address for ${basics.ai_name.trim() || 'your AI assistant'} to send from (e.g., concierge@yourvenue.com).`,
+            )
             setSaving(false)
             return false
           }
@@ -759,7 +761,7 @@ export default function OnboardingPage() {
           if (!aiNameSet || !escalationSet) {
             const missing = [!aiNameSet && 'an AI assistant name', !escalationSet && 'an escalation email'].filter(Boolean).join(' and ')
             throw new Error(
-              `Set ${missing} before going live — open Settings → Sage Identity, save, then come back and try again.`,
+              `Set ${missing} before going live — open Settings → AI Identity, save, then come back and try again.`,
             )
           }
 
@@ -849,7 +851,7 @@ export default function OnboardingPage() {
         const escalationSet = Boolean((aiCfgCheck as { escalation_email?: string | null } | null)?.escalation_email?.trim())
         if (!aiNameSet || !escalationSet) {
           const missing = [!aiNameSet && 'an AI assistant name', !escalationSet && 'an escalation email'].filter(Boolean).join(' and ')
-          setError(`Set ${missing} before going live — open Settings → Sage Identity, save, then come back and try again.`)
+          setError(`Set ${missing} before going live — open Settings → AI Identity, save, then come back and try again.`)
           return
         }
         await supabase
@@ -1239,12 +1241,12 @@ export default function OnboardingPage() {
                       type="text"
                       value={basics.ai_name}
                       onChange={(e) => setBasics({ ...basics, ai_name: e.target.value })}
-                      placeholder="Sage"
+                      placeholder="e.g. Ivy"
                       className={inputClasses}
                       maxLength={40}
                     />
                     <p className="text-xs text-sage-400 mt-1">
-                      Leave blank to use the default (Sage). White-label venues might pick Ivy, Rose, etc.
+                      Leave blank to use a neutral default. Most venues pick something that fits their brand.
                     </p>
                   </div>
 
@@ -1254,7 +1256,7 @@ export default function OnboardingPage() {
                       mailbox / forwarder themselves first. */}
                   <div>
                     <label className="block text-sm font-medium text-sage-700 mb-1">
-                      Email address for {basics.ai_name.trim() || 'Sage'} to send from <span className="text-rose-500">*</span>
+                      Email address for {basics.ai_name.trim() || 'your AI assistant'} to send from <span className="text-rose-500">*</span>
                     </label>
                     <input
                       type="email"

@@ -4,6 +4,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
+import { CoupleAiNameProvider } from '@/lib/hooks/use-couple-context'
 
 /**
  * Resolve the venue slug from (in priority order):
@@ -56,6 +57,20 @@ async function getVenueBranding() {
     .eq('venue_id', venue.id)
     .single()
 
+  // The AI assistant's name, fetched here rather than in a browser effect
+  // so the very first paint says what the venue calls theirs. Without this
+  // (W16, 2026-09-09: this layout never queried venue_ai_config, and never
+  // wrapped children in CoupleAiNameProvider) useCoupleContext() had nothing
+  // seeded and fell through to its own async fetch — a beat where every
+  // subdomain-served couple saw the generic 'your AI assistant' fallback
+  // before the venue's real name arrived. Mirrors the path-based
+  // /couple/[slug] layout, which already does this correctly.
+  const { data: aiConfig } = await supabase
+    .from('venue_ai_config')
+    .select('ai_name')
+    .eq('venue_id', venue.id)
+    .maybeSingle()
+
   // Fetch wedding date for the Final Review sidebar badge
   const { data: weddingDateRow } = await supabase
     .from('weddings')
@@ -77,6 +92,7 @@ async function getVenueBranding() {
     logoUrl: config?.logo_url || null,
     portalTagline: config?.portal_tagline || null,
     weddingDate: weddingDateRow?.wedding_date || null,
+    aiName: (aiConfig?.ai_name as string | null | undefined)?.trim() || null,
   }
 }
 
@@ -108,14 +124,19 @@ export default async function CoupleLayout({
       <link href={fontUrl} rel="stylesheet" />
 
       <div style={cssVars} className="min-h-screen bg-[#FAFAF8]">
-        <CoupleShell
-          venueName={branding.venueName}
-          logoUrl={branding.logoUrl}
-          base=""
-          weddingDate={branding.weddingDate}
-        >
-          {children}
-        </CoupleShell>
+        {/* Seeds useCoupleContext().aiName so every subdomain-served page
+            renders the venue's own assistant name on first paint, same as
+            the path-based /couple/[slug] layout. */}
+        <CoupleAiNameProvider aiName={branding.aiName}>
+          <CoupleShell
+            venueName={branding.venueName}
+            logoUrl={branding.logoUrl}
+            base=""
+            weddingDate={branding.weddingDate}
+          >
+            {children}
+          </CoupleShell>
+        </CoupleAiNameProvider>
       </div>
     </>
   )

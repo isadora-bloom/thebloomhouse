@@ -165,16 +165,18 @@ export default function SageIdentityPage() {
     // field and silently brand-leak as Hawthorne's Sage. Surface a
     // clear error and keep editing.
     if (!form.ai_name.trim()) {
-      setError('Give your AI assistant a name (any short word will do — e.g. Ivy, Aria, Sage).')
+      setError('Give your AI assistant a name (any short word will do — e.g. Ivy, Aria, Willow).')
       return
     }
     // Stream EEEE: escalation_email is required. The footer attached
-    // to every Sage outbound email tells couples "or email <addr>
-    // directly" — without an address we'd ship a broken sentence,
-    // and without a real human path we'd ship a footer that lies.
+    // to every outbound email from the venue's AI assistant tells
+    // couples "or email <addr> directly" — without an address we'd
+    // ship a broken sentence, and without a real human path we'd ship
+    // a footer that lies.
     const escalationTrimmed = form.escalation_email.trim()
     if (!escalationTrimmed) {
-      setError('Add an escalation email — the address Sage points couples to when they need a human.')
+      // form.ai_name is guaranteed non-blank here (checked above).
+      setError(`Add an escalation email — the address ${form.ai_name.trim()} points couples to when they need a human.`)
       return
     }
     // Light syntactic check — anything past this hits Postgres on save.
@@ -234,7 +236,7 @@ export default function SageIdentityPage() {
 
   if (loading) {
     return (
-      <div className="text-sm text-sage-500 p-6">Loading Sage identity…</div>
+      <div className="text-sm text-sage-500 p-6">Loading AI identity…</div>
     )
   }
 
@@ -243,10 +245,10 @@ export default function SageIdentityPage() {
       <header className="flex items-center gap-3">
         <Sparkles className="w-6 h-6 text-sage-600" />
         <div>
-          <h1 className="text-2xl font-serif text-sage-900">Sage Identity</h1>
+          <h1 className="text-2xl font-serif text-sage-900">{form.ai_name || SAGE_DEFAULTS.ai_name} Identity</h1>
           <p className="text-sm text-sage-600 mt-1">
-            How Sage introduces herself to couples. These settings shape tone and
-            structure — they do not (and cannot) change the requirement that Sage
+            How {form.ai_name || SAGE_DEFAULTS.ai_name} introduces herself to couples. These settings shape tone and
+            structure — they do not (and cannot) change the requirement that {form.ai_name || SAGE_DEFAULTS.ai_name}
             discloses she is AI.
           </p>
         </div>
@@ -279,7 +281,7 @@ export default function SageIdentityPage() {
           className="w-full max-w-md border border-border rounded-lg px-3 py-2.5 bg-warm-white text-sage-900 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
         />
         <p className="text-xs text-sage-500">
-          The address {form.ai_name || 'Sage'} points couples to when they need a human. Printed in every outbound email
+          The address {form.ai_name || SAGE_DEFAULTS.ai_name} points couples to when they need a human. Printed in every outbound email
           ("or email {form.escalation_email || '<address>'} directly") and in the chat sign-off. Required — saving without
           this is blocked. Couples can also reply to any thread with "HUMAN REQUESTED" in the subject; that goes to your
           coordinator dashboard automatically.
@@ -318,7 +320,7 @@ export default function SageIdentityPage() {
       {/* Purposes */}
       <section className="space-y-2">
         <label className="block text-sm font-medium text-sage-800">
-          What Sage is here for
+          What {form.ai_name || SAGE_DEFAULTS.ai_name} is here for
         </label>
         <p className="text-xs text-sage-500 -mt-1 mb-2">
           Pick 1–4 to complete "I'm here to make sure you get ___". Current: {form.ai_purposes.length}/4.
@@ -361,7 +363,7 @@ export default function SageIdentityPage() {
       <section className="space-y-2">
         <label className="block text-sm font-medium text-sage-800">Opener shape</label>
         <p className="text-xs text-sage-500 -mt-1 mb-2">
-          The structural pattern of Sage's first message. Same shape, different
+          The structural pattern of {form.ai_name || SAGE_DEFAULTS.ai_name}'s first message. Same shape, different
           words every time — no two couples get an identical opener.
         </p>
         <div className="space-y-2">
@@ -417,7 +419,7 @@ export default function SageIdentityPage() {
         <p className="text-xs text-sage-500">
           Paste the Calendly (or equivalent) URL couples use to book a tour with
           you. Add more than one if you have different tour types — mark the
-          one Sage should offer by default.
+          one {form.ai_name || SAGE_DEFAULTS.ai_name} should offer by default.
         </p>
         {form.tour_booking_links.length === 0 && (
           <p className="text-xs text-sage-500 italic py-2">
@@ -477,7 +479,7 @@ export default function SageIdentityPage() {
                     ? 'bg-amber-100 text-amber-800 border border-amber-300'
                     : 'text-sage-600 hover:bg-sage-100 border border-transparent'
                 }`}
-                title={link.is_default ? 'Default — Sage uses this link for generic tour requests' : 'Set as default'}
+                title={link.is_default ? `Default — ${form.ai_name || SAGE_DEFAULTS.ai_name} uses this link for generic tour requests` : 'Set as default'}
               >
                 <Star className={`w-3 h-3 ${link.is_default ? 'fill-current' : ''}`} />
                 {link.is_default ? 'Default' : 'Make default'}

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -188,7 +189,11 @@ function MatchingPageInner() {
   const [tangentialByPerson, setTangentialByPerson] = useState<
     Map<string, TangentialSignalRow[]>
   >(new Map())
-  const [aiName, setAiName] = useState<string>('Sage')
+  // Server-resolved venue name first paint, no flash of another venue's
+  // brand; the venue_ai_config fetch below re-affirms it once the page's
+  // own explicitly-VENUE_ID-scoped queries land (W16, 2026-09-09).
+  const defaultAiName = useAiName()
+  const [aiName, setAiName] = useState<string>(defaultAiName)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState<string | null>(null)

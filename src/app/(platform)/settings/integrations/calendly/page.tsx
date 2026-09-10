@@ -115,7 +115,7 @@ export default async function CalendlyIntegrationPage() {
           )}
         </div>
         <p className="text-xs text-sage-600">
-          Tour booking links are edited at Sage Identity. {aiName} offers the
+          Tour booking links are edited at {aiName} Identity. {aiName} offers the
           default link by default when a couple asks for a tour.
         </p>
         <div>

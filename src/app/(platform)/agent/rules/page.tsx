@@ -1063,7 +1063,7 @@ export default function RulesEditorPage() {
                   type="text"
                   value={newApprovedPhrase}
                   onChange={(e) => setNewApprovedPhrase(e.target.value)}
-                  placeholder="Add a phrase you want Sage to use..."
+                  placeholder={`Add a phrase you want ${aiName} to use...`}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleAddApprovedPhrase()
                   }}

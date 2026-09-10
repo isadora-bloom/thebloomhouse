@@ -50,16 +50,20 @@ const SCAN_DIRS = [
 
 // Couple-facing code, where the strict rules apply. A couple must never
 // see Bloom's house name: to them the assistant belongs to their venue.
-// Everything else in SCAN_DIRS is coordinator-facing admin, where the
-// pre-W1 leniency still applies (see the skips below). That leniency is
-// hiding 23 real 'Sage' literals in /settings/sage-identity, /onboarding,
-// /agent/rules and friends; those are venue-staff-facing white-label leaks
-// and they are owed a fix, but they belong to the workstreams that own
-// those pages, not to this one.
+//
+// W16 (2026-09-09) closed the pre-W1 leniency for coordinator-facing
+// admin: 'src/app/(platform)' and 'src/components' are now strict too.
+// That leniency (any line mentioning 'aiName'/'DEFAULT_AI_NAME', or any
+// file that used 'aiName' ANYWHERE, waved the whole file through) was
+// hiding 25 real 'Sage' literals in /settings/sage-identity, /onboarding,
+// /agent/rules, /intel/matching, /intel/tours and friends — venue-staff
+// facing white-label leaks a coordinator at a non-Rixey venue would have
+// seen on day one. All 25 are fixed; this scan now covers the class.
 const STRICT_DIRS = [
   'src/app/_couple-pages',
   'src/app/couple',
-  'src/components/couple',
+  'src/app/(platform)',
+  'src/components',
   'src/lib/hooks',
 ]
 
@@ -119,8 +123,20 @@ const ALLOWLIST = new Set([
   // Static nav-config strings — re-branded at the consumer in
   // sidebar-v2 / mode-strip via brandedLabel(text, aiName). Keeping the
   // canonical "Sage" here means the demo seed (Hawthorne) renders the
-  // expected label without an extra round-trip.
+  // expected label without an extra round-trip. nav-config.ts is a
+  // static module (no hooks), so it can't call useAiName() itself —
+  // every mode.label / section.title / section.subtitle / item.label
+  // string is passed through brandedLabel()/`.replace(/\bSage\b/g,
+  // aiName)` at render time in sidebar-v2.tsx and mode-strip.tsx before
+  // a coordinator ever sees it (W16, 2026-09-09: verified all seven).
   "src/components/shell/nav-config.ts:subtitle: 'What Sage learns from',",
+  "src/components/shell/nav-config.ts:title: 'Couple-facing Sage',",
+  "src/components/shell/nav-config.ts:{ label: 'Sage Queue',",
+  "src/components/shell/nav-config.ts:label: \"Sage's Brain\",",
+  "src/components/shell/nav-config.ts:description: 'Configure Sage",
+  "src/components/shell/nav-config.ts:subtitle: 'How Sage introduces herself',",
+  "src/components/shell/nav-config.ts:{ label: 'Sage Identity',",
+  "src/components/shell/nav-config.ts:subtitle: 'What Sage knows about your venue',",
 ])
 
 function walk(dir) {
@@ -163,6 +179,22 @@ for (const file of files) {
       if (line.includes('*/')) inBlockComment = false
       continue
     }
+
+    // Skip line comments and same-line block / JSX block comments FIRST,
+    // before deciding whether this line opens a multi-line block comment.
+    // Bug fixed here: a `//` line that happens to contain a stray `/*`
+    // with no matching `*/` on the same line — e.g. a route-glob comment
+    // like `// Note: dynamic routes (/portal/weddings/[id]/*) aren't...`
+    // — used to be misread as OPENING a block comment (because the
+    // opensBlock check ran first), which put the scanner in
+    // inBlockComment mode for the rest of the file until it hit an
+    // unrelated `*/` on a real JSDoc block. Everything in between was
+    // silently unscanned. Checking the `//` prefix first means a line
+    // comment can never open a phantom block.
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue
+    if (/\/\*.*\*\//.test(line)) continue
+    if (/\{\/\*.*Sage.*\*\/\}/.test(line)) continue
+
     const opensBlock = /\/\*/.test(line) && !/\/\*[\s\S]*\*\//.test(line)
     if (opensBlock) {
       inBlockComment = true
@@ -172,10 +204,6 @@ for (const file of files) {
       continue
     }
 
-    // Skip line comments and same-line block / JSX block comments.
-    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue
-    if (/\/\*.*\*\//.test(line)) continue
-    if (/\{\/\*.*Sage.*\*\/\}/.test(line)) continue
     // console.* dev logs — not user-visible
     if (/console\.(log|warn|error|info|debug)/.test(line)) continue
 
@@ -256,13 +284,17 @@ for (const file of promptBrainFiles) {
       if (line.includes('*/')) inBlockComment = false
       continue
     }
+    // Same fix as the UI pass above: check `//` / same-line block
+    // comments before deciding whether the line opens a multi-line
+    // block, so a `//` comment holding a stray `/*` can't fake a block
+    // open and blind the rest of the scan.
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue
+    if (/\/\*.*\*\//.test(line)) continue
     const opensBlock = /\/\*/.test(line) && !/\/\*[\s\S]*\*\//.test(line)
     if (opensBlock) {
       inBlockComment = true
       continue
     }
-    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue
-    if (/\/\*.*\*\//.test(line)) continue
     if (/console\.(log|warn|error|info|debug)/.test(line)) continue
 
     for (const token of PROMPT_FORBIDDEN_TOKENS) {
