@@ -17,7 +17,11 @@
 // judge that reads the whole answer instead of a regex).
 // ---------------------------------------------------------------------------
 
-export type ProbeName = 'overview' | 'attribution' | 'cohort' | 'dailyList'
+/** The four reader probes plus one `source:<tool_name>` probe per wave-2 tool
+ *  source registered in src/lib/intel/tool-sources (NOVEMBER-PLAN.md wave 2).
+ *  A source declares which battery questions it exists to answer, so adding
+ *  a source is enough to put its facts in front of the judge. */
+export type ProbeName = 'overview' | 'attribution' | 'cohort' | 'dailyList' | `source:${string}`
 
 /** Which probes feed which question ids (battery-expected.ts ids). */
 export const QUESTION_PROBES: Record<string, ProbeName[]> = {
@@ -71,6 +75,8 @@ export async function loadGroundTruth(
   // Dynamic import so run-battery's loadEnv() has already mirrored .env.local
   // onto process.env before the canonical module's service client initialises.
   const canonical = await import('../src/lib/intel/canonical')
+  const { loadToolSources } = await import('../src/lib/intel/tools')
+  const { createServiceClient } = await import('../src/lib/supabase/service')
   const out = new Map<ProbeName, string>()
 
   const jobs: Array<[ProbeName, () => Promise<unknown>]> = [
@@ -86,6 +92,23 @@ export async function loadGroundTruth(
     ['dailyList', () => canonical.getDailyList(venueId)],
   ]
 
+  // One probe per registered tool source, run with no arguments (every
+  // source must answer sensibly with defaults) and the same clock the
+  // dispatcher would use. Its battery questions join QUESTION_PROBES for
+  // this run only.
+  const sources = await loadToolSources()
+  if (sources.length > 0) {
+    const deps = { supabase: createServiceClient(), today: new Date().toISOString().slice(0, 10) }
+    for (const source of sources) {
+      const name: ProbeName = `source:${source.tool.name}`
+      jobs.push([name, () => source.run(venueId, {}, deps)])
+      for (const q of source.batteryQuestions) {
+        const existing = sourceQuestionProbes[q] ?? []
+        if (!existing.includes(name)) sourceQuestionProbes[q] = [...existing, name]
+      }
+    }
+  }
+
   for (const [name, job] of jobs) {
     try {
       out.set(name, compact(await job()))
@@ -97,13 +120,16 @@ export async function loadGroundTruth(
   return out
 }
 
+/** Filled by loadGroundTruth from each source's declared battery questions. */
+const sourceQuestionProbes: Record<string, ProbeName[]> = {}
+
 /** Assemble the ground-truth block for one question, or null if it has none. */
 export function groundTruthFor(
   questionId: string,
   probes: Map<ProbeName, string>
 ): string | null {
-  const names = QUESTION_PROBES[questionId]
-  if (!names || names.length === 0) return null
+  const names = [...(QUESTION_PROBES[questionId] ?? []), ...(sourceQuestionProbes[questionId] ?? [])]
+  if (names.length === 0) return null
   return names
     .map((n) => `--- probe: ${n} ---\n${probes.get(n) ?? '[probe missing]'}`)
     .join('\n')
