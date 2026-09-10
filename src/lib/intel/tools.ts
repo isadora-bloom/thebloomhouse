@@ -180,12 +180,14 @@ export const CANONICAL_TOOL_SCOPE_SUMMARY =
 /** Subjects the six readers hold no data for. A question that is only about
  *  one of these is refused before any tool call is worth making. */
 export const OUT_OF_SCOPE_SUBJECTS = [
-  'weather and forecasts',
+  // Weather against tour outcomes and review themes left this list on
+  // 2026-09-09 when the W14 tool sources landed. Live forecasts are still
+  // out: the product stores weather history, it does not predict.
+  'weather forecasts for future dates',
   'economic indicators (FRED, mortgage rates, CPI)',
   'search or social trends',
   'marketing spend by month',
   'competitor pricing or why a couple chose another venue',
-  'reviews and review language',
 ]
 
 // ---------------------------------------------------------------------------
@@ -291,6 +293,37 @@ export function scopeSummaryFor(sources: readonly IntelToolSource[]): string {
   return `${CANONICAL_TOOL_SCOPE_SUMMARY}, ${extra.join(', ')}`
 }
 
+/** Today's date as the venue sees it, YYYY-MM-DD. Ghost risk, completeness
+ *  and the follow-up window all count days from this; a UTC date would move
+ *  an evening call at a US venue into tomorrow. Timezone lives on
+ *  venue_config (migration 001). Falls back to UTC if the row is missing. */
+export async function venueLocalToday(
+  supabase: ToolSourceDeps['supabase'],
+  venueId: string,
+): Promise<string> {
+  let timeZone = 'UTC'
+  try {
+    const { data } = await supabase
+      .from('venue_config')
+      .select('timezone')
+      .eq('venue_id', venueId)
+      .maybeSingle()
+    if (data && typeof data.timezone === 'string' && data.timezone) timeZone = data.timezone
+  } catch {
+    // Missing config is not a reason to fail the tool call; UTC is the honest default.
+  }
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
+  } catch {
+    return new Date().toISOString().slice(0, 10)
+  }
+}
+
 export function createCanonicalDispatcher(
   venueId: string,
   readers?: CanonicalReaders,
@@ -390,11 +423,12 @@ export function createCanonicalDispatcher(
         const sources = sourceOpts?.sources ?? (await loadToolSources())
         const source = sources.find((s) => s.tool.name === name)
         if (source) {
+          const supabase =
+            sourceOpts?.deps?.supabase ??
+            (await import('@/lib/supabase/service')).createServiceClient()
           const deps: ToolSourceDeps = {
-            supabase:
-              sourceOpts?.deps?.supabase ??
-              (await import('@/lib/supabase/service')).createServiceClient(),
-            today: sourceOpts?.deps?.today ?? new Date().toISOString().slice(0, 10),
+            supabase,
+            today: sourceOpts?.deps?.today ?? (await venueLocalToday(supabase, venueId)),
           }
           return JSON.stringify(await source.run(venueId, args, deps))
         }

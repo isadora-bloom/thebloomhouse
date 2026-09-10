@@ -41,10 +41,11 @@ interface LostDeal {
   id: string
   venue_id: string
   wedding_id: string | null
-  stage: string
-  reason: string
-  competitor: string | null
-  notes: string | null
+  lost_at_stage: string | null
+  reason_category: string | null
+  competitor_name: string | null
+  reason_detail: string | null
+  lost_at: string | null
   recovery_attempted: boolean
   recovery_outcome: string | null
   created_at: string
@@ -56,8 +57,11 @@ type ReasonFilter = 'all' | string
 
 const PIE_COLORS = ['#7D8471', '#5D7A7A', '#A6894A', '#B8908A', '#6A7060', '#8FA88A']
 
-const STAGES = ['inquiry', 'toured', 'held', 'proposal_sent', 'negotiation']
-const REASONS = ['price', 'date_unavailable', 'competitor', 'cold_feet', 'venue_fit', 'unresponsive', 'other']
+// Vocabulary is the lost_deals CHECK constraints (migration 009). The page
+// used to read stage/reason/competitor, columns that never existed, so every
+// chart was empty and every save failed (W14 finding, 2026-09-09).
+const STAGES = ['inquiry', 'tour', 'hold', 'contract']
+const REASONS = ['pricing', 'competitor', 'date_unavailable', 'no_response', 'ghosted', 'changed_plans', 'venue_mismatch', 'budget_change', 'other']
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -109,7 +113,7 @@ export default function LostDealsPage() {
 
   // Form state
   const [formStage, setFormStage] = useState('inquiry')
-  const [formReason, setFormReason] = useState('price')
+  const [formReason, setFormReason] = useState('pricing')
   const [formCompetitor, setFormCompetitor] = useState('')
   const [formNotes, setFormNotes] = useState('')
   const [saving, setSaving] = useState(false)
@@ -169,7 +173,7 @@ export default function LostDealsPage() {
   const stageData = useMemo(() => {
     const map: Record<string, number> = {}
     for (const d of deals) {
-      const key = d.stage || 'unknown'
+      const key = d.lost_at_stage || 'unknown'
       map[key] = (map[key] || 0) + 1
     }
     return Object.entries(map).map(([name, value]) => ({ name: formatLabel(name), value }))
@@ -179,7 +183,7 @@ export default function LostDealsPage() {
   const reasonData = useMemo(() => {
     const map: Record<string, number> = {}
     for (const d of deals) {
-      const key = d.reason || 'unknown'
+      const key = d.reason_category || 'unknown'
       map[key] = (map[key] || 0) + 1
     }
     return Object.entries(map)
@@ -192,7 +196,7 @@ export default function LostDealsPage() {
   const topCompetitors = useMemo(() => {
     const map: Record<string, number> = {}
     for (const d of deals) {
-      if (d.competitor) map[d.competitor] = (map[d.competitor] || 0) + 1
+      if (d.competitor_name) map[d.competitor_name] = (map[d.competitor_name] || 0) + 1
     }
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
@@ -207,7 +211,7 @@ export default function LostDealsPage() {
     // Top reason
     const reasonCounts: Record<string, number> = {}
     for (const d of deals) {
-      const key = d.reason || 'unknown'
+      const key = d.reason_category || 'unknown'
       reasonCounts[key] = (reasonCounts[key] || 0) + 1
     }
     const topReasonEntry = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1])[0]
@@ -253,22 +257,28 @@ export default function LostDealsPage() {
   // Filtered list
   const filtered = useMemo(() => {
     return deals.filter((d) => {
-      if (stageFilter !== 'all' && d.stage !== stageFilter) return false
-      if (reasonFilter !== 'all' && d.reason !== reasonFilter) return false
+      if (stageFilter !== 'all' && d.lost_at_stage !== stageFilter) return false
+      if (reasonFilter !== 'all' && d.reason_category !== reasonFilter) return false
       return true
     })
   }, [deals, stageFilter, reasonFilter])
 
   // Save new lost deal
   const handleSave = async () => {
+    if (!scope.venueId) {
+      setError('Pick a single venue before recording a lost deal.')
+      return
+    }
     setSaving(true)
     const supabase = createClient()
     try {
       const { error: err } = await supabase.from('lost_deals').insert({
-        stage: formStage,
-        reason: formReason,
-        competitor: formCompetitor || null,
-        notes: formNotes || null,
+        venue_id: scope.venueId,
+        lost_at_stage: formStage,
+        reason_category: formReason,
+        competitor_name: formCompetitor || null,
+        reason_detail: formNotes || null,
+        lost_at: new Date().toISOString(),
         // T5-Rixey-BBB: lost-deal records are always outcome class.
         // signal-class-justified: lost-deals are structurally always outcome
         signal_class: 'outcome',
@@ -276,7 +286,7 @@ export default function LostDealsPage() {
       if (err) throw err
       setShowModal(false)
       setFormStage('inquiry')
-      setFormReason('price')
+      setFormReason('pricing')
       setFormCompetitor('')
       setFormNotes('')
       setLoading(true)
@@ -461,8 +471,8 @@ export default function LostDealsPage() {
                   {filtered.map((d) => (
                     <tr key={d.id} className="hover:bg-sage-50/50 transition-colors">
                       <td className="px-6 py-4">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${stageBadge(d.stage)}`}>
-                          {formatLabel(d.stage)}
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${stageBadge(d.lost_at_stage ?? 'unknown')}`}>
+                          {formatLabel(d.lost_at_stage ?? 'unknown')}
                         </span>
                       </td>
                       {scope.level !== 'venue' && (
@@ -470,9 +480,9 @@ export default function LostDealsPage() {
                           <VenueChip venueName={d.venues?.name} />
                         </td>
                       )}
-                      <td className="px-6 py-4 text-sage-700">{formatLabel(d.reason)}</td>
-                      <td className="px-6 py-4 text-sage-700">{d.competitor ?? '--'}</td>
-                      <td className="px-6 py-4 text-sage-600 max-w-xs truncate">{d.notes ?? '--'}</td>
+                      <td className="px-6 py-4 text-sage-700">{formatLabel(d.reason_category ?? 'unknown')}</td>
+                      <td className="px-6 py-4 text-sage-700">{d.competitor_name ?? '--'}</td>
+                      <td className="px-6 py-4 text-sage-600 max-w-xs truncate">{d.reason_detail ?? '--'}</td>
                       <td className="px-6 py-4">
                         {d.recovery_attempted ? (
                           <span className="text-xs font-medium text-emerald-600">Attempted</span>

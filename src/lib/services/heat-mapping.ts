@@ -1418,6 +1418,14 @@ export async function markAsBooked(
  * can derive from the event row alone (the trigger only sees reason, not
  * lost_to, and only fills lost_at if NULL).
  */
+/** Collapse the weddings.status vocabulary onto lost_deals.lost_at_stage. */
+export function lostStageFor(status: string): 'inquiry' | 'tour' | 'hold' | 'contract' {
+  if (status.startsWith('tour')) return 'tour'
+  if (status.startsWith('hold')) return 'hold'
+  if (status.startsWith('proposal') || status.startsWith('contract')) return 'contract'
+  return 'inquiry'
+}
+
 export async function markAsLost(
   weddingId: string,
   reason?: string,
@@ -1438,7 +1446,12 @@ export async function markAsLost(
 
   const venueId = wedding.venue_id as string
   const now = new Date().toISOString()
-  const previousStage = (wedding.status as string) || 'inquiry'
+  // lost_deals.lost_at_stage is CHECK-constrained to inquiry | tour | hold |
+  // contract (migration 009). weddings.status is a different vocabulary
+  // (tour_scheduled, proposal_sent, ...), and writing it verbatim made every
+  // live mark-as-lost insert after the inquiry stage violate the constraint
+  // (W14 finding, 2026-09-09). Map it.
+  const previousStage = lostStageFor((wedding.status as string) || 'inquiry')
 
   // Round-5 follow-up: parallelize the 4 writes. The UPDATE and 3
   // INSERTs all depend on the SELECT above but not on each other —

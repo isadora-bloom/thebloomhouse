@@ -5,6 +5,7 @@ import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 import { CoupleAiNameProvider } from '@/lib/hooks/use-couple-context'
+import { FloatingSage } from '@/components/couple/floating-sage'
 
 /**
  * Resolve the venue slug from (in priority order):
@@ -102,6 +103,7 @@ export default async function CoupleLayout({
   children: React.ReactNode
 }) {
   const branding = await getVenueBranding()
+  const slug = (await resolveVenueSlug()) ?? ''
   const fontUrl = getFontUrl(branding.fontPairKey)
   const fontVars = getFontVars(branding.fontPairKey)
 
@@ -136,6 +138,9 @@ export default async function CoupleLayout({
           >
             {children}
           </CoupleShell>
+          {/* Floating assistant on every page; the path-based layout had it, the
+              subdomain layout never did (W16 finding, 2026-09-09). */}
+          <FloatingSage venueSlug={slug} />
         </CoupleAiNameProvider>
       </div>
     </>

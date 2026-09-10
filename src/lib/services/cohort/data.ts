@@ -35,11 +35,13 @@ export async function loadCohortData(
 ): Promise<CohortData> {
   const since = opts.since ?? null
 
-  // Venue timezone — drives every weekday / hour / month bucket.
+  // Venue timezone drives every weekday / hour / month bucket. It lives on
+  // venue_config (migration 001), not venues; the old read of venues.timezone
+  // failed quietly and every bucket fell back to America/New_York (W12 note).
   const { data: venueRow } = await supabase
-    .from('venues')
+    .from('venue_config')
     .select('timezone')
-    .eq('id', venueId)
+    .eq('venue_id', venueId)
     .maybeSingle()
   const timezone =
     venueRow && typeof venueRow.timezone === 'string' && venueRow.timezone
@@ -53,6 +55,7 @@ export async function loadCohortData(
         'id, lifecycle_state, channel_scope, wedding_date, heat_score, created_at, primary_contact_name',
       )
       .eq('venue_id', venueId)
+      .is('merged_into_id', null)
       .order('created_at', { ascending: true })
     // Window on last activity (last_progression_at, set from signal time at
     // mint) — not created_at, which the Phase-2 reimport stamps to now().

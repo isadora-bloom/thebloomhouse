@@ -388,6 +388,8 @@ export default function PipelinePage() {
   const [columns, setColumns] = useState<PipelineColumn[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // wedding_heat failed to load: heat is unknown, not zero (W17 finding).
+  const [heatUnavailable, setHeatUnavailable] = useState(false)
   const [totalLeads, setTotalLeads] = useState(0)
   const [activeWedding, setActiveWedding] = useState<PipelineWedding | null>(null)
 
@@ -457,12 +459,15 @@ export default function PipelinePage() {
       if (venueIds && venueIds.length > 0) {
         heatQuery = heatQuery.in('venue_id', venueIds)
       }
-      const [{ data: rawWeddingsData, error: fetchError }, { data: heatRows }] = await Promise.all([
+      const [{ data: rawWeddingsData, error: fetchError }, { data: heatRows, error: heatError }] = await Promise.all([
         query,
         heatQuery,
       ])
 
       if (fetchError) throw fetchError
+      // A failed heat read must not render every lead as cold. Keep the
+      // pipeline, mark heat unknown, and say so.
+      setHeatUnavailable(Boolean(heatError))
 
       const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
       for (const h of heatRows ?? []) {
@@ -476,8 +481,8 @@ export default function PipelinePage() {
           const heat = heatByWedding.get(row.id as string)
           return {
             ...row,
-            heat_score: heat?.heat_score ?? 0,
-            temperature_tier: heat?.temperature_tier ?? 'cool',
+            heat_score: heat?.heat_score ?? (heatError ? null : 0),
+            temperature_tier: heat?.temperature_tier ?? (heatError ? null : 'cool'),
           }
         })
         .sort((a: any, b: any) => (b.heat_score ?? 0) - (a.heat_score ?? 0))
@@ -673,6 +678,25 @@ export default function PipelinePage() {
            same component /agent/leads renders. */}
       <TriageRail activeBucket="needsReply" />
       <LifecycleStrip />
+
+      {/* ---- Heat unavailable ---- */}
+      {heatUnavailable && !error && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800">
+            Heat scores could not be loaded, so leads are shown without a temperature rather than as cold.
+          </p>
+          <button
+            onClick={() => {
+              setLoading(true)
+              fetchPipeline()
+            }}
+            className="ml-auto text-sm font-medium text-amber-700 hover:text-amber-900 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* ---- Error ---- */}
       {error && (
