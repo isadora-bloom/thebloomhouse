@@ -10,6 +10,7 @@ import { reviewsToolSource } from './reviews'
 import { lostDealsToolSource } from './lost-deals'
 import { weatherToursToolSource } from './weather-tours'
 import { capacityToolSource } from './capacity'
+import { FOLLOW_UP_SOURCES } from './follow-ups'
 
 export const TOOL_SOURCES: readonly IntelToolSource[] = [
   timeSeriesSource,
@@ -20,4 +21,6 @@ export const TOOL_SOURCES: readonly IntelToolSource[] = [
   weatherToursToolSource, // W14 Q10
   capacityToolSource, // W14 Q39
   // W15 (drafting + follow-up state) appends here
+  // W14 (reviews, lost deals, weather x tours, open Saturdays) appends here
+  ...FOLLOW_UP_SOURCES, // W15 (drafting + follow-up state)
 ]
