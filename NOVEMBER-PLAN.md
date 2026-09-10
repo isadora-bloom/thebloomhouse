@@ -153,3 +153,47 @@ Same shared rules as wave 1. Two additions: every worktree starts with
 `git reset --hard consolidation` (the worktree tool may fork from master) and `npm ci`; and
 no tool source may read a legacy table where the spine (`couples`, `touchpoints`) holds the
 same fact.
+
+## Wave 2 status (integrated 2026-09-09 evening)
+
+All ten workstreams merged on `consolidation`. Gate on the integrated head: tsc 0, vitest
+green (see the commit for the count), all governance and guard scripts green including
+plan-enforcement, which had been red on master since the wave-1 canonical routes landed
+without `requirePlan`. Lint runs again on the eslint CLI.
+
+What Ask your data can now answer, all from tool results: 14 new tools across time series,
+operator patterns, ghost risk, record completeness, identity precision, conversion signals,
+reviews, lost deals, weather against tours, prime Saturday capacity, follow-up state and
+follow-up proposals. The battery judge reads every registered source as ground truth.
+Every rate still comes back `enoughData: false` on Rixey until the reimport lands.
+
+Migrations owed to prod, in this order: 395 (billing `trial_ends_at`), 397 (drop the
+`'Sage'` default on `venue_ai_config.ai_name`). Then the older seven.
+
+Fixed on find during integration (no workstream owned the file): cohort loader read
+`venues.timezone` (does not exist) and counted merged couples; mark-as-lost wrote the
+weddings vocabulary into `lost_deals.lost_at_stage` and failed its CHECK on every loss after
+inquiry; `/intel/lost-deals` read three phantom columns and saved without `venue_id`;
+`/agent/pipeline` zeroed heat on a failed read; the subdomain couple portal had no floating
+assistant; demo-repair refused its own dry run against prod.
+
+Follow-ups carried to wave 3:
+- Q37 link 1: "tours this weekend" in the past tense has no tool; `get_daily_list` is
+  forward-only. Needs a tour-cohort tool with a date range.
+- `findUngroundedClaims` name sweep: every W13 source returns `names` keys, so a ghost-risk
+  call in the same turn as an empty tour bucket unlocks the proper-noun check. Decide whether
+  the escape should be per tool.
+- `reviews-analytics.ts` has no injectable client, so W14 re-derived its numbers; give it a
+  seam and collapse the two.
+- `propose_follow_ups` records `phrase_usage` and a cost row when it composes; decide whether
+  a read tool may do that.
+- `wedding_relationships.relationship_role` gained `parent`; widen the migration-255 comment.
+- `/intel/tours` upcoming/this-year filters still use browser local time.
+- `SAGE_DEFAULTS.ai_name` in `brain/sage-identity.ts` is still `'Sage'`.
+- `supabase/seed.sql` writes `weddings.heat_score` and `temperature_tier`, dropped in 316.
+- `DEMO-RESEED-DESIGN.md` §4 step 3: mint the wedding before the first signal, not after
+  the tour (W19 found the mirror upsert requires it).
+- Lint: `react-hooks/rules-of-hooks` is downgraded to warn for one site; fix the site and
+  restore the rule.
+- Demo reseed is built and tested but has NOT been run against prod; operator step:
+  `npx tsx scripts/demo-reseed.ts` (dry run) → `--apply --allow-prod` → `--verify`.
