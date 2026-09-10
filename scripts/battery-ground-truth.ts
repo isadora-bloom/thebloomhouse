@@ -102,7 +102,10 @@ export async function loadGroundTruth(
     for (const source of sources) {
       const name: ProbeName = `source:${source.tool.name}`
       jobs.push([name, () => source.run(venueId, {}, deps)])
-      for (const q of source.batteryQuestions) {
+      for (const raw of source.batteryQuestions) {
+        // Sources write 'Q12' (the plan's spelling); battery-expected.ts keys
+        // on the bare '12'. Accept both here so neither side has to care.
+        const q = raw.replace(/^Q/i, '')
         const existing = sourceQuestionProbes[q] ?? []
         if (!existing.includes(name)) sourceQuestionProbes[q] = [...existing, name]
       }
