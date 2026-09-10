@@ -545,6 +545,10 @@ export async function POST(request: NextRequest) {
     interactions_inserted: commitResult.interactionsInserted,
     tours_inserted: commitResult.toursInserted,
     lost_deals_inserted: commitResult.lostDealsInserted,
+    // W20: the people on the imported projects who are not the couple —
+    // parents, planners — now imported as Agent-class people linked to
+    // their couple. Absent when the export carried none.
+    related_contacts: commitResult.relatedContacts ?? null,
     // Rows that failed pre-commit validation, each with a plain reason.
     skipped_invalid: skippedInvalid,
     // Deduped commit-time failures + a migration hint when applicable.
