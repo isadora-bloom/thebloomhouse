@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
 
@@ -53,13 +54,14 @@ export function useTrialExpired(isDemo: boolean): boolean {
  * this banner does not itself gate anything.
  */
 export function TrialExpiredBanner() {
+  const aiName = useAiName()
   return (
     <div className="fixed top-0 left-0 right-0 z-[60] h-10 bg-amber-50 border-b border-amber-200 px-4 flex items-center justify-between gap-3 text-sm">
       <div className="flex items-center gap-2 text-amber-800">
         <AlertTriangle className="w-4 h-4 shrink-0" />
         <span className="font-medium">Your trial has ended</span>
         <span className="hidden sm:inline text-amber-600">
-          — Sage still runs, but auto-send is paused. Subscribe to turn it back on.
+          {aiName} still runs, but auto-send is paused. Subscribe to turn it back on.
         </span>
       </div>
       <Link

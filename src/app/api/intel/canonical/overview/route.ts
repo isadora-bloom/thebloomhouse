@@ -14,7 +14,8 @@
  * GET → { ok, overview, venueIds, venueCount, truncated }
  */
 
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
 import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { getVenueOverview } from '@/lib/intel/canonical'
@@ -27,7 +28,11 @@ export const maxDuration = 60
  *  first N and say so than to time out with nothing. */
 const MAX_VENUES = 12
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Paid-tier surface (PROJECT-AUDIT-V2 GAP-12). Demo cookie is handled inside requirePlan.
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 

@@ -243,7 +243,9 @@ async function main() {
   const { apply, allowProd } = parseSafetyFlags(process.argv)
   const env = loadEnv()
   const url = env.NEXT_PUBLIC_SUPABASE_URL
-  assertNotProd(url, { allowProd })
+  // Only a write needs the prod guard. The dry run is a read and must be
+  // allowed to print its report against prod (W19 finding, 2026-09-09).
+  if (apply) assertNotProd(url, { allowProd })
 
   const sb = createClient(url, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
 

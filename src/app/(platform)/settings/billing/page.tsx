@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, Suspense } from 'react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import {
@@ -121,6 +122,7 @@ function formatMoney(amount: number | null, currency: string | null): string {
 }
 
 function BillingPageInner() {
+  const aiName = useAiName()
   const searchParams = useSearchParams()
   const successFlag = searchParams.get('success') === 'true'
 
@@ -268,7 +270,7 @@ function BillingPageInner() {
                 <>
                   <div className="font-medium">Your trial ended {formatDate(trial.trialEndsAt)}.</div>
                   <div className="mt-0.5">
-                    Sage keeps drafting and every lead is still captured — only auto-send is paused until
+                    {aiName} keeps drafting and every lead is still captured. Only auto-send is paused until
                     you subscribe. Pick a plan below to turn it back on.
                   </div>
                 </>
@@ -607,7 +609,7 @@ function BillingPageInner() {
           )}
 
           <p className="mt-4 pt-4 border-t border-sage-100 text-xs text-sage-500">
-            Going over a cap never blocks anything: every inquiry is still captured and Sage keeps
+            Going over a cap never blocks anything: every inquiry is still captured and {aiName} keeps
             working normally. You&apos;ll see a notification here and in Pulse, so you know it&apos;s
             time to upgrade — nothing is dropped or turned off because of capacity.
           </p>

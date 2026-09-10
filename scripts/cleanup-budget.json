@@ -5,6 +5,6 @@
   "resolver_reassign_calls": 35,
   "resolver_reassign_calls_justification": "couple_notifications table (mig 389) added to mergeWeddings reassign list",
   "grandfather_entries": 28,
-  "migration_files": 393,
-  "migration_files_justification": "wipe + reimport 2026-09-08; W1 (mig 391), W4 (mig 392), W5 (mig 393) migrations pending; flatten to tracked baseline still owed post-reimport"
+  "migration_files": 395,
+  "migration_files_justification": "wave 2 (2026-09-09): 395 billing trial_ends_at (W18) and 397 drop the Sage default on venue_ai_config.ai_name (W16 root cause); 391-394 applied to prod 2026-09-09; flatten to tracked baseline still owed post-reimport"
 }

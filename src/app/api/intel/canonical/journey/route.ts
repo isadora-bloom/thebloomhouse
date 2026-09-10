@@ -27,6 +27,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { getPlatformAuth, unauthorized, badRequest } from '@/lib/api/auth-helpers'
 import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { createServiceClient } from '@/lib/supabase/service'
@@ -62,6 +63,10 @@ interface CoupleContact {
 }
 
 export async function GET(req: NextRequest) {
+  // Paid-tier surface (PROJECT-AUDIT-V2 GAP-12). Demo cookie is handled inside requirePlan.
+  const plan = await requirePlan(req, 'pre_opening')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 
