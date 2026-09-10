@@ -445,21 +445,27 @@ function ComposeModal({
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   const handleSend = async () => {
     if (!to.trim() || !body.trim()) return
     setSending(true)
+    setSendError(null)
     try {
       const res = await fetch('/api/agent/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: to.trim(), subject: subject.trim(), body: body.trim() }),
       })
-      if (!res.ok) throw new Error('Send failed')
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}) as { error?: string; message?: string })
+        throw new Error(errBody.message || errBody.error || `Send failed (HTTP ${res.status})`)
+      }
       onSent()
       onClose()
     } catch (err) {
       console.error('Failed to send email:', err)
+      setSendError(err instanceof Error ? err.message : 'Send failed. Nothing was sent.')
     } finally {
       setSending(false)
     }
@@ -497,6 +503,12 @@ function ComposeModal({
             className="w-full px-3 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 bg-warm-white resize-y"
           />
         </div>
+        {sendError && (
+          <div className="mx-4 mb-3 flex items-start gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg">
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+            <span className="text-sm text-red-700">{sendError}</span>
+          </div>
+        )}
         <div className="flex items-center justify-end gap-2 p-4 border-t border-border">
           <button
             onClick={onClose}
@@ -540,6 +552,7 @@ function ReplyForm({
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   // Acquire thread lock when composer expands
   const acquireLock = useCallback(async () => {
@@ -583,25 +596,31 @@ function ReplyForm({
   const handleCollapse = () => {
     setExpanded(false)
     setBody('')
+    setSendError(null)
     releaseLock()
   }
 
   const handleSend = async () => {
     if (!body.trim()) return
     setSending(true)
+    setSendError(null)
     try {
       const res = await fetch('/api/agent/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ interactionId, body: body.trim() }),
       })
-      if (!res.ok) throw new Error('Reply failed')
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}) as { error?: string; message?: string })
+        throw new Error(errBody.message || errBody.error || `Reply failed (HTTP ${res.status})`)
+      }
       setBody('')
       setExpanded(false)
       releaseLock()
       onSent()
     } catch (err) {
       console.error('Failed to send reply:', err)
+      setSendError(err instanceof Error ? err.message : 'Reply failed. Nothing was sent.')
     } finally {
       setSending(false)
     }
@@ -653,6 +672,12 @@ function ReplyForm({
         rows={4}
         className="w-full px-3 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 bg-warm-white resize-y"
       />
+      {sendError && (
+        <div className="flex items-start gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg">
+          <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+          <span className="text-sm text-red-700">{sendError}</span>
+        </div>
+      )}
       <div className="flex items-center justify-end gap-2">
         <button
           onClick={handleCollapse}
@@ -1686,18 +1711,36 @@ export default function InboxPage() {
         draft_id: draftId,
         action: 'approved',
       }), { op: 'draft_feedback.insert', venueId })
-      try {
-        await fetch('/api/agent/drafts', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ draftId }),
-        })
-      } catch {
-        // email send is best-effort
+    } catch (err) {
+      console.error('Failed to approve draft:', err)
+      setError('Could not approve this draft. Nothing was sent, try again.')
+      setProcessingDraftId(null)
+      return
+    }
+
+    // The approve write above is durable. The send below is a separate,
+    // fallible step (UX-AUDIT-NON-TECHNICAL.md finding 3): a failure
+    // here used to be swallowed and the draft cleared from the list
+    // regardless, so a couple who never got a reply looked, from inside
+    // the product, like a couple who had been answered. A send failure
+    // now stays on screen and the draft stays in the pending list.
+    try {
+      const res = await fetch('/api/agent/drafts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draftId }),
+      })
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}) as { error?: string })
+        throw new Error(errBody.error || `Send failed (HTTP ${res.status})`)
       }
       clearDraftFromList(draftId)
     } catch (err) {
-      console.error('Failed to approve & send draft:', err)
+      console.error('Failed to send approved draft:', err)
+      const reason = err instanceof Error ? err.message : 'unknown error'
+      setError(
+        `This reply was approved but could not be sent (${reason}). It is still in your pending list, try Approve & Send again once the problem is fixed.`
+      )
     } finally {
       setProcessingDraftId(null)
     }
@@ -2663,13 +2706,26 @@ export default function InboxPage() {
                         draft_id: draftId,
                         action: 'approved',
                       }), { op: 'draft_feedback.insert', venueId: selectedInteraction?.venue_id })
-                      try {
-                        await fetch('/api/agent/drafts', {
-                          method: 'PATCH',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ draftId }),
-                        })
-                      } catch { /* email send is best-effort */ }
+
+                      // The approve write above is durable. The send below
+                      // is a separate, fallible step (UX-AUDIT-NON-TECHNICAL.md
+                      // finding 3): a failure here used to be swallowed and
+                      // the thread panel closed regardless, so an unsent
+                      // reply read as a sent one. Now the failure surfaces
+                      // and the panel stays open so the coordinator can
+                      // retry.
+                      const res = await fetch('/api/agent/drafts', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ draftId }),
+                      })
+                      if (!res.ok) {
+                        const errBody = await res.json().catch(() => ({}) as { error?: string })
+                        setError(
+                          `This reply was approved but could not be sent (${errBody.error || `HTTP ${res.status}`}). It is still here, try Save & Send again once the problem is fixed.`
+                        )
+                        return
+                      }
                       setThreadDraft(null)
                     }}
                     onDeleteDraft={async (draftId: string) => {
