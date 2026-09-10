@@ -32,6 +32,10 @@ jobs:
       - name: TypeScript
         run: npx tsc --noEmit
 
+      - name: Lint — eslint (2026-09-09, non-blocking while rules tighten)
+        continue-on-error: true
+        run: npm run lint
+
       - name: Next.js build
         run: npm run build
         env:
