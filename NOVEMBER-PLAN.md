@@ -96,7 +96,8 @@ Shared rules for every agent:
 - [x] Run `node scripts/phase2-wipe-finish.mjs --apply --allow-prod` (interactions + people) — done 2026-09-08, all Rixey pipeline tables 0
 - [ ] Import the five HoneyBook CSVs through `/onboarding/crm-import`, oldest first — PAUSED by Isadora until wave-1 fixes land; parse verified offline (281 couples, 136 distinct emails)
 - [ ] Download a fresh HoneyBook "Booked clients" report (newest on disk ends Jun 2026)
-- [ ] Fast-forward `master` after each integration I hand you
+- [ ] Fast-forward `master` after each integration I hand you (wave 1 + wave 2 wiring ready on `consolidation` as of 2026-09-09)
+- [x] Migrations 391, 392, 393, 394 applied to prod 2026-09-09 (couple_invites, demo anon reads, accommodations columns verified live)
 - [ ] Decide: fix Hawthorne's `venue_config.business_name` by SQL (one line, I will give it)
 - [ ] Decide: delete the two May snapshot branches to save cost, keep `pre-phase2-2026-09-08`
 
@@ -125,7 +126,7 @@ plug-in contract in `src/lib/intel/tool-sources/`, and pulls forward the indepen
 code work from weeks 4 to 6 that does not need the reimport to land first.
 
 State going in: `consolidation` 1134261f, master not yet fast-forwarded, migrations 392 and
-394 applied to prod on 2026-09-09, 391 still missing on prod, 393 a no-op (thresholds
+394 applied to prod on 2026-09-09, then 391 later the same evening, 393 a no-op (thresholds
 already 85). Gmail still disconnected. Rixey reimport paused. Two live SMS inquiries have
 been minted since the wipe (identity resolver, 2026-09-09), so Rixey is not at zero rows.
 
