@@ -5,6 +5,7 @@ import { SidebarV2 } from './sidebar-v2'
 import { ModeStrip } from './mode-strip'
 import { GearMenu } from './gear-menu'
 import { DemoBanner } from './demo-banner'
+import { TrialExpiredBanner, useTrialExpired } from '@/components/billing/trial-banner'
 import { ScopeIndicator } from './scope-indicator'
 import { UserMenu } from './user-menu'
 import { FloatingBrainDump } from './floating-brain-dump'
@@ -33,16 +34,24 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   const { isDemo, level: scopeLevel, venueId } = useVenueScope()
   const isStandalone = STANDALONE_ROUTES.some((route) => pathname.startsWith(route))
 
+  // Trial-expired banner (W18, Nov-plan wave 2) occupies the same top-of-
+  // page slot as DemoBanner. The two are mutually exclusive in practice —
+  // a demo venue never has a real trial — so `showTopBanner` reuses the
+  // exact spacing math DemoBanner already had; only which banner renders
+  // changes, isDemo wins if somehow both were true.
+  const trialExpired = useTrialExpired(isDemo)
+  const showTopBanner = isDemo || trialExpired
+
   if (isStandalone) {
     // Standalone routes (/setup, /onboarding) don't get the sidebar, but a
     // user must always be able to sign out — otherwise they're trapped inside
     // the wizard. Render a minimal top bar with just the UserMenu.
     return (
       <>
-        {isDemo && <DemoBanner />}
+        {isDemo ? <DemoBanner /> : trialExpired ? <TrialExpiredBanner /> : null}
         <div
           className={`sticky z-30 bg-warm-white/90 backdrop-blur-sm border-b border-border px-6 lg:px-8 py-3 flex items-center justify-end ${
-            isDemo ? 'top-10' : 'top-0'
+            showTopBanner ? 'top-10' : 'top-0'
           }`}
         >
           <UserMenu compact />
@@ -54,16 +63,16 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {isDemo && <DemoBanner />}
+      {isDemo ? <DemoBanner /> : trialExpired ? <TrialExpiredBanner /> : null}
       <SidebarV2 scopeLevel={scopeLevel} />
-      <main className={`lg:pl-64 ${isDemo ? 'pt-24 lg:pt-10' : 'pt-14 lg:pt-0'}`}>
+      <main className={`lg:pl-64 ${showTopBanner ? 'pt-24 lg:pt-10' : 'pt-14 lg:pt-0'}`}>
         {/* Tier-B #62 — top bar small-screen behavior. Tighter horizontal
             padding on mobile (px-3) so the right cluster doesn't overflow
             on iPhone SE width (375px). Right cluster gets `shrink-0` so
             mode-strip absorbs any squeeze first. */}
         <div
           className={`sticky z-30 bg-warm-white/90 backdrop-blur-sm border-b border-border px-3 lg:px-8 py-2 flex items-center justify-between gap-2 ${
-            isDemo ? 'top-24 lg:top-10' : 'top-14 lg:top-0'
+            showTopBanner ? 'top-24 lg:top-10' : 'top-14 lg:top-0'
           }`}
         >
           <ModeStrip />

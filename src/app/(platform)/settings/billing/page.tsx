@@ -15,6 +15,8 @@ import {
   Download,
   Receipt,
   Activity,
+  Gauge,
+  AlertTriangle,
 } from 'lucide-react'
 import { PLANS, planForTier } from '@/lib/billing/plans'
 import type { PlanTier } from '@/lib/hooks/use-plan-tier'
@@ -37,6 +39,22 @@ interface UsageItem {
   used: number
   limit: number
   windowLabel: string
+}
+
+interface CapacityItem {
+  label: string
+  used: number
+  /** null = unlimited (enterprise tier). */
+  limit: number | null
+  windowLabel: string
+}
+
+interface TrialStatus {
+  isTrial: boolean
+  trialEndsAt: string | null
+  trialExpired: boolean
+  daysRemaining: number | null
+  tier: PlanTier
 }
 
 interface SubscriptionSummary {
@@ -114,6 +132,8 @@ function BillingPageInner() {
   const [invoicesLoading, setInvoicesLoading] = useState(true)
   const [usage, setUsage] = useState<UsageItem[]>([])
   const [usageLoading, setUsageLoading] = useState(true)
+  const [capacity, setCapacity] = useState<CapacityItem[]>([])
+  const [trial, setTrial] = useState<TrialStatus | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -153,15 +173,28 @@ function BillingPageInner() {
         if (res.ok && Array.isArray(data?.items)) {
           if (!cancelled) setUsage(data.items as UsageItem[])
         }
+        if (res.ok && Array.isArray(data?.capacity)) {
+          if (!cancelled) setCapacity(data.capacity as CapacityItem[])
+        }
       } catch {
         // Usage is supplementary — don't surface errors.
       } finally {
         if (!cancelled) setUsageLoading(false)
       }
     }
+    async function loadTrial() {
+      try {
+        const res = await fetch('/api/billing/trial-status')
+        const data = await res.json()
+        if (res.ok && !cancelled) setTrial(data as TrialStatus)
+      } catch {
+        // Trial status is supplementary — the page still works without it.
+      }
+    }
     load()
     loadInvoices()
     loadUsage()
+    loadTrial()
     return () => { cancelled = true }
   }, [])
 
@@ -215,6 +248,43 @@ function BillingPageInner() {
           <div className="mb-6 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800 flex items-start gap-2">
             <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {/* Trial status (W18) — only shown for a venue that has never
+            subscribed. A subscribed venue never sees this, regardless of
+            what trial_ends_at happens to say historically. */}
+        {trial?.isTrial && (
+          <div
+            className={`mb-6 rounded-lg border px-4 py-3 text-sm flex items-start gap-2 ${
+              trial.trialExpired
+                ? 'bg-amber-50 border-amber-200 text-amber-800'
+                : 'bg-sage-50 border-sage-200 text-sage-800'
+            }`}
+          >
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div>
+              {trial.trialExpired ? (
+                <>
+                  <div className="font-medium">Your trial ended {formatDate(trial.trialEndsAt)}.</div>
+                  <div className="mt-0.5">
+                    Sage keeps drafting and every lead is still captured — only auto-send is paused until
+                    you subscribe. Pick a plan below to turn it back on.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="font-medium">
+                    You&apos;re on a free trial
+                    {trial.daysRemaining != null ? ` — ${trial.daysRemaining} day${trial.daysRemaining === 1 ? '' : 's'} left` : ''}.
+                  </div>
+                  <div className="mt-0.5">
+                    Trial ends {formatDate(trial.trialEndsAt)}. Subscribe any time before then to keep
+                    auto-send running without interruption.
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         )}
 
@@ -484,6 +554,63 @@ function BillingPageInner() {
               })}
             </div>
           )}
+        </div>
+
+        {/* Capacity vs plan cap (W18) — real CAPACITY_LIMITS usage, plus
+            the plain sentence about what happens at the cap. Enforcement
+            itself lives at mint time (capacity-enforcement.ts); this is
+            just the honest read of it. */}
+        <div className="bg-white rounded-xl border border-sage-100 p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-heading text-lg font-bold text-sage-900 flex items-center gap-2">
+              <Gauge className="w-5 h-5 text-sage-500" />
+              Capacity
+            </h3>
+          </div>
+
+          {usageLoading ? (
+            <div className="flex items-center gap-2 text-sm text-sage-500 py-3">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading capacity...
+            </div>
+          ) : capacity.length === 0 ? (
+            <p className="text-sm text-sage-500 py-3">No capacity data available.</p>
+          ) : (
+            <div className="space-y-3">
+              {capacity.map((item) => {
+                const limit = item.limit
+                const unlimited = limit === null
+                const pct = limit === null ? 0 : Math.min(100, Math.round((item.used / limit) * 100))
+                const overCap = limit !== null && item.used > limit
+                const barColor = overCap ? 'bg-red-400' : pct >= 80 ? 'bg-amber-400' : 'bg-sage-400'
+                return (
+                  <div key={item.label}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm text-sage-700">{item.label}</span>
+                      <span className={`text-xs ${overCap ? 'text-red-600 font-medium' : 'text-sage-500'}`}>
+                        {item.used} / {unlimited ? 'Unlimited' : item.limit}{' '}
+                        <span className="text-sage-400">{item.windowLabel}</span>
+                      </span>
+                    </div>
+                    {!unlimited && (
+                      <div className="w-full h-1.5 bg-sage-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${barColor}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <p className="mt-4 pt-4 border-t border-sage-100 text-xs text-sage-500">
+            Going over a cap never blocks anything: every inquiry is still captured and Sage keeps
+            working normally. You&apos;ll see a notification here and in Pulse, so you know it&apos;s
+            time to upgrade — nothing is dropped or turned off because of capacity.
+          </p>
         </div>
 
         {/* Available plans summary */}
