@@ -205,6 +205,46 @@ export interface NormalisedLeadRow {
   interactions?: NormalisedInteractionRow[]
   tours?: NormalisedTourRow[]
   lost_deal?: NormalisedLostDealRow | null
+
+  /** W20 (2026-09-09): people on the source record who are NOT the
+   *  couple — a mother, a planner, an aunt paying the invoice. A
+   *  HoneyBook project export puts one row per person, so a three- or
+   *  four-row group is a couple plus family. These used to be counted
+   *  in a warning and thrown away. They now become Agent-class people
+   *  on the spine, linked to the couple with a role. */
+  related_contacts?: NormalisedRelatedContactRow[]
+}
+
+/**
+ * One non-couple human attached to an imported row. Becomes, through
+ * `linkSignal`'s Agent branch: a `couples` row at
+ * lifecycle_state='agent', an `agent_couple_links` row joining them to
+ * the couple, and a `wedding_relationships` row carrying the role.
+ * See IDENTITY-FIRST-ARCHITECTURE.md §1 (the Agent class).
+ */
+export interface NormalisedRelatedContactRow {
+  first_name?: string | null
+  last_name?: string | null
+  email?: string | null
+  phone?: string | null
+  /** Role on the couple's record. The coarse vocabulary a project export
+   *  can actually support: a CRM contact list carries no gender and no
+   *  "of the bride", so 'parent' is as precise as the data gets. A
+   *  channel that knows more (an email signature saying "mother of the
+   *  bride") may pass any value migration 255 documents for
+   *  `wedding_relationships.relationship_role`. */
+  role: 'parent' | 'planner' | 'other' | string
+  /** Why the role was chosen, kept verbatim for the coordinator.
+   *  "Company: Ivy Lane Events", "shares the surname Blaine". */
+  role_detail?: string | null
+  /** Stable per-contact key. Feeds both the touchpoint's external_id and
+   *  the crm_import_rows dedup fingerprint, so a re-upload of the same
+   *  export writes nothing twice. */
+  external_id?: string | null
+  /** 1-based CSV row this contact came from, for operator forensics. */
+  source_row?: number | null
+  /** Header-keyed source row, preserved into the touchpoint payload. */
+  raw_row?: Record<string, unknown> | null
 }
 
 export interface NormalisedInteractionRow {
@@ -393,6 +433,28 @@ export interface CommitResult {
    *  existing caller continues to see byte-identical output. */
   preview?: true
   previewDecisions?: PreviewDecision[]
+  /** W20: what happened to the non-couple people on the imported rows
+   *  (parents, planners, whoever else was on the project). Absent when
+   *  the batch carried none. Replaces the old warn-and-drop, so an
+   *  import that saw fourteen parents can say so. */
+  relatedContacts?: RelatedContactsSummary
+}
+
+/** Per-import tally for the Agent-class people an import produced. */
+export interface RelatedContactsSummary {
+  /** Non-couple contacts seen on the parsed rows. */
+  seen: number
+  /** New agent-class `couples` rows minted by this import. */
+  created: number
+  /** Contacts that ended the import joined to their couple through
+   *  `agent_couple_links`, whether this run wrote the link or a previous
+   *  one did. */
+  linked: number
+  /** `wedding_relationships` rows written by this run. */
+  rolesRecorded: number
+  /** Every contact that was NOT linked, and why. One entry per contact —
+   *  a dropped human is never a bare number. */
+  skipped: Array<{ contact: string; reason: string }>
 }
 
 /** Optional config the adapter may consume — only generic_csv currently
@@ -601,6 +663,15 @@ export async function commitNormalisedRows(args: {
     sortKey: number
   }
   const pendingHoneybookSignals: PendingHoneybookSignal[] = []
+
+  // W20: the non-couple people on the imported rows. Accumulated in the
+  // row loop and flushed after it, so a row that rolls back (a failed
+  // tours or lost_deals insert wipes the wedding) does not leave an
+  // agent pointing at a wedding that no longer exists. The flush filters
+  // against the surviving touched-wedding set.
+  const pendingRelatedContacts: Array<
+    import('./related-contacts').PendingRelatedContact
+  > = []
 
   // ---------------------------------------------------------------------
   // Dry-run / pre-flight diff path.
@@ -826,6 +897,24 @@ export async function commitNormalisedRows(args: {
     // portal provisioning, no recordResolution side-effect. Return
     // the decisions verbatim. Counters stay at zero because we did
     // not perform any write.
+    //
+    // W20: the one thing the pre-flight DOES report is how many
+    // non-couple people the parse found, so the coordinator sees the
+    // parents and planners before they press Commit. Seen only; nothing
+    // is created or linked in a dry run.
+    const relatedSeen = rows.reduce(
+      (n, r) => n + (r.related_contacts?.length ?? 0),
+      0,
+    )
+    if (relatedSeen > 0) {
+      result.relatedContacts = {
+        seen: relatedSeen,
+        created: 0,
+        linked: 0,
+        rolesRecorded: 0,
+        skipped: [],
+      }
+    }
     return result
   }
 
@@ -1827,6 +1916,18 @@ export async function commitNormalisedRows(args: {
       }
       if (rowAborted) continue
 
+      // W20: queue the non-couple people on this row (parents, planners,
+      // whoever else the CRM had on the project). They are written after
+      // the row loop, through linkSignal's Agent branch.
+      for (const contact of row.related_contacts ?? []) {
+        pendingRelatedContacts.push({
+          contact,
+          weddingId,
+          rowSourceId: row.source_id ?? null,
+          weddingDate: row.wedding_date ?? null,
+        })
+      }
+
       // lost_deals (only if status='lost' AND a lost_deal payload exists)
       if (row.lost_deal && (row.status === 'lost' || row.lost_at)) {
         const { error: lostErr } = await supabase.from('lost_deals').insert({
@@ -1951,6 +2052,28 @@ export async function commitNormalisedRows(args: {
           (err instanceof Error ? err.message : 'unknown'),
       )
     }
+  }
+
+  // W20 flush: the non-couple people on the imported rows (parents,
+  // planners, whoever else the CRM had on the project). Written after the
+  // row loop so a row that rolled back does not leave an agent pointing
+  // at a wedding that no longer exists. See ./related-contacts.ts for
+  // the doctrine and the dedup contract.
+  if (pendingRelatedContacts.length > 0) {
+    const { commitRelatedContacts } = await import('./related-contacts')
+    const summary = await commitRelatedContacts({
+      supabase,
+      venueId,
+      crmSource,
+      pending: pendingRelatedContacts,
+      survivingWeddings: new Set(result.touchedWeddingIds ?? []),
+    })
+    result.relatedContacts = summary
+    console.log(
+      `[crm-import] related contacts: seen=${summary.seen} `
+      + `created=${summary.created} linked=${summary.linked} `
+      + `roles=${summary.rolesRecorded} skipped=${summary.skipped.length}`,
+    )
   }
 
   // Batch-provision the couple portal for every BOOKED wedding this

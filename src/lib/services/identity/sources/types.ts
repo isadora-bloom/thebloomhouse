@@ -94,6 +94,44 @@ export interface NormalizedSignal {
    *  a non-couple sender (a vendor blast, a platform notification).
    *  Null/undefined on channels without classification. */
   author_class?: string | null
+
+  /** W20 (2026-09-09). Present when the signal describes a person acting
+   *  ON BEHALF of a couple rather than a partner in it — the mother on a
+   *  HoneyBook project, the planner who owns the file, the aunt paying the
+   *  invoice. `linkSignal` sees this and takes the Agent branch
+   *  (`identity/agent-link.ts`) instead of scoring the person as a
+   *  candidate partner: they get their own `couples` row at
+   *  lifecycle_state='agent', an `agent_couple_links` row joining them to
+   *  the couple, and a `wedding_relationships` row carrying the role.
+   *  See IDENTITY-FIRST-ARCHITECTURE.md §1, the Agent class. */
+  agent_context?: AgentContext | null
+}
+
+/** Who this person is to the couple, and which couple. Carried on a
+ *  NormalizedSignal so any channel can declare "this human is an Agent,
+ *  not a partner" without the matcher having to guess. */
+export interface AgentContext {
+  /** Role on the couple's record. Free text, because channels know
+   *  different amounts: the values migration 255 documents for
+   *  `wedding_relationships.relationship_role` (mother / father /
+   *  planner / family_friend / vendor_contact / other) plus the coarser
+   *  CSV vocabulary (parent / planner / other) a project export supports. */
+  role: string
+  /** Free-text nuance, kept verbatim. "Company: Ivy Lane Events",
+   *  "shares a surname with Adam Blaine". */
+  relationship_detail?: string | null
+  /** The couple this person acts for, as a legacy `weddings.id`. Resolved
+   *  to a couples row through `couples.source_wedding_id`. */
+  for_legacy_wedding_id?: string | null
+  /** The couple this person acts for, as a `couples.id`. Wins over the
+   *  legacy id when both are set. */
+  for_couple_id?: string | null
+  /** `agent_couple_links.source`. A CRM project contact is the venue's own
+   *  record of who is on the file, so CSV imports pass 'operator_confirmed'. */
+  link_source?: 'self_identified' | 'multi_couple_inferred' | 'operator_confirmed'
+  /** `wedding_relationships.source` (migration 255). Where the role came
+   *  from. Defaults to 'csv_import'. */
+  role_source?: 'ai_email_extraction' | 'coordinator_added' | 'csv_import' | 'tour_transcript'
 }
 
 export interface SourceAdapterArgs {

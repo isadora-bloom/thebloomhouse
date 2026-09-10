@@ -85,6 +85,7 @@ import { recordProgressionIfEligible } from './progression'
 import { stampTouchpointAndPointZero } from './point-zero'
 import { buildJudgeContext } from './judge-context'
 import type { NormalizedSignal } from './sources/types'
+import type { AgentLinkOutcome } from './agent-link'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -124,6 +125,10 @@ export interface LinkResult {
   candidate_match_queued: boolean
   reason: string
   duplicate: boolean
+  /** W20: set only when the signal carried `agent_context` and took the
+   *  Agent branch. Lets an importer count created / linked / skipped
+   *  without a second read. See ./agent-link.ts. */
+  agent_link?: AgentLinkOutcome
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +238,20 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
   }
 
   try {
+    // 0. Agent branch (W20). The caller has already established that this
+    //    human acts on behalf of a couple rather than being one, and which
+    //    couple, so there is nothing for the matcher to decide. Run the
+    //    person through the Agent writer instead: their own couples row at
+    //    lifecycle_state='agent', an agent_couple_links row, and the role.
+    //    Without this a mother-of-the-bride either gets absorbed into the
+    //    couple's touchpoints or mints a second, fake wedding.
+    if (signal.agent_context) {
+      const { linkAgentSignal } = await import('./agent-link')
+      const agentResult = await linkAgentSignal({ supabase, venueId, signal })
+      await emitLinkEvent(supabase, venueId, runId, agentResult, signal)
+      return agentResult
+    }
+
     // 1. Legacy-wedding fast path.
     if (signal.legacy_wedding_id) {
       const coupleId = await findCoupleForLegacyWedding(

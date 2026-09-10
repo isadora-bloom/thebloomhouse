@@ -47,6 +47,27 @@
  *   Tags              → concatenated into weddings.notes (no tags column)
  *   Notes             → weddings.notes
  *
+ * Non-couple project contacts (W20, 2026-09-09)
+ * ----------------------------------------------
+ * The "Booked Client" report is one row per PERSON, grouped by Project
+ * Name. Two rows are the couple. A third or fourth is whoever else was
+ * on the file — a mother, a father, a planner, the aunt paying the
+ * invoice. They used to be counted in a warning and dropped.
+ *
+ * They now come out of parse() as `related_contacts` on the row, and
+ * `commitNormalisedRows` routes each through linkSignal's Agent branch:
+ * their own `couples` row at lifecycle_state='agent', an
+ * `agent_couple_links` row joining them to the couple, and the role on
+ * `wedding_relationships`. See IDENTITY-FIRST-ARCHITECTURE.md §1.
+ *
+ * Role comes from the columns the export actually has:
+ *   Company non-empty          → 'planner'
+ *   name reads as a business   → 'planner'
+ *   surname matches a partner  → 'parent'   (no gender in the file, so
+ *                                            'parent' is as precise as
+ *                                            the data honestly gets)
+ *   otherwise                  → 'other'
+ *
  * Path 3 (per-project Activity Log CSV) is intentionally NOT supported in
  * this first cut — that flow requires the coordinator to export each
  * project individually and stitch them together. Defer.
@@ -113,6 +134,7 @@ import type {
   NormalisedInteractionRow,
   CommitResult,
   NormalisedLostDealRow,
+  NormalisedRelatedContactRow,
 } from './index'
 // commitNormalisedRows is intentionally NOT imported here at the top level.
 // honeybook.ts ↔ index.ts are circular: index imports honeybookAdapter;
@@ -160,6 +182,10 @@ const COLUMNS: ColumnSpec[] = [
   { key: 'booking_date',  variants: [/^booking\s*date$/i, /^booked\s*date$/i, /^date\s*booked$/i, /^booked\s*on$/i, /^contract\s*signed\s*date$/i] },
   { key: 'tags',          variants: [/^tags$/i] },
   { key: 'notes',         variants: [/^notes$/i, /^internal\s*notes$/i, /^description$/i] },
+  // Present on the real Rixey "Booked Client" export. Blank for a
+  // couple; filled for anyone on the project in a professional
+  // capacity, which is the strongest planner signal the file carries.
+  { key: 'company',       variants: [/^company$/i, /^business(\s*name)?$/i, /^organi[sz]ation$/i] },
 ]
 
 interface ColumnIndex {
@@ -449,6 +475,78 @@ function parseProjectName(raw: string | null): ParsedNames {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Non-couple project contacts (W20, 2026-09-09)
+//
+// A HoneyBook project export is one row per PERSON. Two rows sharing a
+// Project Name are the couple. Three or four are the couple plus whoever
+// else is on the file: a mother, a father, a planner, an aunt paying the
+// invoice. Until now the adapter counted them in a warning and dropped
+// them, which is how "Amy Stewart, lkahomeconcierge@gmail.com" ends up
+// filed under "Bria and Iain's Wedding" and then nowhere.
+//
+// The identity doctrine calls these people Agents: a real human acting
+// on behalf of a couple, whose calls and emails must still ingest and
+// attach to that couple (IDENTITY-FIRST-ARCHITECTURE.md §1). So the
+// adapter now emits them as `related_contacts` and the commit step
+// routes each one through linkSignal's Agent branch.
+//
+// Role inference, in the order the export actually supports it. The
+// file carries no gender and no "of the bride", so 'parent' is the most
+// precise honest label for a surname match; the coordinator can sharpen
+// it later on the relationships panel.
+// ---------------------------------------------------------------------------
+
+/** Words that mean the person is on the file professionally rather than
+ *  as family. Matched against the Company cell and, failing that, the
+ *  name itself (some exports put the firm in the Last Name column). */
+const PLANNER_WORDS =
+  /\b(event|events|planning|planner|weddings?|design|designs|co\.|company|llc|inc\.?|studio|concierge|coordination|coordinator|productions?)\b/i
+
+function inferContactRole(args: {
+  first: string | null
+  last: string | null
+  company: string | null
+  partnerSurnames: string[]
+}): { role: 'parent' | 'planner' | 'other'; detail: string | null } {
+  const company = (args.company ?? '').trim()
+  if (company) {
+    return { role: 'planner', detail: `Company: ${company}` }
+  }
+  const fullName = [args.first, args.last].filter(Boolean).join(' ').trim()
+  if (fullName && PLANNER_WORDS.test(fullName)) {
+    return { role: 'planner', detail: `name reads as a business: ${fullName}` }
+  }
+  const last = (args.last ?? '').trim().toLowerCase()
+  if (last && args.partnerSurnames.includes(last)) {
+    return {
+      role: 'parent',
+      detail: `shares the surname ${args.last!.trim()} with the couple; `
+        + `parent or close relative, not confirmed`,
+    }
+  }
+  return { role: 'other', detail: null }
+}
+
+/** Stable per-contact key. Email when there is one, because that is what
+ *  survives a re-export; otherwise the project plus the name, which is
+ *  stable enough for the same file uploaded twice. */
+function contactExternalId(
+  projectName: string | null,
+  email: string | null,
+  fullName: string,
+  csvRow: number,
+): string {
+  const slug = (projectName ?? 'unknown')
+    .trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '')
+    || 'unknown'
+  if (email) return `honeybook:contact:${slug}:${email.trim().toLowerCase()}`
+  const nameSlug = fullName.trim().toLowerCase().replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_-]/g, '')
+  if (nameSlug) return `honeybook:contact:${slug}:${nameSlug}`
+  return `honeybook:contact:${slug}:row${csvRow}`
+}
+
 /** "Sarah Chen" → ["Sarah", "Chen"]. */
 function splitFullName(raw: string | null | undefined): { first: string | null; last: string | null } {
   if (!raw) return { first: null, last: null }
@@ -536,6 +634,7 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
     sourceRaw: string | null
     tags: string | null
     notes: string | null
+    company: string | null
   }
 
   const people: PersonRow[] = []
@@ -597,6 +696,7 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
       sourceRaw: get(data, 'source'),
       tags: get(data, 'tags'),
       notes: get(data, 'notes'),
+      company: get(data, 'company'),
     })
   }
 
@@ -655,14 +755,56 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
       extras.push(...remaining)
     }
     if (!partner1) continue
+
+    // W20: the people on the project who are not the couple. Emitted as
+    // related_contacts rather than warned about and dropped. The warning
+    // stays, but it now says where they went.
+    const relatedContacts: NormalisedRelatedContactRow[] = []
     if (extras.length > 0) {
+      const partnerSurnames = [
+        partner1.last,
+        partner2?.last,
+        fromProject.partner1_last,
+        fromProject.partner2_last,
+      ]
+        .map((s) => (s ?? '').trim().toLowerCase())
+        .filter(Boolean)
+      const partnerEmails = new Set(
+        [partner1.email, partner2?.email]
+          .map((e) => (e ?? '').trim().toLowerCase())
+          .filter(Boolean),
+      )
+      for (const e of extras) {
+        const fullName = [e.first, e.last].filter(Boolean).join(' ').trim()
+        const email = e.email?.trim() || null
+        // Same human on two rows of the same project. Not an agent.
+        if (email && partnerEmails.has(email.toLowerCase())) continue
+        const { role, detail } = inferContactRole({
+          first: e.first,
+          last: e.last,
+          company: e.company,
+          partnerSurnames,
+        })
+        relatedContacts.push({
+          first_name: e.first,
+          last_name: e.last,
+          email,
+          phone: e.phone,
+          role,
+          role_detail: detail,
+          external_id: contactExternalId(projectName, email, fullName, e.csvRow),
+          source_row: e.csvRow,
+          raw_row: e.rawRow,
+        })
+      }
       const extraNames = extras
         .map((e) => [e.first, e.last].filter(Boolean).join(' ') || `row ${e.csvRow}`)
         .join(', ')
       warnings.push(
         `"${projectName ?? '(no project name)'}": ${extras.length} extra ` +
-        `${extras.length === 1 ? 'person' : 'people'} (${extraNames}) not imported as ` +
-        `partners — couple read as ${[partner1.first, partner2?.first].filter(Boolean).join(' & ') || partner1.first}`,
+        `${extras.length === 1 ? 'person' : 'people'} (${extraNames}) read as ` +
+        `agents on the couple, not partners — couple read as ` +
+        `${[partner1.first, partner2?.first].filter(Boolean).join(' & ') || partner1.first}`,
       )
     }
 
@@ -757,6 +899,7 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
       interactions: adapterInteractions,
       tours: [],
       lost_deal: lostDeal,
+      related_contacts: relatedContacts,
     })
   }
 
@@ -777,8 +920,14 @@ function previewHoneybook(rows: NormalisedLeadRow[]): PreviewResult {
   let earliest: string | null = null
   let latest: string | null = null
   const sources = new Set<string>()
+  const byRole = new Map<string, number>()
+  let relatedTotal = 0
   for (const r of rows) {
     byStatus.set(r.status ?? 'inquiry', (byStatus.get(r.status ?? 'inquiry') ?? 0) + 1)
+    for (const c of r.related_contacts ?? []) {
+      relatedTotal += 1
+      byRole.set(c.role, (byRole.get(c.role) ?? 0) + 1)
+    }
     if (r.wedding_date) {
       if (!earliest || r.wedding_date < earliest) earliest = r.wedding_date
       if (!latest   || r.wedding_date > latest)   latest   = r.wedding_date
@@ -790,6 +939,14 @@ function previewHoneybook(rows: NormalisedLeadRow[]): PreviewResult {
     warnings.push(`Summary — ${rows.length} rows (${parts})`)
     if (earliest && latest) warnings.push(`Date range: ${earliest} → ${latest}`)
     if (sources.size > 0)   warnings.push(`Distinct lead sources: ${sources.size}`)
+    if (relatedTotal > 0) {
+      const roleParts = Array.from(byRole.entries())
+        .map(([k, v]) => `${k}=${v}`).join(', ')
+      warnings.push(
+        `Other people on these projects: ${relatedTotal} (${roleParts}) — `
+        + `imported as agents linked to their couple, not as partners`,
+      )
+    }
   }
 
   return {
