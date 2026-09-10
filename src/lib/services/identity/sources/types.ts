@@ -26,6 +26,18 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 /** The unified shape every adapter produces. Field names align with
  *  the new schema's `touchpoints` + `fragments` tables. */
+/** Platforms a handle can belong to. Keys of NormalizedSignal.handles and
+ *  couples.handles. Add here, never as a free string. */
+export type HandlePlatform =
+  | 'instagram'
+  | 'tiktok'
+  | 'facebook'
+  | 'pinterest'
+  | 'twitter'
+  | 'knot'
+  | 'weddingwire'
+  | 'zola'
+
 export interface NormalizedSignal {
   /** Channel-specific stable id. Combined with venue_id + channel,
    *  forms the UNIQUE(venue_id, channel, external_id) rerun-safety
@@ -74,6 +86,14 @@ export interface NormalizedSignal {
   wedding_date?: string | null
   session_ip?: string | null
   session_fingerprint?: string | null
+
+  /** Wave 3 (2026-09-09, HANDLE-IDENTITY-SPEC.md). Platform handles the
+   *  signal carries, already normalised by normalizeHandle(): lower case,
+   *  no leading @, no URL. A handle is a first-class identifier: the
+   *  cascade matches it exactly, platform-scoped, and a handle-only
+   *  signal can set couples.first_seen_at. It still cannot establish
+   *  Point-Zero on its own (a handle is not reachable). */
+  handles?: Partial<Record<HandlePlatform, string>> | null
 
   /** Raw payload for operator forensics + future reprocessing. Lands
    *  in touchpoints.raw_payload (GIN-indexed). */

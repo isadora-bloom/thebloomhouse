@@ -197,3 +197,25 @@ Follow-ups carried to wave 3:
   restore the rule.
 - Demo reseed is built and tested but has NOT been run against prod; operator step:
   `npx tsx scripts/demo-reseed.ts` (dry run) → `--apply --allow-prod` → `--verify`.
+
+## Wave 3 (launched 2026-09-09 night): handles on the spine
+
+Isadora, 2026-09-09: tracking every touchpoint from the first Instagram follow through to the
+review is THE most important thing. Spec: `HANDLE-IDENTITY-SPEC.md`. Contract landed before
+launch: `NormalizedSignal.handles`, `HandlePlatform`, `normalizeHandle()`, migration 398.
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W22 | Handle as identifier: cascade stage, matcher, linker stamping of `couples.handles` + `first_seen_at`, fragment promotion by handle, merge_couples carries handles, ratchet on `people.platform_handles` reads | Opus | `src/lib/services/identity/identity-cascade.ts`, `matcher.ts`, `forwards-linker.ts`, `tier-routing.ts`, `mint-couple.ts`, `point-zero.ts` (first_seen only), new `fragment-sweep.ts`, `merge-couples*`, `lifecycle-audit.ts` (invariant), new `scripts/check-no-platform-handles-reads.mjs`, golden case |
+| W23 | Social captures through linkSignal: followers/story/DM list and screenshot rows become signals; delete the auto-bind fallbacks; social branch of orphan-promote goes | Opus | `src/lib/services/social/**`, `src/app/api/intel/social-integration/**`, `src/lib/services/identity/orphan-promote.ts` (social branch only), `src/lib/services/identity/replay/social.ts` (new) |
+| W24 | Tangential pool collapses into fragments and candidate_matches; vision comment/tag candidates route through linkSignal; `client_match_queue` retires | Opus | `src/lib/services/ingestion/tangential-signals.ts`, `identity-enqueue.ts`, `src/lib/services/identity/candidate-clusterer.ts`, `candidate-resolver.ts` (handle emit only), `handle-convergence.ts`, admin routes that read those tables |
+| W25 | Ask for the key: optional handle field on the inquiry form adapter, calculator, Calendly question mapping; email signature/body handle extraction through the existing extraction path plus profile-URL parse | Sonnet | `src/lib/services/crm-import/web-form.ts`, `src/lib/services/identity/calendly-to-signal.ts`, `email-to-signal.ts`, `src/lib/services/extraction.ts` (handles only), `src/config/prompts/*identity*`, the public form components |
+| W26 | Tracer retires: coalesce moves under the linker as the nightly fragment sweep; `tracer.ts`, `backtrack.ts` dead paths removed; cron dispatch updated | Sonnet | `src/lib/services/identity/tracer.ts`, `tracer-runner.ts`, `backtrack.ts`, `src/app/api/cron/route.ts` (dispatch lines only), `vercel.json` |
+| W27 | The ribbon shows it: getCoupleJourney and the couple page render first seen, handles, discovery vs known phases; identity-precision tool and journey adapter read `couples.handles` | Sonnet | `src/lib/intel/canonical.ts` (getCoupleJourney only), `src/lib/intel/adapters/**`, `src/app/(platform)/intel/couples/**`, `src/lib/intel/tool-sources/identity-precision.ts` |
+| W28 | Instagram DMs via the Meta Messaging API into the SMS-shaped pipeline; env-gated, webhook verified, dry until credentials | Opus | new `src/lib/services/ingestion/instagram-dm.ts`, new `src/app/api/webhooks/instagram/route.ts`, `src/lib/services/integrations/**` (Meta only), settings page for the connection |
+
+Shared rules as wave 1, plus: every worktree starts with `git reset --hard consolidation`
+and `npm ci`; the only writer is `linkSignal`; `people.platform_handles` is read-only and
+on its way out; a handle is always `(platform, handle)` through `normalizeHandle()`.
+Migration numbers: 398 (contract, landed). W23/W24 may need 399/400 for retiring tables
+(mark deprecated, do not drop).
