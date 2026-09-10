@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { DailyList, VenueOverview } from '@/lib/intel/canonical'
+import { dayLabel, timeLabel } from '@/lib/copy/client-terms'
 import {
   MATURITY_THRESHOLD_COUPLES,
   ROWS_PER_BLOCK,
@@ -138,6 +139,22 @@ describe('why lines', () => {
     const late = { id: 't1', coupleId: 'c1', scheduledAt: '2026-09-13T00:30:00.000Z' }
     expect(tourWhy(late, NOW, 'UTC')).toBe('Tour on Sun 13 Sep, 12:30am.')
     expect(tourWhy(late, NOW, 'America/New_York')).toBe('Tour on Sat 12 Sep, 8:30pm.')
+  })
+
+  it('a 7pm America/New_York tour does not display as the next day', () => {
+    // Winter: America/New_York is on EST (UTC-5), so 7:00pm on the 15th
+    // is exactly midnight UTC on the 16th — the sharpest version of this
+    // bug class. Reading the calendar day off the raw UTC instant (or a
+    // viewer's browser zone east of New York) instead of the venue's own
+    // timezone puts the tour a full calendar day late.
+    const scheduledAt = '2026-01-16T00:00:00.000Z'
+    expect(dayLabel(scheduledAt, 'America/New_York')).toBe('Thu 15 Jan')
+    expect(dayLabel(scheduledAt, 'UTC')).toBe('Fri 16 Jan')
+    expect(timeLabel(scheduledAt, 'America/New_York')).toBe('7:00pm')
+
+    const tour = { id: 't1', coupleId: 'c1', scheduledAt }
+    const nineAmSameMorningNY = Date.parse('2026-01-15T14:00:00.000Z')
+    expect(tourWhy(tour, nineAmSameMorningNY, 'America/New_York')).toBe('Tour today, 7:00pm.')
   })
 
   it('drops the time when the tour has a date but no time', () => {

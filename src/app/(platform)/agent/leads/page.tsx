@@ -46,8 +46,10 @@ interface Lead {
   venue_id: string
   status: string
   source: string | null
-  heat_score: number
-  temperature_tier: string
+  // null (not 0) means the wedding_heat read failed for this batch —
+  // the score is unknown, not zero. See heatUnavailable below.
+  heat_score: number | null
+  temperature_tier: string | null
   inquiry_date: string
   wedding_date: string | null
   guest_count_estimate: number | null
@@ -298,8 +300,15 @@ function BarSkeleton() {
 
 function HeatDistributionBar({ leads }: { leads: Lead[] }) {
   const counts = useMemo(() => {
-    const c: Record<string, number> = { hot: 0, warm: 0, cool: 0, cold: 0, frozen: 0 }
+    const c: Record<string, number> = { hot: 0, warm: 0, cool: 0, cold: 0, frozen: 0, unavailable: 0 }
     for (const lead of leads) {
+      // heat_score === null means the wedding_heat read failed for this
+      // lead, not that it scored zero. Counting it as 'cool' would draw
+      // the exact confidently-wrong bar this file was audited for.
+      if (lead.heat_score === null) {
+        c.unavailable++
+        continue
+      }
       const tier = lead.temperature_tier || 'cool'
       if (c[tier] !== undefined) c[tier]++
       else c.cool++
@@ -315,6 +324,7 @@ function HeatDistributionBar({ leads }: { leads: Lead[] }) {
     { key: 'cool', color: '#3B82F6', count: counts.cool },
     { key: 'cold', color: '#1E40AF', count: counts.cold },
     { key: 'frozen', color: '#6B7280', count: counts.frozen },
+    { key: 'unavailable', color: '#D1D5DB', count: counts.unavailable },
   ].filter((s) => s.count > 0)
 
   return (
@@ -363,6 +373,15 @@ function HeatDistributionBar({ leads }: { leads: Lead[] }) {
             </div>
           )
         })}
+        {counts.unavailable > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#D1D5DB' }} />
+            <span className="text-xs text-sage-600">
+              Unavailable{' '}
+              <span className="font-medium text-sage-800">({counts.unavailable})</span>
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -417,6 +436,13 @@ export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Heat is fetched from wedding_heat in parallel with the wedding rows.
+  // Its error used to be discarded, so a permissions/timeout failure on
+  // that one query rendered every lead as heat 0 / Frozen, confidently
+  // and indistinguishably from a lead that genuinely has no engagement
+  // yet (UX-AUDIT-NON-TECHNICAL.md finding 2). This flag drives a banner
+  // and an honest "unavailable" state on the rows instead.
+  const [heatUnavailable, setHeatUnavailable] = useState(false)
   const [tierFilter, setTierFilter] = useState<TierFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [sortField, setSortField] = useState<SortField>('heat_score')
@@ -495,30 +521,42 @@ export default function LeadsPage() {
       if (venueIds && venueIds.length > 0) {
         heatQuery = heatQuery.in('venue_id', venueIds)
       }
-      const [{ data: rawData, error: fetchError }, { data: heatRows }] = await Promise.all([
+      const [{ data: rawData, error: fetchError }, { data: heatRows, error: heatError }] = await Promise.all([
         query,
         heatQuery,
       ])
 
       if (fetchError) throw fetchError
 
+      // heatError is surfaced, not discarded: a failed wedding_heat read
+      // (permissions, a missing view, a timeout) must not render every
+      // lead as a confident heat 0 / Frozen. When it fails, heat_score /
+      // temperature_tier stay null for this batch rather than default —
+      // null means "we don't know", 0 means "we know and it's cold".
+      setHeatUnavailable(!!heatError)
+      if (heatError) {
+        console.error('Failed to fetch wedding_heat:', heatError)
+      }
+
       const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
-      for (const h of heatRows ?? []) {
-        heatByWedding.set(h.wedding_id as string, {
-          heat_score: (h.heat_score as number) ?? 0,
-          temperature_tier: (h.temperature_tier as string) ?? 'cool',
-        })
+      if (!heatError) {
+        for (const h of heatRows ?? []) {
+          heatByWedding.set(h.wedding_id as string, {
+            heat_score: (h.heat_score as number) ?? 0,
+            temperature_tier: (h.temperature_tier as string) ?? 'cool',
+          })
+        }
       }
       const data = (rawData ?? [])
         .map((row: any) => {
           const heat = heatByWedding.get(row.id as string)
           return {
             ...row,
-            heat_score: heat?.heat_score ?? 0,
-            temperature_tier: heat?.temperature_tier ?? 'cool',
+            heat_score: heatError ? null : heat?.heat_score ?? 0,
+            temperature_tier: heatError ? null : heat?.temperature_tier ?? 'cool',
           }
         })
-        .sort((a: any, b: any) => (b.heat_score ?? 0) - (a.heat_score ?? 0))
+        .sort((a: any, b: any) => (b.heat_score ?? -1) - (a.heat_score ?? -1))
 
       // Last Activity = the newest touchpoint on the couple's spine
       // ribbon, resolved back to this wedding through
@@ -565,8 +603,11 @@ export default function LeadsPage() {
           venue_id: row.venue_id,
           status: row.status,
           source: row.source,
-          heat_score: row.heat_score ?? 0,
-          temperature_tier: row.temperature_tier ?? 'cool',
+          // row.heat_score/temperature_tier are already null when the
+          // wedding_heat read failed (set above) — do not re-default
+          // them to 0/'cool' here, that would recreate the swallow.
+          heat_score: row.heat_score as number | null,
+          temperature_tier: row.temperature_tier as string | null,
           inquiry_date: row.inquiry_date,
           wedding_date: row.wedding_date,
           guest_count_estimate: row.guest_count_estimate,
@@ -646,8 +687,11 @@ export default function LeadsPage() {
 
       switch (sortField) {
         case 'heat_score':
-          aVal = a.heat_score
-          bVal = b.heat_score
+          // Unavailable heat (null) sorts to the bottom rather than
+          // pretending to be 0 — a cold lead is a known quantity, an
+          // unavailable one is not.
+          aVal = a.heat_score ?? -1
+          bVal = b.heat_score ?? -1
           break
         case 'inquiry_date':
           aVal = new Date(a.inquiry_date).getTime()
@@ -730,6 +774,29 @@ export default function LeadsPage() {
               fetchLeads()
             }}
             className="ml-auto text-sm font-medium text-red-600 hover:text-red-800 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* ---- Heat unavailable ----
+           wedding_heat failed to load for this batch. Heat is unknown,
+           not zero, and every "Heat unavailable" row below is a lead
+           whose real interest level we could not read, not a cold one. */}
+      {heatUnavailable && !loading && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800">
+            We could not load interest levels for this list. The scores below are unavailable,
+            not zero, retry or check the wedding_heat permissions.
+          </p>
+          <button
+            onClick={() => {
+              setLoading(true)
+              fetchLeads()
+            }}
+            className="ml-auto text-sm font-medium text-amber-700 hover:text-amber-900 transition-colors"
           >
             Retry
           </button>
@@ -944,20 +1011,32 @@ export default function LeadsPage() {
                         </span>
                       </td>
 
-                      {/* Heat Score */}
+                      {/* Heat Score. null (not 0) means the wedding_heat
+                          read failed for this batch — say so, don't draw
+                          a confident badge on a default. */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="pill" />
+                          {lead.heat_score === null ? (
+                            <span className="text-xs text-amber-700 italic">Heat unavailable</span>
+                          ) : (
+                            <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="pill" />
+                          )}
                         </div>
                       </td>
 
                       {/* Tier */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="dot" />
-                          <span className="text-sm text-sage-700 capitalize">
-                            {tierStyle.label}
-                          </span>
+                          {lead.heat_score === null ? (
+                            <span className="text-xs text-amber-700 italic">Unavailable</span>
+                          ) : (
+                            <>
+                              <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="dot" />
+                              <span className="text-sm text-sage-700 capitalize">
+                                {tierStyle.label}
+                              </span>
+                            </>
+                          )}
                         </div>
                       </td>
 

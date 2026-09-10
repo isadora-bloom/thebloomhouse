@@ -22,6 +22,7 @@ import {
   FileText,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { dayLabel, DEFAULT_TIME_ZONE } from '@/lib/copy/client-terms'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -234,6 +235,20 @@ export default function ToursPage() {
   const [cancelSaving, setCancelSaving] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
 
+  // Every scheduled_at below must render in the VENUE's timezone, not
+  // the viewer's browser timezone — a 7pm America/New_York tour must
+  // not read as tomorrow to a coordinator opening this page from a
+  // different zone (or a server that renders in UTC). venue_config
+  // carries timezone (venues does not, wave 1 schema-truth fix
+  // 65abf8d5); keyed by venue_id so a company-scope view spanning
+  // several venues still resolves each tour against its own venue.
+  const [venueTimeZones, setVenueTimeZones] = useState<Record<string, string>>({})
+  const tzForVenue = useCallback(
+    (venueId: string | null | undefined) =>
+      (venueId && venueTimeZones[venueId]) || DEFAULT_TIME_ZONE,
+    [venueTimeZones],
+  )
+
   const fetchData = useCallback(async () => {
     if (scope.loading) return
     const supabase = createClient()
@@ -276,6 +291,32 @@ export default function ToursPage() {
       if (err) throw err
       const rows = (data ?? []) as TourRow[]
       setTours(rows)
+
+      // Batch-load each distinct venue's timezone so scheduled_at renders
+      // against the right one below. Best-effort: a failed read here must
+      // not take the tour list down with it — tzForVenue falls back to
+      // DEFAULT_TIME_ZONE, which is the same default the daily-list
+      // reader and /today use.
+      const distinctVenueIds = Array.from(
+        new Set(rows.map((t) => t.venue_id).filter((v): v is string => !!v)),
+      )
+      if (distinctVenueIds.length > 0) {
+        try {
+          const { data: tzRows } = await supabase
+            .from('venue_config')
+            .select('venue_id, timezone')
+            .in('venue_id', distinctVenueIds)
+          const tzMap: Record<string, string> = {}
+          for (const r of tzRows ?? []) {
+            const tz = (r.timezone as string | null)?.trim()
+            if (tz) tzMap[r.venue_id as string] = tz
+          }
+          setVenueTimeZones(tzMap)
+        } catch (tzErr) {
+          console.warn('Failed to load venue timezones (falling back to default):', tzErr)
+        }
+      }
+
       // Connective tissue II / fix #1: hydrate brief state from
       // the persisted columns so the panel renders the cached brief
       // immediately on page load instead of nudging the coordinator
@@ -339,18 +380,24 @@ export default function ToursPage() {
   // No-show count (cancelled tours)
   const noShows = yearTours.filter((t) => t.outcome === 'cancelled').length
 
-  // Best converting day of week
+  // Best converting day of week. Computed in the TOUR'S OWN venue
+  // timezone (not the viewer's browser zone) — otherwise a run of
+  // evening tours near a zone boundary drifts onto the wrong weekday
+  // and the "best day" insight below is just wrong.
   const dayConversions = useMemo(() => {
     const dayMap: Record<string, { total: number; booked: number }> = {}
     for (const t of yearTours) {
       if (!['completed', 'booked'].includes(t.outcome)) continue
-      const day = new Date(t.scheduled_at).toLocaleDateString('en-US', { weekday: 'long' })
+      const day = new Date(t.scheduled_at).toLocaleDateString('en-US', {
+        timeZone: tzForVenue(t.venue_id),
+        weekday: 'long',
+      })
       if (!dayMap[day]) dayMap[day] = { total: 0, booked: 0 }
       dayMap[day].total++
       if (t.outcome === 'booked') dayMap[day].booked++
     }
     return dayMap
-  }, [yearTours])
+  }, [yearTours, tzForVenue])
 
   // ---- Compute insights from tour data ----
   const tourInsights: InsightItem[] = (() => {
@@ -762,7 +809,9 @@ export default function ToursPage() {
                             ) : null}
                           </td>
                           <td className="px-5 py-4 font-medium text-sage-900">{tourCoupleName(t)}</td>
-                          <td className="px-5 py-4 text-sage-700">{new Date(t.scheduled_at).toLocaleDateString()}</td>
+                          <td className="px-5 py-4 text-sage-700">
+                            {dayLabel(t.scheduled_at, tzForVenue(t.venue_id)) ?? '—'}
+                          </td>
                           <td className="px-5 py-4 text-sage-600">{t.venue?.name || '—'}</td>
                           <td className="px-5 py-4 text-sage-700">
                             <span className="inline-flex items-center gap-1">
