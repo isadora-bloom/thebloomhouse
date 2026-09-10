@@ -140,6 +140,7 @@ function CaptureModal({
   onClose: () => void
   onSaved: () => void
 }) {
+  const aiName = useAiName()
   const [answer, setAnswer] = useState('')
   const [tags, setTags] = useState<string[]>(gap.category ? [gap.category] : [])
   const [appliesUntil, setAppliesUntil] = useState('')
@@ -207,7 +208,7 @@ function CaptureModal({
               onChange={(e) => setAnswer(e.target.value)}
               rows={5}
               className={inputClasses}
-              placeholder="Provide the answer. This becomes the venue's permanent record — Sage uses it on every future draft."
+              placeholder={`Provide the answer. This becomes the venue's permanent record — ${aiName} uses it on every future draft.`}
             />
           </div>
 
@@ -511,6 +512,7 @@ function CaptureEditModal({
   onClose: () => void
   onSaved: () => void
 }) {
+  const aiName = useAiName()
   const [question, setQuestion] = useState(capture.question)
   const [answer, setAnswer] = useState(capture.answer)
   const [tags, setTags] = useState<string[]>(capture.tags ?? [])
@@ -602,7 +604,7 @@ function CaptureEditModal({
               onChange={(e) => setActive(e.target.checked)}
               className="w-4 h-4 rounded border-sage-300 text-sage-600 focus:ring-sage-500"
             />
-            <span className="text-sm text-sage-700">Active (Sage uses this in drafts)</span>
+            <span className="text-sm text-sage-700">Active ({aiName} uses this in drafts)</span>
           </label>
           {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg p-3">{error}</div>}
           <div className="flex items-center justify-end gap-3 pt-2">

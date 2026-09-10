@@ -686,7 +686,7 @@ export function FloatingBrainDump() {
                           ? `Detected ${state.pendingConfirm.intent.replace(/_preview$/, '').replace(/_/g, ' ')}, ${state.pendingConfirm.previewRows.toLocaleString()} rows`
                           : state.clarification
                             ? state.clarification
-                            : `Sage parsed this as ${state.pendingConfirm.intent.replace(/_/g, ' ')}`}
+                            : `${aiName} parsed this as ${state.pendingConfirm.intent.replace(/_/g, ' ')}`}
                       </p>
                       {state.pendingConfirm.intent.endsWith('_preview') && (
                         <p className="text-xs text-sage-700 mt-1">

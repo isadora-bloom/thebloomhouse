@@ -3,6 +3,7 @@
 import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   MapPin,
   Plus,
@@ -193,6 +194,7 @@ function StatCardSkeleton() {
 
 export default function ToursPage() {
   const scope = useScope()
+  const aiName = useAiName()
   const [tours, setTours] = useState<TourRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -284,7 +286,7 @@ export default function ToursPage() {
       for (const t of rows) {
         if (t.tour_brief_text) {
           cachedBriefs[t.id] = {
-            aiName: 'Sage', // venue's actual aiName comes back from the regenerate POST; for hydration the brand-default reads cleanly
+            aiName, // venue's actual aiName comes back from the regenerate POST; for hydration this venue-scoped default reads cleanly
             venueName: t.venue?.name ?? 'this venue',
             brief: t.tour_brief_text,
             suggestedFollowUpDraft: t.tour_brief_followup_draft ?? null,
@@ -302,7 +304,7 @@ export default function ToursPage() {
     } finally {
       setLoading(false)
     }
-  }, [scope.loading, scope.level, scope.venueId, scope.groupId])
+  }, [scope.loading, scope.level, scope.venueId, scope.groupId, aiName])
 
   useEffect(() => {
     setLoading(true)
