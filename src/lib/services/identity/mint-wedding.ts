@@ -306,6 +306,37 @@ export async function mintWedding(
     })()
   }
 
+  // W18 (Nov-plan wave 2): capacity cap check. Only on a genuinely NEW
+  // wedding — attaching a fresh signal to an existing wedding isn't a new
+  // inquiry against the monthly cap. Fire-and-forget, never blocks the
+  // mint, never drops the couple: over-cap couples are still recorded,
+  // the venue just gets an honest notification. See
+  // src/lib/services/billing/capacity-enforcement.ts for the full
+  // rationale.
+  if (resolved.isNew.wedding) {
+    void (async () => {
+      try {
+        const { checkAndRecordCapacityHit } = await import('@/lib/services/billing/capacity-enforcement')
+        await checkAndRecordCapacityHit(venueId, supabase)
+      } catch (err) {
+        // Never block or mask the mint on a capacity-check failure.
+        logEvent({
+          level: 'warn',
+          msg: 'identity.mint_wedding.capacity_check_failed',
+          venueId,
+          correlationId: correlationId ?? null,
+          actor: 'system',
+          event_type: 'identity.mint_wedding',
+          outcome: 'fail',
+          data: {
+            wedding_id: resolved.weddingId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        })
+      }
+    })()
+  }
+
   const latencyMs = Date.now() - started
 
   logEvent({

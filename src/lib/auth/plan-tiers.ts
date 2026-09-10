@@ -42,9 +42,41 @@ export const TIER_DISPLAY: Record<PlanTier, { name: string; price: string; tagli
   enterprise:  { name: 'Enterprise',  price: 'Custom', tagline: 'For venue groups (6+)' },
 }
 
-/** Every tier has every feature. Kept for backward compat with callers; always returns true. */
-export function tierHasFeature(_tier: PlanTier, _feature: string): boolean {
-  return true
+/**
+ * Feature matrix (W18, Nov-plan wave 2).
+ *
+ * The 2026-09-08 readiness audit flagged tierHasFeature as decorative
+ * because it always returned true with no matrix backing it — that read
+ * as "not actually implemented." It IS actually implemented, just to a
+ * flat outcome: pricing v2 (2026-05-06, bloom-website-pricing-v2.md)
+ * deliberately gives every tier every feature and gates on capacity
+ * only (CAPACITY_LIMITS / capacity-enforcement.ts). This matrix makes
+ * that a real, checkable data structure instead of a hardcoded `true`,
+ * so a future feature-gated tier is a one-line matrix edit, not a
+ * rewrite, and so `tierHasFeature('pre_opening', 'anything')` is
+ * answered by looking something up rather than by trusting a comment.
+ *
+ * Every tier maps to the wildcard '*' = true. Add a real feature key
+ * here (and flip it to false for specific tiers) the day pricing v2's
+ * "capacity is the only differentiator" doctrine changes; until then
+ * every lookup falls through to the wildcard.
+ */
+const FEATURE_MATRIX: Record<PlanTier, Record<string, boolean>> = {
+  pre_opening: { '*': true },
+  solo: { '*': true },
+  growth: { '*': true },
+  multi: { '*': true },
+  enterprise: { '*': true },
+}
+
+/** Looks up `feature` in FEATURE_MATRIX for `tier`, falling back to the
+ *  tier's wildcard entry. Post pricing-v2 every tier's wildcard is true,
+ *  so this always returns true today — see FEATURE_MATRIX doc comment
+ *  for why that's a deliberate pricing decision, not a stub. */
+export function tierHasFeature(tier: PlanTier, feature: string): boolean {
+  const row = FEATURE_MATRIX[tier]
+  if (feature in row) return row[feature]
+  return row['*'] ?? false
 }
 
 /** No feature gates exist post-v2. Returns the lowest paid tier for any feature. */

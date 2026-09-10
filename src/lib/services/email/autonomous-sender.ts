@@ -20,6 +20,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { isAutonomousPaused } from '@/lib/services/cost-ceiling'
+import { isTrialExpiredNoSub } from '@/lib/services/billing/billing-state'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -290,6 +291,20 @@ export async function checkAutoSendEligible(
     return {
       eligible: false,
       reason: 'Auto-send blocked: venue autonomous behavior is paused (cost ceiling reached or coordinator override)',
+    }
+  }
+
+  // Check 0a-bis: Trial expiry (W18, Nov-plan wave 2). A venue that has
+  // never subscribed and is past trial_ends_at keeps everything else
+  // working (nothing else in the product blocks on trial state) but does
+  // NOT get autonomous sending — that's the one behaviour with real
+  // downside if left on for an unpaying venue indefinitely. Drafts still
+  // get written for manual coordinator send; only the auto-send path is
+  // affected. See src/lib/services/billing/billing-state.ts.
+  if (await isTrialExpiredNoSub(venueId)) {
+    return {
+      eligible: false,
+      reason: 'Auto-send blocked: trial has ended with no subscription (see /settings/billing)',
     }
   }
 

@@ -106,6 +106,33 @@ describe('tierHasFeature (pricing v2)', () => {
       }
     }
   })
+
+  // W18 (Nov-plan wave 2): one explicit test per tier, backed by the real
+  // FEATURE_MATRIX data structure rather than a hardcoded `return true`.
+  it('pre_opening has every feature', () => {
+    expect(tierHasFeature('pre_opening', 'agent')).toBe(true)
+    expect(tierHasFeature('pre_opening', 'unknown_future_feature')).toBe(true)
+  })
+
+  it('solo has every feature', () => {
+    expect(tierHasFeature('solo', 'sage')).toBe(true)
+    expect(tierHasFeature('solo', 'unknown_future_feature')).toBe(true)
+  })
+
+  it('growth has every feature', () => {
+    expect(tierHasFeature('growth', 'intel')).toBe(true)
+    expect(tierHasFeature('growth', 'unknown_future_feature')).toBe(true)
+  })
+
+  it('multi has every feature', () => {
+    expect(tierHasFeature('multi', 'cross_venue_intelligence')).toBe(true)
+    expect(tierHasFeature('multi', 'unknown_future_feature')).toBe(true)
+  })
+
+  it('enterprise has every feature', () => {
+    expect(tierHasFeature('enterprise', 'api_access')).toBe(true)
+    expect(tierHasFeature('enterprise', 'unknown_future_feature')).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------

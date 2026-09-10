@@ -1,18 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { resolveBillingState } from '@/lib/services/billing/billing-state'
 
 // ---------------------------------------------------------------------------
 // GET /api/billing/usage
 //
-// Returns current rate-limit bucket usage for the authenticated venue.
-// Reads `rate_limit_buckets` for keys matching 'venue:<venueId>:%' and
-// the common per-venue key prefixes (sage, nlq, auto-send, etc.).
+// Returns current rate-limit bucket usage for the authenticated venue
+// (`items` — request-throttling buckets, unrelated to the plan) AND, as of
+// W18 (Nov-plan wave 2), real usage against the venue's CAPACITY_LIMITS
+// plan caps (`capacity`). Before this, CAPACITY_LIMITS was only read from
+// unit tests — nowhere in the product showed a venue how close it was to
+// its plan's cap. See src/lib/services/billing/capacity-enforcement.ts for
+// where the same cap is enforced (honestly, non-fatally) at mint time.
 //
 // Response shape:
-//   { items: Array<{ label: string; used: number; limit: number; windowLabel: string }> }
+//   {
+//     items: Array<{ label; used; limit; windowLabel }>            // rate limits
+//     capacity: Array<{ label; used; limit: number | null; windowLabel }>  // plan caps
+//   }
 //
-// Used by the billing page "Usage" section to show a simple quota table.
+// Used by the billing page "Usage" and "Capacity" sections.
 // ---------------------------------------------------------------------------
 
 // Describes what limits are enforced per key prefix so the UI can show
@@ -110,5 +118,63 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
     }
   })
 
-  return NextResponse.json({ items })
+  // ---------------------------------------------------------------------
+  // Capacity — real usage against the plan's CAPACITY_LIMITS. Reads the
+  // spine (`couples`), not `weddings` — the wave-2 shared rule says no
+  // new read under src/app should hit a legacy table couples/touchpoints
+  // already carries the same fact for, and it does here: every mint
+  // dual-writes a couples row (mirrorCoupleFromWedding). venue-scoped
+  // (inquiries, active couples); venues-per-org uses orgId when present
+  // (demo/org-less coordinators skip that row).
+  // ---------------------------------------------------------------------
+  const state = await resolveBillingState(venueId)
+  const cap = state.effectiveCapacity
+
+  const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()
+
+  const [inquiriesRes, activeCouplesRes, venuesRes] = await Promise.all([
+    supabase
+      .from('couples')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .is('merged_into_id', null)
+      .gte('created_at', monthStart),
+    supabase
+      .from('couples')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .is('merged_into_id', null)
+      .neq('lifecycle_state', 'ghost'),
+    auth.orgId
+      ? supabase
+          .from('venues')
+          .select('id', { count: 'exact', head: true })
+          .eq('org_id', auth.orgId)
+      : Promise.resolve({ count: null, error: null } as { count: number | null; error: null }),
+  ])
+
+  const capacity: Array<{ label: string; used: number; limit: number | null; windowLabel: string }> = [
+    {
+      label: 'Inquiries',
+      used: inquiriesRes.count ?? 0,
+      limit: cap.inquiriesPerMonth,
+      windowLabel: 'this month',
+    },
+    {
+      label: 'Active couples',
+      used: activeCouplesRes.count ?? 0,
+      limit: cap.activeCouplesInPortal,
+      windowLabel: 'in the pipeline',
+    },
+  ]
+  if (auth.orgId) {
+    capacity.push({
+      label: 'Venues',
+      used: venuesRes.count ?? 0,
+      limit: cap.venues,
+      windowLabel: 'in your org',
+    })
+  }
+
+  return NextResponse.json({ items, capacity, isTrial: state.isTrial, trialEndsAt: state.trialEndsAt })
 }
