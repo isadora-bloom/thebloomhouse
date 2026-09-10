@@ -4,7 +4,14 @@ import path from 'path'
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['src/**/__tests__/**/*.test.ts', 'src/**/*.unit.test.ts'],
+    include: [
+      'src/**/__tests__/**/*.test.ts',
+      'src/**/*.unit.test.ts',
+      // Operator scripts that carry real logic get unit tests too. First
+      // one is scripts/demo-reseed (NOVEMBER-PLAN.md W19); its generator
+      // and plan builder are pure, so they are worth pinning.
+      'scripts/**/__tests__/**/*.test.ts',
+    ],
     globals: false,
   },
   resolve: {
