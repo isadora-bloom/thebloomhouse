@@ -3,11 +3,11 @@
   "scanDir": "src/app",
   "tables": {
     "weddings": 128,
-    "people": 46,
+    "people": 45,
     "interactions": 62,
     "attribution_events": 25,
     "wedding_touchpoints": 1
   },
-  "total": 262,
+  "total": 261,
   "updatedAt": "2026-09-11"
 }

@@ -588,14 +588,19 @@ const NAME_ALLOWLIST = new Set([
 export function toursBucketWasEmpty(calls: readonly ToolCallRecord[]): boolean {
   let sawTourBucket = false
   for (const call of calls) {
-    if (call.name !== TOOL_GET_DAILY_LIST) continue
+    // W32 (2026-09-11): get_tour_cohort is the other list that names tour
+    // couples, for windows in the past. An empty cohort is an empty bucket.
+    const isCohort = call.name === 'get_tour_cohort'
+    if (call.name !== TOOL_GET_DAILY_LIST && !isCohort) continue
     let parsed: unknown
     try {
       parsed = JSON.parse(call.result)
     } catch {
       continue
     }
-    const block = (parsed as { toursThisWeek?: { n?: unknown } } | null)?.toursThisWeek
+    const block = isCohort
+      ? (parsed as { n?: unknown } | null)
+      : (parsed as { toursThisWeek?: { n?: unknown } } | null)?.toursThisWeek
     if (!block || typeof block !== 'object') continue
     sawTourBucket = true
     if (typeof block.n === 'number' && block.n > 0) return false

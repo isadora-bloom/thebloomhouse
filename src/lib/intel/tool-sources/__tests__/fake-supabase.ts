@@ -25,7 +25,7 @@ export interface FilterCall {
 export type FakeResolver = (
   table: string,
   calls: FilterCall[],
-) => { data?: unknown[] | null; error?: { message: string } | null }
+) => { data?: unknown[] | Record<string, unknown> | null; error?: { message: string } | null }
 
 const CHAIN_METHODS = [
   'select',

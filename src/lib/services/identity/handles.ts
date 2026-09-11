@@ -38,9 +38,22 @@ const SHAPE: Record<HandlePlatform, RegExp> = {
   zola: /^[a-z0-9._-]{1,64}$/,
 }
 
-/** Normalise one handle for one platform. Null when empty or malformed. */
+/** Path segments that are pages, not people. A profile URL parse that
+ *  lands on one of these is not a handle (W29 finding, 2026-09-11). */
+const RESERVED_SEGMENTS = new Set([
+  'p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct', 'tv',
+  'marketplace', 'sharer', 'share', 'profile.php', 'groups', 'events', 'pages',
+  'photo', 'photos', 'watch', 'video', 'videos', 'hashtag', 'tag', 'tags',
+  'pin', 'search', 'login', 'signup', 'help', 'about', 'legal', 'privacy',
+  'terms', 'home', 'i', 'intent', 'status', 'discover', 'foryou', 'music',
+  'vendors', 'wedding-vendors', 'registry', 'wedding-planning', 'expert-advice',
+])
+
+/** Normalise one handle for one platform. Null when empty, malformed, an
+ *  unknown platform, or a reserved page segment. Never throws. */
 export function normalizeHandle(platform: HandlePlatform, raw: string | null | undefined): string | null {
   if (!raw) return null
+  if (!(platform in SHAPE)) return null
   let h = raw.trim().toLowerCase()
   if (!h) return null
 
@@ -54,6 +67,7 @@ export function normalizeHandle(platform: HandlePlatform, raw: string | null | u
 
   if (h.startsWith('@')) h = h.slice(1)
   h = h.replace(/\/+$/, '')
+  if (RESERVED_SEGMENTS.has(h)) return null
   return SHAPE[platform].test(h) ? h : null
 }
 

@@ -123,7 +123,7 @@ function resolveWindow(
 ): { from: string; to: string; defaulted: boolean } {
   const rawFrom = str(args, 'period_from')
   const rawTo = str(args, 'period_to')
-  const todayKey = isDateKey(today) ? today : today.slice(0, 10)
+  const todayKey = isDateKey(today) ? today : String(today).slice(0, 10)
 
   if (!rawFrom && !rawTo) {
     return { from: addDaysToDateKey(todayKey, -6), to: todayKey, defaulted: true }
