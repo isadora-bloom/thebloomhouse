@@ -20,22 +20,31 @@
 import { useState } from 'react'
 import { ExternalLink, X, Loader2, CheckCircle2, Sparkles, Image as ImageIcon } from 'lucide-react'
 
-interface MatchedSample {
+/** One handle and what the spine did with it. */
+interface SpineSample {
   handle: string
+  display_name: string | null
+  couple_id: string | null
   couple_name: string | null
-  wedding_id: string | null
-  is_pre_inquiry: boolean
-  engagement_at: string | null
-  inquiry_date: string | null
+  outcome: string
+  occurred_at: string
+  match_status: 'matched' | 'unmatched'
 }
 
 interface CaptureResult {
   captureId: string
   total: number
+  processed: number
+  skipped: number
+  attached: number
+  minted: number
+  candidates: number
+  fragments: number
+  duplicates: number
   matched: number
   unmatched: number
-  surfaced_pre_inquiry: number
-  matchedSamples: MatchedSample[]
+  samples: SpineSample[]
+  errors?: string[]
 }
 
 interface Props {
@@ -248,6 +257,7 @@ function ResultView({
   result: CaptureResult
   onClose: () => void
 }) {
+  const inReview = result.candidates
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-sage-200 bg-sage-50 p-4 text-sm text-sage-900">
@@ -256,34 +266,47 @@ function ResultView({
           <strong className="font-medium">Capture saved.</strong>
         </div>
         <p className="mt-1 text-sage-800">
-          {result.total} handles parsed · {result.matched} matched to
-          existing couples · {result.surfaced_pre_inquiry} pre-inquiry
-          engagements surfaced.
+          {result.total} handles parsed · {result.attached} attached to a
+          couple you already have · {result.minted} became a new record ·{' '}
+          {inReview} in review · {result.fragments} waiting for an identity.
         </p>
+        {result.duplicates > 0 ? (
+          <p className="mt-1 text-xs text-sage-700">
+            {result.duplicates} were already on the timeline from an earlier
+            capture, so nothing was added twice.
+          </p>
+        ) : null}
+        {result.skipped > 0 ? (
+          <p className="mt-1 text-xs text-sage-700">
+            {result.skipped} rows were not usable handles and were left alone.
+          </p>
+        ) : null}
       </div>
 
-      {result.matchedSamples.length > 0 ? (
+      <p className="text-xs text-stone-500">
+        A handle on its own is not a name. Bloom attaches it when it knows
+        whose handle it is, and holds it as a fragment when it does not.
+        Nothing here is a guess.
+      </p>
+
+      {result.samples.length > 0 ? (
         <section>
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
-            Matched samples
+            What happened to each handle
           </h4>
-          <ul className="divide-y divide-stone-100 rounded-md border border-stone-200 bg-white">
-            {result.matchedSamples.map((s) => (
+          <ul className="max-h-64 divide-y divide-stone-100 overflow-y-auto rounded-md border border-stone-200 bg-white">
+            {result.samples.map((s) => (
               <li
                 key={s.handle}
                 className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
               >
-                <div>
-                  <div className="font-medium text-stone-800">
-                    {s.couple_name ?? 'Unknown couple'}
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-stone-800">
+                    {s.couple_name ?? s.display_name ?? `@${s.handle}`}
                   </div>
-                  <div className="text-xs text-stone-500">@{s.handle}</div>
+                  <div className="truncate text-xs text-stone-500">@{s.handle}</div>
                 </div>
-                {s.is_pre_inquiry ? (
-                  <span className="rounded-full bg-gold-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gold-700">
-                    Pre-inquiry
-                  </span>
-                ) : null}
+                <OutcomeBadge sample={s} />
               </li>
             ))}
           </ul>
@@ -291,12 +314,6 @@ function ResultView({
       ) : null}
 
       <div className="flex items-center justify-end gap-2">
-        <a
-          href={`/intel/social-integration/captures/${result.captureId}`}
-          className="rounded-md px-4 py-2 text-sm text-sage-700 hover:bg-sage-50"
-        >
-          View all
-        </a>
         <button
           type="button"
           onClick={onClose}
@@ -306,5 +323,32 @@ function ResultView({
         </button>
       </div>
     </div>
+  )
+}
+
+/** Plain English, not a confidence number. A candidate is in review and a
+ *  fragment is waiting; neither is a match, and neither should look like
+ *  one. */
+function OutcomeBadge({ sample }: { sample: SpineSample }) {
+  const label =
+    sample.outcome === 'attached'
+      ? 'Attached'
+      : sample.outcome === 'minted'
+        ? 'New record'
+        : sample.outcome === 'duplicate'
+          ? 'Already known'
+          : sample.outcome === 'candidate_medium' || sample.outcome === 'candidate_low'
+            ? 'In review'
+            : 'Awaiting identity'
+  const tone =
+    sample.match_status === 'matched'
+      ? 'bg-sage-50 text-sage-700'
+      : sample.outcome === 'candidate_medium' || sample.outcome === 'candidate_low'
+        ? 'bg-gold-50 text-gold-700'
+        : 'bg-stone-100 text-stone-600'
+  return (
+    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${tone}`}>
+      {label}
+    </span>
   )
 }

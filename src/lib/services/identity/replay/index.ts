@@ -17,6 +17,9 @@
  *                            preserved in weddings.calendly_qa)        [this module]
  *   - Reviews              → replayReviews (Google Places + paste; previously
  *                            never reached the spine)                  [this module]
+ *   - Social captures      → replaySocialEngagements (followers / story views /
+ *                            DMs; previously bound to `people` by a trigram
+ *                            name guess and never reached the spine)   [this module]
  *   - Web pixel (UTM)      → stitchVisitsToCouple (bound at calculator submit;
  *                            backfillStitchAll is a no-op until the anon→identity
  *                            carry-forward is wired — see web-visit-stitch.ts)
@@ -29,6 +32,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { replayCalendlyFromQa } from './calendly-replay'
 import { replayReviews } from './reviews'
+import { replaySocialEngagements } from './social'
 import { backfillStitchAll } from './web-visit-stitch'
 
 export interface ReplayAllArgs {
@@ -39,6 +43,7 @@ export interface ReplayAllArgs {
 export interface ReplayAllResult {
   calendly: { processed: number; linked: number }
   reviews: { processed: number; linked: number }
+  social: { scanned: number; processed: number; matched: number }
   webVisits: { stitched: number }
 }
 
@@ -60,14 +65,21 @@ export async function replayAllOrigins(args: ReplayAllArgs): Promise<ReplayAllRe
     console.error(`[replay] reviews failed: ${(e as Error).message}`)
     return { processed: 0, linked: 0 }
   })
+  const social = await replaySocialEngagements({ supabase, venueId })
+    .then((r) => ({ scanned: r.scanned, processed: r.processed, matched: r.matched }))
+    .catch((e) => {
+      console.error(`[replay] social failed: ${(e as Error).message}`)
+      return { scanned: 0, processed: 0, matched: 0 }
+    })
   const webVisits = await backfillStitchAll({ supabase, venueId }).catch((e) => {
     console.error(`[replay] web-visit stitch failed: ${(e as Error).message}`)
     return { stitched: 0 }
   })
 
-  return { calendly, reviews, webVisits }
+  return { calendly, reviews, social, webVisits }
 }
 
 export { replayCalendlyFromQa } from './calendly-replay'
 export { replayReviews } from './reviews'
+export { replaySocialEngagements, linkSocialEngagements } from './social'
 export { stitchVisitsToCouple, backfillStitchAll } from './web-visit-stitch'

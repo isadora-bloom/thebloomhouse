@@ -9,6 +9,12 @@
  * Constitution thesis: a couple who followed the venue on Instagram
  * three weeks before submitting an inquiry is attribution credit. This
  * page is the substrate for that signal.
+ *
+ * Wave 3 (HANDLE-IDENTITY-SPEC.md): every captured handle now goes
+ * through linkSignal, so what comes back is a spine outcome, not a
+ * guess. The card counts read "attached to a couple", "in review" and
+ * "awaiting identity" rather than a matched count that quietly included
+ * two people who happened to share a surname.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -222,10 +228,11 @@ export default function SocialIntegrationPage() {
           <p className="mt-1 max-w-2xl text-sm text-stone-500">
             Instagram, TikTok, Facebook, and Pinterest do not expose the
             data Bloom needs (new followers, profile visits, story
-            viewers) via API. Capture the lists once a week and Bloom
-            matches them against the couples already in your pipeline.
-            Matches whose engagement predates the inquiry are pre-zero
-            attribution credit.
+            viewers) via API. Capture the lists once a week. Each handle
+            goes onto the couple timeline: attached when Bloom knows
+            whose handle it is, held as a fragment when it does not, and
+            put in review when it is close but not certain. An engagement
+            that predates the inquiry is pre-zero attribution credit.
           </p>
         </div>
         <div className="inline-flex items-center gap-2 rounded-full bg-gold-50 px-3 py-1 text-xs text-gold-700">

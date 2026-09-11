@@ -118,7 +118,7 @@ export function PlatformCard({ platform, stateByMetric, onCapture }: Props) {
                   {state?.total_handles
                     ? ` · ${state.total_handles} handles, ${
                         state.matched_count ?? 0
-                      } matched`
+                      } on a couple`
                     : ''}
                 </p>
               </div>

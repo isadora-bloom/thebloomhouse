@@ -8,14 +8,23 @@ import {
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 import { parseInstagramFollowersText } from '@/lib/services/social/parsers/instagram-followers'
-import { matchEngagementsForCapture } from '@/lib/services/social/match-engagements'
+import { linkSocialEngagements } from '@/lib/services/identity/replay/social'
 
 /**
  * POST /api/intel/social-integration/capture
  *
- * Captures one snapshot of operator-pasted social data + runs the
- * matcher inline. V1 only supports (platform=instagram,
- * metric_type=new_followers) -- other combos return 422.
+ * Captures one snapshot of operator-pasted social data, then routes every
+ * parsed handle through `linkSignal` so it lands on the identity spine.
+ * V1 only supports (platform=instagram, metric_type=new_followers);
+ * other combos return 422.
+ *
+ * Wave 3 (HANDLE-IDENTITY-SPEC.md §4): this route used to call
+ * `matchEngagementsForCapture`, which bound handles straight to the
+ * legacy `people` table by trigram name similarity and by "the email
+ * local part contains the handle". Both were guesses and both auto-bound
+ * strangers. They are gone. What comes back now is a spine outcome per
+ * handle: attached to a couple, minted as a new one, a candidate in
+ * review, or a fragment waiting for an identity.
  *
  * Body:
  *   {
@@ -26,10 +35,11 @@ import { matchEngagementsForCapture } from '@/lib/services/social/match-engageme
  *
  * Response (200):
  *   {
- *     captureId, total, matched, unmatched,
- *     surfaced_pre_inquiry,
- *     matchedSamples: [{handle, couple_name, wedding_id,
- *                      is_pre_inquiry, engagement_at, inquiry_date}]
+ *     captureId, total, processed, skipped, skipped_reasons,
+ *     attached, minted, candidates, fragments, duplicates,
+ *     matched, unmatched,
+ *     samples: [{handle, display_name, couple_id, couple_name,
+ *                outcome, occurred_at, match_status}]
  *   }
  */
 export async function POST(request: NextRequest) {
@@ -105,15 +115,12 @@ export async function POST(request: NextRequest) {
       return serverError(capErr ?? new Error('failed to insert capture'))
     }
 
-    // 3. Insert social_engagements rows. The follower-list metric has
-    //    no per-engagement timestamp on Instagram; we treat the capture
-    //    time as the engagement_at upper bound. The "before-inquiry"
-    //    calculation in the matcher uses this; if inquiry_date is
-    //    in the past relative to captured_at the engagement still
-    //    counts as pre-inquiry only when captured_at < inquiry_date.
-    //    Reality: most follower captures are AFTER inquiry, so this
-    //    metric mainly surfaces matches; the pre-inquiry signal is
-    //    high-value when we backfill against historical follower lists.
+    // 3. Insert social_engagements rows. A follower list carries no
+    //    per-row timestamp, so engagement_at starts as the capture time,
+    //    which is a ceiling: the follow happened at or before it. Where a
+    //    capture surface DOES show a relative age (the screenshot vision
+    //    path), the signal builder back-derives the real instant from it
+    //    and the ceiling is never used.
     const engagementRows = parsed.map((p) => ({
       venue_id: auth.venueId,
       social_capture_id: capture.id,
@@ -134,16 +141,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 4. Run the matcher inline.
-    const matchResult = await matchEngagementsForCapture(capture.id, service)
+    // 4. Route every row through linkSignal and write the spine outcome
+    //    back onto it.
+    const linked = await linkSocialEngagements({
+      supabase: service,
+      venueId: auth.venueId,
+      captureId: capture.id,
+      source: 'social_capture',
+    })
 
     return NextResponse.json({
       captureId: capture.id,
       total: parsed.length,
-      matched: matchResult.matched,
-      unmatched: matchResult.unmatched,
-      surfaced_pre_inquiry: matchResult.surfaced_pre_inquiry,
-      matchedSamples: matchResult.matchedSamples,
+      processed: linked.processed,
+      skipped: linked.skipped,
+      skipped_reasons: linked.skipped_reasons,
+      attached: linked.outcomes.attached,
+      minted: linked.outcomes.minted,
+      candidates: linked.outcomes.candidate_medium + linked.outcomes.candidate_low,
+      fragments: linked.outcomes.fragment,
+      duplicates: linked.outcomes.duplicate,
+      matched: linked.matched,
+      unmatched: linked.unmatched,
+      samples: linked.samples,
+      errors: linked.errors,
     })
   } catch (err) {
     return serverError(err)

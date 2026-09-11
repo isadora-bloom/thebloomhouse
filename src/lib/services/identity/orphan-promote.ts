@@ -4,26 +4,33 @@
  * Anchor: bloom-identity-resolution-doctrine.md (Step 6, G4 + G5; 2026-05-13
  * Pass C closes the audio gap left at Step 6).
  *
- * Three surfaces in Bloom carry "unmatched" signals that should
+ * Two surfaces in Bloom carry "unmatched" signals that should
  * eventually bind to a wedding when a downstream signal makes the
  * binding possible. Pre-fix, each had its own ad-hoc behaviour:
  *
  *   - Audio (tour_transcript_orphans): coordinator manually attaches
  *     via /agent/audio-inbox. No auto-promote sweep.
- *   - Social engagements (match_status='unmatched'): match runs once
- *     at capture time; if no person matches then, the row stays
- *     unmatched forever, even when a couple later inquires and matches
- *     the IG handle.
  *   - Reviews (wedding_id IS NULL): Wave 13 reconciliation only fires
  *     when an outstanding solicitation request exists. Organic Google
  *     / Knot reviews never get a wedding binding.
  *
- * This module adds a deterministic, idempotent nightly sweep for all
- * three. Audio is the lightest pass — it regex-extracts email/phone
- * from the transcript text (the cases the cheap-path can catch) and
- * matches against the live people roster. Full identity extraction
- * from spoken dialog needs an LLM judge and is the natural next step;
- * the existing /agent/audio-inbox UI handles the long tail.
+ * This module adds a deterministic, idempotent nightly sweep for both.
+ * Audio is the lightest pass — it regex-extracts email/phone from the
+ * transcript text (the cases the cheap-path can catch) and matches
+ * against the live people roster. Full identity extraction from spoken
+ * dialog needs an LLM judge and is the natural next step; the existing
+ * /agent/audio-inbox UI handles the long tail.
+ *
+ * Social left this sweep in wave 3 (2026-09-09, HANDLE-IDENTITY-SPEC.md
+ * §5). It used to re-run the retired social matcher nightly: handle
+ * lookup against people.platform_handles, then a surname match on the
+ * last token of the display name at confidence 70. That last one bound
+ * a stranger called Hoyle to a couple called Hoyle, every night, with
+ * nobody watching. Social engagements now reach the spine through
+ * `linkSignal` at capture time, and the catch-up sweep is
+ * `replaySocialEngagements` in ./replay/social.ts. A handle that finds
+ * its couple later is handled deterministically by W22's fragment
+ * promotion, not by a nightly guess.
  *
  * Design rules:
  *   - Never throws. Best-effort per-row.
@@ -31,8 +38,8 @@
  *     rows.
  *   - Venue-scoped. Every match query filters by venue_id.
  *   - Cheap. No LLM in this layer — reuses regex + existing match
- *     infrastructure (social/match-engagements.ts internals; reviews
- *     name lookup; audio email/phone regex against people roster).
+ *     infrastructure (reviews name lookup; audio email/phone regex
+ *     against the people roster).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -42,133 +49,6 @@ interface PromoteResult {
   scanned: number
   promoted: number
   errors: string[]
-}
-
-// ---------------------------------------------------------------------------
-// Social engagements — re-run match chain for unmatched rows.
-// ---------------------------------------------------------------------------
-
-/**
- * Re-run the social engagements matcher for every row whose
- * match_status='unmatched'. New persons / weddings that arrived since
- * the last attempt may now satisfy one of the three matchers
- * (handle_exact, name_fuzzy, email_inferred).
- *
- * Bounded at `limit` rows per venue per call so a venue with thousands
- * of unmatched IG followers doesn't dominate one cron tick.
- */
-export async function promoteSocialOrphans(
-  venueId: string,
-  options: { supabase?: SupabaseClient; limit?: number } = {},
-): Promise<PromoteResult> {
-  const supabase = options.supabase ?? createServiceClient()
-  const limit = Math.min(Math.max(options.limit ?? 500, 1), 2000)
-  const result: PromoteResult = { scanned: 0, promoted: 0, errors: [] }
-
-  // Pull unmatched engagements scoped to the venue.
-  const { data: engagementsRaw, error: engErr } = await supabase
-    .from('social_engagements')
-    .select('id, venue_id, platform, handle, display_name')
-    .eq('venue_id', venueId)
-    .eq('match_status', 'unmatched')
-    .limit(limit)
-  if (engErr) {
-    result.errors.push(`social engagements read: ${engErr.message}`)
-    return result
-  }
-  const engagements = (engagementsRaw ?? []) as Array<{
-    id: string
-    venue_id: string
-    platform: string
-    handle: string
-    display_name: string | null
-  }>
-  if (engagements.length === 0) return result
-
-  // Bulk-load all people at the venue (same shape as
-  // match-engagements.ts). Volume per venue is in the low thousands —
-  // a single in-memory pass is cheaper than per-row queries.
-  const { data: peopleRaw } = await supabase
-    .from('people')
-    .select('id, wedding_id, first_name, last_name, email, platform_handles')
-    .eq('venue_id', venueId)
-    .is('merged_into_id', null)
-  const people = (peopleRaw ?? []) as Array<{
-    id: string
-    wedding_id: string | null
-    first_name: string | null
-    last_name: string | null
-    email: string | null
-    platform_handles: Record<string, string> | null
-  }>
-
-  // Bucket people by handle for matcher 1 (handle_exact).
-  const handlesByPlatform = new Map<string, Map<string, { id: string }>>()
-  for (const p of people) {
-    if (!p.platform_handles) continue
-    for (const [plat, handle] of Object.entries(p.platform_handles)) {
-      if (typeof handle !== 'string' || handle.length === 0) continue
-      const key = handle.toLowerCase()
-      if (!handlesByPlatform.has(plat)) handlesByPlatform.set(plat, new Map())
-      handlesByPlatform.get(plat)!.set(key, { id: p.id })
-    }
-  }
-
-  // Last-name index for matcher 2 (display_name → people.last_name).
-  // Cheap version of match-engagements' fuzzy match: exact match on
-  // last token of display_name vs last_name. The original Haiku-grade
-  // fuzzy matcher is the right tool inside match-engagements proper;
-  // this sweep is the deterministic fallback for re-attempts.
-  const byLastName = new Map<string, { id: string }>()
-  for (const p of people) {
-    const ln = (p.last_name ?? '').trim().toLowerCase()
-    if (ln) byLastName.set(ln, { id: p.id })
-  }
-
-  const now = new Date().toISOString()
-  for (const eng of engagements) {
-    result.scanned += 1
-    let matchedPersonId: string | null = null
-    let method: 'handle_exact' | 'name_lastname' | null = null
-    let confidence = 0
-
-    const handleKey = eng.handle.toLowerCase()
-    const platformBucket = handlesByPlatform.get(eng.platform)
-    if (platformBucket?.has(handleKey)) {
-      matchedPersonId = platformBucket.get(handleKey)!.id
-      method = 'handle_exact'
-      confidence = 100
-    } else if (eng.display_name) {
-      const tokens = eng.display_name.trim().split(/\s+/).filter(Boolean)
-      const lastToken = tokens[tokens.length - 1]?.toLowerCase() ?? null
-      if (lastToken && byLastName.has(lastToken)) {
-        matchedPersonId = byLastName.get(lastToken)!.id
-        method = 'name_lastname'
-        confidence = 70
-      }
-    }
-
-    if (!matchedPersonId) continue
-
-    const { error: updateErr } = await supabase
-      .from('social_engagements')
-      .update({
-        match_status: 'matched',
-        matched_person_id: matchedPersonId,
-        match_method: method,
-        match_confidence: confidence,
-        matched_at: now,
-      })
-      .eq('id', eng.id)
-      .eq('match_status', 'unmatched')
-    if (updateErr) {
-      result.errors.push(`promote ${eng.id}: ${updateErr.message}`)
-      continue
-    }
-    result.promoted += 1
-  }
-
-  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -468,24 +348,18 @@ export async function promoteAllOrphansAllVenues(options: {
     .limit(1000)
   if (error) {
     return {
-      social: { total_scanned: 0, total_promoted: 0, errors: [`venues read: ${error.message}`] },
+      social: { ...SOCIAL_RETIRED, errors: [`venues read: ${error.message}`] },
       reviews: { total_scanned: 0, total_promoted: 0, errors: [] },
       audio: { total_scanned: 0, total_promoted: 0, errors: [] },
     }
   }
 
-  const social = { total_scanned: 0, total_promoted: 0, errors: [] as string[] }
   const reviews = { total_scanned: 0, total_promoted: 0, errors: [] as string[] }
   const audio = { total_scanned: 0, total_promoted: 0, errors: [] as string[] }
   const limit = options.limitPerVenue ?? 500
 
   for (const v of venues ?? []) {
     const venueId = v.id as string
-    const s = await promoteSocialOrphans(venueId, { supabase, limit })
-    social.total_scanned += s.scanned
-    social.total_promoted += s.promoted
-    social.errors.push(...s.errors)
-
     const r = await promoteReviewOrphans(venueId, { supabase, limit })
     reviews.total_scanned += r.scanned
     reviews.total_promoted += r.promoted
@@ -497,5 +371,14 @@ export async function promoteAllOrphansAllVenues(options: {
     audio.errors.push(...a.errors)
   }
 
-  return { social, reviews, audio }
+  return { social: { ...SOCIAL_RETIRED, errors: [] }, reviews, audio }
 }
+
+/**
+ * The social counters the cron's prune_maintenance response still
+ * carries. Always zero since wave 3 — social no longer has a nightly
+ * guess to run. Left in place so the cron's result shape is unchanged
+ * while a workstream that owns `src/app/api/cron/route.ts` drops the
+ * `orphan_promote_social` field. See the header for where social went.
+ */
+const SOCIAL_RETIRED = { total_scanned: 0, total_promoted: 0 } as const
