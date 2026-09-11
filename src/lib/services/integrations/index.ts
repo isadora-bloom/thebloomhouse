@@ -21,6 +21,7 @@ import type { IntegrationAdapter, IntegrationCategory } from './types'
 import { gmailAdapter } from './gmail'
 import { openphoneAdapter } from './openphone'
 import { twilioAdapter } from './twilio'
+import { instagramAdapter } from './instagram'
 import { aircallAdapter } from './aircall'
 import { dialpadAdapter } from './dialpad'
 import { ringcentralAdapter } from './ringcentral'
@@ -48,6 +49,8 @@ export const INTEGRATION_ADAPTERS: ReadonlyArray<IntegrationAdapter> = [
   dialpadAdapter,
   ringcentralAdapter,
   vonageAdapter,
+  // social DM (Wave 3 W28 — Instagram through the Meta Messaging API)
+  instagramAdapter,
   // video
   zoomAdapter,
   googleMeetAdapter,
@@ -75,6 +78,7 @@ export const CATEGORY_ORDER: ReadonlyArray<IntegrationCategory> = [
   'video',
   'calendar',
   'audio_capture',
+  'social_dm',
   'crm',
   'sms_webhook',
 ]
@@ -87,6 +91,7 @@ export const CATEGORY_LABELS: Record<IntegrationCategory, string> = {
   audio_capture: 'Audio Capture',
   crm: 'CRM',
   sms_webhook: 'SMS (webhook)',
+  social_dm: 'Social DMs',
 }
 
 export const CATEGORY_BLURBS: Record<IntegrationCategory, string> = {
@@ -97,6 +102,8 @@ export const CATEGORY_BLURBS: Record<IntegrationCategory, string> = {
   audio_capture: 'Wearable transcripts attach to the tour they happened on.',
   crm: 'Pull historical leads, bookings, and communications from your existing CRM.',
   sms_webhook: 'Push-style SMS pipelines for venues already on another phone stack.',
+  social_dm:
+    'The first message a couple sends is often a DM. It arrives as a handle, and a handle is an identifier the record can hold.',
 }
 
 export function adaptersByCategory(category: IntegrationCategory): IntegrationAdapter[] {
