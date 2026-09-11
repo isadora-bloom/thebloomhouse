@@ -15,6 +15,7 @@ import { lostDealsToolSource } from './lost-deals'
 import { weatherToursToolSource } from './weather-tours'
 import { capacityToolSource } from './capacity'
 import { FOLLOW_UP_SOURCES } from './follow-ups'
+import { tourCohortSource } from './tour-cohort'
 
 export const TOOL_SOURCES: readonly IntelToolSource[] = [
   // W12: time series and operator patterns (Q1 Q7 Q11 Q12 Q14, Q22 Q23 Q24)
@@ -32,4 +33,6 @@ export const TOOL_SOURCES: readonly IntelToolSource[] = [
   capacityToolSource,
   // W15: follow-up state and proposals (Q34 Q37)
   ...FOLLOW_UP_SOURCES,
+  // W32: explicit-window tour cohort, past or future (Q37 link 1)
+  tourCohortSource,
 ]
