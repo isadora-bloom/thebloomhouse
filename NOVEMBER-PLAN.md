@@ -281,3 +281,38 @@ defaulted. Meta app credentials for W28 are an operator step.
 
 Shared rules as wave 3. Every worktree starts with `git reset --hard consolidation` and
 `npm ci`. linkSignal is the only spine writer. No database writes.
+
+## Wave 4 status (integrated 2026-09-11)
+
+All six workstreams merged on `consolidation`. Gate on the integrated head: tsc 0, vitest
+1036/1036, governance green, every guard green, golden 16/16, links OK, lint 0 errors with
+the six React Compiler rules back at error.
+
+What is true now: an inbound email's profile URL lands on `couples.handles` and a venue reply
+never does; a CSV row's handle is merged onto the mirrored couple with conflicts counted and
+queued; an Instagram DM reaches `/agent/audio-inbox` and the classifier through the same
+chokepoint SMS uses, labelled by handle, with replies stubbed until Meta credentials exist;
+`get_tour_cohort` answers past windows and the name gate covers it; first-seen dates from
+screenshot ages read "about 3 weeks before" rather than a false date; the capture detail page
+exists; tour filters use venue time; the reviews tool calls the analytics service instead of
+re-deriving; a proposal no longer writes `phrase_usage`; `normalizeHandle` rejects page
+segments and unknown platforms instead of storing or throwing.
+
+Migrations owed to prod, all at once: `npm run migrate:pending` then
+`npm run migrate:pending -- --apply --allow-prod`. Then `npx tsx scripts/replay-social-to-spine.ts`
+(dry run, then `--apply --allow-prod`) to put existing follower captures on the spine.
+
+Follow-ups for wave 5:
+- `nowMs()` in `src/lib/utils/clock.ts` satisfies the purity rule by hiding `Date.now()` behind a
+  function; "ago" labels are now read once per mount. Fine for pages, wrong for a tab left open
+  all day. A ticking clock hook is the honest fix.
+- CSV adapters (web form, calculator, HoneyBook) still mint through `mintWedding`; the handle
+  stamp works around it. Moving them onto `linkSignal` closes the last legacy writer on intake.
+- A venue's own social handle can stamp a couple if a prospect pastes the venue's link above
+  the quote line; add `venue_config` social handles and exclude them.
+- A dated CSV row without a handle does not set `first_seen_at`; decide whether it should.
+- Instagram outbound replies: `sendInstagramReply` is a refusing stub with the Graph endpoint
+  named; needs the Meta app and a send path through the same disclosure guard as email.
+- Marketing-site repos: add "Your Instagram (optional)" to the inquiry form and calculator,
+  mapped to the `instagram` CSV column.
+- Two lifecycles (six spine states vs the thirteen-stage wedding machine) remain unreconciled.
