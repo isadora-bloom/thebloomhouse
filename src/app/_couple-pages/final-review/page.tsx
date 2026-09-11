@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
+import { nowMs } from '@/lib/utils/clock'
 import {
   ClipboardCheck,
   Check,
@@ -83,6 +84,9 @@ export default function FinalReviewPage() {
 
   const supabase = createClient()
 
+  // Capture current time once per render to avoid purity violations
+  const currentTime = useMemo(() => nowMs(), [])
+
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
     if (!weddingId) return
@@ -116,7 +120,7 @@ export default function FinalReviewPage() {
   // ---- Computed ----
   const weeksUntilWedding = wedding?.wedding_date
     ? Math.max(0, Math.ceil(
-        (new Date(wedding.wedding_date).getTime() - Date.now()) / (7 * 24 * 60 * 60 * 1000)
+        (new Date(wedding.wedding_date).getTime() - currentTime) / (7 * 24 * 60 * 60 * 1000)
       ))
     : null
 
@@ -174,7 +178,7 @@ export default function FinalReviewPage() {
   // Days until wedding (more precise than weeks for countdown)
   const daysUntilWedding = wedding?.wedding_date
     ? Math.max(0, Math.ceil(
-        (new Date(wedding.wedding_date).getTime() - Date.now()) / (24 * 60 * 60 * 1000)
+        (new Date(wedding.wedding_date).getTime() - currentTime) / (24 * 60 * 60 * 1000)
       ))
     : null
 

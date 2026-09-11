@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
+import { nowMs } from '@/lib/utils/clock'
 import {
   Users,
   Plus,
@@ -118,6 +119,9 @@ export default function TeamPage() {
 
   // Role editing
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null)
+
+  // Capture current time once per render to avoid purity violations
+  const currentTime = useMemo(() => nowMs(), [])
 
   // ---------------------------------------------------------------------------
   // Load data
@@ -573,7 +577,7 @@ export default function TeamPage() {
             {pendingInvites.map((invite) => {
               const badge = getRoleBadge(invite.role)
               const expiresIn = Math.ceil(
-                (new Date(invite.expires_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+                (new Date(invite.expires_at).getTime() - currentTime) / (1000 * 60 * 60 * 24)
               )
 
               return (

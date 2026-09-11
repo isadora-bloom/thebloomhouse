@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
+import { nowMs } from '@/lib/utils/clock'
 import {
   Check,
   ChevronRight,
@@ -251,6 +252,9 @@ export default function GettingStartedPage() {
 
   const supabase = createClient()
 
+  // Capture current time once per render to avoid purity violations
+  const currentTime = useMemo(() => nowMs(), [])
+
   // ---- Fetch + derive + persist progress ----
   // Migration 094 added the wide-column shape this page expected. The
   // existing (step, completed) shape was multi-row and didn't match the
@@ -391,10 +395,10 @@ export default function GettingStartedPage() {
     return Math.max(
       0,
       Math.ceil(
-        (new Date(wedding.wedding_date).getTime() - Date.now()) / (7 * 24 * 60 * 60 * 1000)
+        (new Date(wedding.wedding_date).getTime() - currentTime) / (7 * 24 * 60 * 60 * 1000)
       )
     )
-  }, [wedding])
+  }, [wedding, currentTime])
 
   // ---- Get the right nudge bucket ----
   const currentNudge = useMemo(() => {

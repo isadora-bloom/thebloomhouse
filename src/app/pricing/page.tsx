@@ -56,7 +56,7 @@ function PricingPageInner() {
       }
 
       // Redirect to Stripe Checkout
-      window.location.href = data.url
+      window.location.assign(data.url)
     } catch (err) {
       console.error('[pricing] checkout error:', err)
       setError('Network error. Please try again.')

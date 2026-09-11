@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -9,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { CoupleUserMenu } from './couple-user-menu'
 import { CoupleNotificationBell } from './couple-notification-bell'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
+import { nowMs } from '@/lib/utils/clock'
 
 interface CoupleTopBarProps {
   /** Venue display name shown next to the logo. */
@@ -38,17 +40,21 @@ export function CoupleTopBar({
 }: CoupleTopBarProps) {
   const pathname = usePathname()
   const { weddingId, aiName, weddingDate } = useCoupleContext()
+
+  // Capture current time once per render to avoid purity violations
+  const currentTime = useMemo(() => nowMs(), [])
+
   // Sarah-portal Tier-B #62: print buttons are only useful in the
   // final 42 days (a couple 14 months out doesn't even have a
   // timeline to print). Hide them until the couple is within the
   // window. The whole-page print icon stays visible since the
   // browser's "print this page" works for any page.
-  const daysUntilWedding = (() => {
+  const daysUntilWedding = useMemo(() => {
     if (!weddingDate) return null
-    const ms = new Date(weddingDate).getTime() - Date.now()
+    const ms = new Date(weddingDate).getTime() - currentTime
     if (Number.isNaN(ms)) return null
     return Math.ceil(ms / (1000 * 60 * 60 * 24))
-  })()
+  }, [weddingDate, currentTime])
   const showDayOfPackageButton =
     daysUntilWedding !== null && daysUntilWedding <= 42 && daysUntilWedding > -7
   const sageHref = `${base}/chat`

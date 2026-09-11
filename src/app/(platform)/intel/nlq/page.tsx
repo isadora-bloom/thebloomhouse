@@ -392,8 +392,8 @@ export default function NaturalLanguageQueryPage() {
     }
   }
 
-  // ---- Use a suggested question ----
-  function useSuggestion(question: string) {
+  // ---- Apply a suggested question ----
+  function applySuggestion(question: string) {
     setInput(question)
     inputRef.current?.focus()
   }
@@ -446,7 +446,7 @@ export default function NaturalLanguageQueryPage() {
               {SUGGESTED_QUESTIONS.map((q) => (
                 <button
                   key={q}
-                  onClick={() => useSuggestion(q)}
+                  onClick={() => applySuggestion(q)}
                   className="px-4 py-2 text-sm rounded-full bg-surface border border-border text-sage-700 hover:bg-sage-50 hover:border-sage-300 transition-colors"
                 >
                   <MessageSquare className="w-3.5 h-3.5 inline mr-1.5 text-sage-400" />

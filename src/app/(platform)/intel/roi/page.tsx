@@ -127,7 +127,7 @@ export default function ROIDashboardPage() {
       return (orgVenues ?? []).map((v) => v.id as string)
     }
     return null // company without orgId — legacy fallback
-  }, [scope.level, scope.venueId, scope.groupId])
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId])
 
   useEffect(() => {
     if (scope.loading) return

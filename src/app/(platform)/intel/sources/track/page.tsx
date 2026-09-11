@@ -20,6 +20,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useAiName } from '@/lib/hooks/use-ai-name'
+import { nowMs } from '@/lib/utils/clock'
 import Link from 'next/link'
 import {
   Sparkles,
@@ -70,6 +71,9 @@ export default function SourcesTrackPage() {
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [pending, setPending] = useState<Set<string>>(new Set())
+
+  // Capture current time once per render to avoid purity violations
+  const currentTime = useMemo(() => nowMs(), [])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -296,6 +300,7 @@ export default function SourcesTrackPage() {
                         report={report ?? null}
                         isExpanded={isExpanded}
                         isPending={isPending}
+                        currentTime={currentTime}
                         onToggle={() => toggleExpanded(entry.key)}
                         onTrack={() => handleTrack(entry)}
                         onUntrack={() => handleUntrack(entry)}
@@ -330,6 +335,7 @@ function SourceCard({
   report,
   isExpanded,
   isPending,
+  currentTime,
   onToggle,
   onTrack,
   onUntrack,
@@ -341,6 +347,7 @@ function SourceCard({
   report: FreshnessReport | null
   isExpanded: boolean
   isPending: boolean
+  currentTime: number
   onToggle: () => void
   onTrack: () => void
   onUntrack: () => void
@@ -351,7 +358,7 @@ function SourceCard({
   const reminderDue = report?.reminder_due ?? false
   const lastUploadAgo =
     report?.last_upload_at != null
-      ? Math.max(0, Math.floor((Date.now() - new Date(report.last_upload_at).getTime()) / 86_400_000))
+      ? Math.max(0, Math.floor((currentTime - new Date(report.last_upload_at).getTime()) / 86_400_000))
       : null
 
   return (

@@ -23,6 +23,7 @@ import { DataMaturity } from '@/components/ui/data-maturity'
 import { TodayBlockCard } from '@/components/today/today-block'
 import { TodayPulse } from '@/components/today/today-pulse'
 import { DEFAULT_TIME_ZONE } from '@/lib/copy/client-terms'
+import { nowMs } from '@/lib/utils/clock'
 import { buildTodayViewModel, PULSE_ROWS, type PulseLike } from './view-model'
 
 export const dynamic = 'force-dynamic'
@@ -66,7 +67,10 @@ export default async function TodayPage() {
   const scope = await resolvePlatformScope()
   if (!scope) redirect('/setup')
 
-  const now = Date.now()
+  // One timestamp per request (server component, so nothing re-renders
+  // against it). Read through the helper for the same reason as the
+  // client pages: the compiler's purity check flags a bare Date.now().
+  const now = nowMs()
 
   // Three reads, in parallel. The pulse read is best-effort: a flagged-
   // items outage must not take the landing page down with it.
