@@ -12,31 +12,37 @@
  * candidate_identities + tangential_signals under anonymous handles
  * for up to a day after we knew who they were.
  *
- * The cascade is the missing trigger. It runs three existing services
+ * The cascade is the missing trigger. It runs two existing services
  * back to back, fire-and-forget:
- *   1. runBacktrackForWedding — scans unresolved storefront
- *      candidate_identities (Knot, IG, Pinterest, WW) for matches
- *      against the wedding's now-known partner names + state +
- *      inquiry window. High-confidence matches auto-link, medium
- *      goes to the coordinator review queue.
- *   2. resolveForWedding — runs the Tier-1 deterministic + Tier-2 AI
+ *   1. resolveForWedding — runs the Tier-1 deterministic + Tier-2 AI
  *      adjudicator on every still-unresolved candidate in the venue.
  *      Catches cases where an exact-email match now exists (the
  *      couple texted us their email which we just stamped on the
  *      person row) so a Pinterest "rosaliehoyle" candidate that had
  *      the same email gets linked.
- *   3. recomputeFirstTouch — re-elects the earliest pre-inquiry
+ *   2. recomputeFirstTouch — re-elects the earliest pre-inquiry
  *      attribution_event as is_first_touch=true so the wedding's
  *      forensic origin updates with any newly-discovered earlier
  *      signal.
+ *
+ * Wave 3 note (2026-09): a Stage 1 used to run first — backtrack.ts's
+ * `runBacktrackForWedding`, scanning unresolved storefront
+ * candidate_identities (Knot, IG, Pinterest, WW) for matches against
+ * the wedding's now-known partner names + state + inquiry window.
+ * `backtrack.ts` is retired as part of NOVEMBER-PLAN.md Wave 3 W26
+ * (duplicate identity module per scripts/check-cleanup-budget.mjs).
+ * The `backtrackHits` / `backtrackAutoLinked` / `backtrackQueued`
+ * fields stay on `CascadeResult` at 0 rather than being removed —
+ * several callers outside this workstream's ownership read them, and
+ * a zeroed field is a safer no-op than an API-shape change made in
+ * passing.
  *
  * Contract:
  *   - Fire-and-forget — never throws. Errors get logged + counted in
  *     the return shape.
  *   - Idempotent — re-firing on a wedding whose cascade already ran
- *     is a no-op. backtrack stamps backtrack_attempted_at, resolver
- *     skips resolved candidates, recomputeFirstTouch is naturally
- *     convergent.
+ *     is a no-op. resolver skips resolved candidates,
+ *     recomputeFirstTouch is naturally convergent.
  *   - Callers NEVER block. The cascade is always a side-effect; if a
  *     caller is on a hot path (SMS persist, live email pipeline)
  *     they should `void triggerIdentityCascade(...)` to drop the
@@ -49,7 +55,6 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { runBacktrackForWedding } from './backtrack'
 import { resolveForWedding, recomputeFirstTouch } from './candidate-resolver'
 import { logEvent } from '@/lib/observability/logger'
 
@@ -106,25 +111,7 @@ export async function triggerIdentityCascade(
   const result = emptyResult()
   const started = Date.now()
 
-  // Stage 1 — backtrack against this specific wedding. Scans every
-  // unresolved storefront candidate (Knot, IG, Pinterest, WW, etc.)
-  // for fingerprint match against the wedding's now-known partner
-  // names + state within the engagement window.
-  try {
-    const summary = await runBacktrackForWedding(supabase, weddingId)
-    result.backtrackAutoLinked = summary.highAutoLinked
-    result.backtrackQueued = summary.mediumQueued
-    result.backtrackHits = summary.highAutoLinked + summary.mediumQueued
-    if (summary.errors.length > 0) {
-      result.errors.push(...summary.errors.map((e) => `backtrack: ${e}`))
-    }
-  } catch (err) {
-    result.errors.push(
-      `backtrack threw: ${err instanceof Error ? err.message : String(err)}`,
-    )
-  }
-
-  // Stage 2 — resolve every unresolved candidate in the venue. The
+  // Stage 1 — resolve every unresolved candidate in the venue. The
   // resolver re-checks Tier-1 exact-email / exact-phone / exact-handle
   // paths, which is where the just-enriched email or handle gets to
   // pick up its anonymous shadow. skipAI=false at trigger time is
@@ -149,13 +136,9 @@ export async function triggerIdentityCascade(
     )
   }
 
-  // Stage 3 — recompute first-touch. Cheap, deterministic, runs even
-  // when stages 1 + 2 found nothing (callers may have stamped an
-  // attribution row directly via the override path). The backtrack
-  // auto-link path already calls recomputeFirstTouch internally per
-  // successful link, but firing it once here covers the cases where
-  // no new attribution landed but a manual coordinator action still
-  // needs the flag recomputed.
+  // Stage 2 — recompute first-touch. Cheap, deterministic, runs even
+  // when stage 1 found nothing (callers may have stamped an
+  // attribution row directly via the override path).
   try {
     const ft = await recomputeFirstTouch(supabase, weddingId)
     if (ft.error) {

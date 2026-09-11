@@ -141,20 +141,24 @@ const CHOKEPOINT_FILES = new Set([
   'src/lib/services/identity/mint-wedding.ts',
 
   // Owns the spine touchpoint + fragment INSERT helpers
-  // (insertTouchpoint at :324, insertFragment at :356) which the
-  // forwards-linker and route-by-tier chokepoints both call. ALSO
-  // contains the Backwards Tracer batch-walk writers (couples /
-  // touchpoints / fragments / couple_merge_events for fragment_promoted
-  // audit at :805). Both responsibilities are doctrinally cascade-
-  // internal — the Tracer is the historical-arrival counterpart to
-  // linkSignal's live-arrival path.
+  // (insertTouchpoint, insertFragment) which the forwards-linker and
+  // route-by-tier chokepoints both call. Wave 3 W26 (2026-09):
+  // retired as the Backwards Tracer orchestrator — the batch-walk
+  // writers (couples / touchpoints / fragments / couple_merge_events
+  // for the fragment_promoted audit) moved to fragment-sweep.ts
+  // below. This file is now ONLY the shared matcher/insert
+  // primitives; kept at this filename so forwards-linker.ts,
+  // route-by-tier.ts, agent-link.ts and knot-visitor-match.ts didn't
+  // need an import-path change.
   'src/lib/services/identity/tracer.ts',
 
-  // Legacy `wedding_touchpoints` idempotent writer. Pre-336 race-safe
-  // helper used by backtrack.ts. Doesn't write spine tables but lives
-  // here so the Batch-1 P3 contract ("the chokepoint that owns
-  // touchpoint writes for the legacy limb") is in the same surface.
-  'src/lib/services/identity/touchpoints-writer.ts',
+  // Wave 3 W26 (2026-09): nightly fragment sweep. Owns the
+  // identity-hint cross-channel coalesce inherited verbatim from the
+  // retired tracer.ts (couple_merge_events 'fragment_promoted' audit
+  // insert) plus the handle-based promotion seam (W22). Doctrinally
+  // cascade-internal — the historical/batch counterpart to
+  // linkSignal's live-arrival path, same as the Tracer was.
+  'src/lib/services/identity/fragment-sweep.ts',
 
   // Phase A `couples` mirror — called from mintWedding's Branch A +
   // Branch B exits to keep couples in sync with weddings/people.
@@ -322,8 +326,10 @@ const GRANDFATHERED = new Map([
     'attribution_events.insert at intel/referrals/resolve.ts — referral self-report resolution. Same low-volume path as discovery-source/capture.ts; same migration pass. Folded into Pbatch2-6 scope as parallel linkSignal({action_type:"referral_self_report"}).',
   ],
 
-  // --- wedding_touchpoints: writers outside the canonical
-  // touchpoints-writer.ts (which IS a chokepoint). ---
+  // --- wedding_touchpoints: writer outside the chokepoint surface.
+  // (touchpoints-writer.ts, the previous canonical chokepoint here,
+  // was deleted in Wave 3 W26 — it existed only to serve backtrack.ts,
+  // which is retired.) ---
   [
     'src/lib/services/attribution/touchpoints.ts',
     'wedding_touchpoints.insert for status-change touchpoints (e.g. Calendly final_walkthrough auto-promote to booked needs a contract_signed touchpoint to close the funnel). Lives outside identity/ because it is funnel-completion, not identity-cascade.',

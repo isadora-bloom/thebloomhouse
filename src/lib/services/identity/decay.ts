@@ -11,18 +11,28 @@
  * Booked never decays (excluded from the candidate set). Agents are a
  * separate class and also excluded.
  *
- * Two callers share this logic:
- *   - The Backwards Tracer's `decay_sweep` stage (one venue, wrapped
- *     in tracer_run_events telemetry).
- *   - The daily `heat_decay` cron, which runs it across every venue
- *     so decay happens nightly even for venues with no Tracer run.
+ * Caller: the daily `heat_decay` cron (`runDecaySweepAllVenues`),
+ * fleet-wide.
+ *
+ * Wave 3 note (2026-09): this used to also be wrapped by the Backwards
+ * Tracer's `decay_sweep` stage, one venue at a time, with the wrapper
+ * emitting the only `tracer_run_events` rows this decay logic ever
+ * produced. The Tracer is retired (see tracer.ts header) and the
+ * stage went with it — `decayStaleCouples` itself never emitted
+ * telemetry, so `runDecaySweepAllVenues` below now emits one
+ * `tracer_run_events` row per venue (stage='decay_sweep') itself, so
+ * `/api/admin/identity-telemetry`'s "decay sweep most-recent per
+ * venue" panel keeps getting fresh rows instead of reading a stage
+ * nothing writes any more.
  *
  * Idempotent: flipping an already-ghost couple is a no-op (the
  * candidate query only ever selects resolved / channel_scoped).
  */
 
+import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/observability/logger'
+import { writeOrLog } from '@/lib/db/write-or-log'
 
 export interface DecaySweepResult {
   examined: number
@@ -120,12 +130,29 @@ export async function runDecaySweepAllVenues(
     errors: [],
   }
 
+  const runId = `decay:${new Date().toISOString().slice(0, 10)}:${randomUUID()}`
+
   for (const v of (venues ?? []) as Array<{ id: string }>) {
     try {
       const r = await decayStaleCouples(supabase, v.id)
       result.venues_swept += 1
       result.total_examined += r.examined
       result.total_ghosted += r.ghosted
+      // Telemetry the retired Tracer's decay_sweep stage used to emit.
+      // See file header — the daily identity-telemetry panel reads
+      // this stage; keep it fed now that this is the only caller.
+      await writeOrLog(
+        supabase.from('tracer_run_events').insert({
+          venue_id: v.id,
+          run_id: runId,
+          stage: 'decay_sweep',
+          status: 'succeeded',
+          rows_seen: r.examined,
+          rows_written: r.ghosted,
+          detail: { examined: r.examined, ghosted: r.ghosted },
+        }),
+        { op: 'tracer_run_events.insert', venueId: v.id },
+      )
     } catch (err) {
       result.errors.push(
         `${v.id}: ${err instanceof Error ? err.message : String(err)}`,

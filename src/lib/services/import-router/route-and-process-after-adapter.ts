@@ -23,7 +23,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitResult } from '@/lib/services/crm-import'
 import { enqueueIdentityReconstruction } from '@/lib/services/identity/enqueue-reconstruction'
 import { reclusterVenue } from '@/lib/services/identity/candidate-clusterer'
-import { requestTracerRun } from '@/lib/services/identity/tracer-runner'
 
 const BUCKET_NAME = 'crm-imports'
 
@@ -184,15 +183,15 @@ export async function persistAndEnqueueAfterAdapterCommit(
     // non-fatal
   }
 
-  // 6. Queue a Backwards Tracer run so the freshly imported, re-linked
-  //    and clustered data flows into the couples / touchpoints spine
-  //    without waiting for a manual trigger. Idempotent — stamps a
-  //    venue marker the Tracer drain picks up.
-  try {
-    await requestTracerRun(supabase, venueId)
-  } catch {
-    // non-fatal
-  }
+  // 6. Wave 3 W26 (2026-09-09): this used to queue a Backwards Tracer
+  //    run (stamping venues.identity_tracer_requested_at for the
+  //    5-minute drain to pick up) so freshly imported, re-linked and
+  //    clustered data flowed into the couples / touchpoints spine
+  //    without waiting for a manual trigger. The Tracer and its drain
+  //    are retired. The nightly fragment_sweep cron now covers every
+  //    venue unconditionally, so no per-import queue marker is needed
+  //    — the freshly imported data gets swept within 24h same as any
+  //    other venue's fragments.
 
   return { importRunId, reconstructionEnqueuedCount, orphansRelinked }
 }

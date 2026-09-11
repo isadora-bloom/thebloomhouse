@@ -633,12 +633,13 @@ export const GEAR_GROUPS: GearGroup[] = [
       { label: 'Identity audit', href: '/admin/identity', icon: GitMerge, requiresRole: 'org_admin' },
       { label: 'Identity decisions', href: '/admin/identity/decisions', icon: ListOrdered, requiresRole: 'org_admin' },
       { label: 'Handle merges', href: '/admin/identity/handle-merges', icon: Workflow, requiresRole: 'org_admin' },
-      { label: 'Identity backtrack', href: '/admin/identity/backtrack', icon: Sparkles, requiresRole: 'org_admin' },
-      // Identity-First Phase B/C/E surfaces (IDENTITY-FIRST-ARCHITECTURE.md
-      // §4 + §9). Tracer-runs visualises Backwards Tracer + Forwards
-      // Linker activity; Identity telemetry is the cross-venue health
-      // dashboard per §9.
-      { label: 'Tracer runs', href: '/admin/tracer-runs', icon: Activity, requiresRole: 'org_admin' },
+      // Wave 3 W26 (2026-09): 'Identity backtrack' (backtrack.ts admin
+      // UI) and 'Tracer runs' (the batch Backwards Tracer's on-demand
+      // trigger + run history) removed — both backing services are
+      // retired. Identity telemetry (below) is the surviving
+      // cross-venue health dashboard per IDENTITY-FIRST-ARCHITECTURE.md
+      // §9; it still reads live Forwards Linker + decay-sweep +
+      // fragment-sweep activity out of the same tracer_run_events table.
       { label: 'Identity telemetry', href: '/admin/identity-telemetry', icon: Gauge, requiresRole: 'org_admin' },
       { label: 'Identity divergence', href: '/admin/identity-divergence', icon: AlertTriangle, requiresRole: 'org_admin' },
       { label: 'Disagreements', href: '/admin/disagreements', icon: AlertTriangle, requiresRole: 'org_admin' },

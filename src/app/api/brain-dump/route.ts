@@ -1616,16 +1616,11 @@ export async function runCsvImport(args: {
   switch (detection.shape) {
     case 'leads': {
       const summary = await importLeads({ supabase, venueId, detection, headerRow, dataRows })
-      // Identity-First §4: a CRM import is exactly the "bulk CRM
-      // import" trigger for the Backwards Tracer. Stamp the venue so
-      // the */5 cron drain reconstructs the couples graph. Never
-      // throws — a queue-stamp failure must not fail the import.
-      if (summary.inserted > 0 || summary.updated > 0) {
-        const { requestTracerRun } = await import(
-          '@/lib/services/identity/tracer-runner'
-        )
-        await requestTracerRun(supabase, venueId)
-      }
+      // Wave 3 W26 (2026-09-09): this used to stamp a Backwards Tracer
+      // request on a bulk CRM import so the */5 cron drain reconstructed
+      // the couples graph. The Tracer and its request-queue are
+      // retired — the nightly fragment_sweep cron covers every venue
+      // unconditionally, so no per-import stamp is needed.
       return summary
     }
     case 'tour_links': {
@@ -1792,14 +1787,10 @@ export async function runCsvImport(args: {
         result.skipped_duplicate +
         result.skipped_empty_name +
         result.skipped_unparseable_date
-      // Identity-First §4: a storefront CSV refresh (Knot / WW / IG)
-      // is a Tracer trigger. Stamp the venue for the cron drain.
-      if (result.inserted > 0) {
-        const { requestTracerRun } = await import(
-          '@/lib/services/identity/tracer-runner'
-        )
-        await requestTracerRun(supabase, venueId)
-      }
+      // Wave 3 W26 (2026-09-09): this used to stamp a Backwards Tracer
+      // request on a storefront CSV refresh (Knot / WW / IG). The
+      // Tracer and its request-queue are retired — the nightly
+      // fragment_sweep cron covers every venue unconditionally.
 
       return {
         inserted: result.inserted,
