@@ -38,6 +38,8 @@ import type { Cents } from '@/lib/types/monetary'
 import type { Surface } from '@/lib/services/email/surface-classifier'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
+import { normalizeHandles } from '@/lib/services/identity/handles'
+import type { HandlePlatform, NormalizedSignal } from '@/lib/services/identity/sources/types'
 
 /** Stable identifier for the per-row crm_source column. Mirrors the
  *  weddings.crm_source CHECK constraint extended by migration 178 to
@@ -438,6 +440,18 @@ export interface CommitResult {
    *  the batch carried none. Replaces the old warn-and-drop, so an
    *  import that saw fourteen parents can say so. */
   relatedContacts?: RelatedContactsSummary
+  /** W29 (HANDLE-IDENTITY-SPEC.md §1): platform handles this import
+   *  added to `couples.handles`. Counted per (couple, platform), so a
+   *  row whose Instagram handle the couple already had counts zero —
+   *  the import recorded nothing new. Absent when the batch carried no
+   *  handle column at all (every HoneyBook export today). */
+  handlesRecorded?: number
+  /** Platforms where the row's handle disagreed with the one already on
+   *  the couple. Nothing was overwritten; `handle-merge.ts` keeps the
+   *  stored value and the cascade writes a `handle_contradiction` row to
+   *  `couple_merge_events` for a human to look at. A non-zero count here
+   *  is the number that wants eyes on it. */
+  handleConflicts?: number
 }
 
 /** Per-import tally for the Agent-class people an import produced. */
@@ -564,6 +578,231 @@ export function findAdapter(name: string): CrmAdapter | null {
   return ADAPTERS.find((a) => a.name === name) ?? null
 }
 
+// ---------------------------------------------------------------------------
+// W29 — a CSV row's handles reach couples.handles (HANDLE-IDENTITY-SPEC.md §1)
+// ---------------------------------------------------------------------------
+//
+// W25 taught the web-form / calculator adapter to read an `instagram` or
+// `tiktok` column and put the normalised value on the row's interaction, at
+// `extracted_identity.handles`. It stopped there, because this commit path
+// writes weddings + people + interactions through `mintWedding` and mirrors
+// the couple afterwards, rather than building a NormalizedSignal and handing
+// it to `linkSignal`. So the handle landed on the interaction row and never
+// on the couple, which is the only place anything reads it.
+//
+// This closes that gap without moving the adapter onto `linkSignal` (a much
+// larger job, still owed). Handles are collected per row during the loop,
+// then stamped after it through the same chokepoint the live linker uses,
+// `stampHandlesAndFirstSeen`. Three reasons it runs after the loop rather
+// than inline:
+//
+//   1. `mintWedding` fires `mirrorCoupleFromWedding` WITHOUT awaiting it. Read
+//      the couple straight after the mint and it may not exist yet. Deferring
+//      to the end of the batch gives that mirror the rest of the loop to land,
+//      and the flush awaits a mirror of its own when it still has not.
+//   2. A row can roll back after its wedding is written (a failed tours or
+//      lost_deals insert wipes it). Stamping at the end lets the flush filter
+//      against the weddings that actually survived, exactly as the W20
+//      related-contacts flush does.
+//   3. It keeps the whole feature in three named functions a reader can hold
+//      in their head, instead of another forty lines inside a loop that is
+//      already long.
+//
+// The path is generic: it reads `extracted_identity.handles` off whatever the
+// adapter produced. HoneyBook exports carry no handle column today, so a
+// HoneyBook import counts zero and writes nothing. That is the correct
+// outcome, not a gap.
+
+/** The closed platform set, mirrored here so an adapter that ever writes an
+ *  unknown key cannot reach `normalizeHandle`. That function's per-platform
+ *  lookup tables assume the closed set and throw on a stranger, and a throw
+ *  inside the row loop would roll the whole row back over a social handle.
+ *  `extraction.ts` guards its model output the same way. */
+const KNOWN_HANDLE_PLATFORMS = new Set<string>([
+  'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter',
+  'knot', 'weddingwire', 'zola',
+])
+
+/** One row's handles, held until the row loop is done. */
+export interface PendingHandleStamp {
+  /** The wedding the row committed to. Resolved to a couple at flush time. */
+  weddingId: string
+  handles: Partial<Record<HandlePlatform, string>>
+  /** Earliest real-world time the row carries, for `first_seen_at`. Empty
+   *  string when the row carried no usable date — `stampFirstSeenAt` treats
+   *  that as "nothing to say" and leaves the column alone. */
+  occurredAt: string
+  /** Adapter's own row key, for the log line only. */
+  rowSourceId: string | null
+}
+
+/**
+ * The handles an adapter put on a row, merged across its interactions.
+ *
+ * Everything is re-normalised through `normalizeHandles`, so an adapter that
+ * wrote a raw `@Handle` or a profile URL still lands clean, and a junk value
+ * lands as nothing. Earlier interactions win per platform: the first time a
+ * row states a handle is the statement, and a later row-level repeat is not
+ * new evidence.
+ */
+export function handlesFromRow(
+  row: NormalisedLeadRow,
+): Partial<Record<HandlePlatform, string>> | null {
+  const merged: Partial<Record<HandlePlatform, string>> = {}
+  for (const interaction of row.interactions ?? []) {
+    const raw = (interaction.extracted_identity ?? null) as
+      | { handles?: unknown }
+      | null
+    const stated = (raw?.handles ?? null) as Record<string, unknown> | null
+    if (!stated || typeof stated !== 'object') continue
+    const known: Partial<Record<HandlePlatform, string>> = {}
+    for (const [key, value] of Object.entries(stated)) {
+      if (typeof value !== 'string' || !value.trim()) continue
+      if (!KNOWN_HANDLE_PLATFORMS.has(key)) continue
+      known[key as HandlePlatform] = value
+    }
+    const cleaned = normalizeHandles(known)
+    if (!cleaned) continue
+    for (const platform of Object.keys(cleaned) as HandlePlatform[]) {
+      if (!merged[platform]) merged[platform] = cleaned[platform]
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : null
+}
+
+/**
+ * The earliest real-world timestamp the row can offer for `first_seen_at`.
+ * The row's own interactions first (they are the touchpoints), then the
+ * inquiry date. Returns '' when the row carries no usable date, which the
+ * first-seen stamp reads as "leave it alone".
+ */
+export function firstSeenCandidateFor(row: NormalisedLeadRow): string {
+  const candidates: string[] = []
+  for (const interaction of row.interactions ?? []) {
+    if (interaction.occurred_at) candidates.push(interaction.occurred_at)
+  }
+  if (row.inquiry_date) candidates.push(row.inquiry_date)
+  const usable = candidates.filter((c) => Number.isFinite(Date.parse(c)))
+  if (usable.length === 0) return ''
+  return usable.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b))
+}
+
+/**
+ * Stamp the batch's collected handles onto their couples.
+ *
+ * For each surviving wedding: find its mirrored couple, then hand a synthetic
+ * signal to `stampHandlesAndFirstSeen` — the same chokepoint the live linker
+ * calls after a touchpoint lands. That gives the import the identical
+ * behaviour for free: existing handles are never overwritten, a disagreement
+ * is logged and queued to `couple_merge_events` instead of picking a winner,
+ * `first_seen_at` only ever moves earlier, and any unpromoted fragment with
+ * the same handle is promoted onto the couple.
+ *
+ * Never throws. The rows are already committed by the time this runs, and a
+ * failure to stamp a handle must not fail an import that otherwise worked.
+ *
+ * Exported so the test can drive it against a fake client.
+ */
+export async function commitHandleStamps(args: {
+  supabase: SupabaseClient
+  venueId: string
+  pending: PendingHandleStamp[]
+  /** Weddings that survived the row loop. Anything else rolled back. */
+  survivingWeddings: Set<string>
+}): Promise<{ recorded: number; conflicts: number }> {
+  const { supabase, venueId, pending, survivingWeddings } = args
+  let recorded = 0
+  let conflicts = 0
+
+  const { stampHandlesAndFirstSeen } = await import(
+    '@/lib/services/identity/route-by-tier'
+  )
+
+  for (const item of pending) {
+    if (!survivingWeddings.has(item.weddingId)) continue
+    try {
+      const coupleId = await resolveMirroredCouple(supabase, venueId, item.weddingId)
+      if (!coupleId) {
+        console.warn(
+          `[crm-import] handle stamp skipped: no mirrored couple for wedding ${item.weddingId}`,
+        )
+        continue
+      }
+
+      // A synthetic signal, not a spine write. `stampHandlesAndFirstSeen`
+      // reads four fields off it: handles, occurred_at, channel and
+      // external_id (the last two only to name the source in the
+      // contradiction audit row). Nothing here inserts a touchpoint — the
+      // import's own interactions row is the record of the event.
+      const signal = {
+        external_id: item.rowSourceId ?? `crm_import:${item.weddingId}`,
+        channel: 'csv_import',
+        action_type: 'imported',
+        occurred_at: item.occurredAt,
+        signal_tier: 'medium',
+        identity_hint: null,
+        primary_name: null,
+        primary_email: null,
+        primary_phone: null,
+        partner_name: null,
+        partner_email: null,
+        partner_phone: null,
+        wedding_date: null,
+        session_ip: null,
+        session_fingerprint: null,
+        handles: item.handles,
+        raw_payload: {},
+        legacy_wedding_id: item.weddingId,
+      } as unknown as NormalizedSignal
+
+      const outcome = await stampHandlesAndFirstSeen({
+        supabase,
+        venueId,
+        coupleId,
+        signal,
+      })
+      recorded += outcome.handlesAdded.length
+      conflicts += outcome.handleConflicts.length
+    } catch (err) {
+      console.warn(
+        '[crm-import] handle stamp failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+  }
+
+  return { recorded, conflicts }
+}
+
+/**
+ * The couples row mirroring one wedding.
+ *
+ * Reads `(venue_id, source_wedding_id)` first, because by flush time
+ * `mintWedding`'s fire-and-forget mirror has almost always landed. Only when
+ * it has not does this await a mirror of its own, which is the same
+ * idempotent upsert and safe to repeat.
+ */
+async function resolveMirroredCouple(
+  supabase: SupabaseClient,
+  venueId: string,
+  weddingId: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('couples')
+    .select('id')
+    .eq('venue_id', venueId)
+    .eq('source_wedding_id', weddingId)
+    .maybeSingle()
+  const existing = (data as { id?: string } | null)?.id ?? null
+  if (existing) return existing
+
+  const { mirrorCoupleFromWedding } = await import(
+    '@/lib/services/identity/mirror-couple'
+  )
+  const mirrored = await mirrorCoupleFromWedding({ venueId, weddingId, supabase })
+  return mirrored.coupleId
+}
+
 /**
  * Shared commit helper. All adapters normalise to NormalisedLeadRow and
  * then funnel through this for the actual writes — keeps the row-shape
@@ -672,6 +911,11 @@ export async function commitNormalisedRows(args: {
   const pendingRelatedContacts: Array<
     import('./related-contacts').PendingRelatedContact
   > = []
+
+  // W29: the handles the adapter read off each row, stamped onto their
+  // couples after the loop. See the block comment above `handlesFromRow`
+  // for why this waits rather than stamping inline.
+  const pendingHandleStamps: PendingHandleStamp[] = []
 
   // ---------------------------------------------------------------------
   // Dry-run / pre-flight diff path.
@@ -1928,6 +2172,20 @@ export async function commitNormalisedRows(args: {
         })
       }
 
+      // W29: queue this row's handles. Same reasoning as the related
+      // contacts above — written after the loop so a row that rolls back
+      // cannot stamp a couple whose wedding no longer exists, and so the
+      // couple mirror `mintWedding` fired without awaiting has landed.
+      const rowHandles = handlesFromRow(row)
+      if (rowHandles) {
+        pendingHandleStamps.push({
+          weddingId,
+          handles: rowHandles,
+          occurredAt: firstSeenCandidateFor(row),
+          rowSourceId: row.source_id ?? null,
+        })
+      }
+
       // lost_deals (only if status='lost' AND a lost_deal payload exists)
       if (row.lost_deal && (row.status === 'lost' || row.lost_at)) {
         const { error: lostErr } = await supabase.from('lost_deals').insert({
@@ -2073,6 +2331,24 @@ export async function commitNormalisedRows(args: {
       `[crm-import] related contacts: seen=${summary.seen} `
       + `created=${summary.created} linked=${summary.linked} `
       + `roles=${summary.rolesRecorded} skipped=${summary.skipped.length}`,
+    )
+  }
+
+  // W29 flush (HANDLE-IDENTITY-SPEC.md §1 + §3): the handles the rows
+  // carried, onto their couples, through the cascade's own stamp. Filtered
+  // against the surviving weddings so a rolled-back row stamps nothing.
+  if (pendingHandleStamps.length > 0) {
+    const handleOutcome = await commitHandleStamps({
+      supabase,
+      venueId,
+      pending: pendingHandleStamps,
+      survivingWeddings: new Set(result.touchedWeddingIds ?? []),
+    })
+    result.handlesRecorded = handleOutcome.recorded
+    result.handleConflicts = handleOutcome.conflicts
+    console.log(
+      `[crm-import] handles: rows_with_handles=${pendingHandleStamps.length} `
+      + `recorded=${handleOutcome.recorded} conflicts=${handleOutcome.conflicts}`,
     )
   }
 

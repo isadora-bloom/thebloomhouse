@@ -549,6 +549,13 @@ export async function POST(request: NextRequest) {
     // parents, planners — now imported as Agent-class people linked to
     // their couple. Absent when the export carried none.
     related_contacts: commitResult.relatedContacts ?? null,
+    // W29: platform handles this import put on couples.handles, and the
+    // ones that disagreed with a handle the couple already had. A
+    // conflict is never overwritten — it is queued to
+    // couple_merge_events for a human. Zero for any export with no
+    // handle column, which is every HoneyBook export today.
+    handles_recorded: commitResult.handlesRecorded ?? 0,
+    handle_conflicts: commitResult.handleConflicts ?? 0,
     // Rows that failed pre-commit validation, each with a plain reason.
     skipped_invalid: skippedInvalid,
     // Deduped commit-time failures + a migration hint when applicable.

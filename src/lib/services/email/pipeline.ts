@@ -48,7 +48,9 @@ import { findIdentityMatches } from '@/lib/services/identity/resolution'
 import { extractKnotPersonId } from '@/lib/services/identity/knot-sender-id'
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
-import { applySignalInference } from '@/lib/services/attribution/signal-inference'
+import { applySignalInference, stripQuotedReply } from '@/lib/services/attribution/signal-inference'
+import { extractHandlesFromUrls } from '@/lib/services/extraction'
+import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/intel/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
@@ -422,6 +424,92 @@ export function detectHumanEscalation(
   const haystack = `${subject ?? ''}\n${body ?? ''}`
   if (!haystack.trim()) return false
   return HUMAN_ESCALATION_PATTERN.test(haystack)
+}
+
+// ---------------------------------------------------------------------------
+// Wave 4 W29 — handles on the live email signal (HANDLE-IDENTITY-SPEC.md §4)
+// ---------------------------------------------------------------------------
+//
+// Wave 3 gave the signal a `handles` field and gave `extraction.ts` two ways
+// to fill it: the Haiku signal-extraction prompt reads a signature line, and
+// `extractHandlesFromUrls` reads a profile URL deterministically. The email
+// pipeline uses the SECOND one only, and here is why.
+//
+// `extractSignals` is a per-email Haiku call. The pipeline does not run it
+// today and adding it would put a new model call on the hot path of every
+// inbound tick, for one optional field. The URL parse is pure string work,
+// costs nothing, and catches the common real case: someone pastes their
+// Instagram link into the inquiry. When a per-email LLM extraction does come
+// back to this path, pass its `handles` through the same helper and the model
+// read joins the URL read exactly as it does inside `extraction.ts`.
+//
+// Two narrowings on top of the raw URL parse, both learned from what actually
+// arrives in a venue inbox:
+//
+//   1. Quoted reply chrome is stripped first. A prospect replying to the
+//      venue quotes the venue's own footer, links and all. A handle the
+//      couple never wrote is not evidence about the couple.
+//   2. Marketplace platforms (knot / weddingwire / zola) are excluded and
+//      reserved path segments are dropped. `theknot.com/marketplace/<venue>`
+//      would otherwise yield the handle "marketplace", and `instagram.com/p/
+//      <postid>` would yield "p". Those are URL shapes, not people.
+//
+// Direction is an argument rather than a caller-side `if` so every call site
+// states which rule it is under, and so the rule itself is testable. Outbound
+// and operator-authored mail always returns null: a venue reply quoting a
+// signature is not evidence about the couple, and neither is a draft Sage
+// wrote.
+
+/** Platforms a profile URL in an email body may speak for. Marketplace
+ *  platforms are deliberately absent — their URLs are listings. */
+const BODY_HANDLE_PLATFORMS: readonly HandlePlatform[] = [
+  'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter',
+]
+
+/** First path segments that are part of the site, not somebody's profile.
+ *  `normalizeHandle` takes the first segment of a profile URL, so without
+ *  this a post link, a share link or a login link becomes a "handle". */
+const RESERVED_PROFILE_SEGMENTS = new Set([
+  'p', 'reel', 'reels', 'stories', 'story', 'explore', 'tv', 'tags', 'hashtag',
+  'accounts', 'about', 'directory', 'marketplace', 'share', 'sharer',
+  'sharer.php', 'photo.php', 'profile.php', 'permalink.php', 'pages', 'groups',
+  'events', 'login', 'signup', 'help', 'legal', 'privacy', 'terms', 'search',
+  'home', 'settings', 'web', 'media', 'discover', 'pin', 'pins', 'ideas',
+  'intent', 'i', 'messages', 'direct', 'embed', 'oembed', 'watch', 'video',
+  'business', 'developers', 'api', 'download', 'install', 'static', 'assets',
+  'img', 'images', 'invite', 'invites', 'notifications', 'session',
+])
+
+/**
+ * Handles to put on the cascade signal for one email.
+ *
+ * Inbound: the deterministic profile-URL parse over the unquoted part of the
+ * body, narrowed to the social platforms and with reserved path segments
+ * dropped. Outbound: always null, by rule.
+ *
+ * Exported for the unit test and so a future caller reuses the rule rather
+ * than re-deriving it.
+ */
+export function handlesForEmailSignal(args: {
+  direction: 'inbound' | 'outbound'
+  body?: string | null
+}): Partial<Record<HandlePlatform, string>> | null {
+  // The whole rule, in one line: only an inbound email speaks for the couple.
+  if (args.direction !== 'inbound') return null
+  const body = args.body
+  if (!body || !body.trim()) return null
+
+  const found = extractHandlesFromUrls(stripQuotedReply(body))
+  if (!found) return null
+
+  const out: Partial<Record<HandlePlatform, string>> = {}
+  for (const platform of BODY_HANDLE_PLATFORMS) {
+    const handle = found[platform]
+    if (!handle) continue
+    if (RESERVED_PROFILE_SEGMENTS.has(handle)) continue
+    out[platform] = handle
+  }
+  return Object.keys(out).length > 0 ? out : null
 }
 
 // ---------------------------------------------------------------------------
@@ -1364,6 +1452,22 @@ export async function processIncomingEmail(
   // forensic record asynchronously after enqueue.
   const extractedIdentity: Record<string, unknown> = { ...(baseExtractedIdentity as unknown as Record<string, unknown>) }
 
+  // Wave 4 W29 (HANDLE-IDENTITY-SPEC.md §4): platform handles for this
+  // email, derived once here and reused by both inbound linkSignal sites
+  // below (main inbound and human-escalation). Inbound only — the
+  // outbound self-loop branch further down passes direction:'outbound'
+  // and therefore gets null, because a venue reply quoting a signature
+  // says nothing about who the couple is.
+  const inboundHandles = handlesForEmailSignal({
+    direction: 'inbound',
+    body: email.body,
+  })
+  // Tee the same map onto the interaction's extracted_identity, the way
+  // the web-form adapter does for its instagram column. The couple's copy
+  // is written by the cascade; this one is the audit trail on the row that
+  // carried it.
+  if (inboundHandles) extractedIdentity.handles = inboundHandles
+
   // Step 1a.55: Scheduling-tool detection already ran at 1a.0 to bypass
   // the universal-ignore short-circuit. Reuse the same result here so
   // we don't double-parse the body.
@@ -1593,6 +1697,11 @@ export async function processIncomingEmail(
             rawFromEmail,
             actionType: 'venue_sent',
             signalTier: 'medium',
+            // W29: outbound. The venue wrote this, and any handle in the
+            // body belongs to the venue's own footer or to the couple's
+            // message quoted underneath. Neither is evidence about the
+            // couple, so the rule returns null here by construction.
+            handles: handlesForEmailSignal({ direction: 'outbound', body: email.body }),
           }),
           correlationId,
           source: 'live:email_outbound',
@@ -2605,6 +2714,10 @@ export async function processIncomingEmail(
           // Phase 1.1.b (N3 / GC-10): full body + headers into the spine.
           fullBody: email.body,
           rfc2822Headers: email.headers,
+          // W29: inbound. Same map the interaction row carries; the
+          // cascade merges it onto couples.handles after the touchpoint
+          // lands. Null when the email carried no profile URL.
+          handles: inboundHandles,
           // formLead wins over schedulingEvent (matches the identity-
           // priority order at pipeline.ts:1277-1281 for fromEmail).
           resolvedEmail: formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? null,
@@ -5096,6 +5209,12 @@ export async function processIncomingEmail(
           // row for content (lets interactions be retired — gap G1).
           fullBody: email.body,
           rfc2822Headers: email.headers,
+          // W29 (HANDLE-IDENTITY-SPEC.md §4): the main inbound site. This
+          // is the one that closes the email half of the handle journey —
+          // linkSignal's post-attach stamp merges these onto
+          // couples.handles and moves first_seen_at back if this email is
+          // the earliest thing the couple has.
+          handles: inboundHandles,
           // formLead wins over schedulingEvent (matches the identity-
           // priority order at pipeline.ts:1277-1281 for fromEmail).
           resolvedEmail: formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? null,
@@ -5584,6 +5703,12 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
                 weddingId: parentWeddingId,
                 actionType: 'venue_sent',
                 signalTier: 'medium',
+                // W29: outbound, and operator-authored at that — this is
+                // a Sage draft the venue approved. Never stamps handles.
+                handles: handlesForEmailSignal({
+                  direction: 'outbound',
+                  body: draft.draft_body as string,
+                }),
               }),
               correlationId: parentCorrelationId ?? undefined,
               source: 'live:autosend_flush',
@@ -6124,6 +6249,11 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
           weddingId: parentWeddingId,
           actionType: 'venue_sent',
           signalTier: 'medium',
+          // W29: outbound, operator-approved draft. Never stamps handles.
+          handles: handlesForEmailSignal({
+            direction: 'outbound',
+            body: draft.draft_body as string,
+          }),
         }),
         correlationId: parentCorrelationId ?? undefined,
         source: 'live:approved_draft',
