@@ -82,6 +82,8 @@ import {
   splitConcatenatedCoupleName,
   looksLikeConcatenatedCoupleName,
 } from './primitives/couple-parser'
+import { normalizeHandle } from '@/lib/services/identity/handles'
+import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 
 // ---------------------------------------------------------------------------
 // Provider hint shape — a config the adapter consumes to know which
@@ -137,6 +139,21 @@ export interface FormHint {
    *  site-visitors pixel row that share a visitor_id can be stitched to
    *  the same couple by downstream identity resolution. */
   visitorIdColumn?: string
+
+  /** Wave 3 (HANDLE-IDENTITY-SPEC.md §4) — "Ask for the key". Optional
+   *  column carrying the Instagram handle the couple typed on the form
+   *  ("Your Instagram (optional, so we can recognise you)"). The
+   *  cheapest reliable way to join a person's Instagram to their
+   *  inquiry is to ask them — nobody had. Normalised via
+   *  normalizeHandle() and carried on the interaction's
+   *  extracted_identity.handles; malformed input is dropped, never
+   *  stored. */
+  instagramColumn?: string
+  /** Same idea, TikTok. Only wired where the form already has a
+   *  social section (see CALCULATOR_SUBMISSIONS_HINT / CONTACT_
+   *  SUBMISSIONS_HINT comments) — the brief is one new visible field
+   *  per form, not two. */
+  tiktokColumn?: string
 
   /** Columns that should be excluded from the readable interaction body
    *  (purely numeric helpers, calculated subtotals, etc.). */
@@ -292,6 +309,9 @@ export const CALCULATOR_SUBMISSIONS_HINT: FormHint = {
   intentColumn: 'next_steps',
   referrerColumn: 'referrer',
   visitorIdColumn: 'visitor_id',
+  // Wave 3: the venue's own calculator — the field is "ask for the
+  // key" on the form itself, so the export gets a matching column.
+  instagramColumn: 'instagram',
   ignoreColumns: ['id', 'visitor_id', 'per_payment'],
 }
 
@@ -316,6 +336,9 @@ export const CONTACT_SUBMISSIONS_HINT: FormHint = {
   notesColumn: 'message',
   referrerColumn: 'referrer',
   visitorIdColumn: 'visitor_id',
+  // Wave 3: the inquiry form's own "Your Instagram (optional, so we
+  // can recognise you)" field, exported under the matching column.
+  instagramColumn: 'instagram',
   ignoreColumns: ['id', 'visitor_id'],
 }
 
@@ -697,6 +720,12 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
   // Optional website tracking-pixel visitor_id column. Carried into
   // extracted_identity as the cross-link external identifier.
   const idxVisitorId     = findColumn(hdr, hint.visitorIdColumn)
+  // Wave 3 (HANDLE-IDENTITY-SPEC.md §4): the optional "ask for the
+  // key" columns. Same carry-forward mechanism as visitor_id above —
+  // parsed here, normalised, and written into the interaction's
+  // extracted_identity.handles.
+  const idxInstagram     = findColumn(hdr, hint.instagramColumn)
+  const idxTikTok        = findColumn(hdr, hint.tiktokColumn)
 
   if (idxContactEmail < 0 && idxContactName < 0) {
     return {
@@ -731,11 +760,32 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
     const intentRaw    = get(idxIntent)
     const refRaw       = get(idxRef)
     const visitorId    = get(idxVisitorId)
+    const instagramRaw = get(idxInstagram)
+    const tiktokRaw    = get(idxTikTok)
 
     // Skip rows with no identity at all.
     if (!contactName && !contactEmail && !partnerName && !partnerEmail) {
       warnings.push(`row ${r}: skipped — no contact identity`)
       continue
+    }
+
+    // Wave 3 (HANDLE-IDENTITY-SPEC.md §4): normalise whatever the
+    // couple typed into the optional handle field(s). Malformed input
+    // is dropped — counted in the row warning, never stored.
+    const handles: Partial<Record<HandlePlatform, string>> = {}
+    let handlesDropped = 0
+    if (instagramRaw) {
+      const n = normalizeHandle('instagram', instagramRaw)
+      if (n) handles.instagram = n
+      else handlesDropped++
+    }
+    if (tiktokRaw) {
+      const n = normalizeHandle('tiktok', tiktokRaw)
+      if (n) handles.tiktok = n
+      else handlesDropped++
+    }
+    if (handlesDropped > 0) {
+      warnings.push(`row ${r}: dropped ${handlesDropped} malformed handle value(s)`)
     }
 
     const p1 = splitFullName(contactName)
@@ -834,6 +884,14 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
         // browsing history to this couple.
         ...(visitorId ? { visitor_id: visitorId } : {}),
         ...(notesBodyExtract ? { body_extract_from_notes: notesBodyExtract } : {}),
+        // Wave 3 (HANDLE-IDENTITY-SPEC.md §4): the couple's own
+        // handle, asked for on the form and normalised above. This
+        // adapter writes weddings/interactions directly (a legacy
+        // path outside linkSignal — see the file header) rather than
+        // constructing a NormalizedSignal, so this is the closest
+        // "signal" carrier available: the same mechanism visitor_id
+        // already uses to survive the commit.
+        ...(Object.keys(handles).length > 0 ? { handles } : {}),
       },
       // T5-Rixey-BBB: form submissions are touchpoint class. The
       // lead used the calculator AFTER discovering the venue — the

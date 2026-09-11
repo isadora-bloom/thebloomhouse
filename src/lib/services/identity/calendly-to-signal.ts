@@ -33,9 +33,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { NormalizedSignal } from './sources/types'
+import type { NormalizedSignal, HandlePlatform } from './sources/types'
 import { deriveIdentityHint } from './signal-helpers/identity-hint'
 import { mergeRawPayload } from './signal-helpers/raw-payload'
+import { normalizeHandle } from './handles'
 import {
   extractCalendlyQuestions,
   type CalendlyCanonicalSource,
@@ -79,6 +80,13 @@ interface CalendlyPayloadProbe {
   sourceCanonical: CalendlyCanonicalSource | null
   /** Literal source answer for forensic audit. */
   sourceLiteral: string | null
+  /** Wave 3 (HANDLE-IDENTITY-SPEC.md §4). A venue's Calendly event can
+   *  carry a custom question whose label mentions "Instagram" or
+   *  "handle" — when it does, the answer is normalised and carried as
+   *  the invitee's Instagram handle. Never assumed present; most
+   *  venues won't have this question. null when no such question was
+   *  found or the answer didn't normalise to a valid handle. */
+  instagramHandle: string | null
 }
 
 function asString(v: unknown): string | null {
@@ -117,6 +125,7 @@ function probePayload(payload: Record<string, unknown>): CalendlyPayloadProbe {
   let partnerName: string | null = null
   let sourceCanonical: CalendlyCanonicalSource | null = null
   let sourceLiteral: string | null = null
+  let instagramHandle: string | null = null
   const qaCandidates: unknown[] = []
   const directQa = payload.questions_and_answers
   if (Array.isArray(directQa)) qaCandidates.push(...directQa)
@@ -146,6 +155,17 @@ function probePayload(payload: Record<string, unknown>): CalendlyPayloadProbe {
         (q.includes('where') && q.includes('find')))
     ) {
       sourceLiteral = a
+    }
+    // Wave 3 (HANDLE-IDENTITY-SPEC.md §4) — a venue-configured question
+    // whose label mentions "Instagram" or "handle". Never assumed to
+    // exist; permissive substring match because per-venue label
+    // wording varies ("What's your Instagram?", "Instagram handle",
+    // "Your handle (optional)"). The answer is a URL-or-@handle string
+    // typed by the invitee, not prose — normalizeHandle does the
+    // deterministic parse.
+    if (!instagramHandle && (q.includes('instagram') || q.includes('handle'))) {
+      const normalised = normalizeHandle('instagram', a)
+      if (normalised) instagramHandle = normalised
     }
   }
 
@@ -190,7 +210,14 @@ function probePayload(payload: Record<string, unknown>): CalendlyPayloadProbe {
     partnerName,
     sourceCanonical,
     sourceLiteral,
+    instagramHandle,
   }
+}
+
+/** Wave 3 (HANDLE-IDENTITY-SPEC.md §4). Built once per probe and reused
+ *  across the three NormalizedSignal branches below. */
+function handlesFromProbe(probe: CalendlyPayloadProbe): Partial<Record<HandlePlatform, string>> | null {
+  return probe.instagramHandle ? { instagram: probe.instagramHandle } : null
 }
 
 /**
@@ -235,6 +262,7 @@ export function calendlyToNormalizedSignal(
       wedding_date: null,
       session_ip: null,
       session_fingerprint: null,
+      handles: handlesFromProbe(probe),
       raw_payload: mergeRawPayload(
         { external_url: probe.inviteeUri },
         {
@@ -277,6 +305,7 @@ export function calendlyToNormalizedSignal(
       wedding_date: null,
       session_ip: null,
       session_fingerprint: null,
+      handles: handlesFromProbe(probe),
       raw_payload: mergeRawPayload(
         { external_url: probe.scheduledEventUri },
         {
@@ -312,6 +341,7 @@ export function calendlyToNormalizedSignal(
     wedding_date: null,
     session_ip: null,
     session_fingerprint: null,
+    handles: handlesFromProbe(probe),
     raw_payload: mergeRawPayload(
       { external_url: probe.scheduledEventUri },
       {
