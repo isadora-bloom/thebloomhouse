@@ -365,6 +365,15 @@ export interface FollowUpOptions {
   daysSinceLastContact: number
   /** Correlation id from the upstream caller (T1-G). */
   correlationId?: string
+  /**
+   * Whether the follow-up opener phrase gets recorded to `phrase_usage`
+   * (NOVEMBER-PLAN.md wave 4, W34). Defaults to true, unchanged for every
+   * existing caller (bulkDraftFollowUps, follow-up-sequences.ts). Set to
+   * false when the caller is composing a PROPOSAL to show the operator
+   * rather than a draft that will actually be sent — see
+   * composeFollowUpDraft in src/lib/services/cohort/bulk-follow-up.ts.
+   */
+  recordPhraseUsage?: boolean
 }
 
 export interface DraftResult {
@@ -1235,7 +1244,7 @@ export async function generateInquiryDraft(
 export async function generateFollowUp(
   options: FollowUpOptions
 ): Promise<DraftResult> {
-  const { venueId, contactEmail, weddingId, daysSinceLastContact, correlationId } = options
+  const { venueId, contactEmail, weddingId, daysSinceLastContact, correlationId, recordPhraseUsage = true } = options
 
   const supabase = createServiceClient()
 
@@ -1278,6 +1287,7 @@ export async function generateFollowUp(
     category: phraseCategory,
     style: phraseStyle,
     templateVars,
+    record: recordPhraseUsage,
   })
 
   // Get wedding context for personalization. Includes brain-dump context

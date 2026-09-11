@@ -13,8 +13,16 @@
  * Pure DB read. No LLM call. Used by:
  *   - /intel/reviews dashboard panel
  *   - TIER 7d shared review-context helper (briefings + Sage)
+ *
+ * Injectable client (NOVEMBER-PLAN.md wave 4, W34): `computeReviewsAnalytics`
+ * takes an optional `supabase` parameter, defaulting to the service client so
+ * every existing caller is untouched. This gives src/lib/intel/tool-sources/
+ * reviews.ts a seam to pass its own `deps.supabase` (real or a test fake)
+ * instead of re-deriving the same source counts and themes by hand against a
+ * client it opened itself.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 
 export interface ReviewsAnalyticsSourceRow {
@@ -83,8 +91,8 @@ function isoDate(d: Date): string {
 
 export async function computeReviewsAnalytics(
   venueId: string,
+  supabase: SupabaseClient = createServiceClient(),
 ): Promise<ReviewsAnalyticsRollup> {
-  const supabase = createServiceClient()
   const [reviewsRes, venueRes] = await Promise.all([
     supabase
       .from('reviews')

@@ -341,6 +341,15 @@ export interface ComposeFollowUpInput {
   contactEmail: string
   daysSinceLastContact: number
   correlationId?: string
+  /**
+   * Whether the brain's follow-up opener phrase gets recorded to
+   * `phrase_usage` (NOVEMBER-PLAN.md wave 4, W34). Defaults to true, so
+   * bulkDraftFollowUps below is unchanged. The tool source in
+   * src/lib/intel/tool-sources/follow-ups.ts passes false: propose_
+   * follow_ups is a read tool that shows the operator a PROPOSAL, and a
+   * read tool must not write a ledger (types.ts, the plug-in contract).
+   */
+  recordPhraseUsage?: boolean
 }
 
 export interface ComposedFollowUp {
@@ -354,9 +363,15 @@ export interface ComposedFollowUp {
  * Compose one follow-up through the inquiry brain and hand it back.
  *
  * Nothing is persisted to `drafts` and nothing is sent. The brain itself
- * still records its own cost row and an anti-repetition `phrase_usage`
- * row, exactly as it does on the write path; those are the drafter's
- * ledgers, not the operator's outbox.
+ * still records its own cost row in `api_costs` on both paths — that is
+ * fine to keep, it is an audit of spend, not product state, and does not
+ * describe anything an operator would read as "this couple was followed
+ * up with". The anti-repetition `phrase_usage` row is different: that IS
+ * product state (it is what stops a couple getting the same phrase
+ * twice), so whether it gets written is controlled by
+ * `recordPhraseUsage` (default true, unchanged for bulkDraftFollowUps
+ * below). propose_follow_ups passes false, because composing a proposal
+ * to show the operator is a read and a read tool must not write a ledger.
  */
 export async function composeFollowUpDraft(
   input: ComposeFollowUpInput,
@@ -367,6 +382,7 @@ export async function composeFollowUpDraft(
     weddingId: input.weddingId,
     daysSinceLastContact: input.daysSinceLastContact,
     correlationId: input.correlationId,
+    recordPhraseUsage: input.recordPhraseUsage ?? true,
   })
   if (!result.draft || result.draft.trim().length === 0) {
     throw new Error(EMPTY_DRAFT_ERROR)
