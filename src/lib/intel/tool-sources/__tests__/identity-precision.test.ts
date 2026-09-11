@@ -19,6 +19,7 @@ interface Side {
   id: string
   names: string | null
   tombstoned: boolean
+  handles: Record<string, string>
 }
 interface ShapedMerge {
   eventType: string
@@ -31,8 +32,8 @@ interface ShapedMerge {
 interface ShapedPair {
   confidenceTier: string
   matcherReason: string | null
-  primary: { recordType: string; recordId: string; names: string | null }
-  secondary: { recordType: string; recordId: string; names: string | null }
+  primary: { recordType: string; recordId: string; names: string | null; handles: Record<string, string> }
+  secondary: { recordType: string; recordId: string; names: string | null; handles: Record<string, string> }
 }
 interface PrecisionResult {
   records: { totalRecords: number; uniqueCouples: number; duplicatesFolded: number; n: number }
@@ -72,9 +73,9 @@ function merge(over: Record<string, unknown>) {
 
 function tables() {
   const couples = [
-    couple('live-1', 'Ashley Rivera', { partner_contact_name: 'Ryan Rivera' }),
+    couple('live-1', 'Ashley Rivera', { partner_contact_name: 'Ryan Rivera', handles: { instagram: 'ashley.rivera' } }),
     couple('live-2', 'Nia Okafor'),
-    couple('live-3', 'Priya Raman'),
+    couple('live-3', 'Priya Raman', { handles: { instagram: 'priya.raman' } }),
     couple('live-4', 'Tom Beckett'),
     couple('live-5', 'Marta Silva'),
     couple('live-6', 'Owen Hale'),
@@ -171,8 +172,10 @@ describe('identity-precision tool source', () => {
     expect(high.confidenceTier).toBe('high')
     expect(high.kept?.names).toBe('Ashley Rivera & Ryan Rivera')
     expect(high.kept?.id).toBe('live-1')
+    expect(high.kept?.handles).toEqual({ instagram: 'ashley.rivera' })
     expect(high.foldedIn?.names).toBe('A. Rivera')
     expect(high.foldedIn?.tombstoned).toBe(true)
+    expect(high.foldedIn?.handles).toEqual({})
     expect(high.rule).toBe('email_exact')
 
     // A mint is not a fusion.
@@ -202,14 +205,17 @@ describe('identity-precision tool source', () => {
     const first = out.unmergedLookAlikes.pairs[0]
     expect(first.confidenceTier).toBe('high')
     expect(first.primary.names).toBe('Priya Raman')
+    expect(first.primary.handles).toEqual({ instagram: 'priya.raman' })
     expect(first.secondary.names).toBe('Tom Beckett')
     expect(first.matcherReason).toMatch(/different email domain/i)
 
     // A non-couple record has no couple name to resolve, and says so with null
-    // rather than borrowing one.
+    // rather than borrowing one — same for handles, which come back {} not a
+    // borrowed couple's map.
     const second = out.unmergedLookAlikes.pairs[1]
     expect(second.secondary.recordType).toBe('fragment')
     expect(second.secondary.names).toBeNull()
+    expect(second.secondary.handles).toEqual({})
 
     // Resolved candidates are not open questions.
     const ids = out.unmergedLookAlikes.pairs.flatMap((p) => [p.primary.recordId, p.secondary.recordId])

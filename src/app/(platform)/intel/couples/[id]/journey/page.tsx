@@ -25,6 +25,7 @@ import { JourneyRibbon } from '@/components/identity/JourneyRibbon'
 import { JourneyActionChip } from '@/components/identity/JourneyActionChip'
 import { WhyThisCard } from '@/components/ui/why-this-card'
 import { useCoupleJourney } from '../../../_canonical/use-journey'
+import { JourneyPhasesSection } from '../../_components/journey-phases-section'
 
 export default function JourneyStandalonePage() {
   const router = useRouter()
@@ -95,6 +96,8 @@ export default function JourneyStandalonePage() {
               }}
             />
           )}
+
+          <JourneyPhasesSection journey={journey} />
 
           <section className="rounded-xl border border-stone-200 bg-white shadow-sm">
             <div className="border-b border-stone-200 px-6 py-4">

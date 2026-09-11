@@ -62,6 +62,7 @@ interface NameRow {
   partner_contact_name: string | null
   lifecycle_state: string | null
   merged_into_id: string | null
+  handles: Partial<Record<string, string>> | null
 }
 
 export interface ResolvedName {
@@ -70,6 +71,10 @@ export interface ResolvedName {
   lifecycleState: string | null
   /** True when this row has already been folded into another couple. */
   tombstoned: boolean
+  /** Wave 3 (HANDLE-IDENTITY-SPEC.md): `couples.handles`, platform ->
+   *  handle. So a coordinator staring at two "Rosie"s can tell them apart
+   *  by @handle, not just by a uuid. `{}` when the couple has none. */
+  handles: Partial<Record<string, string>>
 }
 
 function displayName(primary: string | null, partner: string | null): string | null {
@@ -88,7 +93,7 @@ async function resolveNames(
     const slice = unique.slice(i, i + NAME_LOOKUP_CHUNK)
     const { data } = await supabase
       .from('couples')
-      .select('id, primary_contact_name, partner_contact_name, lifecycle_state, merged_into_id')
+      .select('id, primary_contact_name, partner_contact_name, lifecycle_state, merged_into_id, handles')
       .eq('venue_id', venueId)
       .in('id', slice)
     for (const row of (data ?? []) as NameRow[]) {
@@ -97,6 +102,7 @@ async function resolveNames(
         names: displayName(row.primary_contact_name, row.partner_contact_name),
         lifecycleState: row.lifecycle_state,
         tombstoned: row.merged_into_id !== null,
+        handles: row.handles ?? {},
       })
     }
   }
@@ -111,6 +117,7 @@ function named(map: Map<string, ResolvedName>, id: string | null): ResolvedName 
       names: null,
       lifecycleState: null,
       tombstoned: false,
+      handles: {},
     }
   )
 }
@@ -169,8 +176,8 @@ export interface ShapedPair {
   confidenceTier: string
   matcherReason: string | null
   createdAt: string
-  primary: { recordType: string; recordId: string; names: string | null }
-  secondary: { recordType: string; recordId: string; names: string | null }
+  primary: { recordType: string; recordId: string; names: string | null; handles: Partial<Record<string, string>> }
+  secondary: { recordType: string; recordId: string; names: string | null; handles: Partial<Record<string, string>> }
 }
 
 function shapeMerges(merges: readonly MergeRecord[], names: Map<string, ResolvedName>): ShapedMerge[] {
@@ -190,6 +197,7 @@ function shapePairs(pairs: readonly CandidatePair[], names: Map<string, Resolved
     recordType,
     recordId,
     names: recordType === 'couple' ? (names.get(recordId)?.names ?? null) : null,
+    handles: recordType === 'couple' ? (names.get(recordId)?.handles ?? {}) : {},
   })
   return pairs.map((p) => ({
     confidenceTier: p.confidenceTier,
@@ -318,11 +326,13 @@ const tool: Anthropic.Tool = {
     'How well the identity model is doing at deciding who is the same couple. Returns the record ' +
     'count against the unique-couple count, the share of records that turned out to be duplicates, ' +
     'the highest-confidence and lowest-confidence merges Bloom made (each with both couples\' ' +
-    'names and ids, the rule that fired and the reason), and the pairs the matcher flagged as ' +
-    'possibly the same couple that Bloom kept apart. Use it for "how many duplicates do I have", ' +
-    '"how confident is the merge on borderline cases", "show me merges you might have got wrong", ' +
-    '"which records are really the same couple". Candidate pairs are open questions: report them ' +
-    'as flagged for review, never as a merge that should happen.',
+    'names, ids and social handles, the rule that fired and the reason), and the pairs the ' +
+    'matcher flagged as possibly the same couple that Bloom kept apart. Handles ride alongside ' +
+    'names and ids on every couple side so two people with the same or similar name (two Rosies) ' +
+    'can be told apart. Use it for "how many duplicates do I have", "how confident is the merge on ' +
+    'borderline cases", "show me merges you might have got wrong", "which records are really the ' +
+    'same couple". Candidate pairs are open questions: report them as flagged for review, never as ' +
+    'a merge that should happen.',
   input_schema: {
     type: 'object',
     properties: {

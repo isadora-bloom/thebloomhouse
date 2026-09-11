@@ -24,6 +24,11 @@
  * this supplementary select goes away.
  *
  * GET ?coupleId=X → { ok, journey, venueId, ribbonFields, heat }
+ *
+ * `journey` is returned whole, so Wave 3's additions to `CoupleJourney`
+ * (`handles`, `firstSeenAt`, `pointZeroAt`, `discovery`, and `zeroPhase`
+ * on every ribbon touchpoint) pass through unchanged — no field list
+ * here to keep in sync with canonical.ts.
  */
 
 import { NextRequest, NextResponse } from 'next/server'

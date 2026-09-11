@@ -53,6 +53,7 @@ import { WhyThisCard } from '@/components/ui/why-this-card'
 // returned 400 and the profile card silently never rendered.
 import { useCoupleJourney } from '../../_canonical/use-journey'
 import { IdentityProfileCard } from '../../_canonical/identity-profile-card'
+import { JourneyPhasesSection } from '../_components/journey-phases-section'
 
 type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
 
@@ -446,6 +447,8 @@ export default function CoupleDetailPage() {
           </span>
         </div>
       </div>
+
+      <JourneyPhasesSection journey={journey} />
 
       {touchpoints.length > 0 && (
         <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4">
