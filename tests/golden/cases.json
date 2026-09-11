@@ -234,6 +234,26 @@
       "assert": [
         { "check": "couple_count_min", "min": 2, "surface": "spine" }
       ]
+    },
+    {
+      "id": "GC-16",
+      "title": "Rosie H.: Instagram follow in March, enquiry in June, one couple and one ribbon",
+      "gaps": ["handle-identity"],
+      "source": "HANDLE-IDENTITY-SPEC.md wave 3 (W22)",
+      "_note": "The shape the whole wave exists for. Somebody follows on Instagram; that is a handle and a display first name, nothing reachable, so it lands as a fragment carrying fragments.handles. Fourteen weeks later she emails with her full name, her address, and the same handle on the signal. The email mints the couple and stamps point_zero_at. The fragment then promotes deterministically on the shared (platform, handle), no judge and no score, and drags first_seen_at back to the follow. One couple, one fragment promoted, and the ribbon starts in March even though the couple only became reachable in June. first_seen_at <= point_zero_at is the invariant lifecycle-audit checks.",
+      "signals": [
+        { "channel": "instagram", "action": "follow", "name": "Rosie", "handles": { "instagram": "rosie.hoyle" }, "at": "2026-03-02T18:00:00Z" },
+        { "channel": "gmail", "action": "reply", "name": "Rosie Hoyle", "identifiers": [{ "kind": "email", "value": "rosie.hoyle@gmail.com", "reliability": "direct" }], "handles": { "instagram": "rosie.hoyle" }, "at": "2026-06-14T09:00:00Z", "body": "Hi! We loved your photos, is 12 September 2027 free?" }
+      ],
+      "assert": [
+        { "check": "couple_count", "eq": 1, "surface": "spine" },
+        { "check": "fragment_count", "eq": 1, "surface": "spine" },
+        { "check": "fragment_promoted_count", "eq": 1, "surface": "spine" },
+        { "check": "couple_handle_eq", "platform": "instagram", "eq": "rosie.hoyle", "surface": "spine" },
+        { "check": "first_seen_at_eq", "eq": "2026-03-02T18:00:00Z", "surface": "spine" },
+        { "check": "point_zero_at_eq", "eq": "2026-06-14T09:00:00Z", "surface": "spine" },
+        { "check": "touchpoint_count_min", "min": 1, "surface": "spine" }
+      ]
     }
   ]
 }

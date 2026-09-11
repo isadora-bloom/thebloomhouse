@@ -13,4 +13,4 @@
  * continue to consume.
  */
 
-export type { SourceAdapter, NormalizedSignal, SourceAdapterArgs } from './types'
+export type { SourceAdapter, NormalizedSignal, SourceAdapterArgs, HandlePlatform } from './types'

@@ -68,6 +68,8 @@ interface Signal {
   lead_source_field?: string
   direction?: string
   repeat?: number
+  /** Wave 3: platform handle map on the signal, e.g. { instagram: 'rosie.hoyle' }. */
+  handles?: Record<string, string>
 }
 interface Case {
   id: string
@@ -88,8 +90,15 @@ interface LinkOutcome {
 }
 interface SpineState {
   link_outcomes: LinkOutcome[]
-  couples: { id: string; lifecycle_state: string }[]
+  couples: {
+    id: string
+    lifecycle_state: string
+    handles: Record<string, string> | null
+    first_seen_at: string | null
+    point_zero_at: string | null
+  }[]
   touchpoints: { channel: string; action_type: string; couple_id: string | null }[]
+  fragments: { id: string; promoted_to_couple_id: string | null; handles: Record<string, string> | null }[]
   open_candidate_matches: number
 }
 
@@ -122,6 +131,7 @@ async function materialize(c: Case): Promise<SpineState> {
           wedding_date: s.wedding_date ?? null,
           legacy_wedding_id: s.wedding_id ?? null,
           author_class: 'couple',
+          handles: s.handles ?? null,
           raw_payload: { direction: s.direction ?? 'inbound', body: s.body, lead_source_field: s.lead_source_field },
         } as Parameters<typeof linkSignal>[0]['signal'],
       })
@@ -137,15 +147,28 @@ async function materialize(c: Case): Promise<SpineState> {
   // Same reads the live harness snapshots — merged (tombstoned) couples excluded.
   const couples = db.tables.couples
     .filter((r) => r.venue_id === venueId && (r.merged_into_id ?? null) === null)
-    .map((r) => ({ id: r.id as string, lifecycle_state: r.lifecycle_state as string }))
+    .map((r) => ({
+      id: r.id as string,
+      lifecycle_state: r.lifecycle_state as string,
+      handles: (r.handles as Record<string, string> | null) ?? null,
+      first_seen_at: (r.first_seen_at as string | null) ?? null,
+      point_zero_at: (r.point_zero_at as string | null) ?? null,
+    }))
   const touchpoints = db.tables.touchpoints
     .filter((r) => r.venue_id === venueId)
     .map((r) => ({ channel: r.channel as string, action_type: r.action_type as string, couple_id: (r.couple_id as string) ?? null }))
+  const fragments = (db.tables.fragments ?? [])
+    .filter((r) => r.venue_id === venueId)
+    .map((r) => ({
+      id: r.id as string,
+      promoted_to_couple_id: (r.promoted_to_couple_id as string | null) ?? null,
+      handles: (r.handles as Record<string, string> | null) ?? null,
+    }))
   const open_candidate_matches = db.tables.candidate_matches.filter(
     (r) => r.venue_id === venueId && (r.resolution ?? null) === null,
   ).length
 
-  return { link_outcomes, couples, touchpoints, open_candidate_matches }
+  return { link_outcomes, couples, touchpoints, fragments, open_candidate_matches }
 }
 
 type Verdict = { ok: boolean; msg?: string }
@@ -168,9 +191,45 @@ function evalSpineAssertion(a: Assertion, s: SpineState): Verdict {
       return { ok: s.open_candidate_matches >= (a.min as number), msg: `open candidate_matches ${s.open_candidate_matches} < ${a.min}` }
     case 'touchpoint_count_min':
       return { ok: s.touchpoints.length >= (a.min as number), msg: `touchpoints ${s.touchpoints.length} < ${a.min}` }
+
+    // ── wave 3: handles + the discovery timeline ──────────────────────────
+    // Timestamps compare by instant, not by string. A real Postgres read
+    // returns '+00:00' where the case file writes 'Z'.
+    case 'fragment_count': {
+      const n = s.fragments.length
+      return { ok: n === a.eq, msg: `fragment_count ${n} ≠ ${a.eq}` }
+    }
+    case 'fragment_promoted_count': {
+      const n = s.fragments.filter((f) => f.promoted_to_couple_id !== null).length
+      return { ok: n === a.eq, msg: `promoted fragments ${n} ≠ ${a.eq}` }
+    }
+    case 'couple_handle_eq': {
+      const platform = a.platform as string
+      const ok = s.couples.some((c) => (c.handles ?? {})[platform] === a.eq)
+      const seen = s.couples.map((c) => JSON.stringify(c.handles ?? {})).join(' ')
+      return { ok, msg: `no couple with handles.${platform}='${a.eq}' (saw ${seen || 'none'})` }
+    }
+    case 'first_seen_at_eq': {
+      const ok = s.couples.some((c) => sameInstant(c.first_seen_at, a.eq))
+      const seen = s.couples.map((c) => String(c.first_seen_at)).join(', ')
+      return { ok, msg: `no couple with first_seen_at=${a.eq} (saw ${seen || 'none'})` }
+    }
+    case 'point_zero_at_eq': {
+      const ok = s.couples.some((c) => sameInstant(c.point_zero_at, a.eq))
+      const seen = s.couples.map((c) => String(c.point_zero_at)).join(', ')
+      return { ok, msg: `no couple with point_zero_at=${a.eq} (saw ${seen || 'none'})` }
+    }
+
     default:
       return { ok: false, msg: `unknown spine check "${a.check}"` }
   }
+}
+
+function sameInstant(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const ta = Date.parse(a)
+  const tb = Date.parse(b)
+  return Number.isFinite(ta) && Number.isFinite(tb) && ta === tb
 }
 
 // ── one vitest case per golden case (spine assertions only) ────────────────

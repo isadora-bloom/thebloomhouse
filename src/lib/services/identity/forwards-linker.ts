@@ -80,7 +80,11 @@ import {
   signalToMatchableRecord,
   type CoupleForMatch,
 } from './tracer'
-import { applyTierRouting } from './route-by-tier'
+import {
+  applyTierRouting,
+  stampHandlesAndFirstSeen,
+  type HandleStampOutcome,
+} from './route-by-tier'
 import { recordProgressionIfEligible } from './progression'
 import { stampTouchpointAndPointZero } from './point-zero'
 import { buildJudgeContext } from './judge-context'
@@ -129,6 +133,10 @@ export interface LinkResult {
    *  Agent branch. Lets an importer count created / linked / skipped
    *  without a second read. See ./agent-link.ts. */
   agent_link?: AgentLinkOutcome
+  /** Wave 3 (HANDLE-IDENTITY-SPEC.md): what the handle / first-seen stamp
+   *  did once the touchpoint landed on a couple. Undefined on the fragment
+   *  and candidate branches, where there is no couple to stamp. */
+  handle_stamp?: HandleStampOutcome
 }
 
 // ---------------------------------------------------------------------------
@@ -203,15 +211,30 @@ async function emitLinkEvent(
       matched_couple_id: result.matched_couple_id,
       candidate_match_queued: result.candidate_match_queued,
       reason: result.reason,
+      handle_stamp: result.handle_stamp ?? null,
       signal: {
         channel: signal.channel,
         action_type: signal.action_type,
         external_id: signal.external_id,
         identity_hint: signal.identity_hint,
         wedding_date: signal.wedding_date,
+        handles: signal.handles ?? null,
       },
     },
   }), { op: 'tracer_run_events.insert', venueId })
+}
+
+/** Short suffix for the link reason so the handle work is visible in the
+ *  telemetry row without a second read. Empty when nothing happened. */
+function describeStamp(s: HandleStampOutcome): string {
+  const parts: string[] = []
+  if (s.handlesAdded.length > 0) parts.push(`handles+${s.handlesAdded.join(',')}`)
+  if (s.handleConflicts.length > 0) {
+    parts.push(`handle_contradiction:${s.handleConflicts.join(',')} (queued, not overwritten)`)
+  }
+  if (s.firstSeenUpdated) parts.push('first_seen_at moved earlier')
+  if (s.fragmentsPromoted > 0) parts.push(`fragments_promoted=${s.fragmentsPromoted}`)
+  return parts.length > 0 ? ` | ${parts.join(' | ')}` : ''
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +309,15 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
               signal,
             })
           }
+          // Wave 3: handles onto the couple, first_seen_at back to the
+          // earliest signal, fragments sharing the handle promoted.
+          result.handle_stamp = await stampHandlesAndFirstSeen({
+            supabase,
+            venueId,
+            coupleId,
+            signal,
+          })
+          result.reason += describeStamp(result.handle_stamp)
         }
         await emitLinkEvent(supabase, venueId, runId, result, signal)
         return result
@@ -319,6 +351,13 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
           touchpointId: routed.touchpoint_id,
           signal,
         })
+        result.handle_stamp = await stampHandlesAndFirstSeen({
+          supabase,
+          venueId,
+          coupleId: routed.matched_couple_id,
+          signal,
+        })
+        result.reason += describeStamp(result.handle_stamp)
       }
       await emitLinkEvent(supabase, venueId, runId, result, signal)
       return result
@@ -400,15 +439,31 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
           )
         : null
       if (contradiction) {
-        // A HARD contradiction means "definitively a different couple", not
-        // "ambiguous" — so demote to below_threshold (→ mint a distinct
-        // couple / leave-separate), NOT medium (→ review-orphan). This is
-        // the doctrine default "merge only with a deterministic anchor;
-        // otherwise leave separate and show both." Fires from any matched
-        // tier (high attach OR medium/low review), since the contradiction
-        // refutes the match regardless of the name score.
-        reasonExtra += ` | tier1.5_guard:${contradiction} demoted ${finalTier}→below_threshold (keep separate)`
-        finalTier = 'below_threshold'
+        // Wave 3 (HANDLE-IDENTITY-SPEC.md §2). A handle match is positive
+        // deterministic evidence, so a contradiction against it is a
+        // genuine disagreement rather than a refutation. The spec is
+        // explicit: demote to the REVIEW QUEUE, never fuse and never
+        // silently split. Dropping it to below_threshold would mint a
+        // second couple and throw the handle evidence away, which is the
+        // under-merge half of the same bug.
+        const handleEvidence = best.verdict.signals.some(
+          (s) => s.name === 'handle_exact' || s.name === 'cascade_handle_exact',
+        )
+        if (handleEvidence) {
+          reasonExtra += ` | tier1.5_guard:${contradiction} demoted ${finalTier}→medium`
+            + ' (handle match contradicted, so review rather than fuse)'
+          finalTier = 'medium'
+        } else {
+          // A HARD contradiction means "definitively a different couple", not
+          // "ambiguous" — so demote to below_threshold (→ mint a distinct
+          // couple / leave-separate), NOT medium (→ review-orphan). This is
+          // the doctrine default "merge only with a deterministic anchor;
+          // otherwise leave separate and show both." Fires from any matched
+          // tier (high attach OR medium/low review), since the contradiction
+          // refutes the match regardless of the name score.
+          reasonExtra += ` | tier1.5_guard:${contradiction} demoted ${finalTier}→below_threshold (keep separate)`
+          finalTier = 'below_threshold'
+        }
       }
     }
 
@@ -450,6 +505,13 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
         touchpointId: result.touchpoint_id,
         signal,
       })
+      result.handle_stamp = await stampHandlesAndFirstSeen({
+        supabase,
+        venueId,
+        coupleId: result.matched_couple_id,
+        signal,
+      })
+      result.reason += describeStamp(result.handle_stamp)
     }
 
     // 3.5 Partner reconciliation (GC-5). When this signal landed on a couple

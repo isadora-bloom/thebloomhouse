@@ -58,7 +58,7 @@ const UNIQUE_KEYS: Record<string, string[]> = {
   fragments: ['venue_id', 'channel', 'external_id'],
 }
 
-type FilterOp = 'eq' | 'is' | 'in' | 'neq' | 'gte' | 'lte'
+type FilterOp = 'eq' | 'is' | 'in' | 'neq' | 'gte' | 'lte' | 'gt' | 'lt'
 interface Filter {
   op: FilterOp
   col: string
@@ -117,6 +117,10 @@ export class MockSupabase {
             return typeof v === 'string' && typeof f.val === 'string' ? v >= f.val : false
           case 'lte':
             return typeof v === 'string' && typeof f.val === 'string' ? v <= f.val : false
+          case 'gt':
+            return typeof v === 'string' && typeof f.val === 'string' ? v > f.val : false
+          case 'lt':
+            return typeof v === 'string' && typeof f.val === 'string' ? v < f.val : false
           default:
             return true
         }
@@ -220,6 +224,11 @@ export class MockSupabase {
           merged_into_id: null,
           heat_score: null,
           source_wedding_id: null,
+          // Migration 398 defaults. The RPC does not take handles, so the
+          // linker stamps them after the mint (route-by-tier
+          // stampHandlesAndFirstSeen), so a fresh row starts empty.
+          handles: {},
+          first_seen_at: null,
         },
       ])
       coupleId = (res.data?.[0]?.id as string) ?? null
@@ -278,9 +287,30 @@ export class MockSupabase {
     winner.partner_contact_name = winner.partner_contact_name ?? loser.primary_contact_name
     winner.partner_contact_email = winner.partner_contact_email ?? loser.primary_contact_email
     winner.partner_contact_phone = winner.partner_contact_phone ?? loser.primary_contact_phone
+    // handles union + earliest first_seen_at (migration 399). The winner
+    // wins a per-platform disagreement and the disagreement is named in the
+    // audit reason rather than dropped.
+    const winnerHandles = (winner.handles as Record<string, string> | null) ?? {}
+    const loserHandles = (loser.handles as Record<string, string> | null) ?? {}
+    const conflicts: string[] = []
+    for (const [platform, value] of Object.entries(loserHandles)) {
+      const held = winnerHandles[platform]
+      if (held !== undefined && held !== value) {
+        conflicts.push(`${platform}: kept '${held}' over '${value}'`)
+      }
+    }
+    winner.handles = { ...loserHandles, ...winnerHandles }
+    const winnerFirst = (winner.first_seen_at as string | null) ?? null
+    const loserFirst = (loser.first_seen_at as string | null) ?? null
+    winner.first_seen_at =
+      winnerFirst === null ? loserFirst
+      : loserFirst === null ? winnerFirst
+      : winnerFirst < loserFirst ? winnerFirst
+      : loserFirst
     // tombstone the loser (demotion, not deletion).
     loser.merged_into_id = winnerId
     // audit.
+    const baseReason = (p.p_reason as string) ?? ''
     this.insertRows('couple_merge_events', [
       {
         venue_id: venue,
@@ -289,7 +319,9 @@ export class MockSupabase {
         secondary_couple_id: loserId,
         rule_triggered: (p.p_rule as string) ?? 'partner_reconciliation',
         confidence_tier: 'high',
-        reason: (p.p_reason as string) ?? null,
+        reason: conflicts.length
+          ? `${baseReason} | handle contradiction on merge: ${conflicts.join('; ')}`
+          : baseReason,
       },
     ])
     return true
@@ -360,6 +392,14 @@ class MockQuery implements PromiseLike<RunResult> {
   }
   lte(col: string, val: unknown): this {
     this.filters.push({ op: 'lte', col, val })
+    return this
+  }
+  gt(col: string, val: unknown): this {
+    this.filters.push({ op: 'gt', col, val })
+    return this
+  }
+  lt(col: string, val: unknown): this {
+    this.filters.push({ op: 'lt', col, val })
     return this
   }
   order(col: string, opts?: { ascending?: boolean }): this {

@@ -48,6 +48,8 @@ interface Signal {
   identifiers?: { kind: string; value: string; reliability?: string }[]
   body?: string; wedding_id?: string; wedding_date?: string; lead_source_field?: string
   direction?: string; repeat?: number
+  /** Wave 3: platform handle map on the signal, e.g. { instagram: 'rosie.hoyle' }. */
+  handles?: Record<string, string>
 }
 interface Case { id: string; title: string; gaps?: string[]; source?: string; signals: Signal[]; assert: Assertion[] }
 
@@ -57,8 +59,15 @@ const { cases } = JSON.parse(readFileSync(join(HERE, 'cases.json'), 'utf8')) as 
 interface LinkOutcome { action: string; matched_couple_id: string | null; touchpoint_id: string | null; candidate_match_queued: boolean }
 interface SpineState {
   link_outcomes: LinkOutcome[]
-  couples: { id: string; lifecycle_state: string }[]
+  couples: {
+    id: string
+    lifecycle_state: string
+    handles?: Record<string, string> | null
+    first_seen_at?: string | null
+    point_zero_at?: string | null
+  }[]
   touchpoints: { channel: string; action_type: string; occurred_at: string; couple_id: string | null }[]
+  fragments: { id: string; promoted_to_couple_id: string | null; handles?: Record<string, string> | null }[]
   open_candidate_matches: number
   // legacy / cross-shadow (best-effort; may be empty under shadow mode)
   people: { wedding_id: string | null; first_name: string | null; last_name: string | null; role: string }[]
@@ -129,6 +138,7 @@ async function materialize(c: Case): Promise<SpineState> {
           wedding_date: s.wedding_date ?? null,
           legacy_wedding_id: s.wedding_id ?? null,
           author_class: 'couple',
+          handles: s.handles ?? null,
           raw_payload: { direction: s.direction ?? 'inbound', body: s.body, lead_source_field: s.lead_source_field },
         } as Parameters<typeof linkSignal>[0]['signal'],
       })
@@ -145,8 +155,11 @@ async function materialize(c: Case): Promise<SpineState> {
   // deleted (migration 379 merged_into_id), so an active-couple count must
   // skip it. This is the doctrine-correct read (readers exclude merged).
   const { data: couples } = await sb.from('couples')
-    .select('id,lifecycle_state').eq('venue_id', venueId).is('merged_into_id', null)
+    .select('id,lifecycle_state,handles,first_seen_at,point_zero_at')
+    .eq('venue_id', venueId).is('merged_into_id', null)
   const { data: tps } = await sb.from('touchpoints').select('channel,action_type,occurred_at,couple_id').eq('venue_id', venueId)
+  const { data: frags } = await sb.from('fragments')
+    .select('id,promoted_to_couple_id,handles').eq('venue_id', venueId)
   const { count: openCandidates } = await sb.from('candidate_matches')
     .select('id', { count: 'exact', head: true }).eq('venue_id', venueId).is('resolution', null)
 
@@ -154,6 +167,7 @@ async function materialize(c: Case): Promise<SpineState> {
     link_outcomes,
     couples: couples ?? [],
     touchpoints: tps ?? [],
+    fragments: frags ?? [],
     open_candidate_matches: openCandidates ?? 0,
     people: [], // legacy people are not written by linkSignal (shadow mode) — see surface tags
   }
@@ -183,6 +197,48 @@ function evalAssertion(a: Assertion, s: SpineState): Verdict {
       return { ok: s.open_candidate_matches >= (a.min as number), msg: `open candidate_matches ${s.open_candidate_matches} < ${a.min}` }
     case 'touchpoint_count_min':
       return { ok: s.touchpoints.length >= (a.min as number), msg: `touchpoints ${s.touchpoints.length} < ${a.min}` }
+    default:
+      return evalHandleAssertion(a, s)
+  }
+}
+
+// --- wave 3 handle / timeline checks (shared shape with the mock runner) ---
+// Timestamps are compared by instant, not by string: Postgres returns
+// '+00:00' where the case file writes 'Z'.
+function sameInstant(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const ta = Date.parse(a)
+  const tb = Date.parse(b)
+  return Number.isFinite(ta) && Number.isFinite(tb) && ta === tb
+}
+
+export function evalHandleAssertion(a: Assertion, s: SpineState): Verdict {
+  switch (a.check) {
+    case 'fragment_count': {
+      const n = s.fragments.length
+      return { ok: n === a.eq, msg: `fragment_count ${n} ≠ ${a.eq}` }
+    }
+    case 'fragment_promoted_count': {
+      const n = s.fragments.filter((f) => f.promoted_to_couple_id !== null).length
+      return { ok: n === a.eq, msg: `promoted fragments ${n} ≠ ${a.eq}` }
+    }
+    case 'couple_handle_eq': {
+      const want = a.eq as string
+      const platform = a.platform as string
+      const ok = s.couples.some((c) => (c.handles ?? {})[platform] === want)
+      const seen = s.couples.map((c) => JSON.stringify(c.handles ?? {})).join(' ')
+      return { ok, msg: `no couple with handles.${platform}='${want}' (saw ${seen || 'none'})` }
+    }
+    case 'first_seen_at_eq': {
+      const ok = s.couples.some((c) => sameInstant(c.first_seen_at, a.eq))
+      const seen = s.couples.map((c) => String(c.first_seen_at)).join(', ')
+      return { ok, msg: `no couple with first_seen_at=${a.eq} (saw ${seen || 'none'})` }
+    }
+    case 'point_zero_at_eq': {
+      const ok = s.couples.some((c) => sameInstant(c.point_zero_at, a.eq))
+      const seen = s.couples.map((c) => String(c.point_zero_at)).join(', ')
+      return { ok, msg: `no couple with point_zero_at=${a.eq} (saw ${seen || 'none'})` }
+    }
     default:
       return { ok: false, msg: `unknown spine check "${a.check}"` }
   }

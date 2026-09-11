@@ -19,6 +19,15 @@
  *      and decides which to merge via the existing identity/resolve
  *      path.
  *
+ *   3. TIMELINE INVARIANTS (wave 3, HANDLE-IDENTITY-SPEC.md §3).
+ *      `first_seen_at <= point_zero_at` for every couple that has both.
+ *      A couple cannot become known by name and a reachable address
+ *      before the venue first saw them at all, so a violation means one
+ *      of the two was stamped from the wrong signal: a replay running
+ *      out of order, or a merge that kept the wrong end of the pair.
+ *      Reported, never auto-fixed: the repair is a re-derive from the
+ *      couple's touchpoints and that is an operator decision.
+ *
  * Anchor: IDENTITY-FIRST-ARCHITECTURE.md §3 (lifecycle clock) + §5
  * (judge + merge UI). The cascade closes the OVER-merge bug class;
  * this diagnostic catches the UNDER-merge bug class, which fires when
@@ -73,14 +82,38 @@ export interface DuplicateGroup {
   }>
 }
 
+/**
+ * A couple whose timeline columns disagree with each other.
+ *
+ * Wave 3 (HANDLE-IDENTITY-SPEC.md §3). The only invariant today is
+ * `first_seen_at <= point_zero_at`: a couple cannot become known by name
+ * and a reachable address BEFORE the venue first saw them at all. It breaks
+ * when a replay stamps point-zero from a signal older than the stored
+ * first_seen_at, or when a merge kept the wrong end of the pair.
+ *
+ * Reported, never auto-fixed. The repair is a re-derive from touchpoints,
+ * which is an operator decision.
+ */
+export interface InvariantViolation {
+  coupleId: string
+  primaryName: string | null
+  invariant: 'first_seen_before_point_zero'
+  firstSeenAt: string | null
+  pointZeroAt: string | null
+  /** Short human-readable explanation. */
+  rationale: string
+}
+
 export interface LifecycleAuditReport {
   drift: LifecycleAuditRow[]
   duplicates: DuplicateGroup[]
+  invariantViolations: InvariantViolation[]
   meta: {
     couplesScanned: number
     driftCount: number
     duplicateGroupCount: number
     duplicateCoupleCount: number
+    invariantViolationCount: number
   }
 }
 
@@ -98,6 +131,9 @@ interface CoupleRow {
   source_wedding_id: string | null
   created_at: string
   last_progression_at: string | null
+  /** Migration 398 / 381. Null on rows written before either landed. */
+  first_seen_at?: string | null
+  point_zero_at?: string | null
 }
 
 interface ProgressionRow {
@@ -246,35 +282,25 @@ export async function runLifecycleAudit(
   const { data: couplesData, error: couplesErr } = await supabase
     .from('couples')
     .select(
-      'id, primary_contact_name, primary_contact_email, partner_contact_name, lifecycle_state, wedding_date, source_wedding_id, created_at, last_progression_at',
+      'id, primary_contact_name, primary_contact_email, partner_contact_name, lifecycle_state, wedding_date, source_wedding_id, created_at, last_progression_at, first_seen_at, point_zero_at',
     )
     .eq('venue_id', venueId)
     .limit(10000)
-  if (couplesErr) {
-    return {
-      drift: [],
-      duplicates: [],
-      meta: {
-        couplesScanned: 0,
-        driftCount: 0,
-        duplicateGroupCount: 0,
-        duplicateCoupleCount: 0,
-      },
-    }
+  const emptyReport: LifecycleAuditReport = {
+    drift: [],
+    duplicates: [],
+    invariantViolations: [],
+    meta: {
+      couplesScanned: 0,
+      driftCount: 0,
+      duplicateGroupCount: 0,
+      duplicateCoupleCount: 0,
+      invariantViolationCount: 0,
+    },
   }
+  if (couplesErr) return emptyReport
   const couples = (couplesData ?? []) as CoupleRow[]
-  if (couples.length === 0) {
-    return {
-      drift: [],
-      duplicates: [],
-      meta: {
-        couplesScanned: 0,
-        driftCount: 0,
-        duplicateGroupCount: 0,
-        duplicateCoupleCount: 0,
-      },
-    }
-  }
+  if (couples.length === 0) return emptyReport
 
   // Bulk-load progression events for those couples.
   const coupleIds = couples.map((c) => c.id)
@@ -386,14 +412,48 @@ export async function runLifecycleAudit(
     return b.couples.length - a.couples.length
   })
 
+  // ---- Timeline invariants (wave 3) --------------------------------------
+  // first_seen_at <= point_zero_at. Only checkable when both are stamped;
+  // a null on either side is missing data, not a violation, and the drift
+  // pass above is where missing data surfaces.
+  const invariantViolations: InvariantViolation[] = []
+  for (const c of couples) {
+    const firstSeen = c.first_seen_at ?? null
+    const pointZero = c.point_zero_at ?? null
+    if (!firstSeen || !pointZero) continue
+    const fs = Date.parse(firstSeen)
+    const pz = Date.parse(pointZero)
+    if (!Number.isFinite(fs) || !Number.isFinite(pz)) continue
+    if (fs <= pz) continue
+    const daysLate = Math.round((fs - pz) / 86_400_000)
+    invariantViolations.push({
+      coupleId: c.id,
+      primaryName: c.primary_contact_name,
+      invariant: 'first_seen_before_point_zero',
+      firstSeenAt: firstSeen,
+      pointZeroAt: pointZero,
+      rationale:
+        `first_seen_at is ${daysLate}d AFTER point_zero_at. The couple cannot have`
+        + ' become reachable before the venue first saw them. Re-derive both from'
+        + ' the couple\'s touchpoints.',
+    })
+  }
+  invariantViolations.sort(
+    (a, b) =>
+      Date.parse(b.firstSeenAt ?? '') - Date.parse(b.pointZeroAt ?? '')
+      - (Date.parse(a.firstSeenAt ?? '') - Date.parse(a.pointZeroAt ?? '')),
+  )
+
   return {
     drift,
     duplicates,
+    invariantViolations,
     meta: {
       couplesScanned: couples.length,
       driftCount: drift.length,
       duplicateGroupCount: duplicates.length,
       duplicateCoupleCount: duplicates.reduce((s, g) => s + g.couples.length, 0),
+      invariantViolationCount: invariantViolations.length,
     },
   }
 }

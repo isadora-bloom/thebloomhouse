@@ -21,7 +21,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { canonicaliseEmail, normalizePhone } from './resolver'
-import type { NormalizedSignal } from './sources/types'
+import { normalizeHandles } from './handles'
+import type { HandlePlatform, NormalizedSignal } from './sources/types'
 
 export interface MintCoupleResult {
   /** couples.id of the minted-or-matched couple. Null only on a
@@ -47,8 +48,17 @@ export interface MintCoupleResult {
  *   phone   — fully race-safe (RPC re-checks couples by phone)
  *   handle  — serialised but may still mint two channel-scoped couples
  *             under concurrency; the matcher coalesces them later
+ *   hint    the free-text identity hint, kept below the real handle
  *   signal  — the floor; the key equals the touchpoint dedup key, so
  *             the RPC's touchpoint re-check is itself the race guard
+ *
+ * Wave 3 (HANDLE-IDENTITY-SPEC.md): a normalised `(platform, handle)` now
+ * outranks the free-text `identity_hint`. Two signals carrying the same
+ * Instagram handle serialise against each other even when one wrote it as
+ * "@Rosie.Hoyle" and the other as a profile URL, because both arrive
+ * already normalised. The old hint key compared raw strings and so let the
+ * same person mint twice. The hint stays as the next rung down for signals
+ * that carry a hint and no structured handle.
  */
 export function computeLockKey(signal: NormalizedSignal): string {
   const email =
@@ -61,8 +71,16 @@ export function computeLockKey(signal: NormalizedSignal): string {
     normalizePhone(signal.partner_phone ?? null)
   if (phone) return `phone:${phone}`
 
+  // Platform-scoped and order-stable: sort so a signal carrying two
+  // handles always produces the same key.
+  const handles = normalizeHandles(signal.handles)
+  if (handles) {
+    const platform = (Object.keys(handles) as HandlePlatform[]).sort()[0]
+    if (platform) return `handle:${platform}:${handles[platform]}`
+  }
+
   const hint = (signal.identity_hint ?? '').trim().toLowerCase()
-  if (hint) return `handle:${signal.channel}:${hint}`
+  if (hint) return `hint:${signal.channel}:${hint}`
 
   return `signal:${signal.channel}:${signal.external_id}`
 }
@@ -100,6 +118,14 @@ export function computeLockKey(signal: NormalizedSignal): string {
 // && intent_class === 'new_inquiry' special-case branch mirroring the
 // existing gmail `author_class === 'couple'` branch). See
 // PHASE-1-BATCH-2.md Pbatch2-4.
+// WAVE 3 NOTE (HANDLE-IDENTITY-SPEC.md §2 + §3). A handle is deliberately
+// NOT sufficient identity to mint a couple. A follow or a story view is one
+// person's thumb, not a wedding enquiry, and minting a couple per follower
+// would fill the couples list with strangers. A handle-only signal becomes a
+// Fragment carrying `fragments.handles`, and the moment a real identity
+// arrives with the same handle the fragment is promoted onto that couple by
+// fragment-sweep.ts. That is how the first Instagram follow ends up on the
+// ribbon without ever having been guessed at.
 export function hasSufficientIdentity(signal: NormalizedSignal): boolean {
   if (signal.channel === 'gmail') {
     return signal.author_class === 'couple'

@@ -45,6 +45,11 @@ import {
 import { recordProgressionIfEligible } from './progression'
 import { maybeResurrectGhost } from './resurrection'
 import { hasSufficientIdentity, lockAndMintCouple } from './mint-couple'
+import { writeOrLog } from '@/lib/db/write-or-log'
+import { logEvent } from '@/lib/observability/logger'
+import { describeHandleConflicts, mergeHandlesIntoCouple } from './handle-merge'
+import { stampFirstSeenAt } from './first-seen'
+import { promoteFragmentsByHandle } from './fragment-sweep'
 
 export type TierRoutingAction =
   | 'attached'
@@ -77,6 +82,127 @@ export interface TierRoutingArgs {
   finalTier: MatchTier
   /** Free-form extension appended to the matcher reason (e.g., judge note). */
   reasonExtra?: string
+}
+
+/**
+ * What the handle stamp did, so the caller can put it in the link reason
+ * and the telemetry row.
+ */
+export interface HandleStampOutcome {
+  /** Platforms added to `couples.handles` by this signal. */
+  handlesAdded: string[]
+  /** Per-platform disagreements. Nothing was overwritten. */
+  handleConflicts: string[]
+  /** True when `first_seen_at` was set or moved earlier. */
+  firstSeenUpdated: boolean
+  /** Fragments promoted onto the couple by a shared handle. */
+  fragmentsPromoted: number
+}
+
+const NO_STAMP: HandleStampOutcome = {
+  handlesAdded: [],
+  handleConflicts: [],
+  firstSeenUpdated: false,
+  fragmentsPromoted: 0,
+}
+
+/**
+ * Wave 3 post-attach stamp (HANDLE-IDENTITY-SPEC.md §1 + §2 + §3).
+ *
+ * Runs after a touchpoint lands on a couple, whether it attached, minted,
+ * or came in on the legacy-wedding fast path. Three things, in order:
+ *
+ *   1. merge the signal's handles into `couples.handles`. A platform where
+ *      the couple already holds a DIFFERENT handle is never overwritten:
+ *      the stored value stays, and the disagreement gets an audit row and
+ *      a line in the link reason so a human sees it. Silently replacing a
+ *      handle is how one mistyped form field would repoint a couple's
+ *      Instagram identity with nothing downstream any the wiser.
+ *   2. set `first_seen_at` to min(existing, occurred_at). A handle-only
+ *      signal counts, and that is the whole point of the column. It only ever
+ *      moves earlier.
+ *   3. promote every unpromoted fragment in the venue carrying the same
+ *      (platform, handle) onto this couple, re-anchoring their orphan
+ *      touchpoints. Deterministic, no judge.
+ *
+ * Best-effort by contract: never throws. The touchpoint is already written.
+ */
+export async function stampHandlesAndFirstSeen(args: {
+  supabase: SupabaseClient
+  venueId: string
+  coupleId: string
+  signal: NormalizedSignal
+}): Promise<HandleStampOutcome> {
+  const { supabase, venueId, coupleId, signal } = args
+  const out: HandleStampOutcome = { ...NO_STAMP, handlesAdded: [], handleConflicts: [] }
+
+  try {
+    if (signal.handles) {
+      const merged = await mergeHandlesIntoCouple({
+        supabase,
+        venueId,
+        coupleId,
+        handles: signal.handles,
+      })
+      out.handlesAdded = merged.added
+      if (merged.conflicts.length > 0) {
+        const detail = describeHandleConflicts(merged.conflicts)
+        out.handleConflicts = merged.conflicts.map((c) => c.platform)
+        logEvent({
+          level: 'warn',
+          msg: 'handles.contradiction',
+          data: {
+            venue_id: venueId,
+            couple_id: coupleId,
+            external_id: signal.external_id,
+            conflicts: detail,
+          },
+        })
+        // Queue it where an operator will find it: the couple's own audit
+        // ledger, alongside merges and resurrections.
+        await writeOrLog(
+          supabase.from('couple_merge_events').insert({
+            venue_id: venueId,
+            event_type: 'handle_contradiction',
+            primary_couple_id: coupleId,
+            rule_triggered: 'handle_stamp',
+            confidence_tier: 'medium',
+            reason: `signal ${signal.channel}:${signal.external_id}: ${detail}`,
+          }),
+          { op: 'couple_merge_events.insert', venueId },
+        )
+      }
+    }
+
+    const firstSeen = await stampFirstSeenAt({
+      supabase,
+      venueId,
+      coupleId,
+      occurredAt: signal.occurred_at,
+    })
+    out.firstSeenUpdated = firstSeen.updated
+
+    if (signal.handles) {
+      const swept = await promoteFragmentsByHandle({
+        supabase,
+        venueId,
+        coupleId,
+        handles: signal.handles,
+      })
+      out.fragmentsPromoted = swept.promoted.length
+    }
+  } catch (err) {
+    logEvent({
+      level: 'warn',
+      msg: 'handles.stamp_failed',
+      data: {
+        venue_id: venueId,
+        couple_id: coupleId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    })
+  }
+  return out
 }
 
 export async function applyTierRouting(
