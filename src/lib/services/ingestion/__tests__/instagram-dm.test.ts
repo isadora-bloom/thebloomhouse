@@ -1,5 +1,7 @@
 /**
- * Wave 3 W28 — Instagram DM ingestion.
+ * Wave 3 W28 — Instagram DM ingestion. Wave 4 W30 wires the interaction
+ * chokepoint on top (see the new describe block near the foot of this
+ * file).
  *
  * Covers the five things the brief pins:
  *   1. signature verification: valid, invalid, missing
@@ -11,7 +13,10 @@
  *
  * No network. The Graph lookup takes an injected fetch, and the Supabase
  * client is a hand-rolled stub that records what was asked of it. The
- * spine is never touched: linkSignal is mocked.
+ * spine is never touched: linkSignal is mocked. Wave 4 also mocks the
+ * inbound-intent classifier (so no AI call runs in tests) and
+ * mintWedding (so "never mints from a DM alone" is checkable without a
+ * real resolver).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -43,32 +48,94 @@ vi.mock('@/lib/supabase/service', () => ({
   createServiceClient: () => makeSupabaseStub({ existingTouchpoint: false }),
 }))
 
+// Wave 4 W30: writeInboundInteractionAndClassify (imported from
+// openphone.ts, the SMS chokepoint) calls these two dynamically. Mocked
+// so the chokepoint wiring tests exercise real chokepoint code without
+// an AI call or a real mint.
+const classifyInboundIntentMock = vi.fn()
+vi.mock('@/lib/services/intel/inbound-intent-classifier', () => ({
+  classifyInboundIntent: (...args: unknown[]) => classifyInboundIntentMock(...args),
+}))
+
+const mintWeddingMock = vi.fn()
+vi.mock('@/lib/services/identity/mint-wedding', () => ({
+  mintWedding: (...args: unknown[]) => mintWeddingMock(...args),
+}))
+
+const DEFAULT_INTENT_VERDICT = {
+  intent_class: 'client_logistics',
+  referenced_couple_name: null,
+  note: null,
+  confidence: 70,
+  extracted_facts: null,
+  signals: {},
+}
+
 /**
- * Minimal Supabase stub. Only the chain instagram-dm actually uses:
- *   from(table).select(cols).eq(..).eq(..).eq(..).limit(n).maybeSingle()
- * and from(table).update(obj).eq(..)
+ * Minimal Supabase stub covering every chain instagram-dm (Wave 3) and
+ * the interaction chokepoint (Wave 4 W30) use:
+ *   from(table).select(cols).eq(..).eq(..).eq(..).order(..).limit(n).maybeSingle()
+ *   from(table).update(obj).eq(..)
+ *   from(table).insert(obj).select(..).maybeSingle()   — interactions only
  */
 function makeSupabaseStub(opts: {
   existingTouchpoint?: boolean
   existingFragment?: boolean
   onSelect?: (table: string) => void
+  onInsert?: (table: string, payload: unknown) => void
+  onUpdate?: (table: string, payload: unknown) => void
+  /** couples.source_wedding_id the legacy-attachment lookup should find. */
+  coupleSourceWeddingId?: string | null
+  /** people.id the legacy-attachment lookup should find on that wedding. */
+  legacyPersonId?: string | null
+  interactionInsertId?: string
+  interactionInsertError?: { message: string } | null
 }) {
   const chain = (table: string) => {
     const self: Record<string, unknown> = {}
-    const passthrough = () => self
+    let op: 'select' | 'insert' | 'update' | null = null
     self.select = (..._a: unknown[]) => {
+      if (op !== 'insert') op = 'select'
       opts.onSelect?.(table)
       return self
     }
-    self.eq = passthrough
-    self.limit = passthrough
-    self.update = passthrough
+    self.insert = (payload: unknown) => {
+      op = 'insert'
+      opts.onInsert?.(table, payload)
+      return self
+    }
+    self.update = (payload: unknown) => {
+      op = 'update'
+      opts.onUpdate?.(table, payload)
+      return self
+    }
+    self.eq = () => self
+    self.order = () => self
+    self.limit = () => self
     self.maybeSingle = async () => {
       if (table === 'touchpoints' && opts.existingTouchpoint) {
         return { data: { id: 'tp-1' }, error: null }
       }
       if (table === 'fragments' && opts.existingFragment) {
         return { data: { id: 'fr-1' }, error: null }
+      }
+      if (table === 'interactions' && op === 'insert') {
+        if (opts.interactionInsertError) {
+          return { data: null, error: opts.interactionInsertError }
+        }
+        return { data: { id: opts.interactionInsertId ?? 'interaction-1' }, error: null }
+      }
+      if (table === 'couples' && op === 'select') {
+        return {
+          data: { source_wedding_id: opts.coupleSourceWeddingId ?? null },
+          error: null,
+        }
+      }
+      if (table === 'people' && op === 'select') {
+        return {
+          data: opts.legacyPersonId ? { id: opts.legacyPersonId } : null,
+          error: null,
+        }
       }
       return { data: null, error: null }
     }
@@ -160,6 +227,9 @@ beforeEach(() => {
     reason: 'identity-poor',
     duplicate: false,
   })
+  classifyInboundIntentMock.mockReset()
+  classifyInboundIntentMock.mockResolvedValue(DEFAULT_INTENT_VERDICT)
+  mintWeddingMock.mockReset()
 })
 
 afterEach(() => {
@@ -583,7 +653,189 @@ describe('ingestInstagramDm', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 5. The interaction row (built, not yet wired — see the file header)
+// Wave 4 W30 — the interaction chokepoint wiring
+// ---------------------------------------------------------------------------
+//
+// ingestInstagramDm now calls writeInboundInteractionAndClassify (the SMS
+// chokepoint, exported from openphone.ts) after a non-duplicate linkSignal.
+// These tests cover the webhook-event-to-interaction-row path end to end
+// (fake client, no network), that the classifier fires exactly once, and
+// that a known couple's legacy wedding gets attached the same way SMS
+// attaches — without ever minting a brand-new one from a handle alone.
+
+describe('ingestInstagramDm — interaction chokepoint (Wave 4 W30)', () => {
+  it('writes an interactions row shaped like the SMS path, with the Instagram channel stamped in extracted_identity', async () => {
+    let insertedPayload: Record<string, unknown> | null = null
+    const supabase = makeSupabaseStub({
+      onInsert: (table, payload) => {
+        if (table === 'interactions') insertedPayload = payload as Record<string, unknown>
+      },
+    })
+
+    const result = await ingestInstagramDm({
+      supabase,
+      venueId: 'venue-1',
+      pageToken: 'page-token',
+      message: inboundMessage(),
+      fetchImpl: fetchReturning({ username: 'rosie.hoyle', name: 'Rosie Hoyle' }),
+    })
+
+    expect(result.outcome).toBe('linked')
+    expect(insertedPayload).toBeTruthy()
+    expect(insertedPayload).toMatchObject({
+      venue_id: 'venue-1',
+      type: 'sms',
+      direction: 'inbound',
+      subject: 'Instagram DM from @rosie.hoyle',
+      from_email: '@rosie.hoyle',
+      from_name: 'Rosie Hoyle',
+      surface: 'voice_capture',
+      signal_class: 'touchpoint',
+      author_class: 'couple',
+      // No legacy couple matched (default linkSignal mock), so both stay
+      // orphan — exactly how the SMS chokepoint leaves an unknown sender.
+      person_id: null,
+      wedding_id: null,
+    })
+    expect(
+      (insertedPayload as unknown as { extracted_identity: Record<string, unknown> })
+        .extracted_identity,
+    ).toMatchObject({
+      channel: 'instagram',
+      instagram_handle: '@rosie.hoyle',
+    })
+  })
+
+  it('runs the inbound-intent classifier exactly once', async () => {
+    const supabase = makeSupabaseStub({})
+    await ingestInstagramDm({
+      supabase,
+      venueId: 'venue-1',
+      pageToken: 'page-token',
+      message: inboundMessage(),
+      fetchImpl: fetchReturning({ username: 'rosie.hoyle', name: 'Rosie Hoyle' }),
+    })
+    expect(classifyInboundIntentMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('never mints a wedding from the DM alone, even when the classifier says new_inquiry', async () => {
+    classifyInboundIntentMock.mockResolvedValue({
+      ...DEFAULT_INTENT_VERDICT,
+      intent_class: 'new_inquiry',
+    })
+    const supabase = makeSupabaseStub({})
+    await ingestInstagramDm({
+      supabase,
+      venueId: 'venue-1',
+      pageToken: 'page-token',
+      message: inboundMessage(),
+      fetchImpl: fetchReturning({ username: 'rosie.hoyle', name: 'Rosie Hoyle' }),
+    })
+    expect(mintWeddingMock).not.toHaveBeenCalled()
+  })
+
+  it('attaches to a known couple\'s legacy wedding via couples.source_wedding_id', async () => {
+    linkSignalMock.mockResolvedValueOnce({
+      action: 'attached',
+      matched_couple_id: 'couple-1',
+      tier: 'handle_exact',
+      matcher_score: 100,
+      judge_invoked: false,
+      judge_outcome: null,
+      touchpoint_id: 'tp-99',
+      candidate_match_queued: false,
+      reason: 'handle match',
+      duplicate: false,
+    })
+    let insertedPayload: Record<string, unknown> | null = null
+    const supabase = makeSupabaseStub({
+      coupleSourceWeddingId: 'wedding-legacy-1',
+      legacyPersonId: 'person-legacy-1',
+      onInsert: (table, payload) => {
+        if (table === 'interactions') insertedPayload = payload as Record<string, unknown>
+      },
+    })
+
+    const result = await ingestInstagramDm({
+      supabase,
+      venueId: 'venue-1',
+      pageToken: 'page-token',
+      message: inboundMessage(),
+      fetchImpl: fetchReturning({ username: 'rosie.hoyle', name: 'Rosie Hoyle' }),
+    })
+
+    expect(result.matchedCoupleId).toBe('couple-1')
+    expect(insertedPayload).toMatchObject({
+      wedding_id: 'wedding-legacy-1',
+      person_id: 'person-legacy-1',
+    })
+  })
+
+  it('leaves the interaction orphan when the matched couple has no legacy mirror', async () => {
+    linkSignalMock.mockResolvedValueOnce({
+      action: 'minted',
+      matched_couple_id: 'couple-instagram-only',
+      tier: null,
+      matcher_score: null,
+      judge_invoked: false,
+      judge_outcome: null,
+      touchpoint_id: 'tp-100',
+      candidate_match_queued: false,
+      reason: 'minted from handle',
+      duplicate: false,
+    })
+    let insertedPayload: Record<string, unknown> | null = null
+    const supabase = makeSupabaseStub({
+      coupleSourceWeddingId: null, // no legacy mirror for this couple
+      onInsert: (table, payload) => {
+        if (table === 'interactions') insertedPayload = payload as Record<string, unknown>
+      },
+    })
+
+    await ingestInstagramDm({
+      supabase,
+      venueId: 'venue-1',
+      pageToken: 'page-token',
+      message: inboundMessage(),
+      fetchImpl: fetchReturning({ username: 'rosie.hoyle', name: 'Rosie Hoyle' }),
+    })
+
+    expect(insertedPayload).toMatchObject({ wedding_id: null, person_id: null })
+  })
+
+  it('never writes an interactions row for a duplicate delivery', async () => {
+    const onInsert = vi.fn()
+    const seen = makeSupabaseStub({ existingTouchpoint: true, onInsert })
+    const result = await ingestInstagramDm({
+      supabase: seen,
+      venueId: 'venue-1',
+      pageToken: 'page-token',
+      message: inboundMessage(),
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+    })
+    expect(result.outcome).toBe('duplicate')
+    expect(onInsert).not.toHaveBeenCalled()
+  })
+
+  it('swallows an interaction-write failure without changing the linked outcome', async () => {
+    const supabase = makeSupabaseStub({
+      interactionInsertError: { message: 'db down' },
+    })
+    const result = await ingestInstagramDm({
+      supabase,
+      venueId: 'venue-1',
+      pageToken: 'page-token',
+      message: inboundMessage(),
+      fetchImpl: fetchReturning({ username: 'rosie.hoyle', name: 'Rosie Hoyle' }),
+    })
+    // The spine write (linkSignal) already succeeded; a legacy-side
+    // hiccup must not flip the outcome the webhook reports to Meta.
+    expect(result.outcome).toBe('linked')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. The interaction row (built, tested, wired above)
 // ---------------------------------------------------------------------------
 
 describe('buildInstagramInteractionRow', () => {

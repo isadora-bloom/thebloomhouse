@@ -21,10 +21,30 @@
  * CHECK constraint allows 'sms' | 'voicemail' | 'call'; we map
  * 'call_summary' → 'call' for the interactions row but keep
  * 'call_summary' as the channel value in processed_sms_messages.
+ *
+ * THE CHOKEPOINT (Wave 4, W30)
+ * ============================
+ * `writeInboundInteractionAndClassify()` below is the one place that
+ * inserts an inbound `interactions` row and runs the inbound-intent
+ * classifier + classifier-gated wedding mint. `persistRow()` in this file
+ * calls it for SMS/voicemail/call_summary. Instagram DMs
+ * (src/lib/services/ingestion/instagram-dm.ts) call the SAME function
+ * rather than opening a second `.insert('interactions')` site, because
+ * `scripts/check-cascade-only-writer.mjs` grandfathers THIS file for the
+ * `interactions` table and `scripts/cleanup-budget.json` pins the
+ * grandfather-entry count — a new file doing its own insert would be a
+ * new violation the guard fails on. The function takes a `logPrefix` and
+ * explicit mint options so SMS behaviour is byte-for-byte unchanged; see
+ * `__tests__/openphone.test.ts` for the row-shape parity test.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
+// Type-only: erased at compile time, so this doesn't create the runtime
+// import cycle the dynamic `await import('@/lib/services/identity/mint-wedding')`
+// calls below are written to avoid.
+import type { WeddingSource } from '@/lib/services/identity/mint-wedding'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -344,6 +364,218 @@ function channelToInteractionType(
   if (channel === 'voicemail') return 'voicemail'
   if (channel === 'call_summary') return 'call'
   return 'sms'
+}
+
+// ---------------------------------------------------------------------------
+// Chokepoint — write an inbound interaction row + trigger classification
+// ---------------------------------------------------------------------------
+
+/** The `interactions` fields the chokepoint writes. Callers build this;
+ *  the chokepoint only adds `venue_id` and does the insert. */
+export interface InboundInteractionRow {
+  person_id: string | null
+  wedding_id: string | null
+  /** interactions.type CHECK value. */
+  type: 'sms' | 'voicemail' | 'call'
+  direction: 'inbound' | 'outbound'
+  subject: string
+  body_preview: string
+  full_body: string
+  from_email: string | null
+  from_name: string | null
+  timestamp: string
+  signal_class: string
+  surface: string
+  author_class: string
+  extracted_identity: Record<string, unknown>
+}
+
+export interface WriteInboundInteractionArgs {
+  supabase: SupabaseClient
+  venueId: string
+  row: InboundInteractionRow
+  /** Console log prefix, matching the calling ingester's existing tag
+   *  ('openphone' for SMS/voicemail/call, 'instagram-dm' for DMs) so
+   *  SMS log lines are unchanged by this refactor. */
+  logPrefix: string
+  /** The channel's own message/call id, for log lines only. */
+  externalMessageId: string
+  /** Whether the classifier-gated wedding mint may run. False for
+   *  handle-only channels that cannot establish Point-Zero — a handle is
+   *  not a reachable address (HANDLE-IDENTITY-SPEC.md §3). */
+  allowMint: boolean
+  /** Required when allowMint is true. Passed through to mintWedding's
+   *  `source` field verbatim. */
+  mintSource?: WeddingSource
+  /** Required when allowMint is true. At least one of email/phone must
+   *  be set — a handle-only signal never reaches here because callers
+   *  that can't offer a reachable identifier pass allowMint: false. */
+  mintSignals?: { email: string | null; phone: string | null }
+  /** Raw (possibly null) occurred-at, distinct from `row.timestamp`
+   *  (which already falls back to "now"). Passed to mintWedding's
+   *  inquiryDate and the post-mint heat-fire exactly as the pre-refactor
+   *  SMS code did. */
+  mintInquiryDate?: string
+  /** heat-mapping event type to fire when the mint gate actually mints a
+   *  fresh wedding. Omit to skip (no heat wiring for this channel yet). */
+  postMintHeatEventType?: string | null
+  /** Metadata object for the post-mint heat-fire. Caller-built so SMS
+   *  keeps its exact `{ source: 'openphone', channel, ... }` shape. */
+  postMintHeatMetadata?: Record<string, unknown>
+}
+
+export interface WriteInboundInteractionResult {
+  interactionId: string | null
+  /** Final wedding_id — unchanged from `row.wedding_id` unless the mint
+   *  gate minted a fresh one. */
+  weddingId: string | null
+  intentClass: string | null
+}
+
+/**
+ * Insert one inbound `interactions` row, then (inbound only) run the
+ * inbound-intent classifier and gate a wedding mint on its verdict —
+ * the same COUPLE_INTENTS = {new_inquiry, inquiry_followup} gate the SMS
+ * path has always used. Never throws: every failure is caught, logged,
+ * and folded into the result (interactionId/weddingId stay whatever they
+ * were before the failing step).
+ */
+export async function writeInboundInteractionAndClassify(
+  args: WriteInboundInteractionArgs,
+): Promise<WriteInboundInteractionResult> {
+  const { supabase, venueId, row, logPrefix, externalMessageId } = args
+  let weddingId = row.wedding_id
+
+  const { data: insertedInteraction, error: interErr } = await supabase
+    .from('interactions')
+    .insert({
+      venue_id: venueId,
+      person_id: row.person_id,
+      wedding_id: weddingId,
+      type: row.type,
+      direction: row.direction,
+      subject: row.subject,
+      body_preview: row.body_preview,
+      full_body: row.full_body,
+      from_email: row.from_email,
+      from_name: row.from_name,
+      timestamp: row.timestamp,
+      signal_class: row.signal_class,
+      surface: row.surface,
+      author_class: row.author_class,
+      extracted_identity: row.extracted_identity,
+    })
+    .select('id')
+    .maybeSingle()
+  if (interErr) {
+    console.error(
+      `[${logPrefix}] interactions insert failed (${externalMessageId}):`,
+      interErr.message,
+    )
+    // Don't undo the caller's dedup log (processed_sms_messages for SMS,
+    // the spine touchpoint for Instagram) — the dedup log is the source
+    // of truth and a manual reprocess is cheap.
+  }
+  const interactionId = (insertedInteraction?.id as string | undefined) ?? null
+
+  let intentClass: string | null = null
+
+  // Inbound-intent classifier (mig 327). Fires on every inbound row this
+  // chokepoint writes, whatever the calling channel.
+  if (row.direction === 'inbound' && interactionId) {
+    const intentChannel: 'sms' | 'voicemail' | 'call' =
+      row.type === 'voicemail' ? 'voicemail' : row.type === 'call' ? 'call' : 'sms'
+    let intentVerdict:
+      | { intent_class: string; referenced_couple_name: string | null }
+      | null = null
+    try {
+      const { classifyInboundIntent } = await import(
+        '@/lib/services/intel/inbound-intent-classifier'
+      )
+      const verdict = await classifyInboundIntent({
+        interactionId,
+        body: row.full_body,
+        subject: null,
+        venueId,
+        channel: intentChannel,
+        supabase,
+      })
+      intentVerdict = {
+        intent_class: verdict.intent_class as string,
+        referenced_couple_name: verdict.referenced_couple_name ?? null,
+      }
+      intentClass = intentVerdict.intent_class
+    } catch (err) {
+      console.warn(
+        `[${logPrefix}] intent-classify failed (${externalMessageId}):`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+
+    // Gate the wedding mint on classifier verdict — see the SMS
+    // COUPLE_INTENTS comment this was lifted from for the full reasoning.
+    // `allowMint` is the generalisation: a caller with no reachable
+    // identifier (Instagram, today) passes false and this block is
+    // inert, whatever the classifier says.
+    const COUPLE_INTENTS = new Set(['new_inquiry', 'inquiry_followup'])
+    const reachable =
+      args.allowMint &&
+      args.mintSignals != null &&
+      Boolean(args.mintSignals.email || args.mintSignals.phone)
+    const shouldMint =
+      reachable && !weddingId && intentVerdict && COUPLE_INTENTS.has(intentVerdict.intent_class)
+
+    if (shouldMint && intentVerdict && args.mintSignals) {
+      try {
+        const { mintWedding } = await import('@/lib/services/identity/mint-wedding')
+        const minted = await mintWedding({
+          venueId,
+          source: args.mintSource ?? 'manual_admin',
+          signals: {
+            email: args.mintSignals.email,
+            phone: args.mintSignals.phone,
+            fullName: null,
+            weddingDate: null,
+            inquiryDate: args.mintInquiryDate,
+          },
+          reason: `intent:${intentVerdict.intent_class}`,
+          supabase,
+          correlationId: null,
+        })
+        weddingId = minted.weddingId
+        await supabase
+          .from('interactions')
+          .update({ wedding_id: weddingId })
+          .eq('id', interactionId)
+        if (args.postMintHeatEventType) {
+          void recordEngagementEvent(
+            venueId,
+            weddingId,
+            args.postMintHeatEventType,
+            row.direction,
+            args.postMintHeatMetadata ?? {},
+            args.mintInquiryDate,
+          ).catch((err) => {
+            console.warn(
+              `[${logPrefix}] post-mint heat fire failed (${externalMessageId}):`,
+              err instanceof Error ? err.message : String(err),
+            )
+          })
+        }
+        console.log(
+          `[${logPrefix}] minted wedding ${weddingId} from intent=${intentVerdict.intent_class} ` +
+            `(${externalMessageId})`,
+        )
+      } catch (mintErr) {
+        console.warn(
+          `[${logPrefix}] gated mint failed (${externalMessageId}):`,
+          mintErr instanceof Error ? mintErr.message : String(mintErr),
+        )
+      }
+    }
+  }
+
+  return { interactionId, weddingId, intentClass }
 }
 
 function pickOccurredAt(raw: Record<string, unknown>): string | null {
@@ -937,7 +1169,7 @@ async function persistRow(
     }
   }
 
-  // 3) Inbox-visible interaction
+  // 3) Inbox-visible interaction, via the chokepoint (Wave 4 W30).
   const interactionType = channelToInteractionType(row.channel)
   const occurred = row.occurred_at ?? new Date().toISOString()
   const subject =
@@ -960,49 +1192,64 @@ async function persistRow(
     { ownEmails: new Set<string>() },
   )
 
-  const interactionPayload: Record<string, unknown> = {
-    venue_id: venueId,
-    person_id: personId,
-    wedding_id: weddingId,
-    type: interactionType,
-    direction: row.direction,
-    subject,
-    body_preview: row.body_text.slice(0, 300),
-    full_body: row.body_text,
-    // interactions has no from_phone column. Surface the number where
-    // the inbox already looks for sender identity.
-    from_email: externalNumber,
-    from_name: null,
-    timestamp: occurred,
-    // T5-Rixey-BBB: SMS / voicemail / call signals from OpenPhone
-    // are touchpoints — the lead reached out via a known channel
-    // they discovered the venue through.
-    // signal-class-justified: phone-channel signals are touchpoint
-    signal_class: 'touchpoint',
-    // Wave 28 (mig 294): phone/voice channels surface in /agent/audio-inbox.
-    surface: 'voice_capture',
-    // Wave 27 (mig 293): inbound from external phone = couple voice;
-    // outbound from venue line = operator. The Haiku author classifier
-    // re-checks bodies later but this is a safe synchronous default.
-    author_class: row.direction === 'inbound' ? 'couple' : 'operator',
-    // Pattern 3: every channel populates extracted_identity for
-    // forensic record + retroactive linkage scripts.
-    extracted_identity: voiceExtractedIdentity,
-  }
+  // Snapshot the pre-mint wedding id. The heat-fire + scheduling-extractor
+  // block just below fires on an ALREADY-matched wedding and is mutually
+  // exclusive with the chokepoint's mint gate (which only fires when
+  // weddingId is falsy) — freezing it here keeps that block's behaviour
+  // identical to before the chokepoint extraction, regardless of what the
+  // chokepoint does to `weddingId`.
+  const weddingIdAtInsert = weddingId
 
-  const { data: insertedInteraction, error: interErr } = await supabase
-    .from('interactions')
-    .insert(interactionPayload)
-    .select('id')
-    .maybeSingle()
-  if (interErr) {
-    console.error(
-      `[openphone] interactions insert failed (${row.openphone_message_id}):`,
-      interErr.message
-    )
-    // Don't undo the processed_sms_messages row — the dedup log is the
-    // source of truth and a manual reprocess is cheap.
-  }
+  const chokepointResult = await writeInboundInteractionAndClassify({
+    supabase,
+    venueId,
+    row: {
+      person_id: personId,
+      wedding_id: weddingId,
+      type: interactionType,
+      direction: row.direction,
+      subject,
+      body_preview: row.body_text.slice(0, 300),
+      full_body: row.body_text,
+      // interactions has no from_phone column. Surface the number where
+      // the inbox already looks for sender identity.
+      from_email: externalNumber,
+      from_name: null,
+      timestamp: occurred,
+      // T5-Rixey-BBB: SMS / voicemail / call signals from OpenPhone
+      // are touchpoints — the lead reached out via a known channel
+      // they discovered the venue through.
+      // signal-class-justified: phone-channel signals are touchpoint
+      signal_class: 'touchpoint',
+      // Wave 28 (mig 294): phone/voice channels surface in /agent/audio-inbox.
+      surface: 'voice_capture',
+      // Wave 27 (mig 293): inbound from external phone = couple voice;
+      // outbound from venue line = operator. The Haiku author classifier
+      // re-checks bodies later but this is a safe synchronous default.
+      author_class: row.direction === 'inbound' ? 'couple' : 'operator',
+      // Pattern 3: every channel populates extracted_identity for
+      // forensic record + retroactive linkage scripts.
+      // ExtractedIdentity is a concrete interface, not an indexed type;
+      // the chokepoint's row field is typed as the broader JSONB shape
+      // every caller's extracted-identity object needs to fit through.
+      extracted_identity: voiceExtractedIdentity as unknown as Record<string, unknown>,
+    },
+    logPrefix: 'openphone',
+    externalMessageId: row.openphone_message_id,
+    allowMint: true,
+    mintSource: 'sms_inbound',
+    mintSignals: { email: null, phone: externalNumber },
+    mintInquiryDate: row.occurred_at ?? undefined,
+    postMintHeatEventType: pickVoiceEventType(row) ?? undefined,
+    postMintHeatMetadata: {
+      source: 'openphone',
+      channel: row.channel,
+      openphone_message_id: row.openphone_message_id,
+      minted_via: 'sms_intent_gate',
+    },
+  })
+  const insertedInteractionId = chokepointResult.interactionId
+  weddingId = chokepointResult.weddingId
 
   // Wave 28 voice-heat wiring (2026-05-12). Fire an engagement_event so
   // SMS / call / voicemail signals actually bump heat scores. Email-side
@@ -1023,20 +1270,19 @@ async function persistRow(
   // Fire-and-forget: a heat-write failure never blocks the SMS persist.
   // recordEngagementEvent only fires when wedding_id is set; orphan
   // signals don't count toward heat.
-  if (weddingId) {
+  if (weddingIdAtInsert) {
     const eventType = pickVoiceEventType(row)
     if (eventType) {
-      const interactionId = (insertedInteraction?.id as string | undefined) ?? null
       void recordEngagementEvent(
         venueId,
-        weddingId,
+        weddingIdAtInsert,
         eventType,
         row.direction,
         {
           source: 'openphone',
           channel: row.channel,
           openphone_message_id: row.openphone_message_id,
-          interaction_id: interactionId,
+          interaction_id: insertedInteractionId,
         },
         row.occurred_at ?? undefined,
       ).catch((err) => {
@@ -1064,7 +1310,7 @@ async function persistRow(
           )
           await extractTourSignalsFromSmsThread({
             supabase,
-            weddingId,
+            weddingId: weddingIdAtInsert,
             venueId,
           })
         } catch (err) {
@@ -1074,144 +1320,6 @@ async function persistRow(
           )
         }
       })()
-    }
-  }
-
-  // Inbound-intent classifier (mig 327, Anja Putman / RM-1152). Fires on
-  // every inbound voice/SMS/call/voicemail. Required for the Anja class
-  // of bug: logistics chatter on a fresh phone number gets minted as a
-  // hot inquiry. The classifier emits intent_class (client_logistics,
-  // family_member_proxy, vendor_communication, etc) so downstream heat
-  // scoring + Sage drafts + sequences route correctly.
-  //
-  // Step 5b (RM-1123, 2026-05-13): classifier is SYNC for inbound so we
-  // can gate the wedding mint on its verdict. Pre-fix it ran
-  // fire-and-forget AFTER the mint, which meant bus drivers, vendors,
-  // and autoreplies created ghost weddings before classification could
-  // refuse them. Cost: ~500ms Haiku call per inbound. OpenPhone polls
-  // every 15min so the latency impact at 50 SMS/poll is +25s — well
-  // within the 5-min cron ceiling.
-  if (row.direction === 'inbound' && insertedInteraction?.id) {
-    const intentChannel =
-      row.channel === 'sms'
-        ? 'sms'
-        : row.channel === 'voicemail'
-          ? 'voicemail'
-          : 'call'
-    let intentVerdict:
-      | { intent_class: string; referenced_couple_name: string | null }
-      | null = null
-    try {
-      const { classifyInboundIntent } = await import(
-        '@/lib/services/intel/inbound-intent-classifier'
-      )
-      const verdict = await classifyInboundIntent({
-        interactionId: insertedInteraction.id as string,
-        body: row.body_text,
-        subject: null,
-        venueId,
-        channel: intentChannel,
-        supabase,
-      })
-      intentVerdict = {
-        intent_class: verdict.intent_class as string,
-        referenced_couple_name: verdict.referenced_couple_name ?? null,
-      }
-    } catch (err) {
-      console.warn(
-        `[openphone] intent-classify failed (${row.openphone_message_id}):`,
-        err instanceof Error ? err.message : String(err),
-      )
-    }
-
-    // Gate the wedding mint on classifier verdict. Couple-intent classes
-    // (new_inquiry, inquiry_followup) trigger mintWedding. Everything
-    // else — client_logistics, vendor_communication, vendor_outreach,
-    // spam_outreach, auto_reply, coordinator_internal, family_member_proxy,
-    // client_emotional, unknown — leaves the interaction as an orphan
-    // with personId set but weddingId null. Operator can later attach
-    // via the inbox if a misclassification surfaces.
-    //
-    // family_member_proxy + client_emotional explicitly skipped here:
-    // they reference an existing wedding that should already be on file.
-    // The classifier emits referenced_couple_name; a future step can
-    // bind them to the matching wedding by name. For now they stay
-    // orphan and the operator triages.
-    // Mint when classifier verdicts couple-intent AND the person doesn't
-    // already have a wedding. Gates on `!weddingId` rather than
-    // `personIsFresh` so a returning sender whose first SMS was a bare
-    // "Hi" (classifier=unknown → no mint) gets minted on the SECOND
-    // message that surfaces intent — even though their person row
-    // already exists by then. The `!weddingId` check is the load-bearing
-    // safety: existing-wedding couples never get a duplicate mint.
-    const COUPLE_INTENTS = new Set(['new_inquiry', 'inquiry_followup'])
-    const shouldMint =
-      !weddingId &&
-      externalNumber &&
-      intentVerdict &&
-      COUPLE_INTENTS.has(intentVerdict.intent_class)
-
-    if (shouldMint && intentVerdict) {
-      try {
-        const { mintWedding } = await import('@/lib/services/identity/mint-wedding')
-        const minted = await mintWedding({
-          venueId,
-          source: 'sms_inbound',
-          signals: {
-            email: null,
-            phone: externalNumber,
-            fullName: null,
-            weddingDate: null,
-            inquiryDate: row.occurred_at ?? undefined,
-          },
-          reason: `intent:${intentVerdict.intent_class}`,
-          supabase,
-          correlationId: null,
-        })
-        weddingId = minted.weddingId
-        // Backfill the interaction's wedding_id now that the mint
-        // succeeded. The original heat-fire block at line 1005 ran with
-        // weddingId=null (since mint was deferred), so we also fire
-        // initial_inquiry heat here so the new lead lands at the same
-        // baseline as the pre-fix flow. Fire-and-forget; never blocks.
-        if (insertedInteraction?.id) {
-          await supabase
-            .from('interactions')
-            .update({ wedding_id: weddingId })
-            .eq('id', insertedInteraction.id as string)
-        }
-        const postMintEventType = pickVoiceEventType(row)
-        if (postMintEventType) {
-          void recordEngagementEvent(
-            venueId,
-            weddingId,
-            postMintEventType,
-            row.direction,
-            {
-              source: 'openphone',
-              channel: row.channel,
-              openphone_message_id: row.openphone_message_id,
-              interaction_id: (insertedInteraction?.id as string | undefined) ?? null,
-              minted_via: 'sms_intent_gate',
-            },
-            row.occurred_at ?? undefined,
-          ).catch((err) => {
-            console.warn(
-              `[openphone] post-mint heat fire failed (${row.openphone_message_id}):`,
-              err instanceof Error ? err.message : String(err),
-            )
-          })
-        }
-        console.log(
-          `[openphone] minted wedding ${weddingId} from intent=${intentVerdict.intent_class} ` +
-            `(phone=${externalNumber}, openphone=${row.openphone_message_id})`,
-        )
-      } catch (mintErr) {
-        console.warn(
-          `[openphone] gated mint failed (${row.openphone_message_id}):`,
-          mintErr instanceof Error ? mintErr.message : String(mintErr),
-        )
-      }
     }
   }
 
@@ -1352,7 +1460,7 @@ async function persistRow(
   // The next three blocks run on every SMS write (lifecycle folder) +
   // every inbound SMS (escalation classifier + auto-reply). All are
   // fire-and-forget. None of them can block the persist path.
-  const interactionId = (insertedInteraction?.id as string | undefined) ?? null
+  const interactionId = insertedInteractionId
   if (row.channel === 'sms' && externalNumber) {
     // W3: SMS lifecycle folder. Runs on every direction so a venue-side
     // outbound moves the thread from awaiting_venue to awaiting_couple

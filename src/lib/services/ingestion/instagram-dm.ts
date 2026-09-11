@@ -45,30 +45,39 @@
  * so this file builds a signal and hands it over. It writes nothing to
  * the spine itself.
  *
- * THE INTERACTION ROW — READ THIS
- * ===============================
+ * THE INTERACTION ROW
+ * ====================
  * The SMS path also writes an `interactions` row, which is what puts a
- * message in the agent inbox and gives the inbound-intent classifier
- * something to stamp. This file does NOT write that row, and the reason
- * is a deliberate constraint rather than an oversight:
+ * message in the agent inbox (the audio-inbox surface, surface=
+ * 'voice_capture' — see migration 294) and gives the inbound-intent
+ * classifier something to stamp. Wave 4 W30 wires this file onto that
+ * same path, through the same insert site, rather than opening a new
+ * one:
  *
  *   `scripts/check-cascade-only-writer.mjs` guards `interactions`. The
  *   four existing channel ingesters (twilio route, openphone, zoom,
  *   email pipeline) each sit in that guard's GRANDFATHERED list, which
  *   `scripts/cleanup-budget.json` pins at a count that may only fall.
- *   Adding a fifth is exactly the move the anti-bandaid ratchet exists
- *   to stop, and the guard's own header says the right answer is
- *   "route through linkSignal".
+ *   Adding a fifth site (even in this file) is exactly the move the
+ *   anti-bandaid ratchet exists to stop. So `ingestInstagramDm` below
+ *   calls `writeInboundInteractionAndClassify()`, exported from
+ *   `src/lib/services/ingestion/openphone.ts` (the SMS chokepoint,
+ *   generalised with a `logPrefix`/`allowMint` seam in Wave 4). The
+ *   `.insert('interactions')` text stays inside that already-grandfathered
+ *   file; this file never touches the table directly.
  *
- * So Instagram is spine-native from day one: a DM lands as a touchpoint
- * on the couple, or as a fragment carrying the handle until a later
- * signal claims it. What it does NOT do yet is appear in /agent/inbox.
+ * A DM lands as a touchpoint on the couple (or a fragment carrying the
+ * handle) via `linkSignal`, AND as an `interactions` row via the
+ * chokepoint, so the spine and the legacy inbox agree. `type` stays
+ * 'sms' — see `buildInstagramInteractionRow` for why.
  *
- * `buildInstagramInteractionRow` below is the finished payload for that
- * row, exported and unit-tested, so wiring it is one call the day the
- * Phase-3 cascade interactions writer lands (CONSOLIDATION-PLAN-PHASED
- * §3) or the day an operator decides a grandfather entry is worth it.
- * See the WIRING note beside that function.
+ * `allowMint` is false for this channel: a handle is not a reachable
+ * address, so a DM alone can never satisfy Point-Zero and must not mint
+ * a brand-new legacy wedding (HANDLE-IDENTITY-SPEC.md §3). A DM from a
+ * couple `linkSignal` already recognises (an existing `couples` row)
+ * still attaches to that couple's legacy wedding, via
+ * `couples.source_wedding_id` — the same mirror the spine already
+ * carries.
  *
  * OUTBOUND
  * ========
@@ -86,6 +95,7 @@ import {
   markInstagramError,
   markInstagramEvent,
 } from '@/lib/services/integrations/instagram-meta'
+import { writeInboundInteractionAndClassify } from '@/lib/services/ingestion/openphone'
 
 export const INSTAGRAM_CHANNEL = 'instagram'
 export const INSTAGRAM_DM_ACTION = 'dm'
@@ -299,12 +309,13 @@ export function buildInstagramDmSignal(
 }
 
 // ---------------------------------------------------------------------------
-// Interaction row (built, tested, not yet wired — see the header)
+// Interaction row (built, tested, wired below via the SMS chokepoint)
 // ---------------------------------------------------------------------------
 
 /**
- * The `interactions` row an Instagram DM would take, shaped exactly as
- * the SMS path shapes its own.
+ * The `interactions` row an Instagram DM takes, shaped exactly as the SMS
+ * path shapes its own — same field set as
+ * `writeInboundInteractionAndClassify`'s `InboundInteractionRow`.
  *
  * `type` is 'sms', not 'dm'. The vocabulary does not have 'dm': the CHECK
  * on interactions.type is ('email','call','voicemail','sms','meeting',
@@ -314,15 +325,10 @@ export function buildInstagramDmSignal(
  * 'dm' to the CHECK would be worse than reusing 'sms': it would extend
  * the vocabulary and then be invisible to every `type IN (...)` filter
  * already in the codebase, so the row would exist and nobody would show
- * it. The channel is not lost: raw/`subject` says Instagram, and the
- * spine touchpoint carries channel='instagram' properly.
- *
- * WIRING, when the interactions limb gets a cascade writer: call this
- * from `ingestInstagramDm` after `linkSignal` returns, insert the row
- * through that writer, then pass its id back into the signal's
- * `raw_payload.interaction_id` slot (the base payload reserves it). The
- * inbound-intent classifier and the reply pipeline both key off the
- * interaction id, so they light up at the same moment.
+ * it. The channel is not lost: `extracted_identity.channel` says
+ * 'instagram' (the audio-inbox tab strip reads this to tell an Instagram
+ * thread apart from a phone SMS thread), `subject` says Instagram, and
+ * the spine touchpoint carries channel='instagram' properly.
  */
 export function buildInstagramInteractionRow(args: {
   venueId: string
@@ -360,6 +366,16 @@ export function buildInstagramInteractionRow(args: {
     // inbox, alongside Twilio and the audio transcripts.
     surface: 'voice_capture',
     author_class: 'couple',
+    // Wave 4 W30: interactions has no `channel` column, so the audio-inbox
+    // page (and any other reader that needs to tell an Instagram DM apart
+    // from an SMS, since both carry type='sms') reads it from here.
+    extracted_identity: {
+      channel: 'instagram',
+      instagram_handle: handle ? `@${handle}` : null,
+      instagram_username_raw: username,
+      instagram_profile_name: profileName,
+      instagram_sender_igsid: message.senderIgsid,
+    },
   }
 }
 
@@ -506,6 +522,61 @@ export async function ingestInstagramDm(
     })
     // Heartbeat for the settings page. Fire and forget.
     void markInstagramEvent(venueId).catch(() => {})
+
+    // Wave 4 W30: mirror onto the legacy `interactions` table through the
+    // SMS chokepoint, so the DM reaches the audio-inbox (surface=
+    // 'voice_capture') and the inbound-intent classifier the exact way an
+    // SMS does. Runs after linkSignal so a matched/minted couple's legacy
+    // wedding is resolvable via couples.source_wedding_id; a failure here
+    // is logged and swallowed — the spine write above already landed and
+    // must not be undone by a legacy-side hiccup.
+    if (!result.duplicate) {
+      try {
+        const legacy = await resolveLegacyAttachment(supabase, result.matched_couple_id)
+        const builtRow = buildInstagramInteractionRow({
+          venueId,
+          message,
+          username,
+          profileName,
+          personId: legacy.personId,
+          weddingId: legacy.weddingId,
+        })
+        await writeInboundInteractionAndClassify({
+          supabase,
+          venueId,
+          row: {
+            person_id: builtRow.person_id as string | null,
+            wedding_id: builtRow.wedding_id as string | null,
+            type: builtRow.type as 'sms',
+            direction: builtRow.direction as 'inbound',
+            subject: builtRow.subject as string,
+            body_preview: builtRow.body_preview as string,
+            full_body: builtRow.full_body as string,
+            from_email: builtRow.from_email as string | null,
+            from_name: builtRow.from_name as string | null,
+            timestamp: builtRow.timestamp as string,
+            signal_class: builtRow.signal_class as string,
+            surface: builtRow.surface as string,
+            author_class: builtRow.author_class as string,
+            extracted_identity: builtRow.extracted_identity as Record<string, unknown>,
+          },
+          logPrefix: 'instagram-dm',
+          externalMessageId: externalId,
+          // A handle is not a reachable address (HANDLE-IDENTITY-SPEC.md
+          // §3) — never mint a brand-new legacy wedding from a DM alone.
+          // A couple the spine already recognises still attaches
+          // (legacy.weddingId above); the classifier still runs either
+          // way so the row carries an intent_class.
+          allowMint: false,
+        })
+      } catch (err) {
+        console.warn(
+          '[instagram-dm] interaction chokepoint failed (spine write already landed):',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+
     return {
       outcome: result.duplicate ? 'duplicate' : 'linked',
       externalId,
@@ -520,6 +591,42 @@ export async function ingestInstagramDm(
     void markInstagramError(venueId, messageText).catch(() => {})
     return { ...base, handleResolved, reason: messageText }
   }
+}
+
+/**
+ * A matched/minted `couples` row does not by itself say which legacy
+ * `weddings`/`people` row it mirrors — only `couples.source_wedding_id`
+ * does, and only when that couple originated from (or was later matched
+ * to) a legacy-mirrored wedding (see `mirror-couple.ts`). Returns nulls
+ * when there is no couple, no mirror, or no person on the mirrored
+ * wedding — all legitimate: a couple that has only ever been reached via
+ * Instagram has no legacy side yet, and the chokepoint writes an orphan
+ * row (person_id/wedding_id null) just as SMS does for an unknown phone.
+ *
+ * Read-only, never throws — the caller already treats this as
+ * best-effort.
+ */
+async function resolveLegacyAttachment(
+  supabase: SupabaseClient,
+  matchedCoupleId: string | null,
+): Promise<{ personId: string | null; weddingId: string | null }> {
+  if (!matchedCoupleId) return { personId: null, weddingId: null }
+  const { data: coupleRow } = await supabase
+    .from('couples')
+    .select('source_wedding_id')
+    .eq('id', matchedCoupleId)
+    .maybeSingle()
+  const weddingId = (coupleRow?.source_wedding_id as string | null) ?? null
+  if (!weddingId) return { personId: null, weddingId: null }
+  const { data: personRow } = await supabase
+    .from('people')
+    .select('id')
+    .eq('wedding_id', weddingId)
+    .order('role', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  const personId = (personRow?.id as string | null) ?? null
+  return { personId, weddingId }
 }
 
 // ---------------------------------------------------------------------------
