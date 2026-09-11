@@ -1,276 +1,204 @@
 /**
- * Apply all pending migrations in order via the public.exec_sql RPC.
+ * Apply every migration owed to production, in order, in one sitting.
  *
- * Probes status by re-using scripts/rixey-load/59-migration-status.ts logic
- * inline (so this script is self-contained), then runs each unapplied
- * migration via scripts/run-migration.ts's machinery.
+ * Why this exists (2026-09-11): waves 2 to 4 of NOVEMBER-PLAN.md each added
+ * migrations and none were applied between waves, on purpose. Agents never
+ * write to the database, and the operator should not have to run seven
+ * commands and remember the order. This runner holds the order.
  *
- * Requires migration 198_exec_sql_rpc.sql to be applied first (one-time
- * paste into the Supabase SQL editor).
+ * Usage:
+ *   npx tsx scripts/apply-pending-migrations.ts                    dry run
+ *   npx tsx scripts/apply-pending-migrations.ts --apply --allow-prod
+ *   npx tsx scripts/apply-pending-migrations.ts --include-legacy ...  also the older six
+ *   npx tsx scripts/apply-pending-migrations.ts --from 399 ...        resume after a failure
+ *
+ * The dry run reads the files, counts statements, and probes production
+ * (read only) for a marker each migration leaves behind, so you can see
+ * what is already there before writing anything. `--apply` runs each file
+ * through scripts/run-migration.ts (the exec_sql runner every prior
+ * migration used), stops on the first failure, asks PostgREST to reload
+ * its schema cache, then re-probes and prints a verification table.
+ *
+ * Every file in the list is idempotent, so a rerun after a failure is safe.
+ * 308 is deliberately absent: it creates storage policies, which exec_sql
+ * cannot ("must be owner of table objects"); it needs the SQL editor.
  */
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { splitSqlStatements } from './lib/sql-split.js'
-import { parseSafetyFlags, requireApply } from './_safety.mjs'
 
-function loadEnv() {
+interface Pending {
+  file: string
+  why: string
+  /** Read-only probe: true = marker present, false = absent, null = not probeable. */
+  probe?: (sb: SupabaseClient) => Promise<boolean | null>
+}
+
+const columnExists = (table: string, column: string) => async (sb: SupabaseClient) => {
+  const { error } = await sb.from(table).select(column).limit(1)
+  if (!error) return true
+  if (error.code === '42703' || /column .* does not exist/i.test(error.message)) return false
+  if (error.code === 'PGRST205' || error.code === '42P01' || /relation .* does not exist|Could not find the table/i.test(error.message)) return false
+  return null
+}
+
+// A HEAD request through supabase-js reports no error for a missing table,
+// so this is a real (tiny) select. PGRST205 is PostgREST's "no such table".
+const tableExists = (table: string) => async (sb: SupabaseClient) => {
+  const { error } = await sb.from(table).select('*').limit(1)
+  if (!error) return true
+  if (error.code === 'PGRST205' || error.code === '42P01' || /relation .* does not exist|Could not find the table/i.test(error.message)) return false
+  return null
+}
+
+/** Owed since wave 2. Order matters only where noted; all are idempotent. */
+const WAVE_MIGRATIONS: Pending[] = [
+  {
+    file: '395_billing_enforcement.sql',
+    why: 'W18: venues.trial_ends_at so a venue with no card is on a real trial, not a free solo tier',
+    probe: columnExists('venues', 'trial_ends_at'),
+  },
+  {
+    file: '397_ai_name_default_null.sql',
+    why: "W16 root cause: venue_ai_config.ai_name no longer defaults to 'Sage'",
+  },
+  {
+    file: '398_couple_handles_first_seen.sql',
+    why: 'Wave 3 contract: couples.handles, couples.first_seen_at, fragments.handles',
+    probe: columnExists('couples', 'handles'),
+  },
+  {
+    file: '399_social_engagements_couple_id.sql',
+    why: 'W23: social captures bind to the spine (couple_id), not to people',
+    probe: columnExists('social_engagements', 'couple_id'),
+  },
+  {
+    file: '400_deprecate_tangential_pool.sql',
+    why: 'W24: comments marking tangential_signals and client_match_queue retired (no DDL)',
+  },
+  {
+    file: '401_instagram_connections.sql',
+    why: 'W28: per-venue Instagram business connection for the DM webhook',
+    probe: tableExists('instagram_connections'),
+  },
+  {
+    file: '402_merge_couples_handles.sql',
+    why: 'W22: merge_couples carries handles and records a handle contradiction (after 398)',
+  },
+]
+
+/** Never applied to production (found by W11's schema-truth check). */
+const LEGACY_MIGRATIONS: Pending[] = [
+  { file: '291_channel_intel_snapshots.sql', why: 'channel_intel_snapshots table', probe: tableExists('channel_intel_snapshots') },
+  { file: '304_marketing_agencies.sql', why: 'marketing agencies suite', probe: tableExists('marketing_agencies') },
+  { file: '305_agency_spend_channel_linkage.sql', why: 'agency spend to channel linkage' },
+  { file: '307_agency_profile_depth.sql', why: 'agency profile depth (documents, contacts, engagements)' },
+  { file: '309_web_pixel.sql', why: 'web_visits for the marketing-site pixel', probe: tableExists('web_visits') },
+  { file: '310_google_ads_and_downloads_audit.sql', why: 'google_ads tables and downloads audit' },
+]
+
+function loadEnv(): Record<string, string> {
   const env: Record<string, string> = { ...process.env } as Record<string, string>
   try {
     const raw = readFileSync('.env.local', 'utf8')
     for (const line of raw.split('\n')) {
       const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
-      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+      if (m) env[m[1]!] = m[2]!.replace(/^["']|["']$/g, '').replace(/\r$/, '')
     }
-  } catch {}
+  } catch {
+    // no .env.local; process.env must carry the keys
+  }
   return env
 }
 
-interface Probe {
-  migration: string
-  file: string
-  describe: string
-  isApplied: (sb: SupabaseClient) => Promise<boolean>
+function statementCount(file: string): number {
+  const sql = readFileSync(resolve('supabase/migrations', file), 'utf8')
+  return splitSqlStatements(sql).filter((s) => !/^\s*(BEGIN|COMMIT|END)\b/i.test(s)).length
 }
 
-const probes: Probe[] = [
-  {
-    migration: '173',
-    file: 'supabase/migrations/173_essentials_org_defaults.sql',
-    describe: 'org_essentials_preferences table',
-    isApplied: async (sb) => {
-      const { error } = await sb.from('org_essentials_preferences').select('id').limit(1)
-      if (!error) return true
-      return !/relation .* does not exist/i.test(error.message)
-    },
-  },
-  {
-    migration: '175',
-    file: 'supabase/migrations/175_weddings_crm_import_fields.sql',
-    describe: 'weddings CRM import fields (tax_amount, amount_paid, gratuity_amount, refunded_amount, crm_external_id, crm_team_members, import_warnings)',
-    isApplied: async (sb) => {
-      const { error } = await sb.from('weddings').select('tax_amount, crm_external_id').limit(1)
-      if (!error) return true
-      return !/column .* does not exist/i.test(error.message)
-    },
-  },
-  {
-    migration: '177',
-    file: 'supabase/migrations/177_identity_reconciliation.sql',
-    describe: 'identity_reconciliation_log table',
-    isApplied: async (sb) => {
-      const { error } = await sb.from('identity_reconciliation_log').select('id').limit(1)
-      if (!error) return true
-      return !/relation .* does not exist/i.test(error.message)
-    },
-  },
-  {
-    migration: '178',
-    file: 'supabase/migrations/178_web_form_intake.sql',
-    describe: 'web_form_submissions table',
-    isApplied: async (sb) => {
-      const { error } = await sb.from('web_form_submissions').select('id').limit(1)
-      if (!error) return true
-      return !/relation .* does not exist/i.test(error.message)
-    },
-  },
-  {
-    migration: '179',
-    file: 'supabase/migrations/179_voice_signal_date.sql',
-    describe: 'voice_training_responses.signal_date + voice_preferences.signal_date',
-    isApplied: async (sb) => {
-      const { error } = await sb.from('voice_training_responses').select('signal_date').limit(1)
-      if (!error) return true
-      return !/column .* does not exist/i.test(error.message)
-    },
-  },
-  {
-    migration: '181',
-    file: 'supabase/migrations/181_booking_value_normalize.sql',
-    describe: 'booking_value normalization (one-shot dollar→cents data fix)',
-    isApplied: async (sb) => {
-      // 181 is a one-shot data normalization, not a schema change. Probe
-      // by checking whether any non-zero booking_value rows still sit in
-      // the dollars-encoded band (1–99,999 cents = $0.01–$999, almost
-      // never a real wedding). Zero such rows = migration done.
-      const { count, error } = await sb
-        .from('weddings')
-        .select('id', { count: 'exact', head: true })
-        .gt('booking_value', 0)
-        .lt('booking_value', 100000)
-      if (error) return false
-      return (count ?? 0) === 0
-    },
-  },
-  {
-    migration: '182',
-    file: 'supabase/migrations/182_weddings_lead_source_attempted_at.sql',
-    describe: 'weddings.lead_source_derivation_attempted_at',
-    isApplied: async (sb) => {
-      const { error } = await sb.from('weddings').select('lead_source_derivation_attempted_at').limit(1)
-      if (!error) return true
-      return !/column .* does not exist/i.test(error.message)
-    },
-  },
-  {
-    migration: '190',
-    file: 'supabase/migrations/190_weather_data_extension.sql',
-    describe: 'weather_data composite index + Rixey lat/lon (Stream ZZ)',
-    isApplied: async (sb) => {
-      // 190 doesn't add columns — it adds idx_weather_data_venue_date and
-      // sets Rixey's lat/lon. Probe by checking Rixey's row has lat/lon
-      // populated. (Earlier probe checked weather_data.region which doesn't
-      // exist in 190 at all — false negative on every run.)
-      const { data, error } = await sb
-        .from('venues')
-        .select('latitude, longitude')
-        .eq('id', 'f3d10226-4c5c-47ad-b89b-98ad63842492')
-        .maybeSingle()
-      if (error) return false
-      return data?.latitude != null && data?.longitude != null
-    },
-  },
-  {
-    migration: '195',
-    file: 'supabase/migrations/195_venue_signature_fields.sql',
-    describe: 'venue_ai_config signature fields',
-    isApplied: async (sb) => {
-      // 195's columns landed on venue_ai_config, not venues. Earlier probe
-      // checked venues.ai_role_title — false negative on every run.
-      const { error } = await sb.from('venue_ai_config').select('ai_role_title').limit(1)
-      if (!error) return true
-      return !/column .* does not exist/i.test(error.message)
-    },
-  },
-  {
-    migration: '196',
-    file: 'supabase/migrations/196_tour_temporal.sql',
-    describe: 'tours.couple_display_name + trigger + index',
-    isApplied: async (sb) => {
-      const { error } = await sb.from('tours').select('couple_display_name').limit(1)
-      if (!error) return true
-      return !/column .* does not exist/i.test(error.message)
-    },
-  },
-]
-
-async function ensureRpcAvailable(sb: SupabaseClient): Promise<void> {
-  // Probe by calling exec_sql with a no-op SELECT.
-  const { data, error } = await sb.rpc('exec_sql', { sql: 'SELECT 1' })
-  if (error) {
-    console.error('✗ exec_sql RPC is NOT available.')
-    console.error(`  RPC error: ${error.message}`)
-    console.error('  Fix: paste supabase/migrations/198_exec_sql_rpc.sql into the Supabase SQL editor and run.')
-    console.error('  https://supabase.com/dashboard/project/jsxxgwprxuqgcauzlxcb/sql/new')
-    process.exit(1)
-  }
-  const r = data as { ok: boolean; error?: string }
-  if (!r.ok) {
-    console.error(`✗ exec_sql probe failed: ${r.error ?? 'unknown'}`)
-    process.exit(1)
-  }
-  console.log('✓ exec_sql RPC available')
-}
-
-// PL/pgSQL EXECUTE rejects transaction-control statements ("EXECUTE of
-// transaction commands is not implemented", SQLSTATE 0A000). Strip them.
-// Each EXECUTE in exec_sql already runs as an implicit single-statement
-// transaction, and migration files in this repo are idempotent — losing
-// the BEGIN/COMMIT grouping doesn't change correctness.
-const TX_CONTROL_RE = /^(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT|END)\b/i
-
-/** Strip leading whitespace + line/block comments. The TX-control regex
- *  matches against this so a chunk like "-- header\nBEGIN" is recognized. */
-function stripLeadingNoise(s: string): string {
-  let i = 0
-  while (i < s.length) {
-    const c = s[i]!
-    if (/\s/.test(c)) { i++; continue }
-    if (c === '-' && s[i + 1] === '-') {
-      while (i < s.length && s[i] !== '\n') i++
-      continue
-    }
-    if (c === '/' && s[i + 1] === '*') {
-      let depth = 1
-      i += 2
-      while (i < s.length && depth > 0) {
-        if (s[i] === '/' && s[i + 1] === '*') { depth++; i += 2; continue }
-        if (s[i] === '*' && s[i + 1] === '/') { depth--; i += 2; continue }
-        i++
-      }
-      continue
-    }
-    break
-  }
-  return s.slice(i)
-}
-
-async function applyFile(sb: SupabaseClient, file: string): Promise<void> {
-  const sql = readFileSync(resolve(file), 'utf8')
-  const allStatements = splitSqlStatements(sql)
-  const statements = allStatements.filter((s) => !TX_CONTROL_RE.test(stripLeadingNoise(s)))
-  const skipped = allStatements.length - statements.length
-  console.log(`  → ${statements.length} statement(s)${skipped > 0 ? ` (${skipped} BEGIN/COMMIT skipped — exec_sql runs each as its own tx)` : ''}`)
-  for (let idx = 0; idx < statements.length; idx++) {
-    const stmt = statements[idx]!
-    const preview = stmt.replace(/\s+/g, ' ').slice(0, 100) + (stmt.length > 100 ? '...' : '')
-    const { data, error } = await sb.rpc('exec_sql', { sql: stmt })
-    if (error) {
-      console.error(`    ✗ [${idx + 1}/${statements.length}] RPC failed: ${error.message}`)
-      console.error(`      statement: ${preview}`)
-      process.exit(1)
-    }
-    const r = data as { ok: boolean; error?: string; state?: string }
-    if (!r.ok) {
-      console.error(`    ✗ [${idx + 1}/${statements.length}] [${r.state}] ${r.error}`)
-      console.error(`      statement: ${preview}`)
-      process.exit(1)
-    }
-    console.log(`    ✓ [${idx + 1}/${statements.length}] ${preview}`)
-  }
+function fmtProbe(v: boolean | null | undefined): string {
+  if (v === true) return 'present'
+  if (v === false) return 'absent'
+  return 'not probeable'
 }
 
 async function main() {
+  const argv = process.argv.slice(2)
+  const apply = argv.includes('--apply')
+  const allowProd = argv.includes('--allow-prod')
+  const includeLegacy = argv.includes('--include-legacy')
+  const fromIdx = argv.indexOf('--from')
+  const from = fromIdx >= 0 ? argv[fromIdx + 1] ?? '' : ''
+
   const env = loadEnv()
-  const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {
-    auth: { persistSession: false },
-  })
+  const url = env.NEXT_PUBLIC_SUPABASE_URL
+  const key = env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) {
+    console.error('NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required (.env.local).')
+    process.exit(2)
+  }
+  const isProd = /jsxxgwprxuqgcauzlxcb/.test(url)
+  if (apply && isProd && !allowProd) {
+    console.error('Target is production. Add --allow-prod to write, or drop --apply for a dry run.')
+    process.exit(2)
+  }
 
-  await ensureRpcAvailable(sb)
+  const list = [...WAVE_MIGRATIONS, ...(includeLegacy ? LEGACY_MIGRATIONS : [])].filter(
+    (m) => !from || m.file.localeCompare(from) >= 0,
+  )
+  const sb = createClient(url, key, { auth: { persistSession: false } })
 
-  console.log('\nProbing migration status...')
-  const pending: Probe[] = []
-  for (const p of probes) {
-    const applied = await p.isApplied(sb)
-    if (applied) {
-      console.log(`✓ ${p.migration}  ${p.describe}`)
-    } else {
-      console.log(`✗ ${p.migration}  ${p.describe}  ← will apply`)
-      pending.push(p)
+  console.log(`\nTarget: ${url}${isProd ? '  (PRODUCTION)' : ''}`)
+  console.log(`Mode:   ${apply ? 'APPLY' : 'dry run (no writes)'}\n`)
+
+  console.log('Before:')
+  const before = new Map<string, boolean | null>()
+  for (const m of list) {
+    const probe = m.probe ? await m.probe(sb) : null
+    before.set(m.file, probe)
+    console.log(`  ${m.file.padEnd(44)} ${String(statementCount(m.file)).padStart(3)} stmts  marker: ${fmtProbe(probe).padEnd(13)} ${m.why}`)
+  }
+
+  if (!apply) {
+    console.log('\nDry run only. Rerun with --apply --allow-prod to write, in this order.')
+    return
+  }
+
+  console.log('\nApplying:')
+  const applied: string[] = []
+  for (const m of list) {
+    const path = `supabase/migrations/${m.file}`
+    console.log(`\n=== ${m.file}`)
+    const r = spawnSync(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'scripts/run-migration.ts', path], {
+      stdio: 'inherit',
+      env: process.env,
+    })
+    if (r.status !== 0) {
+      console.error(`\nStopped at ${m.file} (exit ${r.status}). Applied so far: ${applied.join(', ') || 'none'}.`)
+      console.error(`Fix the failing statement, then resume with: --apply --allow-prod --from ${m.file}`)
+      process.exit(1)
     }
+    applied.push(m.file)
   }
 
-  if (pending.length === 0) {
-    console.log('\nNothing pending. All probed migrations are applied.')
-    return
-  }
+  // PostgREST caches the schema; a new table or column is invisible to the
+  // API until it reloads. NOTIFY is the documented way to ask.
+  await sb.rpc('exec_sql', { sql: "NOTIFY pgrst, 'reload schema'" })
+  await new Promise((r) => setTimeout(r, 2500))
 
-  // Safety: applying migrations mutates the schema of whatever .env.local
-  // points at (prod). Default to DRY-RUN — the "← will apply" list above is
-  // the preview; require --apply to actually execute.
-  const { apply } = parseSafetyFlags(process.argv)
-  if (!requireApply(apply, `apply-pending-migrations: ${pending.length} pending → ${env.NEXT_PUBLIC_SUPABASE_URL}`)) {
-    return
+  console.log('\nAfter:')
+  let unverified = 0
+  for (const m of list) {
+    const probe = m.probe ? await m.probe(sb) : null
+    const was = before.get(m.file)
+    const mark = probe === true ? 'ok' : probe === false ? 'STILL ABSENT' : 'applied (no probe)'
+    if (probe === false) unverified++
+    console.log(`  ${m.file.padEnd(44)} ${mark}${was === true && probe === true ? ' (was already present)' : ''}`)
   }
-
-  console.log(`\nApplying ${pending.length} pending migration(s)...\n`)
-  for (const p of pending) {
-    console.log(`▶ ${p.migration}  ${p.file}`)
-    await applyFile(sb, p.file)
-    console.log()
-  }
-
-  console.log('Done.')
+  console.log(`\nDone. ${applied.length}/${list.length} applied${unverified ? `, ${unverified} marker(s) still absent, look at the output above` : ''}.`)
+  if (unverified) process.exit(1)
 }
 
 main().catch((e) => {

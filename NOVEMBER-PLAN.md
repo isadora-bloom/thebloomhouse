@@ -261,8 +261,10 @@ Follow-ups for wave 4:
 
 ## Wave 4 (launched 2026-09-11): close the handle journey end to end
 
-Migrations are NOT applied between waves. One runner (`scripts/apply-pending-migrations.ts`,
-integrator) applies everything owed, in order, at the end.
+Migrations are NOT applied between waves. One runner applies everything owed, in order, at the
+end: `npm run migrate:pending` (dry run with read-only probes) then
+`npm run migrate:pending -- --apply --allow-prod`; add `--include-legacy` for the older six.
+308 still needs the SQL editor (storage policies).
 
 | # | Workstream | Model | Owns (files) |
 |---|---|---|---|
