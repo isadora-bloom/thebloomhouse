@@ -18,10 +18,19 @@
  *   3. Merge non-null fields from merged → kept if kept's field is null
  *      (email, phone, external_ids union).
  *   4. Delete the merged person row.
- *   5. Insert person_merges audit row. Mark the client_match_queue row
- *      (if matchQueueId provided) as status='merged'.
+ *   5. Insert person_merges audit row.
  *   6. Promote any tangential_signals matched to merged_person_id to
  *      kept_person_id.
+ *
+ * Wave 4 (W31): step 5 used to also UPDATE the retired `client_match_
+ * queue` table (status='merged') when a caller passed matchQueueId.
+ * The tangential pool and that queue are gone (Wave 3, HANDLE-IDENTITY-
+ * SPEC.md) — writing to a retired table did nothing but throw an error
+ * every caller silently swallowed. `matchQueueId` stays on the args
+ * shape so the existing callers (auto-merge-duplicates.ts, people-
+ * merge-aliases.ts, the /api/agent/people/merge route — none owned by
+ * this workstream) do not need a signature change; it is simply no
+ * longer read.
  *
  * Undo (reverseMerge) reads the person_merges row and reconstructs:
  *   - Recreates a people row with the snapshot's column values (new id
@@ -71,7 +80,9 @@ export interface MergePeopleResult {
 }
 
 export async function mergePeople(args: MergePeopleArgs): Promise<MergePeopleResult> {
-  const { supabase, venueId, keepPersonId, mergePersonId, tier, signals, confidence, mergedBy, matchQueueId } = args
+  // matchQueueId is accepted for call-site compatibility but no longer
+  // read — see the Wave 4 (W31) note above.
+  const { supabase, venueId, keepPersonId, mergePersonId, tier, signals, confidence, mergedBy } = args
   if (keepPersonId === mergePersonId) {
     throw new Error('mergePeople: keep and merge ids are identical')
   }
@@ -194,15 +205,6 @@ export async function mergePeople(args: MergePeopleArgs): Promise<MergePeopleRes
   // didn't explicitly reassign — though we shouldn't hit any given the
   // exhaustive reassignment step).
   await supabase.from('people').delete().eq('id', mergePersonId)
-
-  // 7. Mark the queue row, if provided.
-  if (matchQueueId) {
-    await supabase.from('client_match_queue').update({
-      status: 'merged',
-      resolved_by: mergedBy ?? null,
-      resolved_at: new Date().toISOString(),
-    }).eq('id', matchQueueId)
-  }
 
   return {
     mergeId,

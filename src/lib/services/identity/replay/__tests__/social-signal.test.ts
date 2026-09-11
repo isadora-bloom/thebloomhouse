@@ -222,7 +222,9 @@ describe('occurred_at from the relative age', () => {
   })
 
   it('keeps the precision so a reader does not treat a week as an afternoon', () => {
-    expect(shaped({ relative_age: '1w' }).raw_payload.occurred_at_precision).toBe('day')
+    // Wave 4 (W31): a week used to collapse into 'day' precision here too;
+    // it is its own precision now, per date-parser.ts.
+    expect(shaped({ relative_age: '1w' }).raw_payload.occurred_at_precision).toBe('week')
     expect(shaped({ relative_age: '20m' }).raw_payload.occurred_at_precision).toBe('exact')
     expect(shaped({ relative_age: 'Mar 2026' }).raw_payload.occurred_at_precision).toBe('month')
   })

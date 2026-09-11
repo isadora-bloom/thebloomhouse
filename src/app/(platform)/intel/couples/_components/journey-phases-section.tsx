@@ -12,12 +12,14 @@
  */
 
 import { ExternalLink } from 'lucide-react'
-import type { CoupleJourney } from '@/lib/intel/canonical'
+import { approxGapPhrase, type CoupleJourney } from '@/lib/intel/canonical'
 import {
   buildJourneyPhases,
   type PhaseTouchpoint,
 } from '@/lib/intel/adapters/journey-phases'
 import { humanActionLabel } from '@/lib/services/identity/action-labels'
+
+const DAY_MS = 86_400_000
 
 function dayLabel(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
@@ -27,16 +29,36 @@ function dayLabel(iso: string): string {
   })
 }
 
+/**
+ * Wave 4 (W31): the earliest touchpoint's date can be a false-precision
+ * claim — a social capture's "3w" relative age back-derives an
+ * exact-looking ISO instant nobody actually observed. When its
+ * precision says 'week' or 'month', show "about 3 weeks before point
+ * zero" (or "ago" when point zero has not happened yet) instead of a
+ * date. Every other touchpoint keeps its exact date.
+ */
+function touchpointDateLabel(t: PhaseTouchpoint, pointZeroAt: string | null): string {
+  if (t.isFirstSeen && (t.occurredAtPrecision === 'week' || t.occurredAtPrecision === 'month')) {
+    const reference = pointZeroAt ?? new Date().toISOString()
+    const days = Math.floor((Date.parse(reference) - Date.parse(t.occurredAt)) / DAY_MS)
+    const phrase = approxGapPhrase(days, t.occurredAtPrecision)
+    if (phrase) return pointZeroAt ? `${phrase} before point zero` : `${phrase} ago`
+  }
+  return dayLabel(t.occurredAt)
+}
+
 function PhaseColumn({
   label,
   touchpoints,
   accent,
   emptyCopy,
+  pointZeroAt,
 }: {
   label: string
   touchpoints: PhaseTouchpoint[]
   accent: 'stone' | 'amber' | 'emerald'
   emptyCopy: string
+  pointZeroAt: string | null
 }) {
   const dot =
     accent === 'amber'
@@ -59,7 +81,7 @@ function PhaseColumn({
         <ul className="space-y-1">
           {touchpoints.map((t) => (
             <li key={t.id} className="flex flex-wrap items-baseline gap-1.5 text-xs">
-              <span className="shrink-0 text-stone-400">{dayLabel(t.occurredAt)}</span>
+              <span className="shrink-0 text-stone-400">{touchpointDateLabel(t, pointZeroAt)}</span>
               <span className="text-stone-700">{humanActionLabel(t.channel, t.actionType)}</span>
             </li>
           ))}
@@ -125,18 +147,21 @@ export function JourneyPhasesSection({ journey }: { journey: JourneyForPhases | 
           touchpoints={phases.discovery}
           accent="stone"
           emptyCopy="Nothing before point zero."
+          pointZeroAt={journey.pointZeroAt}
         />
         <PhaseColumn
           label={phases.labels.pointZero}
           touchpoints={phases.pointZero ? [phases.pointZero] : []}
           accent="amber"
           emptyCopy="Not reached yet."
+          pointZeroAt={journey.pointZeroAt}
         />
         <PhaseColumn
           label={phases.labels.knownCouple}
           touchpoints={phases.knownCouple}
           accent="emerald"
           emptyCopy="Nothing since point zero."
+          pointZeroAt={journey.pointZeroAt}
         />
       </div>
     </div>

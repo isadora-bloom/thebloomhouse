@@ -32,6 +32,79 @@ import { dayLabel, DEFAULT_TIME_ZONE } from '@/lib/copy/client-terms'
 
 
 // ---------------------------------------------------------------------------
+// Venue-timezone calendar boundaries (Wave 4, W31)
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 86_400_000
+
+/**
+ * Calendar year/month/day for an instant, in a given timezone. Same
+ * Intl.DateTimeFormat technique `zonedParts` (client-terms.ts, the
+ * helper W17 used for `dayLabel` / `whenLabel`) uses for rendering,
+ * kept local here — `zonedParts` is not exported — so "upcoming" and
+ * "this year" can resolve each tour against its OWN venue's zone
+ * instead of one global boundary. Returns null for an unparseable
+ * instant or an unknown zone.
+ */
+export function venueCalendarParts(
+  iso: string,
+  timeZone: string,
+): { year: number; month: number; day: number } | null {
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return null
+  let parts: Intl.DateTimeFormatPart[]
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(t))
+  } catch {
+    return null
+  }
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? NaN)
+  const year = get('year')
+  const month = get('month')
+  const day = get('day')
+  if (![year, month, day].every(Number.isFinite)) return null
+  return { year, month, day }
+}
+
+/** A zoned calendar date as a single comparable number (epoch days),
+ *  so "is this tour's local day on or after today's local day" is one
+ *  comparison instead of a three-field struct compare. */
+export function calendarDayNumber(p: { year: number; month: number; day: number }): number {
+  return Math.floor(Date.UTC(p.year, p.month - 1, p.day) / DAY_MS)
+}
+
+/**
+ * True when `iso`, read in `timeZone`, falls on the same local calendar
+ * day as `nowIso` or later. Timezone-correct "upcoming" boundary: an
+ * 11pm tour in the venue's zone that has already rolled to tomorrow in
+ * UTC (or in the coordinator's own browser zone) must not silently drop
+ * off "upcoming", and a 9am tour that already ran must not still show
+ * as upcoming just because it is UTC-morning somewhere else.
+ */
+export function isOnOrAfterVenueToday(iso: string, timeZone: string, nowIso: string): boolean {
+  const target = venueCalendarParts(iso, timeZone)
+  const today = venueCalendarParts(nowIso, timeZone)
+  if (!target || !today) return false
+  return calendarDayNumber(target) >= calendarDayNumber(today)
+}
+
+/** True when `iso`, read in `timeZone`, falls in the same calendar year
+ *  as `nowIso` in that same zone — the "this year" stats boundary. A
+ *  tour at 11pm venue-local on 31 December must count as this year even
+ *  when its UTC instant has already rolled into 1 January. */
+export function isVenueThisYear(iso: string, timeZone: string, nowIso: string): boolean {
+  const target = venueCalendarParts(iso, timeZone)
+  const today = venueCalendarParts(nowIso, timeZone)
+  if (!target || !today) return false
+  return target.year === today.year
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -360,8 +433,13 @@ export default function ToursPage() {
   }
 
   // Stats
-  const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString()
-  const yearTours = tours.filter((t) => t.created_at >= yearStart)
+  // Wave 4 (W31): "this year" used to be one boundary built from the
+  // browser's local clock (`new Date().getFullYear()`), so a tour late
+  // on 31 December in the venue's own timezone could read as next year
+  // (or vice versa) depending on where the coordinator's browser sat.
+  // Each tour now resolves against its OWN venue's zone.
+  const nowIso = new Date().toISOString()
+  const yearTours = tours.filter((t) => isVenueThisYear(t.created_at, tzForVenue(t.venue_id), nowIso))
   const completed = yearTours.filter((t) => ['completed', 'booked'].includes(t.outcome)).length
   const booked = yearTours.filter((t) => t.outcome === 'booked').length
   const conversionRate = completed > 0 ? booked / completed : 0
@@ -447,12 +525,19 @@ export default function ToursPage() {
   })()
 
   // Filtered
-  const now = new Date().toISOString().slice(0, 10)
+  // Wave 4 (W31): "upcoming" used to compare against the browser's local
+  // date (`new Date().toISOString().slice(0, 10)`), so a tour still
+  // pending late in the venue's evening could vanish from "upcoming" a
+  // day early (or a tour that already ran could linger) depending on
+  // the gap between the venue's zone and the coordinator's browser.
   const filtered = useMemo(() => {
     return tours.filter((t) => {
       switch (filter) {
         case 'upcoming':
-          return t.scheduled_at >= now && t.outcome === 'pending'
+          return (
+            isOnOrAfterVenueToday(t.scheduled_at, tzForVenue(t.venue_id), nowIso) &&
+            t.outcome === 'pending'
+          )
         case 'completed':
           return ['completed', 'booked'].includes(t.outcome)
         case 'cancelled':
@@ -461,7 +546,7 @@ export default function ToursPage() {
           return true
       }
     })
-  }, [tours, filter, now])
+  }, [tours, filter, nowIso, tzForVenue])
 
   const handleSave = async () => {
     setSaving(true)

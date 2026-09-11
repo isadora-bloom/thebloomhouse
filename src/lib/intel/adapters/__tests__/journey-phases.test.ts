@@ -22,6 +22,7 @@ function tp(over: Partial<TouchpointRibbon> & Pick<TouchpointRibbon, 'id' | 'occ
     cascadeStage: over.cascadeStage ?? null,
     cascadeReason: over.cascadeReason ?? null,
     zeroPhase: over.zeroPhase ?? null,
+    occurredAtPrecision: over.occurredAtPrecision ?? null,
   }
 }
 
@@ -55,6 +56,10 @@ describe('buildJourneyPhases', () => {
     // The point-zero touchpoint is not duplicated into either band.
     expect(phases.knownCouple.some((t) => t.id === 'T3')).toBe(false)
     expect(phases.discovery.some((t) => t.id === 'T3')).toBe(false)
+    // Only the earliest touchpoint on the whole ribbon is first-seen.
+    expect(phases.discovery[0].isFirstSeen).toBe(true)
+    expect(phases.discovery[1].isFirstSeen).toBe(false)
+    expect(phases.pointZero?.isFirstSeen).toBe(false)
   })
 
   it('treats a null zero_phase (pre-migration-381 row) as known-couple, never as discovery', () => {
@@ -135,6 +140,81 @@ describe('buildJourneyPhases', () => {
     })
     expect(phases.discoverySummary).toBe('First seen as @rosie.hoyle on instagram, 41 days before point zero.')
     expect(phases.daysBeforePointZero).toBe(41)
+  })
+})
+
+describe('approximate first-seen precision (Wave 4, W31)', () => {
+  it('shows "about N weeks" instead of an exact day count when first-seen is week-precise', () => {
+    const journey: JourneyInput = {
+      ribbon: [],
+      pointZeroAt: '2026-07-12T00:00:00Z',
+      discovery: {
+        summary: 'x',
+        daysBeforePointZero: 21,
+        firstSeenViaHandle: true,
+        firstChannel: 'instagram',
+        firstSeenPrecision: 'week',
+      },
+      handles: {},
+    }
+    const phases = buildJourneyPhases(journey)
+    expect(phases.discoveryGapPhrase).toBe('about 3 weeks of discovery before they wrote to us')
+  })
+
+  it('shows "about N months" when first-seen is month-precise', () => {
+    const journey: JourneyInput = {
+      ribbon: [],
+      pointZeroAt: '2026-07-12T00:00:00Z',
+      discovery: {
+        summary: 'x',
+        daysBeforePointZero: 60,
+        firstSeenViaHandle: false,
+        firstChannel: 'instagram',
+        firstSeenPrecision: 'month',
+      },
+      handles: {},
+    }
+    const phases = buildJourneyPhases(journey)
+    expect(phases.discoveryGapPhrase).toBe('about 2 months of discovery before they wrote to us')
+  })
+
+  it('keeps the exact day count when precision is unset (most channels)', () => {
+    const journey: JourneyInput = {
+      ribbon: [],
+      pointZeroAt: '2026-07-12T00:00:00Z',
+      discovery: {
+        summary: 'x',
+        daysBeforePointZero: 41,
+        firstSeenViaHandle: false,
+        firstChannel: 'gmail',
+        firstSeenPrecision: null,
+      },
+      handles: {},
+    }
+    const phases = buildJourneyPhases(journey)
+    expect(phases.discoveryGapPhrase).toBe('41 days of discovery before they wrote to us')
+  })
+
+  it('marks only the earliest ribbon touchpoint as first-seen', () => {
+    const journey: JourneyInput = {
+      ribbon: [
+        tp({ id: 'T1', occurredAt: '2026-06-01T00:00:00Z', zeroPhase: 'pre_zero', occurredAtPrecision: 'week' }),
+        tp({ id: 'T2', occurredAt: '2026-06-10T00:00:00Z', zeroPhase: 'pre_zero' }),
+      ],
+      pointZeroAt: null,
+      discovery: {
+        summary: 'x',
+        daysBeforePointZero: null,
+        firstSeenViaHandle: false,
+        firstChannel: null,
+        firstSeenPrecision: 'week',
+      },
+      handles: {},
+    }
+    const phases = buildJourneyPhases(journey)
+    expect(phases.discovery[0].isFirstSeen).toBe(true)
+    expect(phases.discovery[0].occurredAtPrecision).toBe('week')
+    expect(phases.discovery[1].isFirstSeen).toBe(false)
   })
 })
 
