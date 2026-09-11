@@ -47,7 +47,7 @@ describe('handlesForEmailSignal — the direction rule', () => {
     const body = [
       'Sounds great, see you Saturday.',
       '',
-      'On Mon, 1 Jun 2026 at 09:00, Rixey Manor <hello@rixeymanor.com> wrote:',
+      'On Mon, 1 Jun 2026 at 09:00, Hawthorne Manor <hello@hawthorne.example> wrote:',
       `> Follow us on Instagram: ${IG_URL}`,
     ].join('\n')
     expect(handlesForEmailSignal({ direction: 'inbound', body })).toBeNull()
