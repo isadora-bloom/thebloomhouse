@@ -1,97 +1,85 @@
 /**
- * Cross-platform handle convergence (Wave 2C — Tenant 2 forensic merge).
+ * Cross-platform handle convergence.
  *
  * Anchor docs:
+ *   - HANDLE-IDENTITY-SPEC.md §1 and §2 (wave 3, 2026-09-09)
  *   - IDENTITY-TRUTH-AUDIT.md Q-C "Cross-source: does the system merge
- *     identity across platforms?" — flagged the gap below as the most-
- *     undelivered promise of the entire codebase.
+ *     identity across platforms?"
  *   - bloom-constitution.md — "the same human appears as
  *     `madison.bryant@gmail.com` AND `Madison B.` on Knot AND `@madisonb`
  *     on IG…All five are one lead."
  *
- * Why this file exists
- * --------------------
- * The clusterer (`candidate-clusterer.ts:563`) keys on
- * `(venue_id, source_platform, fingerprint)`, so the same handle string
- * arriving on Pinterest, Knot, and Instagram will produce THREE
- * `candidate_identities` rows, not one. The chokepoint
- * (`name-capture.ts`) writes per-platform handles into
- * `people.platform_handles[platform]` (mig 255), which gives us the
- * MEMBER side of the convergence problem — but no one has yet built the
- * MATCHER. Three independent handle-shaped signals of "rosaliehoyle"
- * across three platforms remain three rows in the database.
+ * What changed in wave 3
+ * ----------------------
+ * This module used to read `people.platform_handles`,
+ * `candidate_identities.username` and `tangential_signals.extracted_
+ * identity.username`, and it scored same-platform repeats as evidence.
+ * Both of those are gone.
  *
- * What the matcher does
- * ---------------------
- * For one venue:
+ *   - The store is the spine: `couples.handles` and `fragments.handles`
+ *     (migration 398), normalised by `normalizeHandle()`, written only
+ *     through `linkSignal`. `people.platform_handles` is legacy and
+ *     read-only.
+ *   - Same-platform repeats are no longer this module's business. W22's
+ *     `handle_exact` cascade stage matches same platform, same handle,
+ *     deterministically and at tier high, inside the linker. Proposing
+ *     it again here would be a second queue holding a question the
+ *     cascade has already answered.
  *
- *   1. Collect every distinct handle observed in either of the two
- *      stores: `people.platform_handles` (jsonb map of platform → handle)
- *      AND `tangential_signals.extracted_identity.username` (string).
- *
- *   2. Group each handle by its case-insensitive normalized form
- *      (lowercase, strip leading punctuation, drop trailing platform
- *      decoration).
- *
- *   3. For every handle observed across 2+ DIFFERENT records (people
- *      OR candidates) — including across multiple platforms — emit a
- *      merge proposal. Multi-platform-same-handle is a STRONG same-
- *      person signal. Single-platform-multiple-records is also valid
- *      (two candidates with the same Knot handle is still a same-person
- *      signal that the clusterer might have missed).
- *
- *   4. Score each proposal:
- *        - +50 base
- *        - +20 if the handle appeared on 2+ DIFFERENT platforms
- *        - +15 if a `people` row + `candidate_identities` row converge
- *          on the same handle (the post-zero+pre-zero merge case)
- *        - +10 if first/last name observations across the records are
- *          compatible (same first name OR one is a strict prefix of
- *          the other)
- *        - −30 if name observations directly conflict (Sarah vs Mark
- *          on the same handle is suspicious — could be a shared
- *          household account, do NOT auto-merge)
- *
- *   5. Return proposals sorted by score desc. The coordinator UI
- *      reviews + applies the merge through the existing
- *      `mergePeople` / `applyClusterMerge` machinery — this service
- *      DOES NOT mutate the database.
+ * What is left, and why it is not redundant
+ * -----------------------------------------
+ * The one thing the cascade deliberately will not do. `handlesIntersect`
+ * is platform-scoped on purpose: "rosie" on Instagram and "rosie" on
+ * TikTok are two facts, not one, and treating them as one would fuse
+ * strangers who happen to share a common username. But the same string
+ * across two platforms IS worth a human look, especially when it is
+ * distinctive. So this module proposes cross-platform pairs only, at a
+ * low tier, into `candidate_matches` — the one review queue — where a
+ * coordinator decides. It never merges and never auto-binds.
  *
  * Hard rules
  * ----------
- *   - This service is READ ONLY. No writes, no merges, no notifications.
- *     The output is a proposal list the coordinator reviews.
+ *   - `crossPlatformHandleMerge` is READ ONLY. Only
+ *     `proposeHandleConvergenceMatches` writes, and it writes review
+ *     rows, never a merge.
  *   - Handles shorter than 4 chars are ignored (too generic; "ben",
  *     "kim" hit too many randoms).
  *   - Handles that look like real-name initials ("jb", "kp") are ignored.
  *   - Handles that look like obvious bot / generic shapes
  *     (`user12345`, `wedding_admin`, `info`) are ignored.
+ *   - Only cross-platform groups are proposed. A group confined to one
+ *     platform is the cascade's job.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { insertCandidateMatch } from './tracer'
+import type { HandlePlatform } from './sources/types'
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-export type RecordKind = 'people' | 'candidate_identities'
+/**
+ * Which table a converging record came from. `couple` and `fragment`
+ * are what this module emits from wave 3 onward. `people` and
+ * `candidate_identities` remain in the union because the admin
+ * decision surfaces still branch on them for rows decided before the
+ * cutover; nothing produces them any more.
+ */
+export type RecordKind = 'couple' | 'fragment' | 'people' | 'candidate_identities'
 
 export interface HandleRecord {
   kind: RecordKind
   recordId: string
-  /** Original handle as captured. */
+  /** Original handle as stored. Already normalised on the spine. */
   rawHandle: string
   /** Normalised lower-case form used for matching. */
   normalizedHandle: string
   /** Platform the handle was observed on. */
   platform: string
-  /** First name on the record (people.first_name OR
-   *  candidate_identities.first_name). */
+  /** First name observed on the record. */
   firstName: string | null
-  /** Last name on the record (people.last_name OR
-   *  candidate_identities.last_name). Candidate rows store only
-   *  last_initial; we promote that into last_name when no full last
-   *  is available so the compatibility check can fire. */
+  /** Last name observed on the record, when there is one. */
   lastName: string | null
   email: string | null
 }
@@ -101,16 +89,15 @@ export interface HandleMergeProposal {
   handle: string
   /** All records that share this handle. 2+ entries by definition. */
   records: HandleRecord[]
-  /** Distinct platforms the handle was observed on. */
+  /** Distinct platforms the handle was observed on. 2+ by definition. */
   platforms: string[]
-  /** Heuristic confidence 0..100. Higher = more certain same-person. */
+  /** Heuristic confidence 0..100. A suggestion, never an auto-merge bar. */
   score: number
   /** Why this proposal scored where it did — surfaces in coordinator UI. */
   reasoning: string[]
-  /** Whether the records mix `people` and `candidate_identities`. The
-   *  coordinator UI may want to render those proposals differently
-   *  because the merge machinery they target differs (mergePeople vs.
-   *  the candidate-resolver promotion path). */
+  /** Whether the records mix a known couple with a pre-identity
+   *  fragment. Those are the interesting ones: accepting promotes the
+   *  fragment rather than fusing two couples. */
   mixed: boolean
 }
 
@@ -171,14 +158,14 @@ function isInitialShaped(h: string): boolean {
   return false
 }
 
-function normalizeHandle(raw: string | null | undefined): string | null {
+/**
+ * Spine handles arrive already normalised by `normalizeHandle()`, so
+ * this only applies the "is it worth clustering on" filters. Returns
+ * null for anything too generic to be evidence.
+ */
+function clusterableHandle(raw: string | null | undefined): string | null {
   if (!raw) return null
-  let v = String(raw).trim().toLowerCase()
-  // Strip a leading @ / dot / underscore that platform-prefix decoration
-  // sometimes adds.
-  v = v.replace(/^[@._-]+/, '')
-  // Strip trailing whitespace + punctuation.
-  v = v.replace(/[._\-\s]+$/, '')
+  const v = String(raw).trim().toLowerCase()
   if (!v) return null
   if (v.length < 4) return null
   if (GENERIC_HANDLE_BLOCKLIST.has(v)) return null
@@ -188,137 +175,114 @@ function normalizeHandle(raw: string | null | undefined): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Loaders
+// Loaders — the spine, and only the spine
 // ---------------------------------------------------------------------------
 
-interface PeopleRow {
+interface CoupleRow {
   id: string
-  first_name: string | null
-  last_name: string | null
-  email: string | null
-  platform_handles: Record<string, string | null> | null
+  primary_contact_name: string | null
+  partner_contact_name: string | null
+  primary_contact_email: string | null
+  handles: Partial<Record<HandlePlatform, string>> | null
 }
 
-interface CandidateRow {
+interface FragmentRow {
   id: string
-  source_platform: string
-  first_name: string | null
-  last_name: string | null
-  last_initial: string | null
-  email: string | null
-  username: string | null
+  identity_hint: string | null
+  handles: Partial<Record<HandlePlatform, string>> | null
 }
 
-async function loadPeopleHandles(
+/** First token of a display name. Couples store one name string per
+ *  partner, not first / last columns. */
+function firstToken(name: string | null): string | null {
+  const t = (name ?? '').trim().split(/\s+/).filter(Boolean)
+  return t[0] ?? null
+}
+
+function restOfName(name: string | null): string | null {
+  const t = (name ?? '').trim().split(/\s+/).filter(Boolean)
+  return t.length > 1 ? t.slice(1).join(' ') : null
+}
+
+function recordsFromHandleMap(
+  kind: RecordKind,
+  recordId: string,
+  handles: Partial<Record<HandlePlatform, string>> | null,
+  firstName: string | null,
+  lastName: string | null,
+  email: string | null,
+): HandleRecord[] {
+  if (!handles || typeof handles !== 'object') return []
+  const out: HandleRecord[] = []
+  for (const [platform, handle] of Object.entries(handles)) {
+    const normalized = clusterableHandle(handle)
+    if (!normalized) continue
+    out.push({
+      kind,
+      recordId,
+      rawHandle: handle as string,
+      normalizedHandle: normalized,
+      platform,
+      firstName,
+      lastName,
+      email,
+    })
+  }
+  return out
+}
+
+async function loadCoupleHandles(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<HandleRecord[]> {
-  // platform_handles arrived in mig 255; tolerant to its absence on a
-  // fresh checkout (column-not-found errors fall through to []).
   const { data, error } = await supabase
-    .from('people')
-    .select('id, first_name, last_name, email, platform_handles')
+    .from('couples')
+    .select('id, primary_contact_name, partner_contact_name, primary_contact_email, handles')
     .eq('venue_id', venueId)
     .is('merged_into_id', null)
-    .not('platform_handles', 'is', null)
   if (error || !data) return []
   const out: HandleRecord[] = []
-  for (const raw of data as PeopleRow[]) {
-    const handles = raw.platform_handles
-    if (!handles || typeof handles !== 'object') continue
-    for (const [platform, handle] of Object.entries(handles)) {
-      const normalized = normalizeHandle(handle)
-      if (!normalized) continue
-      out.push({
-        kind: 'people',
-        recordId: raw.id,
-        rawHandle: handle as string,
-        normalizedHandle: normalized,
-        platform,
-        firstName: raw.first_name,
-        lastName: raw.last_name,
-        email: raw.email,
-      })
-    }
+  for (const raw of data as CoupleRow[]) {
+    out.push(
+      ...recordsFromHandleMap(
+        'couple',
+        raw.id,
+        raw.handles,
+        firstToken(raw.primary_contact_name),
+        restOfName(raw.primary_contact_name),
+        raw.primary_contact_email,
+      ),
+    )
   }
   return out
 }
 
-async function loadCandidateHandles(
-  supabase: SupabaseClient,
-  venueId: string,
-): Promise<HandleRecord[]> {
-  // The clusterer writes the username two places: a top-level
-  // `candidate_identities.username` column AND each contributing
-  // signal's `tangential_signals.extracted_identity.username`. We
-  // read the candidate column because it's the de-duplicated,
-  // canonical-per-cluster store.
-  const { data, error } = await supabase
-    .from('candidate_identities')
-    .select('id, source_platform, first_name, last_name, last_initial, email, username')
-    .eq('venue_id', venueId)
-    .is('resolved_wedding_id', null)
-    .not('username', 'is', null)
-  if (error || !data) return []
-  const out: HandleRecord[] = []
-  for (const raw of data as CandidateRow[]) {
-    const normalized = normalizeHandle(raw.username)
-    if (!normalized) continue
-    const lastName = raw.last_name ?? raw.last_initial ?? null
-    out.push({
-      kind: 'candidate_identities',
-      recordId: raw.id,
-      rawHandle: raw.username ?? '',
-      normalizedHandle: normalized,
-      platform: raw.source_platform,
-      firstName: raw.first_name,
-      lastName,
-      email: raw.email,
-    })
-  }
-  return out
-}
-
-/** Also harvest from `tangential_signals.extracted_identity.username`
- *  for signals that haven't yet been clustered into a candidate (the
- *  Pinterest-anonymous case where `first_name` is null and the
- *  clusterer skipped the row). These signals get aggregated under a
- *  synthetic record id of `signal:<id>` so the coordinator UI can
- *  surface "this handle was seen on Pinterest but never resolved." */
-async function loadOrphanSignalHandles(
+/** Unpromoted fragments are the pre-identity side. A handle here has
+ *  never been attached to anybody, so a cross-platform hit against a
+ *  couple is the case worth a coordinator's eye. */
+async function loadFragmentHandles(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<HandleRecord[]> {
   const { data, error } = await supabase
-    .from('tangential_signals')
-    .select('id, source_platform, extracted_identity')
+    .from('fragments')
+    .select('id, identity_hint, handles')
     .eq('venue_id', venueId)
-    .is('candidate_identity_id', null)
+    .is('promoted_to_couple_id', null)
   if (error || !data) return []
   const out: HandleRecord[] = []
-  for (const raw of data as Array<{
-    id: string
-    source_platform: string | null
-    extracted_identity: Record<string, unknown> | null
-  }>) {
-    if (!raw.source_platform || !raw.extracted_identity) continue
-    const username = raw.extracted_identity.username
-    if (typeof username !== 'string') continue
-    const normalized = normalizeHandle(username)
-    if (!normalized) continue
-    out.push({
-      kind: 'candidate_identities',
-      // Synthetic id so this surface in the proposal but is clearly
-      // not a real candidate row. Coordinator action would be
-      // "trigger reclusterVenue + resolve" rather than "mergePeople".
-      recordId: `orphan-signal:${raw.id}`,
-      rawHandle: username,
-      normalizedHandle: normalized,
-      platform: raw.source_platform,
-      firstName: null,
-      lastName: null,
-      email: null,
-    })
+  for (const raw of data as FragmentRow[]) {
+    const hint = raw.identity_hint && !raw.identity_hint.startsWith('@') ? raw.identity_hint : null
+    out.push(
+      ...recordsFromHandleMap(
+        'fragment',
+        raw.id,
+        raw.handles,
+        firstToken(hint),
+        restOfName(hint),
+        null,
+      ),
+    )
   }
   return out
 }
@@ -336,8 +300,6 @@ function lower(s: string | null | undefined): string {
 function nameCompatibility(records: HandleRecord[]): 'compatible' | 'conflicting' | 'unknown' {
   const firsts = records.map((r) => lower(r.firstName)).filter(Boolean)
   if (firsts.length < 2) return 'unknown'
-  // Compatible iff every first name is either equal to or a prefix of
-  // the longest seen first name.
   const longest = firsts.reduce((a, b) => (b.length > a.length ? b : a), firsts[0])
   for (const f of firsts) {
     if (longest === f) continue
@@ -352,13 +314,11 @@ function nameCompatibility(records: HandleRecord[]): 'compatible' | 'conflicting
 // ---------------------------------------------------------------------------
 
 /**
- * Compute cross-platform handle merge proposals for one venue.
+ * Compute cross-platform handle proposals for one venue. Read only.
  *
- * Read-only. The result is a list of proposals the coordinator
- * surface displays. A future "apply this merge" action would call
- * `mergePeople` (people-people merge) or trigger `reclusterVenue`
- * (orphan signal + candidate consolidation) — both are existing
- * services, this one only proposes.
+ * Same-platform groups are skipped: `handle_exact` in the cascade
+ * already binds those at tier high inside the linker, so surfacing them
+ * here would ask the coordinator a question the system has answered.
  */
 export async function crossPlatformHandleMerge(
   supabase: SupabaseClient,
@@ -371,17 +331,15 @@ export async function crossPlatformHandleMerge(
     proposals: [],
   }
 
-  const [peopleHandles, candidateHandles, orphanHandles] = await Promise.all([
-    loadPeopleHandles(supabase, venueId),
-    loadCandidateHandles(supabase, venueId),
-    loadOrphanSignalHandles(supabase, venueId),
+  const [coupleHandles, fragmentHandles] = await Promise.all([
+    loadCoupleHandles(supabase, venueId),
+    loadFragmentHandles(supabase, venueId),
   ])
 
-  const all = [...peopleHandles, ...candidateHandles, ...orphanHandles]
+  const all = [...coupleHandles, ...fragmentHandles]
   result.handlesInspected = all.length
   if (all.length === 0) return result
 
-  // Group by normalized handle.
   const byHandle = new Map<string, HandleRecord[]>()
   for (const h of all) {
     const arr = byHandle.get(h.normalizedHandle) ?? []
@@ -389,16 +347,11 @@ export async function crossPlatformHandleMerge(
     byHandle.set(h.normalizedHandle, arr)
   }
 
-  // Build proposals.
   for (const [handle, records] of byHandle.entries()) {
     if (records.length < 2) continue
 
-    // De-duplicate: a single record can have the same handle on the
-    // same platform twice (people row with platform_handles[knot] +
-    // candidate row with the same Knot username). That's still ONE
-    // record on each side. Two records on the SAME platform with the
-    // SAME handle is the multi-row-same-platform case (also a valid
-    // signal — the clusterer missed a merge).
+    // One record can hold the same handle on two platforms. That is one
+    // record, not two, so dedupe by (kind, id) before counting.
     const recordKeys = new Set<string>()
     const dedupRecords: HandleRecord[] = []
     for (const r of records) {
@@ -410,24 +363,25 @@ export async function crossPlatformHandleMerge(
     if (dedupRecords.length < 2) continue
 
     const platforms = Array.from(new Set(dedupRecords.map((r) => r.platform)))
+    // Cross-platform only. Everything else belongs to the cascade.
+    if (platforms.length < 2) continue
+
     const mixed =
-      dedupRecords.some((r) => r.kind === 'people') &&
-      dedupRecords.some((r) => r.kind === 'candidate_identities')
+      dedupRecords.some((r) => r.kind === 'couple') &&
+      dedupRecords.some((r) => r.kind === 'fragment')
 
     const reasoning: string[] = []
-    let score = 50
-    reasoning.push(`Handle "${handle}" observed on ${dedupRecords.length} records`)
-
-    if (platforms.length >= 2) {
-      score += 20
-      reasoning.push(`Cross-platform convergence (${platforms.join(', ')}) — strong same-person signal`)
-    } else {
-      reasoning.push(`Same platform (${platforms[0]}) — clusterer may have missed a merge`)
-    }
+    let score = 40
+    reasoning.push(
+      `Handle "${handle}" appears on ${dedupRecords.length} spine records across ${platforms.join(', ')}`,
+    )
+    reasoning.push(
+      'Platform-scoped matching treats these as separate facts. This is a suggestion for a human, not evidence.',
+    )
 
     if (mixed) {
       score += 15
-      reasoning.push('Spans both pre-zero candidate and post-zero people record — Constitution Point-Zero merge')
+      reasoning.push('Spans a known couple and an unpromoted fragment — accepting promotes the fragment')
     }
 
     const compat = nameCompatibility(dedupRecords)
@@ -436,7 +390,7 @@ export async function crossPlatformHandleMerge(
       reasoning.push('Name observations across records are compatible (equal or prefix relation)')
     } else if (compat === 'conflicting') {
       score -= 30
-      reasoning.push('Name observations CONFLICT — could be shared household account, NOT auto-merge')
+      reasoning.push('Name observations CONFLICT — could be a shared account or two strangers, do NOT merge')
     } else {
       reasoning.push('Name observations missing on at least one record (no compatibility check possible)')
     }
@@ -453,7 +407,6 @@ export async function crossPlatformHandleMerge(
     })
   }
 
-  // Sort by score desc, then by handle asc for stability.
   result.proposals.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score
     return a.handle.localeCompare(b.handle)
@@ -461,4 +414,55 @@ export async function crossPlatformHandleMerge(
 
   result.proposalsFound = result.proposals.length
   return result
+}
+
+export interface HandleProposalWriteResult {
+  proposals: number
+  pairsQueued: number
+}
+
+/**
+ * Push the cross-platform proposals into `candidate_matches` so they
+ * land in the one review queue at /intel/identity-review rather than a
+ * queue of their own.
+ *
+ * Tier is always low. A shared string on two platforms is the weakest
+ * kind of same-person hint the platform records, and the whole point of
+ * the platform-scoped rule is that it must not fuse anybody on its own.
+ * `insertCandidateMatch` swallows the unique-violation, so re-running
+ * this is a no-op.
+ */
+export async function proposeHandleConvergenceMatches(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<HandleProposalWriteResult> {
+  const out: HandleProposalWriteResult = { proposals: 0, pairsQueued: 0 }
+  const { proposals } = await crossPlatformHandleMerge(supabase, venueId)
+
+  for (const p of proposals) {
+    // A conflicting-name proposal is noise, not a question. Keep it out
+    // of the coordinator's queue; it still shows on the read surface.
+    if (p.score < 40) continue
+    const spineRecords = p.records.filter((r) => r.kind === 'couple' || r.kind === 'fragment')
+    if (spineRecords.length < 2) continue
+    out.proposals++
+
+    const primary = spineRecords[0]
+    for (let i = 1; i < spineRecords.length; i += 1) {
+      const secondary = spineRecords[i]
+      await insertCandidateMatch(
+        supabase,
+        venueId,
+        primary.recordId,
+        primary.kind === 'couple' ? 'couple' : 'fragment',
+        secondary.recordId,
+        secondary.kind === 'couple' ? 'couple' : 'fragment',
+        'low',
+        `handle_convergence: "${p.handle}" seen on ${p.platforms.join(' and ')} (score ${p.score}). ${p.reasoning.join(' ')}`,
+      )
+      out.pairsQueued++
+    }
+  }
+
+  return out
 }

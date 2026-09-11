@@ -5,6 +5,6 @@
   "resolver_reassign_calls": 35,
   "resolver_reassign_calls_justification": "couple_notifications table (mig 389) added to mergeWeddings reassign list",
   "grandfather_entries": 28,
-  "migration_files": 396,
-  "migration_files_justification": "wave 3 contract 2026-09-09: 398 couples.handles + first_seen_at + fragments.handles (HANDLE-IDENTITY-SPEC.md); 395/397 still to apply; flatten to tracked baseline still owed post-reimport"
+  "migration_files": 397,
+  "migration_files_justification": "wave 3 2026-09-09: 398 couples.handles + first_seen_at + fragments.handles (contract) took the file count to 396, then 400 (W24) marks tangential_signals / client_match_queue / candidate_identities / people.platform_handles deprecated. 400 is comments only: no DDL, no grant change, so the retired pool stays readable while the spine takes over. The budget sits one above the current count to leave W23 room for 399 in the same wave; ratchet it back down once wave 3 integrates. 395/397 still to apply; flatten to a tracked baseline still owed post-reimport"
 }

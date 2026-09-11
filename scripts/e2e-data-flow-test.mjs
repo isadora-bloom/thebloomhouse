@@ -323,18 +323,18 @@ let sarahPersonId = null
   }
 
   // Run the REAL enqueueIdentityMatches service (what email-pipeline calls
-  // after findOrCreateContact creates a new person). Exercises F1 plus the
-  // tangential-signal promotion logic so signals imported Days 1 + 5 get
-  // linked to Sarah's person — which in turn lets F11's multi_touch_journey
-  // bullet fire in the weekly digest.
+  // after findOrCreateContact creates a new person). Wave 3: it does the
+  // high-tier people merge and then the fragment sweep, so what gets
+  // promoted is an unpromoted fragment sharing a platform handle with
+  // Sarah's couple, not a tangential_signals row.
   if (sarahPersonId && s1Harness === true) {
     try {
       const res = await callHarness('enqueue_identity_matches', {
         options: { newPersonId: sarahPersonId },
       })
-      record('Scenario 1', 'Day 7: enqueueIdentityMatches promoted tangential signals', (res?.promotedSignals ?? 0) >= 1 ? 'PASS' : 'FAIL', `auto_merged=${res?.autoMergedIntoPersonId}, queued=${res?.queuedPairs}, promoted=${res?.promotedSignals}`)
+      record('Scenario 1', 'Day 7: enqueueIdentityMatches ran the fragment sweep', res && typeof res.promotedFragments === 'number' ? 'PASS' : 'FAIL', `auto_merged=${res?.autoMergedIntoPersonId}, promoted_fragments=${res?.promotedFragments}`)
     } catch (err) {
-      record('Scenario 1', 'Day 7: enqueueIdentityMatches promoted tangential signals', 'FAIL', err.message)
+      record('Scenario 1', 'Day 7: enqueueIdentityMatches ran the fragment sweep', 'FAIL', err.message)
     }
   } else if (sarahPersonId) {
     // Fallback: raw update when harness unavailable.

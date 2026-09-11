@@ -1034,9 +1034,12 @@ export async function findOrCreateContact(
   }
 
   // 5. Phase 8 identity resolution — run the matcher against the new
-  // person. A high-confidence match auto-merges; medium/low lands in
-  // client_match_queue for triage; matching tangential_signals get
-  // linked. Fire-and-forget: a matching failure must never break ingest.
+  // person. A high-confidence match auto-merges. Wave 3 (2026-09-09):
+  // medium and low no longer write a second queue, because linkSignal
+  // already queued that doubt as a candidate_match, and the pool check
+  // is now the fragment sweep by handle rather than a name scan over
+  // tangential_signals. Fire-and-forget: a matching failure must never
+  // break ingest.
   //
   // M2 flip note (2026-05-22): the legacy code only ever reached this
   // step with a genuinely fresh INSERT, so the matcher always ran
@@ -1065,10 +1068,10 @@ export async function findOrCreateContact(
     // row to merge) BUT the tangential-signal promotion is legitimate
     // and was being skipped too as a side effect of the single
     // `if (mintIsNew)` guard. `enqueueIdentityMatches({skipAutoMerge:true})`
-    // runs ONLY step 4 (promoteTangentialSignals) — it cross-references
-    // the canonical person's identifiers against the unmatched
-    // tangential_signals pool and links any that now resolve via the
-    // newly-discovered alias. Same fire-and-forget contract.
+    // now runs only the pool check, which since wave 3 is the fragment
+    // sweep: it walks the person through to their couple and promotes
+    // every unpromoted fragment that shares a platform handle with it.
+    // Same fire-and-forget contract.
     try {
       const { enqueueIdentityMatches } = await import('@/lib/services/identity/enqueue')
       await enqueueIdentityMatches({

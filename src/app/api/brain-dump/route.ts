@@ -914,8 +914,9 @@ export async function POST(request: NextRequest) {
   // 2a. JSON fast path — bring-your-own-scraper contract (C-INGEST-4).
   // Documented at docs/ingest/scraper-contract.md. Any 3rd-party tool
   // (Phyllo, Hexomatic, custom IG scraper, etc.) that emits JSON in the
-  // contract shape lands directly in tangential_signals via the existing
-  // identity-import path. Vision-extracted signals already auto-import
+  // contract shape goes through the same identity-import path as a
+  // screenshot, which since wave 3 means one NormalizedSignal per row
+  // through linkSignal. Vision-extracted signals already auto-import
   // without propose-and-confirm; structured-JSON signals follow that
   // pattern.
   if (attachment && (attachment.type === 'application/json' || attachment.name.toLowerCase().endsWith('.json'))) {
@@ -1019,13 +1020,13 @@ export async function POST(request: NextRequest) {
           summary,
           errors,
         },
-        routed_to: [{ table: 'tangential_signals', action: `scraper_import:${summary.written}`, id: null }],
+        routed_to: [{ table: 'spine', action: `scraper_import:${summary.written}`, id: null }],
         parsed_at: new Date().toISOString(),
         resolved_at: new Date().toISOString(),
       }).eq('id', entry.id)
 
       // 2026-05-12: fire the venue-wide identity cascade. The scraper
-      // import just landed new candidate_identities + tangential_signals
+      // import just landed new touchpoints and fragments on the spine
       // (Knot anonymous views, IG handles, Pinterest pins, etc). Every
       // existing wedding at this venue could potentially match one of
       // these new signals on first_name / last_initial / inquiry-window.
@@ -1175,7 +1176,7 @@ export async function POST(request: NextRequest) {
             parse_result: { ...reviewsPayload, vision: v, summary, identitySummary },
             routed_to: [
               { table: 'reviews', action: `vision_import:${summary.inserted}`, id: null },
-              { table: 'tangential_signals', action: `identity_signals:${identitySummary.written}`, id: null },
+              { table: 'spine', action: `identity_signals:${identitySummary.written}`, id: null },
             ],
             parsed_at: new Date().toISOString(),
             resolved_at: new Date().toISOString(),
@@ -1222,7 +1223,7 @@ export async function POST(request: NextRequest) {
           ]
           if (identitySummary && identitySummary.written > 0) {
             routedTo.push({
-              table: 'tangential_signals',
+              table: 'spine',
               action: `identity_signals:${identitySummary.written}`,
               id: null,
             })
@@ -1274,7 +1275,7 @@ export async function POST(request: NextRequest) {
           await supabase.from('brain_dump_entries').update({
             parse_status: 'confirmed',
             parse_result: { ...idPayload, vision: v, identitySummary: summary },
-            routed_to: [{ table: 'tangential_signals', action: `identity_signals:${summary.written}`, id: null }],
+            routed_to: [{ table: 'spine', action: `identity_signals:${summary.written}`, id: null }],
             parsed_at: new Date().toISOString(),
             resolved_at: new Date().toISOString(),
           }).eq('id', entry.id)
