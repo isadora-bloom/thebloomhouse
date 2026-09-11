@@ -656,3 +656,62 @@ export async function markInstagramError(
     console.warn('[instagram] error stamp failed:', error.message)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Outbound — stub only (Wave 4 W30)
+// ---------------------------------------------------------------------------
+//
+// Sending is out of scope for this wave. instagram-dm.ts's own footer
+// note already decided the shape a real send needs:
+//
+//   1. POST {GRAPH_BASE}/{ig_business_id}/messages with
+//      { recipient: { id: <sender_igsid> }, message: { text } } and the
+//      page token. The IGSID to reply to lives in the inbound
+//      touchpoint's raw_payload.sender_igsid.
+//   2. Meta's messaging window is 24 hours from the couple's last
+//      message; a reply outside it needs the human-agent tag.
+//   3. The reply is itself a signal (action_type 'dm_outbound') through
+//      the same linkSignal path the inbound DM used.
+//   4. Auto-send stays behind the same gate SMS is behind — Isadora's
+//      standing instruction is auto-send stays off until the reimport
+//      is complete, and a new channel gets no private exemption.
+//
+// This function exists so the inbox reply affordance and the settings
+// page both have one place to call, and one place to update when the
+// send path above gets built, rather than the UI hard-coding "not
+// built yet" with nothing behind it.
+
+export interface SendInstagramReplyResult {
+  ok: boolean
+  reason: 'not_implemented' | 'not_configured'
+  message: string
+}
+
+/**
+ * Always refuses. Env-gated the same way the inbound webhook is, so the
+ * caller can tell "nobody has built this" apart from "this venue hasn't
+ * even connected Meta yet."
+ */
+export function sendInstagramReply(_args: {
+  venueId: string
+  senderIgsid: string
+  text: string
+}): SendInstagramReplyResult {
+  const envCheck = readInstagramEnv()
+  if (!envCheck.ok) {
+    return {
+      ok: false,
+      reason: 'not_configured',
+      message:
+        `Instagram isn't connected yet (missing ${envCheck.missing.join(', ')}). ` +
+        'Connect it at /settings/integrations/instagram before replies can send.',
+    }
+  }
+  return {
+    ok: false,
+    reason: 'not_implemented',
+    message:
+      'Replies to Instagram are not sent yet. See the outbound note in ' +
+      'instagram-dm.ts for the send path this will use once it is built.',
+  }
+}

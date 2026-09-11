@@ -23,6 +23,18 @@
  * stay in their own table (tour_transcript_orphans); SMS + Zoom live
  * in interactions because they're already wedding-scoped at ingest.
  *
+ * Wave 4 (2026-09-11, W30): Instagram DMs join the same surface, through
+ * the same chokepoint SMS uses (writeInboundInteractionAndClassify in
+ * openphone.ts). They carry type='sms' too (interactions has no 'dm'
+ * value — see instagram-dm.ts), so `providerForInteraction` reads
+ * `extracted_identity.channel === 'instagram'` to tell the two apart
+ * BEFORE falling back to the type check. An Instagram row's from_email
+ * already carries the handle ('@rosie.hoyle'), not a phone number, so
+ * the existing thread-label logic shows it correctly with no other
+ * change. Instagram gets its own tab; replying is not built yet (see
+ * the notice on each Instagram thread card and
+ * /api/agent/instagram/reply, which stubs the send).
+ *
  * White-label: no venue-name or AI-name hardcoding. Help copy resolves
  * venue_ai_config.ai_name so Rixey sees "Sage", Oakwood sees "Iris", etc.
  */
@@ -30,7 +42,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
-import { Inbox, Paperclip, X, MapPin, MessageSquare, Video, Mic } from 'lucide-react'
+import { Inbox, Paperclip, X, MapPin, MessageSquare, Video, Mic, AtSign } from 'lucide-react'
+import { providerForInteraction } from '@/lib/services/inbox/voice-provider'
 
 interface Orphan {
   id: string
@@ -106,32 +119,20 @@ interface VoiceThread {
    *  Lead button vs Unmatched badge. */
   weddingId: string | null
   /** Display label: couple name (when we can derive it from from_name on
-   *  any message) or the phone number for unmatched threads. */
+   *  any message) or the phone number / Instagram handle for unmatched
+   *  threads. */
   label: string
-  /** Phone number / from-address for the thread; surfaced in the header. */
+  /** Phone number / Instagram handle / from-address for the thread;
+   *  surfaced in the header. */
   fromAddress: string | null
-  provider: 'sms' | 'zoom' | 'omi' | 'other'
+  provider: 'sms' | 'zoom' | 'omi' | 'instagram' | 'other'
   messages: VoiceInteraction[]
 }
 
-type VoiceTab = 'all' | 'omi' | 'sms' | 'zoom'
+type VoiceTab = 'all' | 'omi' | 'sms' | 'zoom' | 'instagram'
 
-/**
- * Map an interaction row to a provider label for the tab filter.
- * Order matters: SMS = type='sms'; Zoom = type='meeting' + meeting-shaped
- * extracted_identity.provider; Omi = type='meeting' or 'voicemail' that
- * came from Omi adapter (falls through to default).
- */
-function providerForInteraction(row: VoiceInteraction): 'sms' | 'zoom' | 'omi' | 'other' {
-  if (row.type === 'sms') return 'sms'
-  const provider = (row.extracted_identity as { provider?: string } | null)?.provider
-  if (provider === 'zoom') return 'zoom'
-  if (provider === 'omi') return 'omi'
-  if (row.type === 'meeting' && /zoom/i.test(row.subject ?? '')) return 'zoom'
-  // Default: if it's a meeting/voicemail without a tagged provider, treat as Omi
-  if (row.type === 'meeting' || row.type === 'voicemail') return 'omi'
-  return 'other'
-}
+// providerForInteraction moved to src/lib/services/inbox/voice-provider.ts
+// (Wave 4 W30) so it's unit-testable without importing this page.
 
 export default function AudioInboxPage() {
   const { venueId } = useScope()
@@ -254,14 +255,15 @@ export default function AudioInboxPage() {
 
   // ---- Tab filtering ----
   const tabCounts = useMemo(() => {
-    const counts = { all: 0, omi: orphans.length, sms: 0, zoom: 0 }
+    const counts = { all: 0, omi: orphans.length, sms: 0, zoom: 0, instagram: 0 }
     for (const row of voiceRows) {
       const p = providerForInteraction(row)
       if (p === 'sms') counts.sms++
       else if (p === 'zoom') counts.zoom++
       else if (p === 'omi') counts.omi++
+      else if (p === 'instagram') counts.instagram++
     }
-    counts.all = orphans.length + counts.sms + counts.zoom
+    counts.all = orphans.length + counts.sms + counts.zoom + counts.instagram
     // Omi count is orphans only since interactions-side Omi rows are
     // already matched to a tour (not orphans).
     return counts
@@ -310,7 +312,7 @@ export default function AudioInboxPage() {
       activeTab === 'all'
         ? voiceRows.filter((r) => {
             const p = providerForInteraction(r)
-            return p === 'sms' || p === 'zoom'
+            return p === 'sms' || p === 'zoom' || p === 'instagram'
           })
         : filteredVoiceRows
     const buckets = new Map<string, VoiceInteraction[]>()
@@ -400,7 +402,8 @@ export default function AudioInboxPage() {
   const unmatchedThreadCount = voiceThreads.filter((t) => !t.weddingId).length
 
   const showOrphans = activeTab === 'all' || activeTab === 'omi'
-  const showVoiceList = activeTab === 'all' || activeTab === 'sms' || activeTab === 'zoom'
+  const showVoiceList =
+    activeTab === 'all' || activeTab === 'sms' || activeTab === 'zoom' || activeTab === 'instagram'
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -412,8 +415,8 @@ export default function AudioInboxPage() {
             <p className="text-sm text-sage-600 mt-1">
               Voice + SMS signals from your audio-capture providers. Omi
               transcripts that couldn&apos;t be auto-matched to a tour need
-              attach or dismiss; SMS and Zoom transcripts land here for
-              triage so {aiName} can learn from them.
+              attach or dismiss; SMS, Zoom and Instagram DM transcripts
+              land here for triage so {aiName} can learn from them.
             </p>
           </div>
         </div>
@@ -442,6 +445,7 @@ export default function AudioInboxPage() {
           { id: 'omi', label: 'Omi', count: tabCounts.omi, icon: Mic },
           { id: 'sms', label: 'SMS', count: tabCounts.sms, icon: MessageSquare },
           { id: 'zoom', label: 'Zoom', count: tabCounts.zoom, icon: Video },
+          { id: 'instagram', label: 'Instagram', count: tabCounts.instagram, icon: AtSign },
         ] as const).map((t) => {
           const Icon = t.icon
           const active = activeTab === t.id
@@ -529,7 +533,7 @@ export default function AudioInboxPage() {
         <>
           {showOrphans && orphans.length === 0 && filteredVoiceRows.length === 0 && activeTab === 'all' && (
             <div className="text-sm text-sage-500 border border-dashed border-border rounded-lg px-4 py-10 text-center">
-              Nothing to triage. Orphan Omi transcripts, inbound SMS, and Zoom meeting transcripts will show up here.
+              Nothing to triage. Orphan Omi transcripts, inbound SMS, Zoom meeting transcripts, and Instagram DMs will show up here.
             </div>
           )}
 
@@ -624,12 +628,12 @@ export default function AudioInboxPage() {
               {activeTab === 'all' && (voiceRows.length > 0) && (
                 <h2 className="text-sm font-medium text-sage-800 flex items-center gap-2">
                   <MessageSquare className="w-4 h-4" />
-                  SMS &amp; Zoom transcripts
+                  SMS, Zoom &amp; Instagram transcripts
                 </h2>
               )}
               {voiceThreads.length === 0 && activeTab !== 'all' && (
                 <div className="text-sm text-sage-500 border border-dashed border-border rounded-lg px-4 py-10 text-center">
-                  No {activeTab === 'sms' ? 'SMS' : 'Zoom'} signals yet. Configure the channel under Settings -&gt; Multi-channel.
+                  No {activeTab === 'sms' ? 'SMS' : activeTab === 'zoom' ? 'Zoom' : 'Instagram'} signals yet. Configure the channel under Settings -&gt; Multi-channel.
                 </div>
               )}
               {voiceThreads.map((thread) => {
@@ -638,7 +642,9 @@ export default function AudioInboxPage() {
                     ? MessageSquare
                     : thread.provider === 'zoom'
                       ? Video
-                      : Mic
+                      : thread.provider === 'instagram'
+                        ? AtSign
+                        : Mic
                 const latest = thread.messages[0]
                 const preview = (latest.body_preview || latest.full_body || '')
                   .slice(0, 200)
@@ -727,6 +733,21 @@ export default function AudioInboxPage() {
                         >
                           Collapse
                         </button>
+                      </div>
+                    )}
+                    {thread.provider === 'instagram' && (
+                      <div className="text-xs text-sage-600 bg-sage-50 border border-sage-200 rounded-md px-3 py-2 flex items-center gap-1.5">
+                        <AtSign className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          Replies to Instagram aren&apos;t sent yet.{' '}
+                          <a
+                            href="/settings/integrations/instagram"
+                            className="underline hover:text-sage-800"
+                          >
+                            Connect Meta credentials in Settings
+                          </a>{' '}
+                          to turn on sending.
+                        </span>
                       </div>
                     )}
                   </div>
