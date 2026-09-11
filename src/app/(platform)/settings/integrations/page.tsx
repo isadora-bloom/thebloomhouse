@@ -81,6 +81,13 @@ function formatRelative(iso: string | null): string | null {
   return new Date(iso).toLocaleDateString()
 }
 
+// Plain function, not a component: the compiler would otherwise read
+// `const Icon = iconFor(...)` inside a component as creating one per render.
+function renderIcon(name: string | undefined, className: string) {
+  const Icon = iconFor(name)
+  return <Icon className={className} />
+}
+
 interface ResolvedAdapter {
   adapter: IntegrationAdapter
   status: IntegrationStatus
@@ -191,7 +198,6 @@ export default async function IntegrationsHubPage({ searchParams }: PageProps) {
 }
 
 function IntegrationCard({ adapter, status }: { adapter: IntegrationAdapter; status: IntegrationStatus }) {
-  const Icon = iconFor(adapter.iconName)
   const lastSync = formatRelative(status.lastSyncAt)
   const statusLine = status.statusLine ?? (adapter.ready ? 'Not connected' : 'Coming soon')
   const showConfigure = adapter.ready && adapter.deepConfigHref
@@ -212,7 +218,7 @@ function IntegrationCard({ adapter, status }: { adapter: IntegrationAdapter; sta
               (status.connected ? 'bg-sage-100 text-sage-700' : 'bg-sage-50 text-sage-500')
             }
           >
-            <Icon className="w-5 h-5" />
+            {renderIcon(adapter.iconName, 'w-5 h-5')}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">

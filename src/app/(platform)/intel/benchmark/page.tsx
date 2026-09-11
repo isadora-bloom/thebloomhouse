@@ -162,6 +162,36 @@ function BenchmarkInner() {
     fetchData()
   }, [fetchData])
 
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('desc')
+    }
+  }
+
+  const sortedVenues = useMemo(() => {
+    const venues = data?.venues ?? []
+    return [...venues].sort((a, b) => {
+      const av = a[sortKey]
+      const bv = b[sortKey]
+      if (typeof av === 'string' && typeof bv === 'string') {
+        return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+      }
+      // Null sinks to the bottom regardless of direction — blank rows
+      // should never headline a sorted list.
+      const aNull = av == null
+      const bNull = bv == null
+      if (aNull && bNull) return 0
+      if (aNull) return 1
+      if (bNull) return -1
+      const an = av as number
+      const bn = bv as number
+      return sortDir === 'asc' ? an - bn : bn - an
+    })
+  }, [data, sortKey, sortDir])
+
   // ----- Venue-scope empty state ------------------------------------------
   if (!scope.loading && !isCrossVenueScope) {
     return (
@@ -192,36 +222,6 @@ function BenchmarkInner() {
       </div>
     )
   }
-
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortKey(key)
-      setSortDir('desc')
-    }
-  }
-
-  const sortedVenues = useMemo(() => {
-    const venues = data?.venues ?? []
-    return [...venues].sort((a, b) => {
-      const av = a[sortKey]
-      const bv = b[sortKey]
-      if (typeof av === 'string' && typeof bv === 'string') {
-        return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
-      }
-      // Null sinks to the bottom regardless of direction — blank rows
-      // should never headline a sorted list.
-      const aNull = av == null
-      const bNull = bv == null
-      if (aNull && bNull) return 0
-      if (aNull) return 1
-      if (bNull) return -1
-      const an = av as number
-      const bn = bv as number
-      return sortDir === 'asc' ? an - bn : bn - an
-    })
-  }, [data, sortKey, sortDir])
 
   const rollup = data?.rollup
   const bestVenue = data?.venues.find((v) => v.venueId === rollup?.bestVenueId)

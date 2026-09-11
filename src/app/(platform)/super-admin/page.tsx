@@ -102,6 +102,15 @@ function getMonthStart(): string {
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
 }
 
+function SortIcon({ field, sortField, sortDir }: { field: SortField; sortField: SortField; sortDir: SortDir }) {
+  if (sortField !== field) return null
+  return sortDir === 'asc' ? (
+    <ChevronUp className="w-3 h-3" />
+  ) : (
+    <ChevronDown className="w-3 h-3" />
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -187,15 +196,6 @@ export default function SuperAdminPage() {
       setSortField(field)
       setSortDir('asc')
     }
-  }
-
-  function SortIcon({ field }: { field: SortField }) {
-    if (sortField !== field) return null
-    return sortDir === 'asc' ? (
-      <ChevronUp className="w-3 h-3" />
-    ) : (
-      <ChevronDown className="w-3 h-3" />
-    )
   }
 
   // ---- Filtering & sorting ----
@@ -398,7 +398,7 @@ export default function SuperAdminPage() {
                     onClick={() => toggleSort('name')}
                   >
                     <span className="flex items-center gap-1">
-                      Venue <SortIcon field="name" />
+                      Venue <SortIcon field="name" sortField={sortField} sortDir={sortDir} />
                     </span>
                   </th>
                   <th
@@ -406,7 +406,7 @@ export default function SuperAdminPage() {
                     onClick={() => toggleSort('status')}
                   >
                     <span className="flex items-center gap-1">
-                      Status <SortIcon field="status" />
+                      Status <SortIcon field="status" sortField={sortField} sortDir={sortDir} />
                     </span>
                   </th>
                   <th className="px-5 py-3 font-medium text-sage-500">Plan</th>
@@ -415,7 +415,7 @@ export default function SuperAdminPage() {
                     onClick={() => toggleSort('inquiries_this_month')}
                   >
                     <span className="flex items-center gap-1 justify-end">
-                      Inquiries <SortIcon field="inquiries_this_month" />
+                      Inquiries <SortIcon field="inquiries_this_month" sortField={sortField} sortDir={sortDir} />
                     </span>
                   </th>
                   <th className="px-5 py-3 font-medium text-sage-500 text-right">Bookings</th>
@@ -424,7 +424,7 @@ export default function SuperAdminPage() {
                     onClick={() => toggleSort('revenue_this_month')}
                   >
                     <span className="flex items-center gap-1 justify-end">
-                      Revenue <SortIcon field="revenue_this_month" />
+                      Revenue <SortIcon field="revenue_this_month" sortField={sortField} sortDir={sortDir} />
                     </span>
                   </th>
                   <th
@@ -432,7 +432,7 @@ export default function SuperAdminPage() {
                     onClick={() => toggleSort('ai_cost_this_month')}
                   >
                     <span className="flex items-center gap-1 justify-end">
-                      AI Cost <SortIcon field="ai_cost_this_month" />
+                      AI Cost <SortIcon field="ai_cost_this_month" sortField={sortField} sortDir={sortDir} />
                     </span>
                   </th>
                   <th className="px-5 py-3 w-12" />

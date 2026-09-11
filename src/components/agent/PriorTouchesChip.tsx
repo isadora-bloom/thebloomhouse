@@ -114,13 +114,12 @@ export function PriorTouchesChip({ personId }: PriorTouchesChipProps) {
 }
 
 function TouchRow({ touch }: { touch: PriorTouch }) {
-  const SourceIcon = sourceIcon(touch.source, touch.kind)
   const dateStr = touch.date
     ? new Date(touch.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : ''
   return (
     <div className="flex items-start gap-2 text-sage-800">
-      <SourceIcon className="w-3 h-3 mt-0.5 shrink-0 text-sage-600" />
+      {renderSourceIcon(touch.source, touch.kind, 'w-3 h-3 mt-0.5 shrink-0 text-sage-600')}
       <span className="text-sage-500 shrink-0 tabular-nums w-14">{dateStr}</span>
       <span className="truncate">{touch.summary}</span>
     </div>
@@ -136,6 +135,13 @@ function sourceIcon(source: string, kind: PriorTouch['kind']) {
   if (kind === 'tour') return Calendar
   if (kind === 'interaction' || s === 'email') return Mail
   return Globe
+}
+
+// Plain function, not a component: the compiler would otherwise read
+// `const Icon = sourceIcon(...)` inside a component as creating one per render.
+function renderSourceIcon(source: string, kind: PriorTouch['kind'], className: string) {
+  const Icon = sourceIcon(source, kind)
+  return <Icon className={className} />
 }
 
 function buildNarration(touches: PriorTouch[]): string {

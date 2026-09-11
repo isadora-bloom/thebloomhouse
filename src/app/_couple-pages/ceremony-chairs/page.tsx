@@ -32,10 +32,6 @@ export default function CeremonyChairsPage() {
   const [saved, setSaved] = useState(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => {
-    if (weddingId) load()
-  }, [weddingId])
-
   const load = async () => {
     const { data } = await supabase
       .from('ceremony_chair_plans')
@@ -45,6 +41,12 @@ export default function CeremonyChairsPage() {
     if (data?.plan?.rows?.length) setRows(data.plan.rows)
     setLoading(false)
   }
+
+  // Declared after `load` so the compiler can see the value it closes over.
+  useEffect(() => {
+    if (weddingId) load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weddingId])
 
   const save = async (newRows?: ChairRow[]) => {
     if (saveTimer.current) clearTimeout(saveTimer.current)

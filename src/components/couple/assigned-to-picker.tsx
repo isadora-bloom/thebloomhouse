@@ -66,7 +66,9 @@ export function AssignedToPicker({ value, isCompleted, onChange }: AssignedToPic
   // reads current state, not the closure from when the listener was
   // registered.
   const commitRef = useRef(commit)
-  commitRef.current = commit
+  useEffect(() => {
+    commitRef.current = commit
+  })
 
   useEffect(() => {
     if (!open) return

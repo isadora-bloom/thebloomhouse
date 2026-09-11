@@ -79,6 +79,13 @@ function iconFor(intent: IntentClass) {
   }
 }
 
+// Plain function, not a component: the compiler would otherwise read
+// `const Icon = iconFor(...)` inside a component as creating one per render.
+function renderIntentIcon(intent: IntentClass, className: string) {
+  const Icon = iconFor(intent)
+  return <Icon className={className} />
+}
+
 export function IntentClassChip({
   intentClass,
   templateScore,
@@ -94,7 +101,6 @@ export function IntentClassChip({
       ? intentClass
       : 'unknown'
   const tone = TONE_BY_INTENT[normalised]
-  const Icon = iconFor(normalised)
 
   // Tooltip: title prop wins; otherwise default by intent, optionally
   // appended with templateScore when broadcast.
@@ -114,7 +120,7 @@ export function IntentClassChip({
       title={tooltip}
       className={`inline-flex items-center rounded-full ring-1 font-medium ${tone.bg} ${tone.text} ${tone.ring} ${sizeClasses}`}
     >
-      <Icon className={iconSize} />
+      {renderIntentIcon(normalised, iconSize)}
       {tone.label}
     </span>
   )

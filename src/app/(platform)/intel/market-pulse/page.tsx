@@ -26,6 +26,7 @@ import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel
 import { MeOrMarketCard } from '@/components/intel/MeOrMarketCard'
 import { EmptyState } from '@/components/ui/empty-state'
 import { inferRecommendationDestination } from '@/lib/utils/recommendation-routing'
+import { nowMs } from '@/lib/utils/clock'
 import {
   BarChart,
   Bar,
@@ -211,6 +212,11 @@ function outlookBg(outlook: 'positive' | 'neutral' | 'caution'): string {
     case 'caution':
       return 'bg-red-50 text-red-700 border-red-200'
   }
+}
+
+function calculateDaysAgo(appliedAtStr: string | null, now: number): number | null {
+  if (!appliedAtStr) return null
+  return Math.floor((now - new Date(appliedAtStr).getTime()) / (1000 * 60 * 60 * 24))
 }
 
 function priorityBadge(priority: string | number): {
@@ -579,6 +585,10 @@ function RecommendationsSection({
   onDismiss: (id: string) => void
   loading: boolean
 }) {
+  // One clock read per mount; the "Nd ago" labels below derive from it
+  // rather than calling Date.now() inside the render map.
+  const currentTime = useMemo(() => nowMs(), [])
+
   if (loading) {
     return (
       <section>
@@ -697,9 +707,7 @@ function RecommendationsSection({
               <div className="space-y-3">
                 {resolved.map((rec) => {
                   const outcomeNote = (rec.supporting_data as Record<string, unknown>)?.outcome_notes as string | undefined
-                  const daysAgo = rec.applied_at
-                    ? Math.floor((Date.now() - new Date(rec.applied_at).getTime()) / (1000 * 60 * 60 * 24))
-                    : null
+                  const daysAgo = calculateDaysAgo(rec.applied_at, currentTime)
 
                   return (
                     <div
