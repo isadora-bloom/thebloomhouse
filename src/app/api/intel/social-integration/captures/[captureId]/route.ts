@@ -7,11 +7,19 @@ import {
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
+import { describeSocialOutcome } from '@/lib/services/identity/replay/social'
 
 /**
  * GET /api/intel/social-integration/captures/[captureId]
  *
- * Returns one capture + its engagements with matched-person joins.
+ * Returns one capture and its engagements, each carrying the spine
+ * outcome: the couple it attached to, or the fact that it is a fragment
+ * awaiting identity or a candidate in review.
+ *
+ * Wave 3 (HANDLE-IDENTITY-SPEC.md §4): names come from `couples`, not
+ * from `people`. The legacy `matched_person_id` is deprecated and is no
+ * longer read here; pre-wave-3 rows show as unbound until the replay
+ * runs over them.
  */
 export async function GET(
   request: NextRequest,
@@ -44,42 +52,57 @@ export async function GET(
     const { data: engagements, error: eErr } = await service
       .from('social_engagements')
       .select(
-        'id, handle, display_name, engagement_at, match_status, matched_person_id, match_method, match_confidence, matched_at',
+        'id, handle, display_name, engagement_at, match_status, couple_id, match_method, match_confidence, matched_at',
       )
       .eq('social_capture_id', captureId)
       .order('created_at', { ascending: true })
 
     if (eErr) return serverError(eErr)
 
-    // Hydrate matched-person snippets in one query.
-    const matchedIds = (engagements ?? [])
-      .map((e) => e.matched_person_id)
-      .filter((id): id is string => Boolean(id))
-
-    type PersonSnippet = {
+    type EngagementRow = {
       id: string
-      first_name: string | null
-      last_name: string | null
-      wedding_id: string | null
+      handle: string
+      display_name: string | null
+      engagement_at: string | null
+      match_status: string
+      couple_id: string | null
+      match_method: string | null
+      match_confidence: number | null
+      matched_at: string | null
     }
-    let people: PersonSnippet[] = []
-    if (matchedIds.length > 0) {
-      const { data: pData } = await service
-        .from('people')
-        .select('id, first_name, last_name, wedding_id')
-        .in('id', matchedIds)
-      people = (pData ?? []) as PersonSnippet[]
-    }
-    const personById = new Map(people.map((p) => [p.id, p]))
+    const rows = (engagements ?? []) as EngagementRow[]
 
-    const hydrated = (engagements ?? []).map((e) => {
-      const person = e.matched_person_id ? personById.get(e.matched_person_id) : null
+    // Hydrate couple names from the spine in one query.
+    const coupleIds = Array.from(
+      new Set(rows.map((e) => e.couple_id).filter((id): id is string => Boolean(id))),
+    )
+
+    type CoupleSnippet = {
+      id: string
+      primary_contact_name: string | null
+      partner_contact_name: string | null
+      lifecycle_state: string | null
+    }
+    let couples: CoupleSnippet[] = []
+    if (coupleIds.length > 0) {
+      const { data: cData } = await service
+        .from('couples')
+        .select('id, primary_contact_name, partner_contact_name, lifecycle_state')
+        .in('id', coupleIds)
+      couples = (cData ?? []) as CoupleSnippet[]
+    }
+    const coupleById = new Map(couples.map((c) => [c.id, c]))
+
+    const hydrated = rows.map((e) => {
+      const couple = e.couple_id ? coupleById.get(e.couple_id) : null
+      const coupleName = couple
+        ? [couple.primary_contact_name, couple.partner_contact_name].filter(Boolean).join(' & ') || null
+        : null
       return {
         ...e,
-        couple_name: person
-          ? [person.first_name, person.last_name].filter(Boolean).join(' ') || null
-          : null,
-        wedding_id: person?.wedding_id ?? null,
+        couple_name: coupleName,
+        lifecycle_state: couple?.lifecycle_state ?? null,
+        spine_outcome: describeSocialOutcome(e.match_status, e.match_method, coupleName),
       }
     })
 

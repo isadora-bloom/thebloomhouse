@@ -6,5 +6,5 @@
   "resolver_reassign_calls_justification": "couple_notifications table (mig 389) added to mergeWeddings reassign list",
   "grandfather_entries": 28,
   "migration_files": 396,
-  "migration_files_justification": "wave 3 contract 2026-09-09: 398 couples.handles + first_seen_at + fragments.handles (HANDLE-IDENTITY-SPEC.md); 395/397 still to apply; flatten to tracked baseline still owed post-reimport"
+  "migration_files_justification": "wave 3 2026-09-09: 398 couples.handles + first_seen_at + fragments.handles (contract) and 399 social_engagements.couple_id (W23, the social capture surface binds to a couple on the spine instead of a person); both under HANDLE-IDENTITY-SPEC.md. 395/397/398/399 still to apply; flatten to tracked baseline still owed post-reimport"
 }

@@ -3,6 +3,9 @@
  * One-shot orphan promote sweep for Rixey. Calls the Step 6 service
  * functions directly so the operator doesn't wait for tomorrow's
  * prune_maintenance cron tick.
+ *
+ * Reviews only since wave 3. Social captures go through the spine now:
+ * `npx tsx scripts/replay-social-to-spine.ts`.
  */
 
 import { createClient } from '@supabase/supabase-js'
@@ -23,7 +26,7 @@ async function main(): Promise<void> {
 
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!)
 
-  const { promoteSocialOrphans, promoteReviewOrphans } = await import(
+  const { promoteReviewOrphans } = await import(
     '../src/lib/services/identity/orphan-promote'
   )
 
@@ -39,10 +42,9 @@ async function main(): Promise<void> {
   }
   console.log(`Venue: ${venue.name}`)
 
-  console.log('\n--- social ---')
-  const social = await promoteSocialOrphans(venue.id as string, { supabase: sb, limit: 2000 })
-  console.log(`  scanned=${social.scanned}  promoted=${social.promoted}  errors=${social.errors.length}`)
-  for (const e of social.errors.slice(0, 5)) console.log(`    err: ${e}`)
+  // Social left this sweep in wave 3. Use
+  // `npx tsx scripts/replay-social-to-spine.ts` instead, which routes
+  // every engagement through linkSignal rather than guessing at a surname.
 
   console.log('\n--- reviews ---')
   const reviews = await promoteReviewOrphans(venue.id as string, { supabase: sb, limit: 2000 })
