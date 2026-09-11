@@ -219,3 +219,42 @@ and `npm ci`; the only writer is `linkSignal`; `people.platform_handles` is read
 on its way out; a handle is always `(platform, handle)` through `normalizeHandle()`.
 Migration numbers: 398 (contract, landed). W23/W24 may need 399/400 for retiring tables
 (mark deprecated, do not drop).
+
+## Wave 3 status (integrated 2026-09-11)
+
+All seven workstreams merged on `consolidation`. Gate on the integrated head: tsc 0, vitest
+965/965, governance green including the new `check:platform-handles` ratchet (36 reads left,
+down from 51), every guard script green, golden 16/16 (GC-16 = follow → fragment → email →
+mint → promote, first_seen_at at the follow), lint exits 0.
+
+What is true now: a handle is `(platform, handle)` on the signal, `handle_exact` is a
+high-tier cascade stage, `couples.handles` and `first_seen_at` are stamped by the linker, a
+later signal promotes matching fragments deterministically, followers/story/DM pastes and
+vision comment/tag candidates go through `linkSignal`, the trigram and email-local-part
+auto-binds are deleted, the tangential pool and `client_match_queue` are retired, the tracer
+orchestrator is retired into a nightly `fragment_sweep` cron, the inquiry CSV, Calendly and
+email extraction can carry a handle, the couple page shows Discovery / Point zero / Known
+couple with handle chips, and Instagram DMs have a webhook and settings page waiting on Meta
+credentials.
+
+Integration notes: W22 and W23 both numbered a migration 399; W22's `merge_couples` change is
+now 402. Three branches each wrote `fragment-sweep.ts`; the merged result is W26's
+orchestrator in `fragment-sweep.ts` calling W22's promotion in `fragment-sweep-handles.ts`,
+with `sweepFragmentsForCouple` bridging W24's caller.
+
+Migrations owed to prod, in order: 395, 397, 398, 399, 400, 401, 402. Then the older seven.
+
+Follow-ups for wave 4:
+- `email/pipeline.ts` does not yet pass extracted handles into `emailToNormalizedSignal`; W25
+  built the extraction, the five call sites still need the one argument.
+- `crm-import/index.ts` (web-form and calculator CSVs) mints via `mintWedding`, so the handle
+  it captures lands on `interactions.extracted_identity`, not `couples.handles`, until that
+  adapter moves onto `linkSignal`.
+- Instagram DMs land on the spine but not in `/agent/inbox` and the classifier does not run
+  on them; `buildInstagramInteractionRow()` is ready when the interactions writer lands.
+- No public inquiry form or calculator component lives in this repo; the "your Instagram"
+  field must be added on the marketing-site repos and mapped to the `instagram` column.
+- `merge-people.ts` still updates the retired `client_match_queue`; one-line delete.
+- `/api/intel/social-integration/captures/[captureId]` has no page; the modal link was removed.
+- First-seen dates derived from screenshot relative ages are approximate; label them so.
+- Meta app setup steps are in W28's settings page and its report.

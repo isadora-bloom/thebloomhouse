@@ -2,18 +2,20 @@
  * Sweep orchestration — `sweepFragmentsForVenue` / `sweepFragmentsAllVenues`
  * with a fake Supabase client (Wave 3 W26, NOVEMBER-PLAN.md).
  *
- * This file deliberately does NOT mock `../identity-cascade`, so the
- * handle-promotion pass exercises its REAL current behaviour: this
- * worktree has no `sweepFragmentsForCouple` export yet (W22 lands it
- * in a parallel worktree), so every run here takes the documented
- * `skipped: true, reason: 'not_wired'` path. See
- * fragment-sweep-handle-promotion.test.ts for the wired-in behaviour
- * once that export exists, exercised there with the module mocked.
+ * The handle pass (W22, ./fragment-sweep-handles.ts) is mocked to a clean
+ * zero result so this file exercises the orchestration and the coalesce
+ * pass only. See fragment-sweep-handle-promotion.test.ts for pass 1.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { FakeSupabase } from './fragment-sweep-fake-supabase'
 import { sweepFragmentsForVenue, sweepFragmentsAllVenues } from '../fragment-sweep'
+
+vi.mock('../fragment-sweep-handles', () => ({
+  sweepFragmentsByHandle: vi.fn(async () => ({ scanned: 0, promoted: [], couplesTouched: 0, ambiguous: 0 })),
+  promoteFragmentsByHandle: vi.fn(),
+  sweepFragmentsForCouple: vi.fn(),
+}))
 
 vi.mock('../mint-couple', () => ({
   lockAndMintCouple: vi.fn(async () => ({
@@ -47,7 +49,7 @@ beforeEach(() => {
 })
 
 describe('sweepFragmentsForVenue', () => {
-  it('runs both passes, reports the not-wired handle pass honestly, and writes started+succeeded telemetry', async () => {
+  it('runs both passes, reports an empty handle pass honestly, and writes started+succeeded telemetry', async () => {
     const db = new FakeSupabase()
     addFragment(db, 'f1', 'venue-a', 'knot', 'Amy Park', '2026-02-01T00:00:00.000Z')
     addFragment(db, 'f2', 'venue-a', 'instagram', 'Amy Park', '2026-02-01T01:00:00.000Z')
@@ -62,8 +64,7 @@ describe('sweepFragmentsForVenue', () => {
     expect(summary.handle_promotion).toEqual({
       couplesWithHandles: 0,
       fragmentsPromoted: 0,
-      skipped: true,
-      reason: 'not_wired',
+      skipped: false,
     })
     // full_name_exact (60) + cross_channel_temporal_lt_6h (35) = 95 — promoted.
     expect(summary.identity_hint_coalesce.promoted).toBe(1)
