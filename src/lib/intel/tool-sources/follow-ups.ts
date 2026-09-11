@@ -28,11 +28,16 @@
  * that can email a couple by mistake, and that failure is unrecoverable
  * in a way a wrong number is not.
  *
- * Not entirely side-effect free, said out loud: composing runs the
- * inquiry brain, which records its own cost row and an anti-repetition
- * `phrase_usage` row. Those are the drafter's ledgers. No `drafts` row
- * is created, no email leaves, and nothing the operator would recognise
- * as an action has happened.
+ * Not entirely side-effect free, said out loud: composing still runs the
+ * inquiry brain, which records its own cost row in `api_costs`. That is
+ * fine to keep: it is an audit of spend, not product state, and every
+ * brain call anywhere in the app writes one. It used to also record an
+ * anti-repetition `phrase_usage` row, but a read tool must not write a
+ * ledger (types.ts, the plug-in contract), so NOVEMBER-PLAN.md wave 4
+ * (W34) gave `selectPhrase` a `record: false` option and this file passes
+ * it. No `drafts` row is created, no email leaves, no `phrase_usage` row
+ * is written, and nothing the operator would recognise as an action has
+ * happened.
  *
  * Spine first: identity, contact address and last inbound come from
  * `couples` and `touchpoints`. The suppression signals live in `drafts`,
@@ -458,6 +463,12 @@ async function runPropose(
         weddingId: ctx.weddingId,
         contactEmail: ctx.email,
         daysSinceLastContact: ctx.daysSinceLastContact,
+        // A read tool must not write a ledger (types.ts, the plug-in
+        // contract). This is a PROPOSAL for the operator to look at, not a
+        // follow-up that is being sent, so the brain's anti-repetition
+        // phrase_usage row is skipped here. bulkDraftFollowUps (the write
+        // path this tool hands the operator off to) still records one.
+        recordPhraseUsage: false,
       })
       proposals.push({
         label,

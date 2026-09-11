@@ -22,6 +22,15 @@ export interface SelectPhraseOptions {
   style: string
   fallbackStyle?: string
   templateVars?: Record<string, string>
+  /**
+   * Whether this call records a `phrase_usage` row (NOVEMBER-PLAN.md wave 4,
+   * W34). Defaults to true, so every existing caller keeps writing the
+   * anti-duplication ledger exactly as before. Set to false for a read path
+   * that composes a draft to SHOW the operator without it ever being sent —
+   * `propose_follow_ups` (src/lib/intel/tool-sources/follow-ups.ts) is the
+   * one caller that does this today. A read tool must not write a ledger.
+   */
+  record?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -42,6 +51,7 @@ export async function selectPhrase(options: SelectPhraseOptions): Promise<string
     style,
     fallbackStyle = 'warm',
     templateVars,
+    record = true,
   } = options
 
   const supabase = createServiceClient()
@@ -120,19 +130,24 @@ export async function selectPhrase(options: SelectPhraseOptions): Promise<string
   // Select randomly from available
   let selected = available[Math.floor(Math.random() * available.length)]
 
-  // Record usage. Column names match migration 005.
-  try {
-    const { error } = await supabase.from('phrase_usage').insert({
-      contact_email: contactEmail.toLowerCase(),
-      phrase_category: category,
-      phrase_text: selected,
-      venue_id: venueId,
-    })
-    if (error) {
-      console.warn('[phrase-selector] phrase_usage insert failed:', error.message)
+  // Record usage. Column names match migration 005. Skipped when
+  // record=false: a read path that composes a draft to show the operator,
+  // never sends it, and must not write to this ledger (types.ts, the tool-
+  // source plug-in contract: a source never writes).
+  if (record) {
+    try {
+      const { error } = await supabase.from('phrase_usage').insert({
+        contact_email: contactEmail.toLowerCase(),
+        phrase_category: category,
+        phrase_text: selected,
+        venue_id: venueId,
+      })
+      if (error) {
+        console.warn('[phrase-selector] phrase_usage insert failed:', error.message)
+      }
+    } catch (err) {
+      console.warn('[phrase-selector] phrase_usage insert threw:', (err as Error).message)
     }
-  } catch (err) {
-    console.warn('[phrase-selector] phrase_usage insert threw:', (err as Error).message)
   }
 
   // Substitute template variables if provided

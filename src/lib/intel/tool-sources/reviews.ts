@@ -3,16 +3,21 @@
  * trend read. NOVEMBER-PLAN.md wave 2, W14. Battery Q41.
  *
  * There is already a rollup for this at src/lib/services/intel/reviews-
- * analytics.ts (Tier 7b, powers /intel/reviews). This does not call it:
- * that helper opens its own service-role client via createServiceClient()
- * with no way to inject a fake for a unit test, and it groups by month
- * rather than quarter and does not carry example quotes. This file reads
- * the same `reviews` table (migration 031) directly against the injected
- * deps.supabase so the tool stays testable without the network, and
- * shapes the numbers the way Q41 actually asks for them.
+ * analytics.ts (Tier 7b, powers /intel/reviews). Wave 4 W34 gave that
+ * helper an injectable client, so this file now calls it for the two
+ * numbers that were previously re-derived by hand from the same rows:
+ * per-source counts/average rating and theme frequency. What this file
+ * still owns, because the rollup does not carry it: quarter-bucketed
+ * rating trend (the rollup groups by month), the honest-refusal
+ * `n`/`enoughData` wrapping per figure, and the example quotes attached
+ * to each theme. It still reads the raw `reviews` table itself (against
+ * the same injected deps.supabase passed to the rollup) because the
+ * quarter bucketing and the quotes both need the individual rows, not
+ * just the rollup's aggregates.
  */
 import type { IntelToolSource, ToolSourceDeps } from './types'
 import { insufficient } from './types'
+import { computeReviewsAnalytics } from '@/lib/services/intel/reviews-analytics'
 
 /** Below this many reviews on record, a trend or theme read is a guess
  *  dressed up as a finding. */
@@ -92,20 +97,17 @@ async function run(
     }
   }
 
-  // ---- per source: count + average rating ----
-  const sourceMap = new Map<string, { n: number; sum: number }>()
-  for (const r of rows) {
-    const key = r.source || 'other'
-    const e = sourceMap.get(key) ?? { n: 0, sum: 0 }
-    e.n++
-    e.sum += r.rating
-    sourceMap.set(key, e)
-  }
-  const bySource = Array.from(sourceMap.entries())
-    .map(([source, e]) => ({
-      source: SOURCE_LABELS[source] ?? source,
-      n: e.n,
-      avgRating: e.n > 0 ? round1(e.sum / e.n) : null,
+  // ---- per source + theme frequency: from the shared rollup, not re-derived ----
+  // Same `reviews` rows, same injected deps.supabase, so the two callers
+  // cannot disagree on a count (see the __tests__ "agree with the rollup"
+  // case).
+  const rollup = await computeReviewsAnalytics(venueId, deps.supabase)
+
+  const bySource = rollup.sources
+    .map((s) => ({
+      source: SOURCE_LABELS[s.source] ?? s.source,
+      n: s.count,
+      avgRating: s.avg_rating !== null ? round1(s.avg_rating) : null,
     }))
     .sort((a, b) => b.n - a.n)
 
@@ -127,26 +129,29 @@ async function run(
     }))
     .sort((a, b) => (a.quarter < b.quarter ? -1 : a.quarter > b.quarter ? 1 : 0))
 
-  // ---- recurring themes with a couple of short example quotes each ----
-  const themeMap = new Map<string, { n: number; quotes: string[] }>()
+  // ---- example quotes per theme ----
+  // Theme counts come from the rollup above; this pass over the same rows
+  // only harvests a couple of short quotes per theme, which the rollup
+  // does not carry.
+  const quotesByTheme = new Map<string, string[]>()
   for (const r of rows) {
     if (!Array.isArray(r.themes)) continue
     for (const raw of r.themes) {
       if (!raw) continue
       const theme = String(raw).toLowerCase().trim()
       if (!theme) continue
-      const e = themeMap.get(theme) ?? { n: 0, quotes: [] }
-      e.n++
-      if (e.quotes.length < MAX_QUOTES_PER_THEME && r.body && r.body.trim()) {
-        e.quotes.push(truncate(r.body, QUOTE_MAX_CHARS))
+      const quotes = quotesByTheme.get(theme) ?? []
+      if (quotes.length < MAX_QUOTES_PER_THEME && r.body && r.body.trim()) {
+        quotes.push(truncate(r.body, QUOTE_MAX_CHARS))
       }
-      themeMap.set(theme, e)
+      quotesByTheme.set(theme, quotes)
     }
   }
-  const recurringThemes = Array.from(themeMap.entries())
-    .map(([theme, e]) => ({ theme, n: e.n, exampleQuotes: e.quotes }))
-    .sort((a, b) => b.n - a.n)
-    .slice(0, MAX_THEMES)
+  const recurringThemes = rollup.top_themes.slice(0, MAX_THEMES).map((t) => ({
+    theme: t.theme,
+    n: t.count,
+    exampleQuotes: quotesByTheme.get(t.theme) ?? [],
+  }))
 
   // ---- trending worse: last 6 months vs the 6 months before that ----
   const now = new Date()

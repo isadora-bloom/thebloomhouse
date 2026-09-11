@@ -30,6 +30,7 @@ interface FakeFollowUpOptions {
   weddingId: string
   contactEmail: string
   daysSinceLastContact: number
+  recordPhraseUsage?: boolean
 }
 interface FakeDraftResult {
   draft: string
@@ -481,6 +482,12 @@ describe('propose_follow_ups', () => {
     expect(mockGenerateFollowUp).toHaveBeenCalledTimes(1)
     expect(mockGenerateFollowUp.mock.calls[0][0].weddingId).toBe(WEDDING_A)
     expect(mockGenerateFollowUp.mock.calls[0][0].daysSinceLastContact).toBe(3)
+
+    // W34: a read tool must not write a ledger. propose_follow_ups composes
+    // through the same brain call as the write path, so the only thing
+    // that can stop the phrase_usage row is the flag threaded down to
+    // selectPhrase via composeFollowUpDraft -> generateFollowUp.
+    expect(mockGenerateFollowUp.mock.calls[0][0].recordPhraseUsage).toBe(false)
 
     // No draft row was created. The fake has no insert, so the only way
     // this count could change is a write the tool is not allowed to make.
