@@ -5,6 +5,6 @@
   "resolver_reassign_calls": 35,
   "resolver_reassign_calls_justification": "couple_notifications table (mig 389) added to mergeWeddings reassign list",
   "grandfather_entries": 28,
-  "migration_files": 397,
-  "migration_files_justification": "wave 3 2026-09-11: 398 handles contract, 399 social_engagements.couple_id (W23), 400 tangential pool deprecation comments (W24); 395/397 pending prod; flatten to tracked baseline still owed post-reimport"
+  "migration_files": 398,
+  "migration_files_justification": "wave 3 2026-09-11: 398 handles contract, 399 social_engagements.couple_id (W23), 400 tangential pool deprecations (W24), 401 instagram_connections (W28), 402 merge_couples carries handles (W22, renumbered from a duplicate 399); 395/397 pending prod; flatten to tracked baseline still owed post-reimport"
 }

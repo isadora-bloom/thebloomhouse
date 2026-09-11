@@ -21,6 +21,16 @@
  *       f0a64aa). Deterministic equality on the full prefix is the same
  *       evidence tier as email_exact and short-circuits before any
  *       name-based stage.
+ *   1d. Platform handle exact match (wave 3, HANDLE-IDENTITY-SPEC.md §2).
+ *       Same platform, same normalised handle, exactly one live couple in
+ *       the venue. A handle is a first-class identifier, so it sits with
+ *       the other deterministic identifier stages, after email and the
+ *       marketplace per-prospect keys and before any name stage. Two live
+ *       couples carrying the same handle is ambiguity, not evidence. The
+ *       stage declines and the pair goes to review. Unlike email, a handle
+ *       CAN be contradicted: the Tier 1.5 guard runs here, so a handle
+ *       match against a candidate with a differing strong email falls
+ *       through to the scorer and the linker demotes it to the queue.
  *   2. Exact full first + last name match (case-insensitive)
  *   2b. Partner-side exact full first + last name match. Mirror of stage
  *       2 against the signal's partner_first/partner_last slot. Carries
@@ -67,6 +77,7 @@ import { nicknameEquivalent } from './nicknames'
 import { logicalLocalpartMatch, localpartOf } from './email-localpart'
 import { extractKnotPersonId, knotPersonIdsFromEmails } from './knot-sender-id'
 import { extractMarketplacePersonId, marketplacePersonIdsFromEmails } from './marketplace-relay-id'
+import type { HandlePlatform } from './sources/types'
 
 // ---------------------------------------------------------------------------
 // Inputs
@@ -105,6 +116,10 @@ export interface CascadeSignal {
    *  reads them verbatim. */
   bodyEmails?: string[]
   bodyPhones?: string[]
+  /** Wave 3: platform handles the signal carries, already normalised by
+   *  normalizeHandle(). Read by stage 1d only. Platform-scoped: the same
+   *  string on two platforms is two facts, not one. */
+  handles?: Partial<Record<HandlePlatform, string>> | null
 }
 
 /**
@@ -132,6 +147,14 @@ export interface CascadeSignal {
 export interface CascadeCandidate {
   coupleId: string
   weddingDate: string | null
+  /** Wave 3: the couple's stored handle map (couples.handles, migration
+   *  398). Stage 1d compares platform by platform. */
+  handles?: Partial<Record<HandlePlatform, string>> | null
+  /** Wave 3: set when this couple has been merged away (couples.
+   *  merged_into_id). Stage 1d refuses to match a tombstoned couple:
+   *  "exactly one LIVE couple" is the rule. Callers that do not carry
+   *  the column leave it undefined and every candidate counts as live. */
+  mergedIntoId?: string | null
   people: Array<{
     firstName: string | null
     lastName: string | null
@@ -145,6 +168,7 @@ export type CascadeStageId =
   | 'exact_email'
   | 'knot_person_id_match'
   | 'marketplace_person_id_match'
+  | 'handle_exact'
   | 'exact_full_name'
   | 'partner_full_name'
   | 'nickname_plus_last_name'
@@ -484,6 +508,63 @@ function stage1cMarketplacePersonIdMatch(
           evidence: `marketplace_person_id:${sigId}`,
         }
       }
+    }
+  }
+  return null
+}
+
+/**
+ * Stage 1d, platform handle exact match (wave 3, HANDLE-IDENTITY-SPEC.md).
+ *
+ * Isadora, 2026-09-09: tracking every touchpoint from the first Instagram
+ * follow through to the review is the point of the product. A follow, a
+ * story view or a DM arrives carrying nothing but `(platform, handle)`, and
+ * until migration 398 that could not exist on the spine at all. Social was
+ * matched by trigram name similarity and "the email local part contains the
+ * handle", outside every guard the spine has.
+ *
+ * The rule here is deliberately narrow:
+ *   - platform-scoped. `rosie` on Instagram and `rosie` on TikTok are two
+ *     different facts. `handlesIntersect` in handles.ts holds the same line.
+ *   - already normalised. Every adapter runs `normalizeHandle()` before the
+ *     signal reaches the linker, so this stage is a string equality and
+ *     never a fuzzy compare.
+ *   - exactly one LIVE candidate. Zero is a miss. Two or more live couples
+ *     holding the same handle is ambiguity, not evidence: the stage declines
+ *     and the signal goes to the review queue rather than picking a winner.
+ *     A tombstoned couple (merged_into_id set) is not a candidate.
+ *   - contradictable. Unlike an email, a handle can be re-used, sold, or
+ *     typed in by the wrong person, so the Tier 1.5 guard runs. A handle
+ *     match against a candidate carrying a differing strong email falls
+ *     through here; the scorer then produces a handle-weighted verdict and
+ *     the Forwards Linker demotes it to the candidate queue. Never a fuse.
+ *
+ * Placement is after email and the marketplace per-prospect keys and before
+ * every name stage: a handle is deterministic evidence and beats a name
+ * score, but a reachable address is still the stronger identifier.
+ */
+function stage1dHandleExact(
+  signal: CascadeSignal,
+  candidates: CascadeCandidate[],
+): CascadeMatch | null {
+  const sig = signal.handles
+  if (!sig) return null
+  for (const platform of Object.keys(sig) as HandlePlatform[]) {
+    const value = sig[platform]
+    if (!value) continue
+    const hits = candidates.filter(
+      (c) => !c.mergedIntoId && c.handles?.[platform] === value,
+    )
+    // 0 hits: this platform misses, try the next one. 2+: ambiguous, so the
+    // handle is on two live couples, so let the review queue decide.
+    if (hits.length !== 1) continue
+    const c = hits[0]!
+    if (hasHardContradiction(signal, c)) continue // Tier 1.5 safety
+    return {
+      matched: true,
+      coupleId: c.coupleId,
+      stage: 'handle_exact',
+      evidence: `handle_exact:${platform}:${value}`,
     }
   }
   return null
@@ -949,6 +1030,7 @@ const STAGES: Array<(s: CascadeSignal, c: CascadeCandidate[]) => CascadeMatch | 
   stage1ExactEmail,
   stage1bKnotPersonIdMatch,
   stage1cMarketplacePersonIdMatch,
+  stage1dHandleExact,
   stage2ExactFullName,
   stage2bPartnerFullName,
   stage3NicknamePlusLastName,
@@ -994,6 +1076,8 @@ export function describeMatch(m: CascadeMatch): string {
       return `Knot per-prospect personId match (${m.evidence})`
     case 'marketplace_person_id_match':
       return `marketplace per-prospect key match (${m.evidence})`
+    case 'handle_exact':
+      return `platform handle match (${m.evidence})`
     case 'exact_full_name':
       return `exact full-name match (${m.evidence})`
     case 'partner_full_name':

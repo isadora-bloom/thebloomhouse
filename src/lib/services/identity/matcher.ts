@@ -47,6 +47,8 @@ import {
   type CascadeSignal,
   type CascadeCandidate,
 } from './identity-cascade'
+import { handlesIntersect } from './handles'
+import type { HandlePlatform } from './sources/types'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -77,6 +79,13 @@ export interface MatchableRecord {
   primary_name?: string | null
   partner_name?: string | null
   wedding_date?: string | null
+  /** Wave 3 (HANDLE-IDENTITY-SPEC.md): platform handle map, normalised by
+   *  normalizeHandle(). A shared `(platform, handle)` is a deterministic
+   *  strong identifier, scored like an email. Platform-scoped on purpose. */
+  handles?: Partial<Record<HandlePlatform, string>> | null
+  /** Wave 3: `couples.merged_into_id`. A tombstoned couple is not a live
+   *  candidate for the handle cascade stage. Undefined means "live". */
+  merged_into_id?: string | null
   /** Approximate moment this record's identity was observed. For couples
    *  this is created_at or wedding_date; for fragments it is the
    *  fragment's occurred_at. Used by cross-channel temporal scoring. */
@@ -112,6 +121,24 @@ export interface MatcherVerdict {
 const W = {
   email_exact: 100,
   phone_exact: 100,
+  /**
+   * Platform handle exact match (wave 3, HANDLE-IDENTITY-SPEC.md §2).
+   *
+   * A shared `(platform, handle)` is a deterministic strong identifier, the
+   * same class of evidence as a shared email, so it carries the same weight
+   * and clears the auto-attach threshold on its own. Platform-scoped: the
+   * pure comparison lives in `handlesIntersect`, which refuses to treat the
+   * same string on two platforms as one fact.
+   *
+   * This weight normally does not fire, because cascade stage 1d catches a clean
+   * handle match first and returns high immediately. It fires in the
+   * fallback when the cascade declined: two live couples hold the handle
+   * (ambiguous), or the Tier 1.5 guard found a contradicting strong email.
+   * In the contradiction case the Forwards Linker demotes the verdict to
+   * the candidate queue, which is the point: keep the evidence, refuse the
+   * fuse.
+   */
+  handle_exact: 100,
   partner_email: 95,
   partner_phone: 95,
   full_name_exact: 60,
@@ -374,6 +401,7 @@ function asCascadeSignal(r: MatchableRecord): CascadeSignal {
     // fields null and stage 5b skips.
     partnerFirstName: partnerSplit.firstName,
     partnerLastName: partnerSplit.lastName,
+    handles: r.handles ?? null,
   }
 }
 
@@ -383,6 +411,8 @@ function asCascadeCandidate(r: MatchableRecord): CascadeCandidate {
   return {
     coupleId: r.id,
     weddingDate: r.wedding_date ?? null,
+    handles: r.handles ?? null,
+    mergedIntoId: r.merged_into_id ?? null,
     people: [
       {
         firstName: split.firstName,
@@ -484,6 +514,22 @@ export function scoreCandidate(
 
   const signals: MatcherSignal[] = []
   let score = 0
+
+  // ---- Platform handle exact (wave 3) ------------------------------------
+  // A shared (platform, handle) is a deterministic identifier, scored like
+  // an email. Fires here only when cascade stage 1d declined: ambiguity
+  // across two live couples, or a Tier 1.5 contradiction. Keeping the
+  // evidence on the verdict is what lets the linker route the pair to the
+  // review queue instead of silently minting a second couple.
+  const handlePlatform = handlesIntersect(primary.handles, secondary.handles)
+  if (handlePlatform) {
+    score += W.handle_exact
+    signals.push({
+      name: 'handle_exact',
+      weight: W.handle_exact,
+      evidence: `${handlePlatform}:${primary.handles?.[handlePlatform] ?? ''}`,
+    })
+  }
 
   // ---- Email / phone exact (the cheapest highest-signal checks) -----------
   // Primary↔primary OR secondary↔secondary OR cross. Email and phone

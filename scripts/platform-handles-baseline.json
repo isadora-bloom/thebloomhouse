@@ -1,0 +1,14 @@
+{
+  "_README": "Wave 3 ratchet (HANDLE-IDENTITY-SPEC.md §6). Mentions of people.platform_handles under src/. May only DECREASE. The spine home for a handle is couples.handles (migration 398). Target 0. Re-baseline deliberately with --update; the diff is the human decision point.",
+  "total": 51,
+  "files": {
+    "src/app/api/admin/identity/handle-merge-proposals/route.ts": 1,
+    "src/app/api/intel/name-evidence/[weddingId]/route.ts": 5,
+    "src/components/intel/NameEvidencePanel.tsx": 2,
+    "src/lib/services/identity/candidate-resolver.ts": 4,
+    "src/lib/services/identity/handle-convergence.ts": 8,
+    "src/lib/services/identity/name-capture.ts": 23,
+    "src/lib/services/identity/orphan-promote.ts": 4,
+    "src/lib/services/social/match-engagements.ts": 4
+  }
+}

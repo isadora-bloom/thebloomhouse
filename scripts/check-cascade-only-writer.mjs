@@ -140,6 +140,17 @@ const CHOKEPOINT_FILES = new Set([
   // legacy weddings-table chokepoint (adopted 2026-05-12).
   'src/lib/services/identity/mint-wedding.ts',
 
+  // Wave 3 (HANDLE-IDENTITY-SPEC.md §5). The fragment coalesce moving out
+  // of tracer.ts and under the linker, under a name. Promotes an
+  // unpromoted fragment onto the couple that shares its (platform,
+  // handle), re-anchors that fragment's orphan touchpoints, and writes the
+  // SAME `couple_merge_events` 'fragment_promoted' audit row tracer.ts has
+  // always written, and that is the only guarded INSERT in the file. Called
+  // inline by route-by-tier after an attach or mint, and by the nightly
+  // cron. Cascade-internal by construction; tracer.ts is already a
+  // chokepoint for exactly this write, so this is a move, not a new site.
+  'src/lib/services/identity/fragment-sweep.ts',
+
   // Owns the spine touchpoint + fragment INSERT helpers
   // (insertTouchpoint at :324, insertFragment at :356) which the
   // forwards-linker and route-by-tier chokepoints both call. ALSO

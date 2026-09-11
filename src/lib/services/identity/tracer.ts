@@ -69,7 +69,7 @@ import {
   newJudgeBudget,
   type JudgeRunBudget,
 } from './llm-judge'
-import type { NormalizedSignal } from './sources'
+import type { NormalizedSignal, HandlePlatform } from './sources'
 import { decayStaleCouples } from './decay'
 import { lockAndMintCouple } from './mint-couple'
 
@@ -256,6 +256,11 @@ export interface CoupleForMatch {
   partner_phone: string | null
   wedding_date: string | null
   source_wedding_id: string | null
+  /** Wave 3 (migration 398): the couple's platform handle map, and the
+   *  merge tombstone. Both feed cascade stage 1d, which will only match a
+   *  live couple. */
+  handles: Partial<Record<HandlePlatform, string>> | null
+  merged_into_id: string | null
 }
 
 export function signalToMatchableRecord(s: NormalizedSignal): MatchableRecord {
@@ -271,6 +276,9 @@ export function signalToMatchableRecord(s: NormalizedSignal): MatchableRecord {
     observed_at: s.occurred_at,
     session_ip: s.session_ip ?? null,
     session_fingerprint: s.session_fingerprint ?? null,
+    // Wave 3: carry the signal's handles into the matcher so cascade
+    // stage 1d and the handle weight can see them.
+    handles: s.handles ?? null,
   }
 }
 
@@ -284,6 +292,8 @@ export function coupleToMatchableRecord(c: CoupleForMatch): MatchableRecord {
     primary_phone: c.primary_phone,
     partner_phone: c.partner_phone,
     wedding_date: c.wedding_date,
+    handles: c.handles,
+    merged_into_id: c.merged_into_id,
   }
 }
 
@@ -345,6 +355,10 @@ export async function insertFragment(
     external_id: signal.external_id,
     occurred_at: signal.occurred_at,
     raw_payload: signal.raw_payload,
+    // Wave 3 (migration 398): a pre-identity fragment keeps the handles it
+    // arrived with, so a later signal carrying the same (platform, handle)
+    // can promote it deterministically. See fragment-sweep.ts.
+    handles: signal.handles ?? {},
   })
   if (error) {
     if (error.code === '23505') return { inserted: false }
@@ -392,7 +406,7 @@ export async function loadRecentCouples(
   const { data } = await supabase
     .from('couples')
     .select(
-      'id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, partner_contact_email, partner_contact_phone, wedding_date, source_wedding_id',
+      'id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, partner_contact_email, partner_contact_phone, wedding_date, source_wedding_id, handles, merged_into_id',
     )
     .eq('venue_id', venueId)
     .order('updated_at', { ascending: false })
@@ -407,6 +421,8 @@ export async function loadRecentCouples(
     partner_contact_phone: string | null
     wedding_date: string | null
     source_wedding_id: string | null
+    handles: Partial<Record<HandlePlatform, string>> | null
+    merged_into_id: string | null
   }
   return ((data ?? []) as Row[]).map((r) => ({
     id: r.id,
@@ -418,6 +434,8 @@ export async function loadRecentCouples(
     partner_phone: r.partner_contact_phone,
     wedding_date: r.wedding_date,
     source_wedding_id: r.source_wedding_id,
+    handles: r.handles ?? null,
+    merged_into_id: r.merged_into_id ?? null,
   }))
 }
 

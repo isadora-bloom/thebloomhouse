@@ -265,6 +265,10 @@ async function main() {
           partner_phone: signal.partner_phone ?? null,
           wedding_date: signal.wedding_date ?? null,
           source_wedding_id: null,
+          // Wave 3 (migration 398). A synthesised in-run couple carries the
+          // signal's handles and is live by construction.
+          handles: signal.handles ?? null,
+          merged_into_id: null,
         }
         couples.push(synth)
         mintedThisRun.add(synth.id)
