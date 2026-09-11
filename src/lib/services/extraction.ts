@@ -7,12 +7,17 @@
  */
 
 import { callAIJson } from '@/lib/ai/client'
+import type { HandlePlatform } from './identity/sources/types'
+import { normalizeHandle, normalizeHandles } from './identity/handles'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
  * See PROMPTS-CHANGELOG.md for version history.
+ *
+ * v1.1 (2026-09-11, HANDLE-IDENTITY-SPEC.md §4, wave 3): added the
+ * `handles` field — see PROMPTS-CHANGELOG.md for the full entry.
  */
-export const EXTRACTION_PROMPT_VERSION = 'extraction.prompt.v1.0'
+export const EXTRACTION_PROMPT_VERSION = 'extraction.prompt.v1.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,6 +57,15 @@ export interface ExtractedSignals {
   decisionTimeline: 'immediate' | 'this_month' | 'this_quarter' | 'flexible' | null
   contactRelationship: 'engaged' | 'parent' | 'planner' | 'friend' | null
   phoneNumbers: string[]
+
+  // Wave 3 (HANDLE-IDENTITY-SPEC.md §4): platform handles found in the
+  // email — a signature line ("IG @rosie.hoyle") the model reads plus
+  // a deterministic parse of any instagram.com/<handle>-style profile
+  // URL in the body. Both are normalised through normalizeHandle();
+  // malformed candidates are dropped silently (a dropped-count warning
+  // goes to the console, nothing junk is ever stored). null when the
+  // email carried no recognisable handle.
+  handles: Partial<Record<HandlePlatform, string>> | null
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +204,99 @@ function detectLeadSource(text: string): { source: string | null; detail: string
     }
   }
   return { source: null, detail: null }
+}
+
+// ---------------------------------------------------------------------------
+// Wave 3 (HANDLE-IDENTITY-SPEC.md §4) — handle extraction.
+//
+// Two sources, merged:
+//   1. The model reads a plain-text handle out of a signature or body
+//      line ("IG @rosie.hoyle", "Find us on Instagram @rosieandsam").
+//      That is classification/extraction from prose, so it goes through
+//      the existing LLM path (see the system prompt below), never a
+//      regex over the body text.
+//   2. A profile URL ("https://instagram.com/rosie.hoyle") is a URL,
+//      not prose — finding one and reading its path segment is a
+//      deterministic, syntactic operation the repo's "no regex on user
+//      text" rule does not reach. URL_TOKEN_RE below only ever matches
+//      the shape of a URL; it never interprets meaning from the text
+//      around it.
+//
+// Both sources are normalised through normalizeHandle() before either
+// is trusted. A candidate that fails normalisation is dropped —
+// counted, logged, never stored.
+// ---------------------------------------------------------------------------
+
+const HANDLE_PLATFORMS: readonly HandlePlatform[] = [
+  'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter', 'knot', 'weddingwire', 'zola',
+]
+const KNOWN_HANDLE_PLATFORMS = new Set<string>(HANDLE_PLATFORMS)
+
+const URL_TOKEN_RE = /https?:\/\/[^\s<>"')]+/gi
+
+/**
+ * Strip any key the model returned that isn't one of the closed
+ * `HandlePlatform` values (a hallucinated platform, a typo). Guards
+ * `normalizeHandle()` against an unknown key — its per-platform lookup
+ * tables assume the closed set and are not defensive against a free
+ * string. Exported for the unit test.
+ */
+export function sanitiseHandlePlatformKeys(
+  raw: Partial<Record<string, string | null | undefined>> | null | undefined,
+): Partial<Record<HandlePlatform, string>> | null {
+  if (!raw) return null
+  const out: Partial<Record<HandlePlatform, string>> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== 'string' || !value.trim()) continue
+    if (KNOWN_HANDLE_PLATFORMS.has(key)) {
+      out[key as HandlePlatform] = value
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/**
+ * Deterministic profile-URL parse. Scans free text for http(s) URL
+ * tokens and, for each one, tries every known platform's
+ * `normalizeHandle()` until one recognises the host. Returns the
+ * merged handle map, or null when no URL matched a known profile
+ * host. Exported for the unit test.
+ */
+export function extractHandlesFromUrls(text: string): Partial<Record<HandlePlatform, string>> | null {
+  if (!text) return null
+  const urls = text.match(URL_TOKEN_RE) ?? []
+  if (urls.length === 0) return null
+  const out: Partial<Record<HandlePlatform, string>> = {}
+  for (const url of urls) {
+    for (const platform of HANDLE_PLATFORMS) {
+      if (out[platform]) continue
+      const handle = normalizeHandle(platform, url)
+      if (handle) out[platform] = handle
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/**
+ * Merge the model's signature/body read with the deterministic
+ * profile-URL parse and normalise everything. The URL parse is exact,
+ * so it wins per-platform when both sources fire for the same
+ * platform. Malformed candidates from either source are dropped —
+ * `dropped` counts how many, for the caller to log; nothing malformed
+ * is ever returned. Exported for the unit test.
+ */
+export function mergeAndNormaliseHandles(args: {
+  modelHandles: Partial<Record<string, string | null | undefined>> | null | undefined
+  emailBody: string
+}): { handles: Partial<Record<HandlePlatform, string>> | null; dropped: number } {
+  const sanitised = sanitiseHandlePlatformKeys(args.modelHandles)
+  const rawCandidateCount = sanitised ? Object.keys(sanitised).length : 0
+  const modelNormalised = normalizeHandles(sanitised)
+  const dropped = rawCandidateCount - (modelNormalised ? Object.keys(modelNormalised).length : 0)
+  const urlHandles = extractHandlesFromUrls(args.emailBody)
+  const merged =
+    modelNormalised || urlHandles ? { ...modelNormalised, ...urlHandles } : null
+  return { handles: merged, dropped }
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +457,10 @@ export async function extractSignals(
     venuesTouring: string[]
     decisionTimeline: 'immediate' | 'this_month' | 'this_quarter' | 'flexible' | null
     contactRelationship: 'engaged' | 'parent' | 'planner' | 'friend' | null
+    // Wave 3 (HANDLE-IDENTITY-SPEC.md §4). Raw model read of a
+    // signature/body handle line — sanitised + normalised below
+    // before it ever reaches ExtractedSignals.handles.
+    handles: Partial<Record<string, string>> | null
   }
 
   const signals = await callAIJson<AIExtractedSignals>({
@@ -379,6 +490,7 @@ Return a JSON object with these fields:
 - venuesTouring: string[] — competing venues they mention touring or considering
 - decisionTimeline: "immediate" | "this_month" | "this_quarter" | "flexible" | null — how soon they plan to decide
 - contactRelationship: "engaged" | "parent" | "planner" | "friend" | null — who is writing the email
+- handles: object | null — social-media handles or usernames the sender explicitly gives, most often in a signature line ("IG @rosie.hoyle", "Find us on Instagram @rosieandsam", "TikTok: @the.hoyles"). Keys are one or more of "instagram", "tiktok", "facebook", "pinterest", "twitter" — use a key only when that platform is clearly named. Value is the handle exactly as written (keep the "@" if present, keep case, do not strip or reformat). Do NOT guess a handle from a name, and do NOT invent one from a URL — a bare profile link is parsed separately. null when no handle is given.
 
 Be precise. Only extract what is explicitly stated or clearly implied. Do not guess.`,
     userPrompt: emailBody,
@@ -405,6 +517,19 @@ Be precise. Only extract what is explicitly stated or clearly implied. Do not gu
   const budgetMin = budgetInfo.min ?? signals.budgetRange?.min ?? null
   const budgetMax = budgetInfo.max ?? signals.budgetRange?.max ?? null
 
+  // Wave 3 (HANDLE-IDENTITY-SPEC.md §4): merge the model's signature/
+  // body handle read with the deterministic profile-URL parse. Junk
+  // from either source is dropped, counted, and logged — never stored.
+  const { handles, dropped: droppedHandles } = mergeAndNormaliseHandles({
+    modelHandles: signals.handles,
+    emailBody,
+  })
+  if (droppedHandles > 0) {
+    console.warn(
+      `[extraction] dropped ${droppedHandles} malformed handle candidate(s) from model output`,
+    )
+  }
+
   return {
     ...signals,
     urgency,
@@ -417,5 +542,7 @@ Be precise. Only extract what is explicitly stated or clearly implied. Do not gu
     // Lead source from regex detection
     leadSource: leadSourceInfo.source,
     leadSourceDetail: leadSourceInfo.detail,
+    // Platform handles — model read + deterministic URL parse, merged.
+    handles,
   }
 }

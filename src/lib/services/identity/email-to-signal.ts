@@ -49,9 +49,17 @@
  *
  * Backward compatible — callers that don't supply the resolved* fields
  * keep the pre-existing behaviour byte-identical.
+ *
+ * 2026-09-11 — Wave 3 (HANDLE-IDENTITY-SPEC.md §4). Optional `handles`
+ * input carries platform handles pulled from the email (signature/body
+ * LLM extraction plus a deterministic profile-URL parse, both in
+ * extraction.ts). Re-normalised here via `normalizeHandle()` and set on
+ * the signal's `handles` field. Omitted/empty is byte-identical to the
+ * pre-Wave-3 shape (handles: null).
  */
 
-import type { NormalizedSignal } from './sources/types'
+import type { NormalizedSignal, HandlePlatform } from './sources/types'
+import { normalizeHandles } from './handles'
 
 /** The parsed-email fields the adapter reads. Mirrors the subset of
  *  `IncomingEmail` (pipeline.ts) the inline literal touched. Kept as a
@@ -151,6 +159,16 @@ export interface EmailSignalInput {
    */
   fullBody?: string | null
   rfc2822Headers?: Record<string, unknown> | string | null
+  /**
+   * Wave 3 (HANDLE-IDENTITY-SPEC.md §4). Platform handles pulled from
+   * the email — the LLM signature/body extraction in extraction.ts
+   * (`ExtractedSignals.handles`) merged with its deterministic
+   * profile-URL parse. Values need not already be normalised; this
+   * adapter runs them through `normalizeHandle()` again so a caller
+   * that forgets to pre-clean never lands junk on the signal. null /
+   * omitted when the email carried none.
+   */
+  handles?: Partial<Record<HandlePlatform, string | null | undefined>> | null
 }
 
 /**
@@ -188,7 +206,14 @@ export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSign
     actionTypeOverride,
     fullBody = null,
     rfc2822Headers = null,
+    handles: rawHandles = null,
   } = input
+
+  // Wave 3: re-normalise defensively so a caller that passes raw
+  // model output (or a raw @handle string) straight through never
+  // lands junk on the signal. normalizeHandles drops anything
+  // malformed and returns null when nothing survives.
+  const handles = normalizeHandles(rawHandles)
 
   // Identity resolution — relay-resolved values win when present.
   // null/undefined falls through to the raw From header, preserving
@@ -238,6 +263,7 @@ export function emailToNormalizedSignal(input: EmailSignalInput): NormalizedSign
     wedding_date: null,
     session_ip: null,
     session_fingerprint: null,
+    handles,
     raw_payload: {
       subject: email.subject,
       interaction_id: interactionId,

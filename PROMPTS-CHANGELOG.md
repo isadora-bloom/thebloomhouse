@@ -11,6 +11,12 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-11 (Ask for the key — handle extraction, v1.0 → v1.1)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| extraction (`extractSignals`, `src/lib/services/extraction.ts`) | `extraction.prompt.v1.0` | `extraction.prompt.v1.1` | NOVEMBER-PLAN.md wave 3, W25, HANDLE-IDENTITY-SPEC.md §4. Nothing carried an Instagram/TikTok handle from an email into the identity spine. Added a `handles` field to the schema — the model reads a signature/body line like "IG @rosie.hoyle" (classification from prose stays on the LLM path). A deterministic parse of any `instagram.com/<handle>`-style profile URL in the body supplements it (a URL is a syntactic token, not prose, so the repo's no-regex-on-user-text rule doesn't reach it). Both sources are normalised through `normalizeHandle()`; a candidate that fails normalisation is dropped and counted, never stored. `email-to-signal.ts` carries the merged result onto `NormalizedSignal.handles`. |
+
 ## 2026-09-08 (Couple-intel derive — calibration feedback edge, v2 → v3)
 
 | brain | from | to | change |
@@ -1138,7 +1144,16 @@ prompt-version constants.
 - **v1.0** (2026-05-05) — Initial versioning baseline. Covers both detectDataType
   (24-class classification) and mapColumns (source→target dict). Haiku tier.
 
-### extraction (`extraction.prompt.v1.0`)
+### extraction (`extraction.prompt.v1.1`)
+- **v1.1** (2026-09-11) — NOVEMBER-PLAN.md wave 3, W25, HANDLE-IDENTITY-SPEC.md §4.
+  Added `handles` to the schema: platform handles the sender gives in a signature or
+  body line ("IG @rosie.hoyle"). The model reads it (classification from prose stays
+  on the LLM path, per the repo's no-regex-on-user-text rule); a separate
+  deterministic parse of any `instagram.com/<handle>`-style profile URL in the body
+  (a URL is a syntactic token, not prose) supplements it. Both are normalised through
+  `normalizeHandle()` before either is trusted — malformed candidates are dropped and
+  counted, never stored. See `extractHandlesFromUrls` / `mergeAndNormaliseHandles` /
+  `sanitiseHandlePlatformKeys` in `src/lib/services/extraction.ts`.
 - **v1.0** (2026-05-05) — Initial versioning baseline. Structured signal extraction
   from inquiry email bodies (30-field schema). Haiku tier.
 
