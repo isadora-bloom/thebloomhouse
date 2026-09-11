@@ -258,3 +258,24 @@ Follow-ups for wave 4:
 - `/api/intel/social-integration/captures/[captureId]` has no page; the modal link was removed.
 - First-seen dates derived from screenshot relative ages are approximate; label them so.
 - Meta app setup steps are in W28's settings page and its report.
+
+## Wave 4 (launched 2026-09-11): close the handle journey end to end
+
+Migrations are NOT applied between waves. One runner (`scripts/apply-pending-migrations.ts`,
+integrator) applies everything owed, in order, at the end.
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W29 | Handles reach the couple from every live path: email pipeline passes extracted handles into the signal; CSV import (web form, calculator, HoneyBook) merges handles onto the mirrored couple after mint | Opus | `src/lib/services/email/pipeline.ts` (the emailToNormalizedSignal call sites + extraction call), `src/lib/services/crm-import/index.ts` (post-mint handle merge only), `src/lib/services/identity/route-by-tier.ts` (export only if needed) |
+| W30 | Instagram DMs reach the inbox and the classifier through the same interactions chokepoint SMS uses; reply plumbing stubbed to the Graph send endpoint behind the same env gate | Sonnet | `src/lib/services/ingestion/instagram-dm.ts`, the SMS interactions writer it reuses (read the OpenPhone sync to find it), `src/app/api/webhooks/instagram/route.ts`, inbox filters for type/channel |
+| W31 | Ribbon and social hygiene: approximate first-seen dates labelled on the couple page; a capture detail page at `/intel/social-integration/captures/[id]`; `/intel/tours` upcoming/this-year filters in venue time; `merge-people.ts` stops touching the retired queue | Sonnet | `src/app/(platform)/intel/couples/**` (labels only), `src/app/(platform)/intel/social-integration/**`, `src/app/(platform)/intel/tours/page.tsx`, `src/lib/services/identity/merge-people.ts` |
+| W32 | Q37 link 1: a `get_tour_cohort` tool source with an explicit date range (past or future), so "everyone I toured this weekend" starts from the right list; battery ground truth follows automatically | Sonnet | new `src/lib/intel/tool-sources/tour-cohort.ts` + test + one line in `tool-sources/index.ts` |
+| W33 | Fix the 20 React Compiler sites and restore the five rules to error; fix the one rules-of-hooks site | Haiku | the files eslint names, `eslint.config.mjs` |
+| W34 | `reviews-analytics.ts` gains an injectable client and W14's `reviews.ts` tool source calls it instead of re-deriving; `propose_follow_ups` no longer records `phrase_usage` when composing a proposal (a read tool must not write a ledger) | Sonnet | `src/lib/services/intel/reviews-analytics.ts`, `src/lib/intel/tool-sources/reviews.ts`, `src/lib/ai/phrase-selector.ts` (a no-record flag), `src/lib/services/cohort/bulk-follow-up.ts` (pass the flag) |
+
+Out of this repo: the "Your Instagram (optional)" field on the public inquiry form and the
+calculator lives in the marketing-site repos; map it to the `instagram` CSV column W25
+defaulted. Meta app credentials for W28 are an operator step.
+
+Shared rules as wave 3. Every worktree starts with `git reset --hard consolidation` and
+`npm ci`. linkSignal is the only spine writer. No database writes.
