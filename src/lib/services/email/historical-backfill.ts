@@ -238,14 +238,11 @@ export async function drainGmailBackfill(supabase: SupabaseClient): Promise<unkn
     })
     .eq('id', venue.id)
 
-  if (result.done) {
-    try {
-      const { requestTracerRun } = await import('@/lib/services/identity/tracer-runner')
-      await requestTracerRun(supabase, venue.id)
-    } catch (err) {
-      console.warn('[historical-backfill] requestTracerRun failed:', err)
-    }
-  }
+  // Wave 3 W26 (2026-09-09): this used to request a Backwards Tracer
+  // run once a venue's Gmail backfill completed. The Tracer and its
+  // request-queue are retired — the nightly fragment_sweep cron
+  // covers every venue unconditionally, so no per-backfill stamp is
+  // needed.
 
   return {
     venueId: venue.id,

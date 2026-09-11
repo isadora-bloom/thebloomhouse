@@ -32,12 +32,8 @@ import { mineTranscriptVoiceForAllVenues } from '@/lib/services/tour/transcript-
 import { findBacktraceCandidates } from '@/lib/services/attribution/source-backtrace'
 import { reclusterVenue } from '@/lib/services/identity/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/identity/candidate-resolver'
-import { runBacktrackAllVenues } from '@/lib/services/identity/backtrack'
-import {
-  runIdentityFirstTracerAllVenues,
-  drainPendingTracerRun,
-} from '@/lib/services/identity/tracer-runner'
 import { runDecaySweepAllVenues } from '@/lib/services/identity/decay'
+import { sweepFragmentsAllVenues } from '@/lib/services/identity/fragment-sweep'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/ingestion/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/ingestion/openphone'
 import { runCalendlyUriBackfill } from '@/lib/services/ingestion/calendly'
@@ -148,25 +144,18 @@ const VALID_JOBS = [
   // /api/cron?job=sms_sequences for manual runs.
   'sms_sequences',
   'phase_b_sweep',
-  // Identity-First Phase B (2026-05-14). Backwards Tracer that walks
-  // every connected channel's historical signals (anchors, gmail,
-  // calendly, knot, instagram) and reconstructs the
-  // couples/touchpoints/fragments/candidate_matches graph from raw
-  // evidence. Per IDENTITY-FIRST-ARCHITECTURE.md §4 + Appendix A. NOT
-  // the same job as 'phase_b_sweep' (legacy Wave 4-8) — that one
-  // operates on candidate_identities; this one operates on the new
-  // Phase A schema. Both coexist until Phase D migrates the read paths.
-  'identity_first_tracer',
-  // T5-Rixey-CCC (2026-05-02). Candidate-resolver backtrack — when
-  // weddings become known-email, retroactively scan unresolved storefront
-  // candidate_identities and link the orphans. BBB spike measured 12.7%
-  // of tangential signals connected to active weddings on Rixey; the
-  // 1,704-orphan tail (553 of which are The Knot) never gets attribution
-  // even when the same person submits the calculator weeks later. Daily
-  // sweep runs alongside phase_b_sweep so any new wedding inserts AND
-  // any new storefront imports get retried. Stamps backtrack_attempted_at
-  // (migration 191) so re-runs paginate past recently-evaluated rows.
-  'identity_backtrack',
+  // Wave 3 W26 (2026-09-09). Nightly fragment sweep — replaces the
+  // retired Backwards Tracer (`identity_first_tracer`, deleted) and
+  // the retired identity-backtrack cron (`identity_backtrack`,
+  // deleted — backtrack.ts is a duplicate identity module per
+  // scripts/check-cleanup-budget.mjs). Two passes per venue: W22's
+  // handle-based fragment promotion, then the identity-hint
+  // cross-channel coalesce inherited verbatim from tracer.ts. See
+  // src/lib/services/identity/fragment-sweep.ts header. NOT the same
+  // job as 'phase_b_sweep' (legacy Wave 4-8) — that one operates on
+  // candidate_identities; this one operates on the couples/
+  // touchpoints/fragments spine.
+  'fragment_sweep',
   'data_integrity_sweep',
   're_engagement_attribution',
   // Cost-ceiling circuit breaker (Playbook OPS-21.4.3). cost_ceiling_check
@@ -932,44 +921,18 @@ async function runJob(
       // import time; AI is too expensive to retry every night.
       return sweepPhaseBAllVenues()
 
-    case 'identity_first_tracer': {
-      // Identity-First Phase B Backwards Tracer (2026-05-14). Walks
-      // historical signals on every connected channel and reconstructs
-      // the couples / touchpoints / fragments graph in the new schema
-      // (mig 346). Six stages per IDENTITY-FIRST-ARCHITECTURE.md §4:
-      // anchor_discovery → touchpoint_sweep → cross_channel_coalesce →
-      // agent_infer → decay_sweep → validate. Rerun-safe via
-      // UNIQUE(venue_id, channel, external_id). LLM judge rate-limited
-      // 200/run + 50/venue/day. Cold-start mode: venue with zero
-      // booked-anchor couples short-circuits anchor_discovery and
-      // emits 'skipped' (no degenerate sweep).
-      //
-      // ?judge_budget=N — overrides the per-run LLM judge cap. A large
-      // historical backfill passes judge_budget=0 to skip the judge
-      // entirely (judge-band matches route to candidate_matches for
-      // operator review instead), keeping the sweep inside the
-      // function time limit. Scheduled runs omit it (default 200).
-      const jb = params?.get('judge_budget')
-      const judgeBudget =
-        jb != null && jb !== '' && Number.isFinite(Number(jb))
-          ? Number(jb)
-          : undefined
-      return runIdentityFirstTracerAllVenues(
-        judgeBudget != null ? { judgeBudget } : undefined,
-      )
+    case 'fragment_sweep': {
+      // Wave 3 W26 (2026-09-09). Nightly fragment sweep — see the
+      // VALID_JOBS comment above + fragment-sweep.ts header. Two
+      // passes per venue: W22's handle-based promotion, then the
+      // identity-hint cross-channel coalesce inherited from the
+      // retired Backwards Tracer (score > 91 auto-promote, 30-90
+      // queues a candidate_match). Deterministic — no LLM judge, so
+      // no budget parameter (unlike the old identity_first_tracer
+      // job). Idempotent via `fragments.promoted_to_couple_id`.
+      const supabase = createServiceClient()
+      return sweepFragmentsAllVenues(supabase)
     }
-
-    case 'identity_backtrack':
-      // T5-Rixey-CCC (2026-05-02). Daily backtrack — for each venue,
-      // for each wedding with inquiry_date, score every unresolved
-      // storefront candidate (Knot/WW/IG/Pinterest/...) on first_name
-      // + last_initial + state + ±90/+14d window. High-confidence
-      // matches auto-link via attribution_events; medium queue for
-      // /admin/identity/backtrack coordinator review; low + no-match
-      // get backtrack_attempted_at stamped so the next sweep skips
-      // them for REATTEMPT_WINDOW_DAYS (7d). Idempotent — re-running
-      // doesn't re-link or duplicate. Pure rule scoring; no LLM.
-      return sweepIdentityBacktrackAllVenues()
 
     case 'data_integrity_sweep':
       // Phase 2 multi-venue rollout (2026-04-30). Runs the 8 data
@@ -1168,18 +1131,14 @@ async function runJob(
       // into the same shared runIdentityJudgeSweep service.
       const { runIdentityJudgeSweep } = await import('@/lib/services/identity/judge-sweep')
       const judge = await runIdentityJudgeSweep()
-      // Piggyback: drain one pending Identity-First Backwards Tracer
-      // run (migration 350 queue). Auto-triggered by importers; no
-      // separate cron entry because vercel.json is at the 40-cron cap.
-      let tracerDrain: unknown = null
-      try {
-        tracerDrain = await drainPendingTracerRun()
-      } catch (err) {
-        tracerDrain = {
-          error: err instanceof Error ? err.message : String(err),
-        }
-      }
-      return { judge, tracer_drain: tracerDrain }
+      // Wave 3 W26 (2026-09-09): the Backwards Tracer drain that used
+      // to piggyback here is gone. The migration-350 queue marker
+      // (`venues.identity_tracer_requested_at`) it drained is retired
+      // too — nothing stamps it any more (see import-router's
+      // route-and-process-after-adapter.ts). Fragment reconciliation
+      // now runs on its own nightly cron entry ('fragment_sweep')
+      // rather than a 5-minute drain.
+      return { judge }
     }
 
     case 'couple_intel_sweep': {
@@ -2038,7 +1997,7 @@ async function sweepPhaseBAllVenues(): Promise<
   // NOTE: venues has no `archived_at` column — the prior `.is('archived_at',
   // null)` filter errored (42703), so `data` came back null and this sweep
   // was a silent no-op for every venue, every night. Filter dropped; this
-  // now processes all venues, matching runIdentityFirstTracerAllVenues.
+  // now processes all venues.
   const { data: venues } = await supabase
     .from('venues')
     .select('id, name')
@@ -2082,17 +2041,6 @@ async function sweepPhaseBAllVenues(): Promise<
   }
 
   return out
-}
-
-/**
- * T5-Rixey-CCC identity-backtrack sweep wrapper. Per-venue runner
- * lives in the identity-backtrack service; this wraps it so the cron
- * switch stays consistent. Returns per-venue summary keyed by venue
- * name for log readability.
- */
-async function sweepIdentityBacktrackAllVenues() {
-  const supabase = createServiceClient()
-  return runBacktrackAllVenues(supabase)
 }
 
 /**

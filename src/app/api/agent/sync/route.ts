@@ -112,21 +112,12 @@ export async function POST(req: Request) {
     // If fetched === chunk, there's likely more — keep looping at the UI.
     const done = newEmails.length < chunk || processed === newEmails.length
 
-    // Identity-First §4: once the Gmail backfill has finished pulling
-    // history, request a Backwards Tracer run so the couples graph is
-    // reconstructed from the interactions just imported. Only on the
-    // final chunk (done) so we don't re-stamp on every loop iteration.
-    if (done && processed > 0) {
-      try {
-        const { requestTracerRun } = await import(
-          '@/lib/services/identity/tracer-runner'
-        )
-        const { createServiceClient } = await import('@/lib/supabase/service')
-        await requestTracerRun(createServiceClient(), venueId)
-      } catch {
-        // Queue stamp is best-effort; the sync itself succeeded.
-      }
-    }
+    // Wave 3 W26 (2026-09-09): this used to request a Backwards Tracer
+    // run once the Gmail backfill finished a chunk, so the couples
+    // graph got reconstructed from the interactions just imported. The
+    // Tracer and its request-queue are retired — the nightly
+    // fragment_sweep cron covers every venue unconditionally, so no
+    // per-import stamp is needed.
 
     return NextResponse.json({
       success: true,

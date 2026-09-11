@@ -3123,25 +3123,16 @@ export async function processIncomingEmail(
         }
       })()
 
-      // T5-Rixey-CCC (2026-05-02): retroactive storefront backtrack on
-      // every new wedding. The candidate-resolver above scans candidates
-      // unresolved-as-of-now; backtrack additionally scans every
-      // unresolved storefront candidate (Knot/WW/IG/Pinterest/...) within
-      // the [-90d, +14d] inquiry window for first_name + last_initial +
-      // state matches. This catches the "Sarah viewed Knot 6 weeks ago,
-      // finally emails today" case that the candidate-resolver alone
-      // misses because the candidate's first_seen falls outside the
-      // resolver's tier-1 ±72h window. Fire-and-forget, never blocks.
-      void (async () => {
-        try {
-          const { runBacktrackForWedding } = await import('@/lib/services/identity/backtrack')
-          if (weddingId) {
-            await runBacktrackForWedding(supabase, weddingId)
-          }
-        } catch (err) {
-          console.warn('[pipeline] create-time identity backtrack failed:', err)
-        }
-      })()
+      // Wave 3 W26 (2026-09-09): this used to also fire a retroactive
+      // storefront backtrack (T5-Rixey-CCC) on every new wedding —
+      // backtrack.ts scanned every unresolved storefront candidate
+      // (Knot/WW/IG/Pinterest/...) within the [-90d, +14d] inquiry
+      // window for first_name + last_initial + state matches, catching
+      // the "Sarah viewed Knot 6 weeks ago, finally emails today" case
+      // the candidate-resolver's tier-1 ±72h window alone misses.
+      // backtrack.ts is retired (duplicate identity module per
+      // scripts/check-cleanup-budget.mjs) — the candidate-resolver
+      // call above is what remains of that class of fix.
     }
   } else if (
     isNewContact &&

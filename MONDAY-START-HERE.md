@@ -26,7 +26,7 @@ A 15-minute on-ramp back into the rebuild. Nothing below is urgent; nothing is r
 
 5. **Point the golden harness at a safe DB (D-12):** set `.env` to the `pre-tier-8` Supabase branch (NOT prod), seed `GOLDEN_TEST_VENUE`, then `npm run test:golden`. It tells you which of GC-1…9 already pass = your worklist.
 
-6. **Then — and only then — Phase 1.1** begins: fold the Backwards Tracer into `linkSignal` (the one origin-sourced writer). Ask me to draft it adapter-by-adapter when you're ready; I'll also write `check-no-mirror-source.mjs` and golden cases GC-10–13.
+6. ~~**Then — and only then — Phase 1.1** begins: fold the Backwards Tracer into `linkSignal` (the one origin-sourced writer).~~ **Done, and gone further.** Touchpoint creation moved to origin-replay through `linkSignal` back in Phase 1.1. NOVEMBER-PLAN.md Wave 3 W26 (2026-09-09) then retired the Tracer itself: its only stage with no other home (the identity-hint cross-channel coalesce) moved to `src/lib/services/identity/fragment-sweep.ts` as the nightly `fragment_sweep` cron job; `tracer.ts`, `tracer-runner.ts` and `backtrack.ts` are deleted or reduced to shared primitives. See that workstream's report for the full account.
 
 ## If you have 5 spare minutes this weekend (totally optional)
 Just skim `BLOOM-CEO-DECISIONS.md` — it's the "why" behind the 12 decisions, so Monday's box-checking is fast and confident. Don't run anything; don't decide anything tired.

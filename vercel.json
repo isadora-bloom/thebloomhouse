@@ -97,7 +97,7 @@
       "schedule": "45 4 * * *"
     },
     {
-      "path": "/api/cron?job=identity_backtrack",
+      "path": "/api/cron?job=fragment_sweep",
       "schedule": "0 4 * * *"
     },
     {
