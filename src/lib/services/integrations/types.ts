@@ -22,6 +22,10 @@ export type IntegrationCategory =
   | 'crm'
   | 'audio_capture'
   | 'sms_webhook'
+  /** Wave 3 W28. Social inbox channels: Instagram DMs today, whatever
+   *  else Meta opens up later. Separate from 'sms_webhook' because the
+   *  identifier is a handle, not a phone number. */
+  | 'social_dm'
 
 export type IntegrationAuthShape =
   | 'oauth'

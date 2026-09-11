@@ -6,5 +6,5 @@
   "resolver_reassign_calls_justification": "couple_notifications table (mig 389) added to mergeWeddings reassign list",
   "grandfather_entries": 28,
   "migration_files": 396,
-  "migration_files_justification": "wave 3 contract 2026-09-09: 398 couples.handles + first_seen_at + fragments.handles (HANDLE-IDENTITY-SPEC.md); 395/397 still to apply; flatten to tracked baseline still owed post-reimport"
+  "migration_files_justification": "wave 3 contract 2026-09-09: 398 couples.handles + first_seen_at + fragments.handles (HANDLE-IDENTITY-SPEC.md); 395/397 still to apply; flatten to tracked baseline still owed post-reimport. 2026-09-11, W28 added 401_instagram_connections: a venue-scoped row holding the Instagram business account id, because entry[].id is the only routing key a Meta webhook carries, plus the page-token reference the Graph sender lookup needs. No existing table can hold it (openphone_connections is phone-shaped, venue_config is not a credential store). The number is NOT raised: the count was one below budget, so 401 lands inside the existing headroom and the ratchet stays at 396."
 }
