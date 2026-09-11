@@ -19,8 +19,9 @@
  *   3. Routes by tier:
  *      - `high` → bind in place (update `interactions.wedding_id` +
  *        `interactions.person_id`)
- *      - `medium` → enqueue the pair via the existing
- *        `enqueueIdentityMatches` path so the coordinator can confirm
+ *      - `medium` → leave unbound and log. The spine already holds this
+ *        doubt as a `candidate_matches` row written by `linkSignal`;
+ *        /intel/identity-review is where it gets answered (wave 3).
  *      - no match AND a primary email or phone is present → mint a
  *        fresh wedding via `mintWedding`
  *   4. Fires `triggerIdentityCascade` per newly-bound wedding (fire-
@@ -39,7 +40,6 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
 import { findIdentityMatches } from './resolution'
 import { mintWedding } from './mint-wedding'
@@ -48,8 +48,9 @@ import { logEvent } from '@/lib/observability/logger'
 export interface BinderResult {
   scanned: number
   bound: number
-  /** Rows that produced an ambiguous (medium-tier) match and were
-   *  enqueued via client_match_queue rather than bound silently. */
+  /** Rows that produced an ambiguous (medium-tier) match and were left
+   *  unbound rather than bound silently. The spine's candidate_matches
+   *  carries the question; see /intel/identity-review. */
   deferred: number
   /** Rows for which we minted a fresh person + wedding because no
    *  match was found AND the row had a primary email or phone. */
@@ -218,8 +219,8 @@ export async function runIdentityBinder(
         const weddingId = (personRow.wedding_id as string | null) ?? null
         if (!weddingId) {
           // High-tier person match but no wedding attached. Rare
-          // but possible — log + skip; the operator review will
-          // surface it via client_match_queue if needed.
+          // but possible — log + skip; the operator review at
+          // /intel/identity-review surfaces it if needed.
           result.errors.push(
             `bind_no_wedding ${row.id}: person ${high.personId} has no wedding_id`,
           )
@@ -237,15 +238,30 @@ export async function runIdentityBinder(
         cascadeQueue.add(weddingId)
         cascadeVenue.set(weddingId, row.venue_id)
       } else if (medium) {
-        // Tier medium: ambiguous. Do NOT bind silently — enqueue the
-        // pair via client_match_queue so the coordinator confirms.
-        // The interaction stays unbound until they decide; the next
-        // tick will re-score (cheap given the LOOKBACK_DAYS filter)
-        // and the daily sweep is the final backstop.
-        await enqueueAmbiguousMatch(client, {
+        // Tier medium: ambiguous. Do NOT bind silently. The interaction
+        // stays unbound and the next tick re-scores it.
+        //
+        // Wave 3 (2026-09-09): this used to write a client_match_queue
+        // row. It no longer does. Every inbound email already runs
+        // through linkSignal, which writes a candidate_matches row for
+        // exactly this doubt, with the couple on one side and the
+        // touchpoint on the other, and /intel/identity-review is where
+        // the coordinator answers it. A second queue holding the same
+        // question in a different shape made one doubt look like two.
+        // The ambiguity is still surfaced, it is surfaced once.
+        logEvent({
+          level: 'info',
+          msg: 'identity.binder.deferred_ambiguous',
           venueId: row.venue_id,
-          interactionId: row.id,
-          match: medium,
+          actor: 'cron:identity_binder',
+          event_type: 'identity.binder',
+          outcome: 'ok',
+          data: {
+            interaction_id: row.id,
+            person_id: medium.personId,
+            tier: medium.tier,
+            confidence: medium.confidence,
+          },
         })
         result.deferred++
       } else if (email || phone) {
@@ -362,55 +378,3 @@ export async function runIdentityBinder(
   return result
 }
 
-/**
- * Push an ambiguous match into client_match_queue. The pair is
- * (matched-person, interaction-id) — we don't have a synthetic person
- * for the interaction yet, so the queue row references the
- * interaction directly via the `signals` jsonb payload. The
- * coordinator UI at /intel/identity-queue reads this and either
- * confirms (creates the binding) or rejects (marks no_match).
- *
- * Dedup is best-effort: re-running on the same interaction will
- * insert another queue row only when the match score has changed
- * since the previous tick. The queue UI batches by interaction so the
- * coordinator still sees a single review item.
- */
-async function enqueueAmbiguousMatch(
-  supabase: SupabaseClient,
-  args: {
-    venueId: string
-    interactionId: string
-    match: { personId: string; tier: string; confidence: number; signals: unknown[] }
-  },
-): Promise<void> {
-  const { venueId, interactionId, match } = args
-  // Check for an existing pending row on this interaction so we
-  // don't double-queue when the binder re-scans the same row on the
-  // next tick.
-  const { data: existing } = await supabase
-    .from('client_match_queue')
-    .select('id')
-    .eq('venue_id', venueId)
-    .eq('person_a_id', match.personId)
-    .in('status', ['pending', 'snoozed'])
-    .contains('signals', [{ interaction_id: interactionId }])
-    .limit(1)
-  if (existing && existing.length > 0) return
-
-  // Stash the interaction id in the signals payload so the queue UI
-  // can surface "binder couldn't bind this auto" review.
-  const signals = [
-    { interaction_id: interactionId, binder_proposed_match: true },
-    ...(Array.isArray(match.signals) ? match.signals : []),
-  ]
-  await writeOrLog(supabase.from('client_match_queue').insert({
-    venue_id: venueId,
-    person_a_id: match.personId,
-    person_b_id: null,
-    match_type: 'binder_ambiguous',
-    confidence: match.confidence,
-    signals,
-    tier: match.tier,
-    status: 'pending',
-  }), { op: 'client_match_queue.insert', venueId })
-}

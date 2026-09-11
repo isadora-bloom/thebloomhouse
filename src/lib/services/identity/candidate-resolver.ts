@@ -828,59 +828,69 @@ async function writeAttributionEvents(args: {
     .eq('id', candidate.id)
   if (updErr) return { flagged_conflict: false, error: `candidate resolve update: ${updErr.message}` }
 
-  // Wave 2B: emit the candidate's name + handle through the identity
-  // name-capture chokepoint onto the resolved person row. This is the
-  // moment a sub-zero handle (Pinterest "rosaliehoyle", Knot proxy "User
-  // <hex>", IG "@sarah_p") binds to a known human — chokepoint records
-  // it as evidence + populates platform_handles. Cross-platform handle
-  // convergence (Wave 2C merge candidates) reads platform_handles to
-  // detect same-person across platforms.
+  // The resolve moment is when a sub-zero handle (Pinterest
+  // "rosaliehoyle", Knot proxy "User <hex>", IG "@sarah_p") binds to a
+  // known human. Two separate facts come out of it and they now go to
+  // two different places.
+  //
+  // The NAME still goes through the people chokepoint, because
+  // `people.name_evidence` is the legacy limb's record of how a name
+  // was learned and nothing in wave 3 replaces it.
+  //
+  // The HANDLE goes to the spine. Wave 3 (HANDLE-IDENTITY-SPEC.md §1
+  // and §4) makes `(platform, handle)` a first-class identifier stored
+  // on `couples.handles`, and `linkSignal` is the only writer of it.
+  // `people.platform_handles` is legacy and stops being written here.
+  // The signal carries `legacy_wedding_id`, so the linker takes its
+  // fast path, attaches a touchpoint to the couple that mirrors this
+  // wedding and stamps the handle and `first_seen_at` on the way.
   if (match.person_id) {
-    try {
-      const { captureNameEvidence } = await import('./name-capture')
-      const platform = candidate.source_platform ?? null
-      const platformKey = mapPlatformForChokepoint(platform)
-      const platformSourceKind = mapPlatformSourceForChokepoint(platform)
-
-      // Push the candidate's parsed first/last + handle. Chokepoint
-      // applies shape detection — proxy / username shapes route to
-      // display_handle, not first_name.
-      const candFirst = candidate.first_name ?? null
-      const candLast = candidate.last_name
-        ?? (candidate.last_initial ?? null)
-
-      // Pull the most recent signal-level extracted_identity to surface
-      // the username (handle) when the candidate row only carries the
-      // parsed first_name. Best-effort.
-      let handleFromSignal: string | null = null
-      for (const s of signals) {
-        const ei = (s as { extracted_identity?: Record<string, unknown> | null })
-          .extracted_identity ?? null
-        if (ei && typeof ei.username === 'string' && ei.username.trim()) {
-          handleFromSignal = ei.username.trim()
-          break
-        }
+    // Pull the most recent signal-level extracted_identity to surface
+    // the username (handle) when the candidate row only carries the
+    // parsed first_name. Best-effort.
+    let handleFromSignal: string | null = null
+    for (const s of signals) {
+      const ei = (s as { extracted_identity?: Record<string, unknown> | null })
+        .extracted_identity ?? null
+      if (ei && typeof ei.username === 'string' && ei.username.trim()) {
+        handleFromSignal = ei.username.trim()
+        break
       }
+    }
 
+    const candFirst = candidate.first_name ?? null
+    const candLast = candidate.last_name ?? (candidate.last_initial ?? null)
+
+    try {
       if (candFirst || candLast) {
+        const { captureNameEvidence } = await import('./name-capture')
         await captureNameEvidence(supabase, match.person_id, {
           first: candFirst,
           last: candLast,
-          source: platformSourceKind,
-          handle: handleFromSignal,
-          platform: platformKey,
-        })
-      } else if (handleFromSignal) {
-        // Handle-only signal — chokepoint stamps platform_handles.
-        await captureNameEvidence(supabase, match.person_id, {
-          handle: handleFromSignal,
-          platform: platformKey,
-          source: platformSourceKind,
+          source: mapPlatformSourceForChokepoint(candidate.source_platform ?? null),
         })
       }
     } catch (err) {
-      console.warn('[candidate-resolver] chokepoint emit failed:',
+      console.warn('[candidate-resolver] name chokepoint emit failed:',
         err instanceof Error ? err.message : err)
+    }
+
+    if (handleFromSignal) {
+      try {
+        await emitHandleToSpine({
+          supabase,
+          venueId: candidate.venue_id,
+          weddingId: match.wedding_id,
+          candidateId: candidate.id,
+          sourcePlatform: candidate.source_platform ?? null,
+          rawHandle: handleFromSignal,
+          displayName: [candFirst, candLast].filter(Boolean).join(' ').trim() || null,
+          occurredAt: candidate.last_seen ?? candidate.first_seen ?? new Date().toISOString(),
+        })
+      } catch (err) {
+        console.warn('[candidate-resolver] handle emit to spine failed:',
+          err instanceof Error ? err.message : err)
+      }
     }
   }
 
@@ -1300,9 +1310,72 @@ function mapPlatformSourceForChokepoint(platform: string | null):
 }
 
 /**
- * Map a platform-detector key to the Platform enum the chokepoint uses
- * for `platform_handles[platform]`. Returns null when we don't have a
- * canonical slot for the platform yet.
+ * Emit a confirmed handle onto the spine.
+ *
+ * Wave 3 (HANDLE-IDENTITY-SPEC.md §1 and §4). A resolution says "this
+ * Pinterest handle is this wedding". That is a signal, so it goes
+ * through `linkSignal` like every other signal rather than being poked
+ * into `people.platform_handles`. Carrying `legacy_wedding_id` puts the
+ * linker on its fast path: it finds the couple that mirrors the
+ * wedding, attaches the touchpoint, and stamps `couples.handles` plus
+ * `first_seen_at` from the handle the signal carries.
+ *
+ * `external_id` is stable on the candidate row and the normalised
+ * handle, so re-running the resolver over the same candidate is a
+ * no-op at the database level.
+ *
+ * No-ops when the platform has no handle namespace or when the handle
+ * does not survive normalisation (Knot proxy ids, junk, empty).
+ */
+async function emitHandleToSpine(args: {
+  supabase: SupabaseClient
+  venueId: string
+  weddingId: string
+  candidateId: string
+  sourcePlatform: string | null
+  rawHandle: string
+  displayName: string | null
+  occurredAt: string
+}): Promise<void> {
+  const platform = mapPlatformForChokepoint(args.sourcePlatform)
+  if (!platform) return
+
+  const { normalizeHandle } = await import('./handles')
+  const handle = normalizeHandle(platform, args.rawHandle)
+  if (!handle) return
+
+  const { linkSignal } = await import('./forwards-linker')
+  await linkSignal({
+    supabase: args.supabase,
+    venueId: args.venueId,
+    source: 'candidate_resolver',
+    signal: {
+      external_id: `candidate:${args.candidateId}:handle:${platform}:${handle}`,
+      channel: platform,
+      action_type: 'handle_confirmed',
+      occurred_at: args.occurredAt,
+      // A confirmed handle is deterministic evidence about WHICH
+      // handle, not about how strong the signal was. The tier stays
+      // low; the legacy_wedding_id is what anchors it.
+      signal_tier: 'low',
+      identity_hint: `@${handle}`,
+      primary_name: args.displayName,
+      handles: { [platform]: handle },
+      legacy_wedding_id: args.weddingId,
+      raw_payload: {
+        kind: 'candidate_handle_confirmed',
+        candidate_id: args.candidateId,
+        source_platform: args.sourcePlatform,
+        raw_handle: args.rawHandle,
+      },
+    },
+  })
+}
+
+/**
+ * Map a platform-detector key to the canonical handle platform. Used
+ * for the spine emit above; the same keys are `HandlePlatform` values.
+ * Returns null when the platform has no handle namespace.
  */
 function mapPlatformForChokepoint(platform: string | null):
   | 'pinterest'

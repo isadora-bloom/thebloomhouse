@@ -336,7 +336,9 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'Couples', href: '/intel/couples', icon: UserCheck },
         { label: 'Identity Review', href: '/intel/identity-review', icon: Sparkles },
         { label: 'Data Fields', href: '/intel/data-fields', icon: Database },
-        { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
+        // 'Matching / Dedup' (/intel/matching) came out of the rail in
+        // wave 3: it listed client_match_queue, which nothing writes any
+        // more. The route redirects to Identity Review above.
         { label: 'Re-engagement', href: '/intel/reengagement', icon: Send },
       ],
     },

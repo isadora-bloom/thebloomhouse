@@ -1,20 +1,43 @@
 /**
- * Write vision-extracted identity candidates into tangential_signals
- * and run the promotion logic: if any candidate matches an existing
- * person by email/instagram/name, the signal gets matched_person_id
- * and match_status advanced. Unmatched candidates sit in the pool for
- * future inquiry cross-reference.
+ * Vision-extracted identity candidates become spine signals.
  *
- * This is the other half of the identity-match loop. identity-enqueue.ts
- * handles "new person → check signal pool". This file handles "new signal
- * → check person pool".
+ * Wave 3, W24 (HANDLE-IDENTITY-SPEC.md §4 + §5, NOVEMBER-PLAN.md).
+ *
+ * What this used to be
+ * --------------------
+ * A screenshot of a comment thread, a tag list or a followers pane was
+ * read by vision, turned into `{name, username, platform}` rows, and
+ * written to `tangential_signals`. Those rows were then matched against
+ * `people` by `findIdentityMatches`, clustered into `candidate_identities`
+ * and queued into `client_match_queue`. None of it touched couples,
+ * touchpoints or fragments, so the platform kept two identity systems
+ * beside each other and gave two answers to one question.
+ *
+ * What it is now
+ * --------------
+ * Every candidate becomes a `NormalizedSignal` and goes through
+ * `linkSignal`, the one writer. Channel is the platform, action type is
+ * what the extraction actually saw (comment / tag / mention / follow /
+ * review), handles are normalised by `normalizeHandle()`, the display
+ * name rides as `primary_name` at tier low, and `external_id` is stable
+ * on the capture plus the row so a re-upload of the same screenshot is a
+ * no-op at the database level rather than a one-hour timing guard.
+ *
+ * Below threshold the signal lands as a fragment. That IS the pool the
+ * old `tangential_signals` table was trying to be, except fragments are
+ * promoted deterministically by handle when the same person later
+ * arrives through an inquiry (W22's fragment promotion), and they carry
+ * touchpoints that re-anchor onto the couple.
+ *
+ * `tangential_signals` gets no new rows from this path. It is marked
+ * deprecated in migration 400 and kept for the historical read surfaces.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { writeOrLog } from '@/lib/db/write-or-log'
-import { findIdentityMatches } from '@/lib/services/identity/resolution'
+import { linkSignal } from '@/lib/services/identity/forwards-linker'
+import { normalizeHandle } from '@/lib/services/identity/handles'
 import { normalizeSource } from '@/lib/services/normalize-source'
-import { clusterSignals } from '@/lib/services/identity/candidate-clusterer'
+import type { HandlePlatform, NormalizedSignal } from '@/lib/services/identity/sources/types'
 
 export interface IdentityCandidate {
   name?: string
@@ -28,13 +51,65 @@ export interface IdentityCandidate {
 }
 
 export interface TangentialImportResult {
+  /** Signals accepted and routed through linkSignal (duplicates excluded). */
   written: number
+  /** Signals that attached to, or minted, a couple. */
   matched: number
+  /** Signals that stayed pre-identity: fragment or review-queue candidate. */
   unmatched: number
+  /** Of `unmatched`, the ones that became fragments (the pool). */
+  fragments: number
+  /** Of `unmatched`, the ones that queued a candidate_match for review. */
+  candidates: number
+  /** Re-fires of an external_id the spine already holds. */
+  duplicates: number
+  /** Candidates dropped before the linker: no usable identity at all. */
+  skipped: number
 }
 
-function normaliseHandle(s: string | null | undefined): string {
-  return (s ?? '').toLowerCase().trim().replace(/^@/, '').replace(/[^a-z0-9_.]/g, '')
+/** Canonical source (normalizeSource) → handle platform. Anything absent
+ *  has no handle namespace, so a username on it is a display string, not
+ *  an identifier. */
+const SOURCE_TO_HANDLE_PLATFORM: Record<string, HandlePlatform> = {
+  the_knot: 'knot',
+  wedding_wire: 'weddingwire',
+  zola: 'zola',
+  instagram: 'instagram',
+  facebook: 'facebook',
+  pinterest: 'pinterest',
+  tiktok: 'tiktok',
+}
+
+/** Channel for a candidate whose platform has no handle namespace. */
+function fallbackChannel(actionType: string): string {
+  return actionType === 'review_left' ? 'review' : 'web'
+}
+
+/**
+ * What the extraction saw, as a touchpoint verb. The spec names
+ * comment / tag / mention for the screenshot path; the older
+ * `signal_type` vocabulary maps onto it. Unknown values become
+ * 'mention', the weakest honest reading of "this name appeared".
+ */
+const SIGNAL_TYPE_TO_ACTION: Record<string, string> = {
+  comment: 'comment',
+  tag: 'tag',
+  mention: 'mention',
+  instagram_engagement: 'comment',
+  instagram_follow: 'follow',
+  follow: 'follow',
+  story_view: 'story_view',
+  dm: 'dm',
+  review: 'review_left',
+  referral: 'referral',
+  website_visit: 'web_visit',
+  analytics_entry: 'analytics_entry',
+  other: 'mention',
+}
+
+function actionTypeFor(signalType: string | undefined): string {
+  const key = (signalType ?? '').trim().toLowerCase()
+  return SIGNAL_TYPE_TO_ACTION[key] ?? 'mention'
 }
 
 function splitFullName(raw: string | null | undefined): { first_name: string; last_name: string } {
@@ -44,19 +119,21 @@ function splitFullName(raw: string | null | undefined): { first_name: string; la
   return { first_name: parts[0] ?? '', last_name: parts.slice(1).join(' ') }
 }
 
-function allowedSignalType(s: string | undefined): string {
-  const allowed = new Set([
-    'instagram_engagement',
-    'instagram_follow',
-    'website_visit',
-    'review',
-    'mention',
-    'analytics_entry',
-    'referral',
-    'other',
-  ])
-  const v = (s ?? '').trim()
-  return allowed.has(v) ? v : 'other'
+/** Lower-case, punctuation-free slug of a display name. Used only to
+ *  build a stable external_id for a name-only candidate, never as an
+ *  identifier the matcher reads. */
+function nameSlug(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+}
+
+/** The date part of the capture. Two uploads of the same screenshot on
+ *  the same day collapse to one signal; a genuine re-observation a week
+ *  later is a new signal, which is what we want on a followers list. */
+function captureDay(signalDate: string | null | undefined): string {
+  const d = signalDate ? new Date(signalDate) : new Date()
+  const ms = d.getTime()
+  const safe = Number.isFinite(ms) ? d : new Date()
+  return safe.toISOString().slice(0, 10)
 }
 
 export async function importIdentityCandidates(args: {
@@ -68,124 +145,59 @@ export async function importIdentityCandidates(args: {
   signalDate?: string | null
 }): Promise<TangentialImportResult> {
   const { supabase, venueId, candidates, sourceEntryId, sourceContext, signalDate } = args
-  const out: TangentialImportResult = { written: 0, matched: 0, unmatched: 0 }
-  // IDs of signals inserted this run, so the clusterer can run on them
-  // synchronously below — without this the vision-import path left
-  // signals unclustered until the nightly phase_b_sweep cron.
-  const insertedIds: string[] = []
-
-  for (const cand of candidates) {
-    const first = (cand.first_name ?? splitFullName(cand.name).first_name).trim()
-    const last = (cand.last_name ?? splitFullName(cand.name).last_name).trim()
-    const username = normaliseHandle(cand.username ?? cand.handle)
-    if (!first && !username && !cand.handle) continue
-
-    const extracted: Record<string, unknown> = {
-      name: cand.name ?? (first || last ? `${first} ${last}`.trim() : null),
-      first_name: first || null,
-      last_name: last || null,
-      username: username || null,
-      handle: cand.handle ?? null,
-      platform: cand.platform ?? null,
-    }
-
-    // Dedupe: if we've already written an identical signal (same venue,
-    // same signal_type, same first + same username) within the last hour,
-    // skip. Prevents a re-upload of the same screenshot from doubling
-    // the pool.
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-    const { count: existing } = await supabase
-      .from('tangential_signals')
-      .select('id', { count: 'exact', head: true })
-      .eq('venue_id', venueId)
-      .eq('signal_type', allowedSignalType(cand.signal_type))
-      .eq('extracted_identity->>first_name', first || null as unknown as string)
-      .eq('extracted_identity->>username', username || null as unknown as string)
-      // created-at-ok: 1-hour write-side dupe guard. Catches "user
-      // re-uploaded the same screenshot 30 seconds later" — by
-      // definition wants insertion-time, not signal-time.
-      .gte('created_at', oneHourAgo)
-    if ((existing ?? 0) > 0) continue
-
-    // Try to match against an existing person now (not later). If we hit
-    // high, we still write the signal but link it as confirmed_match.
-    const matches = await findIdentityMatches(supabase, {
-      venueId,
-      firstName: first || null,
-      lastName: last || null,
-      instagramHandle: (cand.platform ?? '').toLowerCase() === 'instagram' ? username || null : null,
-      signalDate: signalDate ?? new Date().toISOString(),
-    })
-    const top = matches[0]
-    let match_status: string = 'unmatched'
-    let matched_person_id: string | null = null
-    let confidence_score: number | null = null
-    if (top) {
-      matched_person_id = top.personId
-      confidence_score = top.confidence
-      if (top.tier === 'high') match_status = 'confirmed_match'
-      else if (top.tier === 'medium') match_status = 'suggested_match'
-      else match_status = 'low_confidence_match'
-    }
-
-    // T5-Rixey-BBB: tangential signals from cross-platform parsing
-    // are source-class by definition (Knot views, IG follows, etc.).
-    // Form submissions are written elsewhere (web-form adapter).
-    // signal-class-justified: tangential cross-platform signals are source
-    const { data: inserted, error } = await supabase
-      .from('tangential_signals')
-      .insert({
-        venue_id: venueId,
-        signal_type: allowedSignalType(cand.signal_type),
-        // source_platform drives the clusterer's grouping and ends up
-        // on candidate_identities.source_platform — the column the
-        // Tracer's knot/instagram adapters filter on. The vision path
-        // previously left it NULL (platform only buried inside
-        // extracted_identity), so the clusterer skipped every row.
-        source_platform: cand.platform ? normalizeSource(cand.platform) : null,
-        extracted_identity: extracted,
-        source_context: cand.context ?? sourceContext ?? null,
-        signal_date: signalDate ?? null,
-        match_status,
-        matched_person_id,
-        confidence_score,
-        source_entry_id: sourceEntryId ?? null,
-        signal_class: 'source',
-      })
-      .select('id')
-      .single()
-    if (error || !inserted) continue
-    out.written++
-    insertedIds.push(inserted.id as string)
-    if (matched_person_id) out.matched++
-    else {
-      out.unmatched++
-      // F1: signal↔signal queueing. If the new signal stayed unmatched,
-      // compare it against other unmatched signals for this venue and
-      // enqueue pairs that look like the same person. Lets coordinators
-      // resolve two cross-channel signals (e.g. Knot view + Instagram
-      // follow) before any inquiry email ever arrives.
-      try {
-        await enqueueSignalPairs(
-          supabase,
-          venueId,
-          inserted.id as string,
-          { first, last, username }
-        )
-      } catch (err) {
-        console.warn('[tangential-signals-import] signal-pair enqueue failed:', err)
-      }
-    }
+  const out: TangentialImportResult = {
+    written: 0,
+    matched: 0,
+    unmatched: 0,
+    fragments: 0,
+    candidates: 0,
+    duplicates: 0,
+    skipped: 0,
   }
 
-  // Cluster the signals just written into candidate_identities, so the
-  // Tracer's knot/instagram adapters (which read candidate_identities)
-  // see them the same day instead of waiting for the nightly sweep.
-  if (insertedIds.length > 0) {
+  const occurredAt = signalDate ?? new Date().toISOString()
+  const day = captureDay(signalDate)
+
+  for (const cand of candidates) {
+    const signal = candidateToSignal(cand, {
+      sourceEntryId: sourceEntryId ?? null,
+      sourceContext: sourceContext ?? null,
+      occurredAt,
+      captureDay: day,
+    })
+    if (!signal) {
+      out.skipped++
+      continue
+    }
+
     try {
-      await clusterSignals({ supabase, signalIds: insertedIds })
+      const res = await linkSignal({
+        supabase,
+        venueId,
+        signal,
+        source: 'vision_identity',
+      })
+      if (res.duplicate || res.action === 'duplicate') {
+        out.duplicates++
+        continue
+      }
+      out.written++
+      if (res.action === 'attached' || res.action === 'minted') {
+        out.matched++
+      } else {
+        out.unmatched++
+        if (res.action === 'fragment' || res.action === 'cold_start') out.fragments++
+        else out.candidates++
+      }
     } catch (err) {
-      console.warn('[tangential-signals-import] cluster failed:', err)
+      // Never let one bad candidate stop the batch. The signal is not
+      // lost: the same screenshot re-imported produces the same
+      // external_id, so a retry picks it up.
+      console.warn(
+        '[vision-identity] linkSignal threw for one candidate:',
+        err instanceof Error ? err.message : err,
+      )
+      out.skipped++
     }
   }
 
@@ -193,119 +205,73 @@ export async function importIdentityCandidates(args: {
 }
 
 /**
- * Compare a just-created tangential signal against other unmatched signals
- * for the venue. Any that look like the same person (exact username
- * match, full-name match, or first-name + shared signal_type within 30d)
- * are inserted into client_match_queue with the appropriate tier. Same
- * queue as person↔person matches — one resolver UI.
+ * Shape one vision candidate into a NormalizedSignal. Exported for the
+ * unit tests: this is where the whole contract lives, so it is worth
+ * testing without a database at all.
+ *
+ * Returns null when the candidate carries no usable identity (neither a
+ * handle we can normalise nor a readable name).
  */
-async function enqueueSignalPairs(
-  supabase: SupabaseClient,
-  venueId: string,
-  newSignalId: string,
-  keys: { first: string; last: string; username: string }
-): Promise<void> {
-  if (!keys.first && !keys.username) return
+export function candidateToSignal(
+  cand: IdentityCandidate,
+  ctx: {
+    sourceEntryId: string | null
+    sourceContext: string | null
+    occurredAt: string
+    captureDay: string
+  },
+): NormalizedSignal | null {
+  const first = (cand.first_name ?? splitFullName(cand.name).first_name).trim()
+  const last = (cand.last_name ?? splitFullName(cand.name).last_name).trim()
+  const displayName = (cand.name ?? `${first} ${last}`).trim()
 
-  const firstLower = keys.first.toLowerCase().trim()
-  const lastLower = keys.last.toLowerCase().trim()
-  const usernameLower = keys.username.toLowerCase().trim()
+  const canonicalSource = cand.platform ? normalizeSource(cand.platform) : null
+  const handlePlatform = canonicalSource ? SOURCE_TO_HANDLE_PLATFORM[canonicalSource] ?? null : null
 
-  const { data: others } = await supabase
-    .from('tangential_signals')
-    .select('id, extracted_identity, signal_type, signal_date')
-    .eq('venue_id', venueId)
-    .eq('match_status', 'unmatched')
-    .neq('id', newSignalId)
-  if (!others || others.length === 0) return
+  const rawHandle = (cand.username ?? cand.handle ?? '').trim()
+  const handle = handlePlatform ? normalizeHandle(handlePlatform, rawHandle) : null
+  const handles = handle && handlePlatform ? ({ [handlePlatform]: handle } as Partial<Record<HandlePlatform, string>>) : null
 
-  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
-  const now = Date.now()
+  // No handle we can trust and no name to read: nothing to link.
+  if (!handle && !first && !displayName) return null
 
-  type PairMatch = {
-    signalId: string
-    tier: 'high' | 'medium' | 'low'
-    confidence: number
-    signals: Array<{ type: string; detail: string; weight: number }>
-  }
-  const matches: PairMatch[] = []
+  const actionType = actionTypeFor(cand.signal_type)
+  const channel = handlePlatform ?? fallbackChannel(actionType)
 
-  for (const other of others) {
-    const eid = (other.extracted_identity ?? {}) as Record<string, unknown>
-    const oFirst = String(eid.first_name ?? '').toLowerCase().trim()
-    const oLast = String(eid.last_name ?? '').toLowerCase().trim()
-    const oUsername = String(eid.username ?? eid.handle ?? '').replace(/^@/, '').toLowerCase().trim()
-    const oDate = other.signal_date ? new Date(other.signal_date as string).getTime() : 0
-    const withinWindow = oDate > 0 && Math.abs(now - oDate) <= thirtyDaysMs
+  // external_id is stable on the capture plus the row. The capture is
+  // the brain-dump entry when there is one, otherwise the day the
+  // signal is dated to; the row is the handle when we have one, else a
+  // slug of the name. Re-importing the same screenshot re-derives the
+  // same id and the spine's UNIQUE (venue_id, channel, external_id)
+  // makes the second pass a no-op.
+  const capture = ctx.sourceEntryId ?? ctx.captureDay
+  const rowKey = handle ?? nameSlug(displayName || first)
+  const externalId = `social:${channel}:${actionType}:${rowKey}:${capture}`
 
-    if (usernameLower && oUsername && usernameLower === oUsername) {
-      matches.push({
-        signalId: other.id as string,
-        tier: 'high',
-        confidence: 0.92,
-        signals: [
-          { type: 'username_exact', detail: `Both signals use @${usernameLower}`, weight: 0.92 },
-        ],
-      })
-      continue
-    }
-    if (firstLower && lastLower && oFirst && oLast && firstLower === oFirst && oLast === lastLower) {
-      matches.push({
-        signalId: other.id as string,
-        tier: 'medium',
-        confidence: 0.7,
-        signals: [
-          { type: 'full_name_match', detail: `Both signals mention ${firstLower} ${lastLower}`, weight: 0.7 },
-        ],
-      })
-      continue
-    }
-    if (
-      firstLower &&
-      oFirst &&
-      firstLower === oFirst &&
-      withinWindow &&
-      (other.signal_type as string) !== ''
-    ) {
-      matches.push({
-        signalId: other.id as string,
-        tier: 'low',
-        confidence: 0.35,
-        signals: [
-          {
-            type: 'first_name_window',
-            detail: `Same first name (${firstLower}) on two channels within 30d`,
-            weight: 0.35,
-          },
-        ],
-      })
-    }
-  }
+  const identityHint = handle ? `@${handle}` : (displayName || first || null)
 
-  if (matches.length === 0) return
-
-  // Dedupe existing rows so re-imports don't stack queue rows.
-  for (const m of matches) {
-    const { data: existing } = await supabase
-      .from('client_match_queue')
-      .select('id')
-      .eq('venue_id', venueId)
-      .or(
-        `and(signal_a_id.eq.${newSignalId},signal_b_id.eq.${m.signalId}),and(signal_a_id.eq.${m.signalId},signal_b_id.eq.${newSignalId})`
-      )
-      .in('status', ['pending', 'snoozed'])
-      .limit(1)
-    if (existing && existing.length > 0) continue
-
-    await writeOrLog(supabase.from('client_match_queue').insert({
-      venue_id: venueId,
-      signal_a_id: newSignalId,
-      signal_b_id: m.signalId,
-      match_type: m.signals[0]?.type ?? 'signal_pair',
-      confidence: m.confidence,
-      signals: m.signals,
-      tier: m.tier,
-      status: 'pending',
-    }), { op: 'client_match_queue.insert', venueId })
+  return {
+    external_id: externalId,
+    channel,
+    action_type: actionType,
+    occurred_at: ctx.occurredAt,
+    // A screenshot of a comment is the weakest honest evidence there
+    // is. It can corroborate, it must not attach on its own: the
+    // cascade decides, and below threshold it becomes a fragment.
+    signal_tier: 'low',
+    identity_hint: identityHint,
+    primary_name: displayName || first || null,
+    handles,
+    raw_payload: {
+      kind: 'vision_identity_candidate',
+      platform: cand.platform ?? null,
+      canonical_source: canonicalSource,
+      signal_type: cand.signal_type ?? null,
+      first_name: first || null,
+      last_name: last || null,
+      raw_handle: rawHandle || null,
+      source_context: cand.context ?? ctx.sourceContext,
+      source_entry_id: ctx.sourceEntryId,
+    },
   }
 }
