@@ -123,6 +123,16 @@ export const CLIENT_TERMS: Readonly<Record<string, string>> = {
   'operator axis': 'by coordinator',
   venue_id: 'venue',
   'merged into': 'joined up with',
+
+  // — handle identity (Wave 3, HANDLE-IDENTITY-SPEC.md) —
+  handle: 'social handle',
+  handles: 'social handles',
+  'first seen at': 'first seen',
+  'point zero at': 'point zero',
+  'pre zero': 'discovery',
+  pre_zero: 'discovery',
+  'post zero': 'known couple',
+  post_zero: 'known couple',
 }
 
 /** Normalise a term for lookup: lower case, separators flattened. */

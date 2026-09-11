@@ -453,11 +453,39 @@ export interface TouchpointRibbon {
   occurredAt: string
   cascadeStage: string | null
   cascadeReason: string | null
+  /** Wave 3 (HANDLE-IDENTITY-SPEC.md §3, migration 381): this touchpoint's
+   *  position relative to `pointZeroAt` — 'pre_zero' is DISCOVERY,
+   *  'post_zero' is the known-couple history. Null on a touchpoint written
+   *  before migration 381 started stamping it; never guessed here. */
+  zeroPhase: 'pre_zero' | 'post_zero' | null
 }
 
 export interface ProgressionEvent {
   eventType: string
   occurredAt: string
+}
+
+/**
+ * Wave 3: how this couple was first seen, built only from
+ * `couples.first_seen_at`, `couples.handles` and the earliest ribbon
+ * touchpoint. Never invents a channel or a handle; when `first_seen_at`
+ * is null the summary says so rather than guessing.
+ */
+export interface DiscoverySummary {
+  /** "First seen as @rosie.hoyle on instagram, 41 days before point
+   *  zero." / "First seen via knot." / "No first-seen date recorded yet."
+   *  Always a sentence, never null — the honesty is in the wording. */
+  summary: string
+  /** Whole days between `firstSeenAt` and `pointZeroAt`. Null when either
+   *  timestamp is missing. Never negative: `first_seen_at <= point_zero_at`
+   *  is a spine invariant (HANDLE-IDENTITY-SPEC.md §3); a violation reads
+   *  as null here rather than as a fabricated negative gap. */
+  daysBeforePointZero: number | null
+  /** True when the earliest touchpoint's channel is a handle platform and
+   *  the couple's handle map has an entry for it. */
+  firstSeenViaHandle: boolean
+  /** Channel of the earliest touchpoint, when the ribbon has one. */
+  firstChannel: string | null
 }
 
 export interface CoupleJourney {
@@ -466,6 +494,18 @@ export interface CoupleJourney {
   progression: ProgressionEvent[]
   identityProfile: Record<string, unknown> | null
   lookAlikeCohort: CoupleRef[]
+  /** Wave 3: `couples.handles` (migration 398) — platform -> normalised
+   *  handle. `{}` when the couple has none on file. */
+  handles: Partial<Record<string, string>>
+  /** Wave 3: `couples.first_seen_at` — the earliest touchpoint on the
+   *  couple, any channel, any identity strength. Null when unset. */
+  firstSeenAt: string | null
+  /** `couples.point_zero_at` (migration 381) — the first event at which
+   *  this couple was known by name AND a reachable address. Null when
+   *  Point-Zero has not happened yet. */
+  pointZeroAt: string | null
+  /** Wave 3: the discovery summary. See `DiscoverySummary`. */
+  discovery: DiscoverySummary
   generatedAt: string
 }
 
@@ -494,6 +534,10 @@ export async function loadCoupleJourney(
     progression: [],
     identityProfile: null,
     lookAlikeCohort: [],
+    handles: {},
+    firstSeenAt: null,
+    pointZeroAt: null,
+    discovery: emptyDiscovery(),
     generatedAt,
   }
   if (!venueId || !coupleId) return empty
@@ -501,10 +545,13 @@ export async function loadCoupleJourney(
   // 1. Couple identity — venue-scoped. Excludes a merged-away couple
   //    (merged_into_id set) so a stale id resolves to honest-empty rather
   //    than a tombstone; callers should follow the pointer upstream.
+  //    handles / first_seen_at (migration 398) and point_zero_at
+  //    (migration 381) are the Wave 3 identity columns this reader
+  //    surfaces; W22 is the only writer of the first two.
   const { data: c } = await supabase
     .from('couples')
     .select(
-      'id, venue_id, primary_contact_name, lifecycle_state, heat_score, wedding_date, source_wedding_id, merged_into_id',
+      'id, venue_id, primary_contact_name, lifecycle_state, heat_score, wedding_date, source_wedding_id, merged_into_id, handles, first_seen_at, point_zero_at',
     )
     .eq('id', coupleId)
     .eq('venue_id', venueId)
@@ -514,9 +561,11 @@ export async function loadCoupleJourney(
   // 2. Ribbon — full touchpoint stream, chronological. cascade_stage /
   //    cascade_reason live in raw_payload (written by the cascade at
   //    match time); null when the touchpoint predates cascade telemetry.
+  //    zero_phase is a real column (migration 381), stamped by the
+  //    forwards-linker at write time — never inferred here.
   const { data: tps } = await supabase
     .from('touchpoints')
-    .select('id, channel, action_type, occurred_at, raw_payload')
+    .select('id, channel, action_type, occurred_at, raw_payload, zero_phase')
     .eq('couple_id', coupleId)
     .order('occurred_at', { ascending: true })
     .limit(1000)
@@ -527,6 +576,7 @@ export async function loadCoupleJourney(
     occurredAt: t.occurred_at,
     cascadeStage: pickString(t.raw_payload, 'cascade_stage'),
     cascadeReason: pickString(t.raw_payload, 'cascade_reason'),
+    zeroPhase: t.zero_phase === 'pre_zero' || t.zero_phase === 'post_zero' ? t.zero_phase : null,
   }))
 
   // 3. Progression anchors.
@@ -562,6 +612,11 @@ export async function loadCoupleJourney(
   //    fuzzy similarity model.
   const lookAlikeCohort = await loadLookAlikeCohort(supabase, venueId, c)
 
+  const handles: Partial<Record<string, string>> = c.handles ?? {}
+  const firstSeenAt = c.first_seen_at ?? null
+  const pointZeroAt = c.point_zero_at ?? null
+  const discovery = buildDiscoverySummary(firstSeenAt, pointZeroAt, handles, ribbon)
+
   return {
     couple: {
       id: c.id,
@@ -573,6 +628,10 @@ export async function loadCoupleJourney(
     progression,
     identityProfile,
     lookAlikeCohort,
+    handles,
+    firstSeenAt,
+    pointZeroAt,
+    discovery,
     generatedAt,
   }
 }
@@ -588,6 +647,10 @@ export async function getCoupleJourney(
       progression: [],
       identityProfile: null,
       lookAlikeCohort: [],
+      handles: {},
+      firstSeenAt: null,
+      pointZeroAt: null,
+      discovery: emptyDiscovery(),
       generatedAt: new Date().toISOString(),
     }
   }
@@ -606,6 +669,9 @@ interface RawJourneyCoupleRow {
   wedding_date: string | null
   source_wedding_id: string | null
   merged_into_id: string | null
+  handles: Partial<Record<string, string>> | null
+  first_seen_at: string | null
+  point_zero_at: string | null
 }
 interface RawJourneyTouchpointRow {
   id: string
@@ -613,6 +679,7 @@ interface RawJourneyTouchpointRow {
   action_type: string
   occurred_at: string
   raw_payload: Record<string, unknown> | null
+  zero_phase: string | null
 }
 interface RawJourneyProgressionRow {
   event_type: string
@@ -624,6 +691,62 @@ function pickString(raw: Record<string, unknown> | null, key: string): string | 
   if (!raw) return null
   const v = raw[key]
   return typeof v === 'string' && v.trim().length > 0 ? v : null
+}
+
+/** Honest-empty discovery block — no couple, no first-seen date to report. */
+function emptyDiscovery(): DiscoverySummary {
+  return {
+    summary: 'No first-seen date recorded yet.',
+    daysBeforePointZero: null,
+    firstSeenViaHandle: false,
+    firstChannel: null,
+  }
+}
+
+const DAY_MS = 86_400_000
+
+/**
+ * Build the discovery sentence from spine facts only: `first_seen_at`,
+ * `point_zero_at`, the couple's handle map and the earliest ribbon
+ * touchpoint's channel. Never invents a handle or a channel that is not
+ * actually on one of those three; when `first_seen_at` is null, says so.
+ */
+function buildDiscoverySummary(
+  firstSeenAt: string | null,
+  pointZeroAt: string | null,
+  handles: Partial<Record<string, string>>,
+  ribbon: readonly TouchpointRibbon[],
+): DiscoverySummary {
+  if (!firstSeenAt) return emptyDiscovery()
+
+  // Ribbon is ordered ascending by occurred_at, so [0] is the earliest —
+  // the same touchpoint first_seen_at was derived from (migration 398's
+  // backfill; the linker sets it the same way going forward).
+  const earliest = ribbon[0] ?? null
+  const firstChannel = earliest?.channel ?? null
+  const handle = firstChannel ? handles[firstChannel] : undefined
+  const firstSeenViaHandle = Boolean(firstChannel && handle)
+
+  let daysBeforePointZero: number | null = null
+  if (pointZeroAt) {
+    const days = Math.floor((Date.parse(pointZeroAt) - Date.parse(firstSeenAt)) / DAY_MS)
+    daysBeforePointZero = Number.isFinite(days) && days >= 0 ? days : null
+  }
+
+  const dayClause =
+    daysBeforePointZero === null
+      ? ''
+      : daysBeforePointZero === 0
+        ? ', the same day they reached point zero'
+        : `, ${daysBeforePointZero} day${daysBeforePointZero === 1 ? '' : 's'} before point zero`
+
+  const summary = firstSeenViaHandle
+    ? `First seen as @${handle} on ${firstChannel}${dayClause}.`
+    : firstChannel
+      ? `First seen via ${firstChannel}${dayClause}.`
+      : `First seen on record; the originating channel is not available.`
+
+  return { summary, daysBeforePointZero, firstSeenViaHandle, firstChannel }
 }
 
 const LOOKALIKE_LIMIT = 6

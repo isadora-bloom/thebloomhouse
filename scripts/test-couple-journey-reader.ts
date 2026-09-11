@@ -33,7 +33,10 @@ interface TableData {
 
 /** Chainable mock supabase. Each .from(table) builds a filter set, then
  *  resolves via maybeSingle() or by being awaited (.limit/.order tail).
- *  Filtering supports eq/neq/is against the seeded rows. */
+ *  Filtering supports eq/neq/is against the seeded rows. order() really
+ *  sorts (a no-op order() would let the ribbon's occurred_at ordering
+ *  pass by accident of array-literal order rather than by the reader's
+ *  own `.order(...)` call actually doing the work). */
 function mockSupabase(data: TableData) {
   return {
     from(table: keyof TableData) {
@@ -41,19 +44,36 @@ function mockSupabase(data: TableData) {
       const eqs: Array<[string, unknown]> = []
       const neqs: Array<[string, unknown]> = []
       const iss: Array<[string, unknown]> = []
-      const apply = () =>
-        rows.filter(
+      let sortKey: string | null = null
+      let sortAsc = true
+      const apply = () => {
+        let out = rows.filter(
           (r) =>
             eqs.every(([k, v]) => r[k] === v) &&
             neqs.every(([k, v]) => r[k] !== v) &&
             iss.every(([k, v]) => (r[k] ?? null) === v),
         )
+        if (sortKey) {
+          const key = sortKey
+          out = out.slice().sort((a, b) => {
+            const av = String(a[key] ?? '')
+            const bv = String(b[key] ?? '')
+            const cmp = av < bv ? -1 : av > bv ? 1 : 0
+            return sortAsc ? cmp : -cmp
+          })
+        }
+        return out
+      }
       const b: Record<string, unknown> = {
         select() { return b },
         eq(k: string, v: unknown) { eqs.push([k, v]); return b },
         neq(k: string, v: unknown) { neqs.push([k, v]); return b },
         is(k: string, v: unknown) { iss.push([k, v]); return b },
-        order() { return b },
+        order(k: string, opts?: { ascending?: boolean }) {
+          sortKey = k
+          sortAsc = opts?.ascending !== false
+          return b
+        },
         maybeSingle() { return Promise.resolve({ data: apply()[0] ?? null, error: null }) },
         limit() { return Promise.resolve({ data: apply(), error: null }) },
         // PostgREST builders are thenable — a query that ends in .order()
@@ -74,7 +94,7 @@ async function main() {
   {
     const sb = mockSupabase({
       couples: [
-        { id: 'C1', venue_id: VENUE, primary_contact_name: 'Sarah & James', lifecycle_state: 'booked', heat_score: 88, wedding_date: '2026-09-12', source_wedding_id: 'W1', merged_into_id: null },
+        { id: 'C1', venue_id: VENUE, primary_contact_name: 'Sarah & James', lifecycle_state: 'booked', heat_score: 88, wedding_date: '2026-09-12', source_wedding_id: 'W1', merged_into_id: null, handles: { knot: 'sarah.james' }, first_seen_at: '2026-03-01T10:00:00Z', point_zero_at: '2026-03-10T10:00:00Z' },
         // same-venue same-lifecycle peers (look-alike candidates)
         { id: 'C2', venue_id: VENUE, primary_contact_name: 'Mia & Tom', lifecycle_state: 'booked', wedding_date: '2026-09-20', source_wedding_id: null, merged_into_id: null, created_at: '2026-02-01' },
         { id: 'C3', venue_id: VENUE, primary_contact_name: 'Far Away', lifecycle_state: 'booked', wedding_date: '2027-06-01', source_wedding_id: null, merged_into_id: null, created_at: '2026-03-01' },
@@ -82,8 +102,8 @@ async function main() {
         { id: 'C5', venue_id: 'other-venue', primary_contact_name: 'Other Tenant', lifecycle_state: 'booked', wedding_date: '2026-09-12', merged_into_id: null, created_at: '2026-01-01' },
       ],
       touchpoints: [
-        { id: 'T2', couple_id: 'C1', channel: 'gmail', action_type: 'reply', occurred_at: '2026-03-10T10:00:00Z', raw_payload: { subject: 'hi' } },
-        { id: 'T1', couple_id: 'C1', channel: 'knot', action_type: 'knot_message', occurred_at: '2026-03-01T10:00:00Z', raw_payload: { cascade_stage: 'knot_person_id_match', cascade_reason: 'knot_person_id:tara.s.2.1' } },
+        { id: 'T2', couple_id: 'C1', channel: 'gmail', action_type: 'reply', occurred_at: '2026-03-10T10:00:00Z', raw_payload: { subject: 'hi' }, zero_phase: 'post_zero' },
+        { id: 'T1', couple_id: 'C1', channel: 'knot', action_type: 'knot_message', occurred_at: '2026-03-01T10:00:00Z', raw_payload: { cascade_stage: 'knot_person_id_match', cascade_reason: 'knot_person_id:tara.s.2.1' }, zero_phase: 'pre_zero' },
       ],
       couple_progression_events: [
         { couple_id: 'C1', event_type: 'tour_booked', occurred_at: '2026-03-15T10:00:00Z' },
@@ -98,6 +118,9 @@ async function main() {
     check('ribbon length = 2', j.ribbon.length === 2, j.ribbon.length)
     check('cascade_stage lifted from raw_payload', j.ribbon.find((r) => r.id === 'T1')?.cascadeStage === 'knot_person_id_match', j.ribbon)
     check('cascade_stage null when absent', j.ribbon.find((r) => r.id === 'T2')?.cascadeStage === null, j.ribbon)
+    check('zero_phase carried per touchpoint (pre_zero on T1, post_zero on T2)', j.ribbon.find((r) => r.id === 'T1')?.zeroPhase === 'pre_zero' && j.ribbon.find((r) => r.id === 'T2')?.zeroPhase === 'post_zero', j.ribbon)
+    check('handles / firstSeenAt / pointZeroAt surfaced from the couple row', j.handles.knot === 'sarah.james' && j.firstSeenAt === '2026-03-01T10:00:00Z' && j.pointZeroAt === '2026-03-10T10:00:00Z', { handles: j.handles, firstSeenAt: j.firstSeenAt, pointZeroAt: j.pointZeroAt })
+    check('discovery names the handle when the earliest touchpoint carries one', j.discovery.firstSeenViaHandle === true && j.discovery.summary.startsWith('First seen as @sarah.james on knot'), j.discovery)
     check('progression folded in', j.progression.length === 1 && j.progression[0].eventType === 'tour_booked', j.progression)
     check('Wave-4 profile folded in via source_wedding_id', (j.identityProfile as Record<string, unknown> | null)?.archetype === 'destination', j.identityProfile)
     // look-alike: excludes self (C1), merged (C4), other venue (C5);

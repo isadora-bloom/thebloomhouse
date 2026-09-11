@@ -110,6 +110,15 @@ const fakeReaders: import('@/lib/intel/tools').CanonicalReaders = {
     progression: [],
     identityProfile: null,
     lookAlikeCohort: [],
+    handles: {},
+    firstSeenAt: null,
+    pointZeroAt: null,
+    discovery: {
+      summary: 'No first-seen date recorded yet.',
+      daysBeforePointZero: null,
+      firstSeenViaHandle: false,
+      firstChannel: null,
+    },
     generatedAt: GENERATED_AT,
   }),
   getVenueOverview: async () => ({
