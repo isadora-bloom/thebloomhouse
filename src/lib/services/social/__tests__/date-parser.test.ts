@@ -52,8 +52,12 @@ describe('absolute forms', () => {
 })
 
 describe('precision travels with the answer', () => {
-  it('a week is a day at best', () => {
-    expect(parseRelativeAge('1w', CAPTURE)?.precision).toBe('day')
+  it('a week is a week, not a day (Wave 4 W31: was falsely day-precise)', () => {
+    expect(parseRelativeAge('1w', CAPTURE)?.precision).toBe('week')
+    expect(parseRelativeAge('3 weeks ago', CAPTURE)?.precision).toBe('week')
+  })
+  it('a day is still a day', () => {
+    expect(parseRelativeAge('2d', CAPTURE)?.precision).toBe('day')
   })
   it('minutes are exact', () => {
     expect(parseRelativeAge('20m', CAPTURE)?.precision).toBe('exact')
@@ -61,7 +65,8 @@ describe('precision travels with the answer', () => {
   it('hours are hours', () => {
     expect(parseRelativeAge('3h', CAPTURE)?.precision).toBe('hour')
   })
-  it('a bare month is a month', () => {
+  it('a relative month is a month, same as a bare month', () => {
+    expect(parseRelativeAge('5mo', CAPTURE)?.precision).toBe('month')
     expect(parseRelativeAge('Mar 2026', CAPTURE)?.precision).toBe('month')
   })
   it('keeps the string it came from', () => {

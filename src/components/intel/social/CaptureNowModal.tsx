@@ -18,6 +18,7 @@
  */
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { ExternalLink, X, Loader2, CheckCircle2, Sparkles, Image as ImageIcon } from 'lucide-react'
 
 /** One handle and what the spine did with it. */
@@ -281,6 +282,13 @@ function ResultView({
             {result.skipped} rows were not usable handles and were left alone.
           </p>
         ) : null}
+        <Link
+          href={`/intel/social-integration/captures/${result.captureId}`}
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sage-700 hover:underline"
+        >
+          View this capture&apos;s full detail
+          <ExternalLink className="h-3 w-3" />
+        </Link>
       </div>
 
       <p className="text-xs text-stone-500">

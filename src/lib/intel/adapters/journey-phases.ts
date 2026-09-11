@@ -15,7 +15,7 @@
  * Pure. Unit-tested in ./__tests__/journey-phases.test.ts.
  */
 
-import type { CoupleJourney, TouchpointRibbon } from '@/lib/intel/canonical'
+import { approxGapPhrase, type CoupleJourney, type TouchpointRibbon } from '@/lib/intel/canonical'
 import { clientTerm } from '@/lib/copy/client-terms'
 
 export interface PhaseTouchpoint extends TouchpointRibbon {
@@ -24,6 +24,12 @@ export interface PhaseTouchpoint extends TouchpointRibbon {
    *  never a member of — see below) or the raw ribbon draw a marker
    *  without re-deriving anything. */
   isPointZero: boolean
+  /** Wave 4 (W31): true on the single earliest touchpoint (ribbon[0]),
+   *  the one `couples.first_seen_at` was derived from. Lets a renderer
+   *  decide whether to show `occurredAtPrecision`'s "about N weeks"
+   *  phrase instead of a date it cannot defend — every other touchpoint
+   *  shows its date as-is. */
+  isFirstSeen: boolean
 }
 
 export interface JourneyPhaseLabels {
@@ -108,8 +114,16 @@ export interface JourneyPhases {
 
 const DAY_MS = 86_400_000
 
-function decorate(t: TouchpointRibbon, pointZeroAt: string | null): PhaseTouchpoint {
-  return { ...t, isPointZero: pointZeroAt !== null && t.occurredAt === pointZeroAt }
+function decorate(
+  t: TouchpointRibbon,
+  pointZeroAt: string | null,
+  firstSeenId: string | null,
+): PhaseTouchpoint {
+  return {
+    ...t,
+    isPointZero: pointZeroAt !== null && t.occurredAt === pointZeroAt,
+    isFirstSeen: firstSeenId !== null && t.id === firstSeenId,
+  }
 }
 
 /**
@@ -125,9 +139,10 @@ export function buildJourneyPhases(
   const discoveryTouchpoints: PhaseTouchpoint[] = []
   const knownCouple: PhaseTouchpoint[] = []
   let pointZero: PhaseTouchpoint | null = null
+  const firstSeenId = ribbon[0]?.id ?? null
 
   for (const t of ribbon) {
-    const decorated = decorate(t, pointZeroAt)
+    const decorated = decorate(t, pointZeroAt, firstSeenId)
     if (decorated.isPointZero && !pointZero) {
       // Drawn once, as the marker — never duplicated into either band.
       pointZero = decorated
@@ -145,6 +160,11 @@ export function buildJourneyPhases(
 
   const daysBeforePointZero = discovery.daysBeforePointZero
   const showDiscoveryGap = daysBeforePointZero !== null && daysBeforePointZero > 1
+  // Wave 4 (W31): a week/month-precise first-seen date cannot honestly
+  // back an exact day count here either — "about 3 weeks" instead of
+  // "23 days" when the underlying precision says so.
+  const approxPhrase =
+    daysBeforePointZero === null ? null : approxGapPhrase(daysBeforePointZero, discovery.firstSeenPrecision)
 
   return {
     discovery: discoveryTouchpoints,
@@ -159,7 +179,9 @@ export function buildJourneyPhases(
     daysBeforePointZero,
     showDiscoveryGap,
     discoveryGapPhrase: showDiscoveryGap
-      ? `${daysBeforePointZero} days of discovery before they wrote to us`
+      ? approxPhrase
+        ? `${approxPhrase} of discovery before they wrote to us`
+        : `${daysBeforePointZero} days of discovery before they wrote to us`
       : null,
     handles,
     chips: handleChips(handles),

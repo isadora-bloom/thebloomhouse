@@ -458,6 +458,12 @@ export interface TouchpointRibbon {
    *  'post_zero' is the known-couple history. Null on a touchpoint written
    *  before migration 381 started stamping it; never guessed here. */
   zeroPhase: 'pre_zero' | 'post_zero' | null
+  /** Wave 4 (W31): `raw_payload.occurred_at_precision`, when the writer
+   *  set one — currently only the social adapter does (date-parser.ts's
+   *  `SocialDatePrecision`, plus 'capture_ceiling'). Undefined/null on a
+   *  channel that does not stamp precision, which a reader should treat
+   *  as "exact enough to show a date". */
+  occurredAtPrecision?: string | null
 }
 
 export interface ProgressionEvent {
@@ -486,6 +492,12 @@ export interface DiscoverySummary {
   firstSeenViaHandle: boolean
   /** Channel of the earliest touchpoint, when the ribbon has one. */
   firstChannel: string | null
+  /** Wave 4 (W31): the earliest touchpoint's `occurredAtPrecision`, when
+   *  it carries one. 'week' or 'month' means `firstSeenAt` is a back-
+   *  derived approximation (a social capture's relative age, e.g. "3w"),
+   *  not a date the venue actually observed — callers should render
+   *  "about N weeks/months" rather than a day count. */
+  firstSeenPrecision?: string | null
 }
 
 export interface CoupleJourney {
@@ -577,6 +589,7 @@ export async function loadCoupleJourney(
     cascadeStage: pickString(t.raw_payload, 'cascade_stage'),
     cascadeReason: pickString(t.raw_payload, 'cascade_reason'),
     zeroPhase: t.zero_phase === 'pre_zero' || t.zero_phase === 'post_zero' ? t.zero_phase : null,
+    occurredAtPrecision: pickString(t.raw_payload, 'occurred_at_precision'),
   }))
 
   // 3. Progression anchors.
@@ -700,10 +713,33 @@ function emptyDiscovery(): DiscoverySummary {
     daysBeforePointZero: null,
     firstSeenViaHandle: false,
     firstChannel: null,
+    firstSeenPrecision: null,
   }
 }
 
 const DAY_MS = 86_400_000
+
+/**
+ * Wave 4 (W31): turn a day count into an honest phrase when the
+ * underlying date is only week- or month-precise. A social capture's
+ * relative age ("3w") back-derives an exact-looking ISO instant, but
+ * the platform never told us the actual day — showing "23 days" would
+ * claim precision nobody has. Returns null for 'exact' / 'hour' / 'day'
+ * / 'year' / unset precision, i.e. when the plain day count is not a
+ * false precision claim.
+ */
+export function approxGapPhrase(days: number, precision: string | null | undefined): string | null {
+  if (days < 0) return null
+  if (precision === 'week') {
+    const weeks = Math.max(1, Math.round(days / 7))
+    return `about ${weeks} week${weeks === 1 ? '' : 's'}`
+  }
+  if (precision === 'month') {
+    const months = Math.max(1, Math.round(days / 30))
+    return `about ${months} month${months === 1 ? '' : 's'}`
+  }
+  return null
+}
 
 /**
  * Build the discovery sentence from spine facts only: `first_seen_at`,
@@ -726,6 +762,7 @@ function buildDiscoverySummary(
   const firstChannel = earliest?.channel ?? null
   const handle = firstChannel ? handles[firstChannel] : undefined
   const firstSeenViaHandle = Boolean(firstChannel && handle)
+  const firstSeenPrecision = earliest?.occurredAtPrecision ?? null
 
   let daysBeforePointZero: number | null = null
   if (pointZeroAt) {
@@ -733,12 +770,20 @@ function buildDiscoverySummary(
     daysBeforePointZero = Number.isFinite(days) && days >= 0 ? days : null
   }
 
+  // Wave 4 (W31): a week/month-precise first-seen date cannot honestly
+  // back a "41 days before point zero" claim — round it into the same
+  // "about N weeks" phrase the discovery-gap headline uses instead.
+  const approxPhrase =
+    daysBeforePointZero === null ? null : approxGapPhrase(daysBeforePointZero, firstSeenPrecision)
+
   const dayClause =
     daysBeforePointZero === null
       ? ''
-      : daysBeforePointZero === 0
-        ? ', the same day they reached point zero'
-        : `, ${daysBeforePointZero} day${daysBeforePointZero === 1 ? '' : 's'} before point zero`
+      : approxPhrase
+        ? `, ${approxPhrase} before point zero`
+        : daysBeforePointZero === 0
+          ? ', the same day they reached point zero'
+          : `, ${daysBeforePointZero} day${daysBeforePointZero === 1 ? '' : 's'} before point zero`
 
   const summary = firstSeenViaHandle
     ? `First seen as @${handle} on ${firstChannel}${dayClause}.`
@@ -746,7 +791,7 @@ function buildDiscoverySummary(
       ? `First seen via ${firstChannel}${dayClause}.`
       : `First seen on record; the originating channel is not available.`
 
-  return { summary, daysBeforePointZero, firstSeenViaHandle, firstChannel }
+  return { summary, daysBeforePointZero, firstSeenViaHandle, firstChannel, firstSeenPrecision }
 }
 
 const LOOKALIKE_LIMIT = 6

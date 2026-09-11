@@ -32,9 +32,15 @@
  * is not a Tuesday afternoon, and a reader that treats it as one will
  * draw a ribbon it cannot defend. The caller stores the precision in the
  * signal's raw payload.
+ *
+ * Wave 4 (W31): "1w" used to collapse into 'day' precision, which is a
+ * second false-precision claim on top of the first — a week-old follow
+ * is not a Tuesday, but it is not a specific day either. 'week' is its
+ * own precision now, so a reader can say "about 3 weeks before" instead
+ * of a date it cannot defend.
  */
 
-export type SocialDatePrecision = 'exact' | 'hour' | 'day' | 'month' | 'year'
+export type SocialDatePrecision = 'exact' | 'hour' | 'day' | 'week' | 'month' | 'year'
 
 export interface DerivedSocialDate {
   /** ISO 8601 instant. */
@@ -70,7 +76,7 @@ const WEEK = 7 * DAY
 const UNITS: Array<{ keys: string[]; ms: number; precision: SocialDatePrecision }> = [
   { keys: ['mo', 'mos', 'month', 'months'], ms: 30 * DAY, precision: 'month' },
   { keys: ['y', 'yr', 'yrs', 'year', 'years'], ms: 365 * DAY, precision: 'year' },
-  { keys: ['w', 'wk', 'wks', 'week', 'weeks'], ms: WEEK, precision: 'day' },
+  { keys: ['w', 'wk', 'wks', 'week', 'weeks'], ms: WEEK, precision: 'week' },
   { keys: ['d', 'day', 'days'], ms: DAY, precision: 'day' },
   { keys: ['h', 'hr', 'hrs', 'hour', 'hours'], ms: HOUR, precision: 'hour' },
   { keys: ['m', 'min', 'mins', 'minute', 'minutes'], ms: MINUTE, precision: 'exact' },
