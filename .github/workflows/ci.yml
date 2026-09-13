@@ -268,3 +268,32 @@ jobs:
 
       - name: Golden-case spec validation — GC-1..GC-9 well-formed (FIX-PLAN Layer C)
         run: npx tsx tests/golden/run-golden-cases.ts --dry
+
+  # Two-venue isolation battery (NOVEMBER-PLAN.md wave 5, W38 / week 7 gate:
+  # "zero cross-tenant reads"). Needs a disposable test-branch Supabase
+  # project — never runs against production (scripts/isolation-battery.ts
+  # refuses the prod ref itself via scripts/_safety.mjs unless --allow-prod
+  # is passed, which this job never passes). Separate job so its skip when
+  # the secrets are absent doesn't read as a failure on the main `checks` job.
+  isolation-battery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+
+      - name: Two-venue isolation battery
+        env:
+          ISOLATION_SUPABASE_URL: ${{ secrets.ISOLATION_SUPABASE_URL }}
+          ISOLATION_SERVICE_KEY: ${{ secrets.ISOLATION_SERVICE_KEY }}
+        run: |
+          if [ -z "$ISOLATION_SUPABASE_URL" ] || [ -z "$ISOLATION_SERVICE_KEY" ]; then
+            echo "[isolation-battery] SKIPPED — ISOLATION_SUPABASE_URL / ISOLATION_SERVICE_KEY secrets are not set."
+            echo "Wire a disposable test-branch Supabase project's URL + service-role key as repo secrets to run this job."
+            exit 0
+          fi
+          npx tsx scripts/isolation-battery.ts --json
