@@ -316,3 +316,21 @@ Follow-ups for wave 5:
 - Marketing-site repos: add "Your Instagram (optional)" to the inquiry form and calculator,
   mapped to the `instagram` CSV column.
 - Two lifecycles (six spine states vs the thirteen-stage wedding machine) remain unreconciled.
+
+## Wave 5 (launched 2026-09-12): finish what can be finished without data
+
+Isadora, 2026-09-12: the Rixey reimport waits until as much of the plan as possible is built.
+No migrations between waves; `npm run migrate:pending` at the end.
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W35 | Intake onto the one writer: the CSV adapters (web form, calculator, HoneyBook) commit through `linkSignal` instead of `mintWedding`, so couples, handles and first-seen are stamped by the spine itself; legacy wedding row still produced for the surfaces that read it | Opus | `src/lib/services/crm-import/index.ts` (commit path), `src/lib/services/crm-import/related-contacts.ts`, `src/lib/services/identity/link-with-lifecycle.ts`, tests |
+| W36 | The venue's own handles and a ticking clock: `venue_config` social handles (migration 403) shown in settings and excluded from stamping; a `useNow()` hook replacing the once-per-mount `nowMs()` reads on pages with "ago" labels | Sonnet | new migration 403, `src/app/(platform)/settings/**` (one section), `src/lib/services/identity/handles.ts` (an exclusion helper), `src/lib/utils/clock.ts`, the nine files W33 touched for purity |
+| W37 | One lifecycle vocabulary: define the mapping from the thirteen-stage wedding machine to the six spine states, an audit that reports disagreements per couple, and one status pill used by the couples list, the pipeline and the couple page | Opus | `src/lib/services/lifecycle/**`, `src/lib/services/identity/lifecycle-audit.ts`, `src/lib/services/identity/status-pill.ts`, `src/lib/copy/client-terms.ts` (terms), the three surfaces' pill components |
+| W38 | Two-venue isolation battery: a script that, given two venue ids, calls every canonical reader, every tool source and every scope-aware route with each venue and asserts zero rows from the other; runnable against a test branch; CI job wired but skipped without credentials | Sonnet | new `scripts/isolation-battery.ts`, `tests/isolation/**`, `.github/workflows/ci.yml` (one job) |
+| W39 | Hide everything not on the client path: audit `src/components/shell/nav-config.ts` and the 183 platform pages against the plan's four daily surfaces plus settings; pages with no nav entry and no client purpose get a `notFound()` behind a `SCAFFOLD_PAGES` flag; SITEMAP regenerated; orphan count in the plan | Sonnet | `src/components/shell/nav-config.ts`, `SITEMAP.md`, `scripts/gen-sitemap.mjs`, a new `src/lib/scaffold-gate.ts`, the orphan pages themselves (gate line only) |
+| W40 | First-seen from any dated intake row (not only rows with a handle), and the daily surfaces off legacy: `/agent/leads`, `/agent/pipeline`, `/intel/sources` still read `weddings` directly; move those reads onto the canonical readers or the spine and ratchet `legacy-reads-baseline.json` down | Sonnet | `src/lib/services/crm-import/index.ts` (first-seen block only, coordinate with W35 by touching only `firstSeenCandidateFor`), `src/app/(platform)/agent/leads/page.tsx`, `src/app/(platform)/agent/pipeline/page.tsx`, `src/app/(platform)/intel/sources/page.tsx`, `src/lib/intel/adapters/**` |
+
+Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. linkSignal is the
+only spine writer. No database writes. W35 and W40 both touch `crm-import/index.ts`: W35 owns
+the commit path, W40 owns only `firstSeenCandidateFor`.
