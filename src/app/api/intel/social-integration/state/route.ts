@@ -6,6 +6,8 @@ import {
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
+import { getVenueSocialHandles } from '@/lib/services/identity/handles'
+import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 
 /**
  * GET /api/intel/social-integration/state
@@ -40,6 +42,24 @@ export async function GET(request: NextRequest) {
       .eq('venue_id', auth.venueId)
 
     if (cErr) return serverError(cErr)
+
+    // Wave 5 W36: venue_config.social_handles (migration 403) is the
+    // canonical venue-handle source now; platform_configs.venue_handle is
+    // legacy. getVenueSocialHandles copies a legacy value across the first
+    // time it finds venue_config empty for that platform, so this overlay
+    // keeps the modal and the settings page reading the same value even
+    // before that copy lands.
+    const venueHandles = await getVenueSocialHandles(service, auth.venueId)
+    const configsWithCanonicalHandle = (configs ?? []).map((c: {
+      platform: string
+      venue_handle: string | null
+      followers_url: string | null
+      recommended_frequency_days: number | null
+      is_active: boolean
+    }) => ({
+      ...c,
+      venue_handle: venueHandles?.[c.platform as HandlePlatform] ?? c.venue_handle,
+    }))
 
     const { data: captures, error: capErr } = await service
       .from('social_captures')
@@ -110,7 +130,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       metrics,
-      configs: configs ?? [],
+      configs: configsWithCanonicalHandle,
     })
   } catch (err) {
     return serverError(err)

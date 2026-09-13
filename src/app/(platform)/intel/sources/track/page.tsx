@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useAiName } from '@/lib/hooks/use-ai-name'
-import { nowMs } from '@/lib/utils/clock'
+import { useNow } from '@/lib/hooks/use-now'
 import Link from 'next/link'
 import {
   Sparkles,
@@ -72,8 +72,8 @@ export default function SourcesTrackPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [pending, setPending] = useState<Set<string>>(new Set())
 
-  // Capture current time once per render to avoid purity violations
-  const currentTime = useMemo(() => nowMs(), [])
+  // Wave 5 W36: ticks every minute instead of freezing at mount.
+  const currentTime = useNow()
 
   const refresh = useCallback(async () => {
     setLoading(true)

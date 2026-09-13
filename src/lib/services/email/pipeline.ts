@@ -50,6 +50,7 @@ import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
 import { applySignalInference, stripQuotedReply } from '@/lib/services/attribution/signal-inference'
 import { extractHandlesFromUrls } from '@/lib/services/extraction'
+import { getVenueSocialHandles, stripVenueHandles } from '@/lib/services/identity/handles'
 import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/intel/consultant-tracking'
@@ -1458,10 +1459,16 @@ export async function processIncomingEmail(
   // outbound self-loop branch further down passes direction:'outbound'
   // and therefore gets null, because a venue reply quoting a signature
   // says nothing about who the couple is.
-  const inboundHandles = handlesForEmailSignal({
+  // Wave 5 W36: a handle in the body can be the venue's own (a signature
+  // link, a "follow us" line above the quoted reply). That is not evidence
+  // about the couple, so it never reaches the signal.
+  const rawInboundHandles = handlesForEmailSignal({
     direction: 'inbound',
     body: email.body,
   })
+  const inboundHandles = rawInboundHandles
+    ? stripVenueHandles(rawInboundHandles, await getVenueSocialHandles(supabase, venueId))
+    : null
   // Tee the same map onto the interaction's extracted_identity, the way
   // the web-form adapter does for its instagram column. The couple's copy
   // is written by the cascade; this one is the audit trail on the row that

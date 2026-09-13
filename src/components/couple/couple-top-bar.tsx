@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 import { CoupleUserMenu } from './couple-user-menu'
 import { CoupleNotificationBell } from './couple-notification-bell'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
-import { nowMs } from '@/lib/utils/clock'
+import { useNow } from '@/lib/hooks/use-now'
 
 interface CoupleTopBarProps {
   /** Venue display name shown next to the logo. */
@@ -41,8 +41,9 @@ export function CoupleTopBar({
   const pathname = usePathname()
   const { weddingId, aiName, weddingDate } = useCoupleContext()
 
-  // Capture current time once per render to avoid purity violations
-  const currentTime = useMemo(() => nowMs(), [])
+  // Wave 5 W36: ticks every minute instead of freezing at mount, so
+  // "days until the wedding" stays honest for a tab left open all day.
+  const currentTime = useNow()
 
   // Sarah-portal Tier-B #62: print buttons are only useful in the
   // final 42 days (a couple 14 months out doesn't even have a

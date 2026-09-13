@@ -35,7 +35,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { linkSignal } from '@/lib/services/identity/forwards-linker'
-import { normalizeHandle } from '@/lib/services/identity/handles'
+import { getVenueSocialHandles, normalizeHandle, stripVenueHandles } from '@/lib/services/identity/handles'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import type { HandlePlatform, NormalizedSignal } from '@/lib/services/identity/sources/types'
 
@@ -157,6 +157,10 @@ export async function importIdentityCandidates(args: {
 
   const occurredAt = signalDate ?? new Date().toISOString()
   const day = captureDay(signalDate)
+  // Wave 5 W36: a screenshot can catch the venue's own account (its own
+  // comment, its own tag, its own follow-back). Fetched once per batch,
+  // not per candidate.
+  const venueHandles = await getVenueSocialHandles(supabase, venueId)
 
   for (const cand of candidates) {
     const signal = candidateToSignal(cand, {
@@ -168,6 +172,9 @@ export async function importIdentityCandidates(args: {
     if (!signal) {
       out.skipped++
       continue
+    }
+    if (signal.handles) {
+      signal.handles = stripVenueHandles(signal.handles, venueHandles)
     }
 
     try {

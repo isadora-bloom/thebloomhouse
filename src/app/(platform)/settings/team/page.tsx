@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
-import { nowMs } from '@/lib/utils/clock'
+import { useNow } from '@/lib/hooks/use-now'
 import {
   Users,
   Plus,
@@ -120,8 +120,8 @@ export default function TeamPage() {
   // Role editing
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null)
 
-  // Capture current time once per render to avoid purity violations
-  const currentTime = useMemo(() => nowMs(), [])
+  // Wave 5 W36: ticks every minute instead of freezing at mount.
+  const currentTime = useNow()
 
   // ---------------------------------------------------------------------------
   // Load data
