@@ -97,6 +97,83 @@ describe('firstSeenCandidateFor', () => {
     const row = { interactions: [] } as unknown as NormalisedLeadRow
     expect(firstSeenCandidateFor(row)).toBe('')
   })
+
+  // W40: a dated row with no handle at all must still yield a usable
+  // candidate — this is the HoneyBook shape (`handlesFromRow` returns
+  // null for it), and the function must not care.
+  it('a row with no handle column (the HoneyBook case) still yields a usable candidate', async () => {
+    const row = await parseOneWebFormRow([
+      'id,created_at,p1_name,p1_email,wedding_date,guests',
+      '1,2026-06-01,Rosie Hoyle,rosie@example.com,2027-06-20,120',
+    ].join('\n'))
+    // handlesFromRow sees no handle column and returns null — this is the
+    // exact row shape that used to never reach stampFirstSeenAt.
+    expect(handlesFromRow(row)).toBeNull()
+    const candidate = firstSeenCandidateFor(row)
+    expect(candidate).not.toBe('')
+    expect(Number.isFinite(Date.parse(candidate))).toBe(true)
+  })
+
+  it('a handle-less row with only inquiry_date (no interactions at all) returns that date', () => {
+    const row = {
+      inquiry_date: '2026-06-01T00:00:00.000Z',
+      interactions: [],
+    } as unknown as NormalisedLeadRow
+    expect(handlesFromRow(row)).toBeNull()
+    expect(firstSeenCandidateFor(row)).toBe('2026-06-01T00:00:00.000Z')
+  })
+
+  it('a row with no handle but with interactions still prefers the earliest interaction over inquiry_date', () => {
+    const row = {
+      inquiry_date: '2026-06-10T00:00:00.000Z',
+      interactions: [
+        {
+          occurred_at: '2026-06-05T00:00:00.000Z',
+          direction: 'inbound' as const,
+          type: 'email' as const,
+        },
+      ],
+    } as unknown as NormalisedLeadRow
+    expect(handlesFromRow(row)).toBeNull()
+    expect(firstSeenCandidateFor(row)).toBe('2026-06-05T00:00:00.000Z')
+  })
+
+  it('picks the earliest of several interactions regardless of list order', () => {
+    const row = {
+      interactions: [
+        { occurred_at: '2026-06-20T00:00:00.000Z', direction: 'inbound' as const, type: 'email' as const },
+        { occurred_at: '2026-06-01T00:00:00.000Z', direction: 'inbound' as const, type: 'email' as const },
+        { occurred_at: '2026-06-15T00:00:00.000Z', direction: 'inbound' as const, type: 'email' as const },
+      ],
+    } as unknown as NormalisedLeadRow
+    expect(firstSeenCandidateFor(row)).toBe('2026-06-01T00:00:00.000Z')
+  })
+
+  it('ignores malformed dates rather than letting them win the comparison', () => {
+    const row = {
+      inquiry_date: 'not-a-date',
+      interactions: [
+        { occurred_at: 'also-not-a-date', direction: 'inbound' as const, type: 'email' as const },
+        { occurred_at: '2026-06-01T00:00:00.000Z', direction: 'inbound' as const, type: 'email' as const },
+      ],
+    } as unknown as NormalisedLeadRow
+    expect(firstSeenCandidateFor(row)).toBe('2026-06-01T00:00:00.000Z')
+  })
+
+  it('falls back to inquiry_date when every interaction date is unusable', () => {
+    const row = {
+      inquiry_date: '2026-06-01T00:00:00.000Z',
+      interactions: [
+        { occurred_at: '', direction: 'inbound' as const, type: 'email' as const },
+      ],
+    } as unknown as NormalisedLeadRow
+    expect(firstSeenCandidateFor(row)).toBe('2026-06-01T00:00:00.000Z')
+  })
+
+  it('returns an empty string when neither interactions nor inquiry_date carry a usable date', () => {
+    const row = { inquiry_date: 'garbage', interactions: [] } as unknown as NormalisedLeadRow
+    expect(firstSeenCandidateFor(row)).toBe('')
+  })
 })
 
 describe('commitHandleStamps', () => {

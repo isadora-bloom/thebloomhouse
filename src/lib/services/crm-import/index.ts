@@ -675,6 +675,21 @@ export function handlesFromRow(
  * The row's own interactions first (they are the touchpoints), then the
  * inquiry date. Returns '' when the row carries no usable date, which the
  * first-seen stamp reads as "leave it alone".
+ *
+ * W40 (NOVEMBER-PLAN.md wave 5): this candidate is for EVERY row, handle
+ * or not. A dated HoneyBook row with no instagram/tiktok/etc. column still
+ * has an inquiry_date, so it still has a usable date here — the function
+ * does not look at, or need, `handlesFromRow`'s result. Before this wave
+ * the only call site pushed to `pendingHandleStamps` gated on
+ * `handlesFromRow(row)` being non-null (see the `rowHandles` check around
+ * `commitHandleStamps`, W35-owned), so a handle-less row's candidate was
+ * computed correctly here but never reached `stampFirstSeenAt` — the row
+ * never got queued at all. Fixing that fully needs the call site to queue
+ * a first-seen stamp whenever this function returns a non-empty string,
+ * independent of whether the row also carries a handle (W35's commit
+ * path owns that line; `stampHandlesAndFirstSeen` already tolerates
+ * `signal.handles` being empty — it only skips the handle-merge branch,
+ * `stampFirstSeenAt` still runs).
  */
 export function firstSeenCandidateFor(row: NormalisedLeadRow): string {
   const candidates: string[] = []
