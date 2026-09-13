@@ -30,6 +30,14 @@
  * The adapter contract is intentionally narrow: parse + preview return
  * pure data, commit takes a Supabase service client + venue id and
  * writes. No adapter is allowed to mutate global state.
+ *
+ * W35 (NOVEMBER-PLAN.md wave 5, 2026-09-12): the commit path now hands
+ * every row to `linkSignal`, the one spine writer, instead of relying on
+ * a mirror and a bolted-on handle stamp. The wedding row is minted first
+ * and the signals follow it; the reasoning for that order, and what it
+ * costs, is written out in full at the top of ./row-signals.ts. W29's
+ * `commitHandleStamps` is gone with it. Handles and first_seen_at now
+ * arrive through the stamp inside the cascade like every other channel.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -39,7 +47,7 @@ import type { Surface } from '@/lib/services/email/surface-classifier'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { normalizeHandles } from '@/lib/services/identity/handles'
-import type { HandlePlatform, NormalizedSignal } from '@/lib/services/identity/sources/types'
+import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 
 /** Stable identifier for the per-row crm_source column. Mirrors the
  *  weddings.crm_source CHECK constraint extended by migration 178 to
@@ -539,7 +547,7 @@ export interface CrmAdapter {
      *  + decision logic (resolveIdentity lookup, crm_import_rows
      *  fingerprint lookup) but performs ZERO writes — no weddings,
      *  no people, no interactions, no tours, no lost_deals, no
-     *  linkSignal, no pendingHoneybookSignals push. Returns
+     *  linkSignal, no row-signal push. Returns
      *  CommitResult.previewDecisions populated so the operator UI
      *  can show "X new, Y already in Bloom, Z dedup-skipped" BEFORE
      *  the coordinator confirms. Optional — adapters that ignore
@@ -579,37 +587,24 @@ export function findAdapter(name: string): CrmAdapter | null {
 }
 
 // ---------------------------------------------------------------------------
-// W29 — a CSV row's handles reach couples.handles (HANDLE-IDENTITY-SPEC.md §1)
+// Handles and first-seen off a CSV row (HANDLE-IDENTITY-SPEC.md §1 + §3)
 // ---------------------------------------------------------------------------
 //
 // W25 taught the web-form / calculator adapter to read an `instagram` or
 // `tiktok` column and put the normalised value on the row's interaction, at
-// `extracted_identity.handles`. It stopped there, because this commit path
-// writes weddings + people + interactions through `mintWedding` and mirrors
-// the couple afterwards, rather than building a NormalizedSignal and handing
-// it to `linkSignal`. So the handle landed on the interaction row and never
-// on the couple, which is the only place anything reads it.
+// `extracted_identity.handles`. W29 collected those per row and stamped them
+// onto the mirrored couple after the loop, because this path did not go
+// through `linkSignal` and so had no cascade stamp to ride on.
 //
-// This closes that gap without moving the adapter onto `linkSignal` (a much
-// larger job, still owed). Handles are collected per row during the loop,
-// then stamped after it through the same chokepoint the live linker uses,
-// `stampHandlesAndFirstSeen`. Three reasons it runs after the loop rather
-// than inline:
+// W35 removed that second pass. The two readers below survive it, because
+// they are what turns an adapter's row shape into the two fields a signal
+// needs. `handlesFromRow` produces the row anchor's `handles`;
+// `firstSeenCandidateFor` produces its `occurred_at`, which is what moves
+// `couples.first_seen_at` earlier. Both are pure, and both are exercised on
+// every row now rather than only on rows that happened to carry a handle.
 //
-//   1. `mintWedding` fires `mirrorCoupleFromWedding` WITHOUT awaiting it. Read
-//      the couple straight after the mint and it may not exist yet. Deferring
-//      to the end of the batch gives that mirror the rest of the loop to land,
-//      and the flush awaits a mirror of its own when it still has not.
-//   2. A row can roll back after its wedding is written (a failed tours or
-//      lost_deals insert wipes it). Stamping at the end lets the flush filter
-//      against the weddings that actually survived, exactly as the W20
-//      related-contacts flush does.
-//   3. It keeps the whole feature in three named functions a reader can hold
-//      in their head, instead of another forty lines inside a loop that is
-//      already long.
-//
-// The path is generic: it reads `extracted_identity.handles` off whatever the
-// adapter produced. HoneyBook exports carry no handle column today, so a
+// The path stays generic: it reads `extracted_identity.handles` off whatever
+// the adapter produced. HoneyBook exports carry no handle column today, so a
 // HoneyBook import counts zero and writes nothing. That is the correct
 // outcome, not a gap.
 
@@ -622,19 +617,6 @@ const KNOWN_HANDLE_PLATFORMS = new Set<string>([
   'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter',
   'knot', 'weddingwire', 'zola',
 ])
-
-/** One row's handles, held until the row loop is done. */
-export interface PendingHandleStamp {
-  /** The wedding the row committed to. Resolved to a couple at flush time. */
-  weddingId: string
-  handles: Partial<Record<HandlePlatform, string>>
-  /** Earliest real-world time the row carries, for `first_seen_at`. Empty
-   *  string when the row carried no usable date — `stampFirstSeenAt` treats
-   *  that as "nothing to say" and leaves the column alone. */
-  occurredAt: string
-  /** Adapter's own row key, for the log line only. */
-  rowSourceId: string | null
-}
 
 /**
  * The handles an adapter put on a row, merged across its interactions.
@@ -688,122 +670,6 @@ export function firstSeenCandidateFor(row: NormalisedLeadRow): string {
 }
 
 /**
- * Stamp the batch's collected handles onto their couples.
- *
- * For each surviving wedding: find its mirrored couple, then hand a synthetic
- * signal to `stampHandlesAndFirstSeen` — the same chokepoint the live linker
- * calls after a touchpoint lands. That gives the import the identical
- * behaviour for free: existing handles are never overwritten, a disagreement
- * is logged and queued to `couple_merge_events` instead of picking a winner,
- * `first_seen_at` only ever moves earlier, and any unpromoted fragment with
- * the same handle is promoted onto the couple.
- *
- * Never throws. The rows are already committed by the time this runs, and a
- * failure to stamp a handle must not fail an import that otherwise worked.
- *
- * Exported so the test can drive it against a fake client.
- */
-export async function commitHandleStamps(args: {
-  supabase: SupabaseClient
-  venueId: string
-  pending: PendingHandleStamp[]
-  /** Weddings that survived the row loop. Anything else rolled back. */
-  survivingWeddings: Set<string>
-}): Promise<{ recorded: number; conflicts: number }> {
-  const { supabase, venueId, pending, survivingWeddings } = args
-  let recorded = 0
-  let conflicts = 0
-
-  const { stampHandlesAndFirstSeen } = await import(
-    '@/lib/services/identity/route-by-tier'
-  )
-
-  for (const item of pending) {
-    if (!survivingWeddings.has(item.weddingId)) continue
-    try {
-      const coupleId = await resolveMirroredCouple(supabase, venueId, item.weddingId)
-      if (!coupleId) {
-        console.warn(
-          `[crm-import] handle stamp skipped: no mirrored couple for wedding ${item.weddingId}`,
-        )
-        continue
-      }
-
-      // A synthetic signal, not a spine write. `stampHandlesAndFirstSeen`
-      // reads four fields off it: handles, occurred_at, channel and
-      // external_id (the last two only to name the source in the
-      // contradiction audit row). Nothing here inserts a touchpoint — the
-      // import's own interactions row is the record of the event.
-      const signal = {
-        external_id: item.rowSourceId ?? `crm_import:${item.weddingId}`,
-        channel: 'csv_import',
-        action_type: 'imported',
-        occurred_at: item.occurredAt,
-        signal_tier: 'medium',
-        identity_hint: null,
-        primary_name: null,
-        primary_email: null,
-        primary_phone: null,
-        partner_name: null,
-        partner_email: null,
-        partner_phone: null,
-        wedding_date: null,
-        session_ip: null,
-        session_fingerprint: null,
-        handles: item.handles,
-        raw_payload: {},
-        legacy_wedding_id: item.weddingId,
-      } as unknown as NormalizedSignal
-
-      const outcome = await stampHandlesAndFirstSeen({
-        supabase,
-        venueId,
-        coupleId,
-        signal,
-      })
-      recorded += outcome.handlesAdded.length
-      conflicts += outcome.handleConflicts.length
-    } catch (err) {
-      console.warn(
-        '[crm-import] handle stamp failed (non-fatal):',
-        err instanceof Error ? err.message : String(err),
-      )
-    }
-  }
-
-  return { recorded, conflicts }
-}
-
-/**
- * The couples row mirroring one wedding.
- *
- * Reads `(venue_id, source_wedding_id)` first, because by flush time
- * `mintWedding`'s fire-and-forget mirror has almost always landed. Only when
- * it has not does this await a mirror of its own, which is the same
- * idempotent upsert and safe to repeat.
- */
-async function resolveMirroredCouple(
-  supabase: SupabaseClient,
-  venueId: string,
-  weddingId: string,
-): Promise<string | null> {
-  const { data } = await supabase
-    .from('couples')
-    .select('id')
-    .eq('venue_id', venueId)
-    .eq('source_wedding_id', weddingId)
-    .maybeSingle()
-  const existing = (data as { id?: string } | null)?.id ?? null
-  if (existing) return existing
-
-  const { mirrorCoupleFromWedding } = await import(
-    '@/lib/services/identity/mirror-couple'
-  )
-  const mirrored = await mirrorCoupleFromWedding({ venueId, weddingId, supabase })
-  return mirrored.coupleId
-}
-
-/**
  * Shared commit helper. All adapters normalise to NormalisedLeadRow and
  * then funnel through this for the actual writes — keeps the row-shape
  * → DB-shape mapping in one place + means future schema additions only
@@ -845,7 +711,7 @@ export async function commitNormalisedRows(args: {
    *  function runs the parse + decision logic (identity resolver
    *  lookup + crm_import_rows fingerprint check) BUT performs ZERO
    *  database writes — no weddings.insert, no people.insert, no
-   *  interactions.insert, no linkSignal, no pendingHoneybookSignals
+   *  interactions.insert, no linkSignal, no row-signal
    *  push, no portal provisioning. Returns CommitResult with
    *  `preview:true` + `previewDecisions[]` populated so the operator
    *  UI can show a pre-flight diff ("X new couples, Y already in
@@ -876,32 +742,22 @@ export async function commitNormalisedRows(args: {
     result.previewDecisions = []
   }
 
-  // H3 cascade-signal accumulator (PHASE-1-BATCH-2.md §3 phase A H3,
-  // 2026-05-26). HoneyBook-only — built per row as the legacy
-  // interactions batch lands, flushed once via `linkSignalBatch` at
-  // the END of the loop so a per-import judge budget (Pbatch2-11) can
-  // be allocated across all rows. Each `pendingSignals` entry carries
-  // the prebuilt `NormalizedSignal` plus a short telemetry tag.
+  // W35: the cascade signals every row produces, flushed through
+  // `linkSignal` after the loop. Replaces the HoneyBook-only H3
+  // accumulator. Every adapter's rows now reach the one writer, not just
+  // HoneyBook's. See ./row-signals.ts for the shape and the ordering
+  // argument; the flush filters against the surviving weddings exactly as
+  // the related-contacts flush does, so a row that rolled back links
+  // nothing.
   //
-  // Non-HoneyBook adapters (generic_csv / web_form / tour_scheduler /
-  // dubsado-scaffold / etc.) get no signals — H3 explicitly scopes to
-  // HoneyBook because:
-  //   (a) the HoneyBook adapter is the only one that emits the
-  //       synthetic `extracted_identity.hear_source` provenance row
-  //       that the cascade needs to read as a true attribution signal.
-  //   (b) the other CRM/CSV adapters have their own Pbatch2 sites
-  //       (web_form has its live-write cascade plumbing already;
-  //       generic_csv carries no provider-specific attribution).
+  // HoneyBook keeps one signal of its own: the synthetic provenance row
+  // carrying `extracted_identity.hear_source`, which is the only true
+  // attribution signal that export provides. It is folded into the row's
+  // time-ordered list rather than flushed separately.
   const isHoneybookImport = crmSource === 'honeybook'
-  type PendingHoneybookSignal = {
-    signal: import('@/lib/services/identity/sources/types').NormalizedSignal
-    rowSourceId: string | null
-    weddingId: string
-    /** Confidence sort key (higher = judge gets it first when budget
-     *  is tight): 'high' tier = 2, 'medium' = 1, 'low'/'aggregate' = 0. */
-    sortKey: number
-  }
-  const pendingHoneybookSignals: PendingHoneybookSignal[] = []
+  const pendingRowSignals: Array<
+    import('./row-signals').PendingRowSignals
+  > = []
 
   // W20: the non-couple people on the imported rows. Accumulated in the
   // row loop and flushed after it, so a row that rolls back (a failed
@@ -911,11 +767,6 @@ export async function commitNormalisedRows(args: {
   const pendingRelatedContacts: Array<
     import('./related-contacts').PendingRelatedContact
   > = []
-
-  // W29: the handles the adapter read off each row, stamped onto their
-  // couples after the loop. See the block comment above `handlesFromRow`
-  // for why this waits rather than stamping inline.
-  const pendingHandleStamps: PendingHandleStamp[] = []
 
   // ---------------------------------------------------------------------
   // Dry-run / pre-flight diff path.
@@ -1184,6 +1035,15 @@ export async function commitNormalisedRows(args: {
     // match so the summary still tells the truth.
     let insertedWeddingId: string | null = null
     let rowAborted = false
+    // W35: the interactions on this row that actually reached the spine:
+    // dedup said new or changed AND the processed marker was written. An
+    // interaction whose marker could not be written produces no signal,
+    // because we cannot tell a first import from a fifth.
+    const signalEligibleInteractions: NormalisedInteractionRow[] = []
+    // HoneyBook's synthetic provenance row, when the export carried one.
+    let honeybookAttributionSignal:
+      | import('@/lib/services/identity/sources/types').NormalizedSignal
+      | null = null
     // Wave 4 Phase 4c: track whether THIS row's wedding id is in the
     // touchedWeddingIds list so the outer catch can unrecord on rollback.
     // Declared outside the try block so the catch can reach it.
@@ -1295,7 +1155,27 @@ export async function commitNormalisedRows(args: {
       // whether to flag a date conflict on the existing wedding.
       let resolvedWeddingId: string | null = null
       let resolvedPartner1Id: string | null = null
+
+      // W35 spine pre-check (read-only). Before the legacy resolver gets a
+      // say, ask the spine whether a couple already holds this row's email
+      // or phone. If it does AND that couple carries a legacy wedding, the
+      // row belongs on it, and importing past it would mint a second couple
+      // for someone the cascade already knows. Deterministic anchors only,
+      // no judge, and nothing is written. A couple with no legacy wedding
+      // is left alone: promoting it from here would be a second spine
+      // writer, and the candidate queue already owns that reconciliation.
+      // See ./row-signals.ts for why the ordering is mint-first at all.
       if (row.partner1_email || row.partner1_phone) {
+        const { findSpineCoupleWedding } = await import('./row-signals')
+        resolvedWeddingId = await findSpineCoupleWedding({
+          supabase,
+          venueId,
+          email: row.partner1_email ?? null,
+          phone: row.partner1_phone ?? null,
+        })
+      }
+
+      if (!resolvedWeddingId && (row.partner1_email || row.partner1_phone)) {
         try {
           const { resolveIdentity } = await import('@/lib/services/identity/resolver')
           const resolved = await resolveIdentity(
@@ -1773,13 +1653,20 @@ export async function commitNormalisedRows(args: {
           interaction: NormalisedInteractionRow
           importRowId: string | null
           willInsert: boolean
+          /** W35: false when the row carried an external_id but the
+           *  processed marker could not be classified. Such an interaction
+           *  still takes the legacy insert (pre-existing behaviour) but
+           *  produces NO cascade signal. See the swallowed-dedup rule. */
+          markerOk: boolean
         }> = []
         // Lazy import — only loads when an adapter actually populates
         // external_id. Most legacy adapter calls bypass entirely.
         let importRowsModule: typeof import('./import-rows') | null = null
         for (const i of row.interactions) {
           if (!i.external_id) {
-            decisions.push({ interaction: i, importRowId: null, willInsert: true })
+            decisions.push({
+              interaction: i, importRowId: null, willInsert: true, markerOk: true,
+            })
             continue
           }
           if (!importRowsModule) {
@@ -1821,15 +1708,25 @@ export async function commitNormalisedRows(args: {
               interaction: i,
               importRowId: classified.importRowId,
               willInsert: classified.state !== 'unchanged',
+              markerOk: true,
             })
           } catch (err) {
             // Dedup failure must not block the import — fall through
             // to insert as before. Log + continue.
+            //
+            // W35: the legacy insert keeps its pre-existing fall-through,
+            // but the cascade signal does not. Without a marker we cannot
+            // tell a first import from a fifth, and the doctrine there is
+            // skip rather than re-import. The touchpoint's own
+            // UNIQUE(venue_id, channel, external_id) would catch a repeat
+            // anyway; this just declines to lean on it.
             console.warn(
               `[crm-import] classifyImportRow failed (continuing without dedup): `,
               err instanceof Error ? err.message : err,
             )
-            decisions.push({ interaction: i, importRowId: null, willInsert: true })
+            decisions.push({
+              interaction: i, importRowId: null, willInsert: true, markerOk: false,
+            })
           }
         }
         // Build payload from interactions we decided to insert.
@@ -1920,163 +1817,90 @@ export async function commitNormalisedRows(args: {
             }
           }
 
-          // H3 dual-write (PHASE-1-BATCH-2.md §3 phase A H3, 2026-05-26):
-          // accumulate cascade signal(s) for this HoneyBook row alongside
-          // the legacy interactions insert above. The legacy `interactions`
-          // batch STAYS source-of-truth; the cascade-side write happens at
-          // the END of the loop via `linkSignalBatch` so a per-import
-          // judge budget (Pbatch2-11) can be allocated across all rows.
+          // W35: turn this row's committed interactions into cascade
+          // signals. The interactions that reach the spine are exactly the
+          // ones that both passed the dedup gate AND got a processed
+          // marker; the rest are held back on purpose (see `markerOk`).
+          // The push happens after the tours block, so a row that rolls
+          // back never reaches the flush.
+          for (const d of decisions) {
+            if (!d.willInsert || !d.markerOk) continue
+            signalEligibleInteractions.push(d.interaction)
+          }
+
+          // HoneyBook's synthetic-provenance signal, the one thing that
+          // export carries which no generic row builder can derive: the
+          // "how did you hear about us" answer. `honeybookCsvToNormalizedSignal`
+          // in attribution mode promotes it to action_type 'crm_attribution'
+          // and surfaces the value in raw_payload, which is what makes
+          // "did Knot drive that booking?" answerable from the cohort funnel.
           //
-          // Per row, we may emit UP TO TWO signals:
-          //   (a) the status-derived row signal — always, encoding
-          //       inquiry/booked/lost lifecycle state into the spine via
-          //       `crm_imported_*` action_types.
-          //   (b) the synthetic-provenance attribution signal — when ANY
-          //       interaction in `row.interactions` carries
-          //       `extracted_identity.hear_source` (the HoneyBook adapter
-          //       emits exactly one such row per wedding when it
-          //       recognises the lead-source field). This is the only
-          //       true attribution signal HoneyBook provides; sending it
-          //       through the spine as `action_type:'crm_attribution'`
-          //       is what makes "did Knot drive that booking?" answerable
-          //       from the cohort funnel.
-          //
-          // Confidence-sort key (Pbatch2-11): high-tier signals get the
-          // LLM judge first when the budget is tight. Attribution rows
-          // with a recognised hear_source are signal_tier='high';
-          // booked/completed rows are 'high'; everything else is
-          // 'medium'. We tag a numeric sortKey now and sort in the flush.
-          //
-          // PART C dedup gate (2026-05-26): when every interaction
-          // on this row was dedup-skipped (re-upload of an already-
-          // imported HoneyBook row with the same content_hash), the
-          // legacy interactions insert wrote zero rows AND the spine
-          // already has the matching signal from the first upload's
-          // H3 push. Pushing here again would: (a) waste an LLM judge
-          // cycle from the Pbatch2-11 budget on a row whose attached
-          // signal is byte-identical to one already in tracer_run_events,
-          // (b) increment UNIQUE-collision noise in
-          // tracer_run_events for the same `(venue_id, source_hash)`
-          // tuple. UNIQUE catches it so there is no double-count, but
-          // we should not pay the cost. Gate: skip H3 push when there
-          // are interactions with external_id AND every one of them
-          // was dedup-skipped (insertDecisions.length === 0 AND
-          // skippedCount > 0 means "row had external_id'd interactions
-          // and all were dedup-skipped"). Rows without external_id
-          // (legacy generic_csv path) still emit H3 because the spine
-          // has no other way to know the row was seen.
+          // Skipped when every interaction on the row was dedup-skipped: the
+          // first upload already pushed this signal, and the touchpoint's
+          // UNIQUE key would only turn the repeat into a no-op we paid for.
           const allInteractionsDedupSkipped =
             decisions.length > 0
             && insertDecisions.length === 0
             && skippedCount === decisions.length
-          // try/catch wrapper: linkSignal builder failures must never
-          // throw out of `commitNormalisedRows`. The legacy interactions
-          // insert above is the source of truth; a cascade-build failure
-          // is auditable via the warn but never blocks the import.
           if (isHoneybookImport && !allInteractionsDedupSkipped) {
             try {
-              const { honeybookCsvToNormalizedSignal } = await import(
-                '@/lib/services/identity/honeybook-csv-to-signal'
-              )
-              const builderRow: import(
-                '@/lib/services/identity/honeybook-csv-to-signal'
-              ).HoneybookCsvRowInput = {
-                source_id: row.source_id ?? null,
-                partner1_first_name: row.partner1_first_name ?? null,
-                partner1_last_name: row.partner1_last_name ?? null,
-                partner1_email: row.partner1_email ?? null,
-                partner1_phone: row.partner1_phone ?? null,
-                partner2_first_name: row.partner2_first_name ?? null,
-                partner2_last_name: row.partner2_last_name ?? null,
-                partner2_email: row.partner2_email ?? null,
-                partner2_phone: row.partner2_phone ?? null,
-                wedding_date: row.wedding_date ?? null,
-                status: row.status ?? null,
-                inquiry_date: row.inquiry_date ?? null,
-                booked_at: row.booked_at ?? null,
-                lost_at: row.lost_at ?? null,
-                source: row.source ?? null,
-                raw_row: row.raw_row ?? null,
-              }
-              // Pick out the synthetic-provenance interaction (if any)
-              // so the attribution signal can be emitted with the
-              // hear_source payload and the matching importRowId.
               const provenanceDecision = decisions.find((d) => {
                 const ext = (d.interaction.extracted_identity ?? null) as
                   | { hear_source?: unknown; hear_source_raw?: unknown }
                   | null
                 return (
                   d.willInsert
+                  && d.markerOk
                   && ext
                   && (typeof ext.hear_source === 'string'
                     || typeof ext.hear_source_raw === 'string')
                 )
               }) ?? null
-
-              // (a) status-derived row signal — always emit. The builder
-              //     skips the attribution promotion when neither
-              //     extracted_identity nor mode='attribution' is set.
-              const rowSignal = honeybookCsvToNormalizedSignal({
-                row: builderRow,
-                weddingId,
-                importRowId: null,
-                mode: 'row',
-              })
-              pendingHoneybookSignals.push({
-                signal: rowSignal,
-                rowSourceId: row.source_id ?? null,
-                weddingId,
-                sortKey: rowSignal.signal_tier === 'high' ? 2
-                  : rowSignal.signal_tier === 'medium' ? 1
-                  : 0,
-              })
-
-              // (b) synthetic-provenance attribution signal — only when
-              //     the HoneyBook adapter emitted a hear_source-bearing
-              //     row. Pass the recognised + raw hear_source into the
-              //     builder so it auto-promotes to action_type:
-              //     'crm_attribution' and surfaces the value in
-              //     raw_payload for downstream readers.
               if (provenanceDecision) {
+                const { honeybookCsvToNormalizedSignal } = await import(
+                  '@/lib/services/identity/honeybook-csv-to-signal'
+                )
                 const ext = provenanceDecision.interaction.extracted_identity as
                   | { hear_source?: unknown; hear_source_raw?: unknown }
                   | null
-                const attributionRow: import(
-                  '@/lib/services/identity/honeybook-csv-to-signal'
-                ).HoneybookCsvRowInput = {
-                  ...builderRow,
-                  extracted_identity: {
-                    hear_source:
-                      typeof ext?.hear_source === 'string'
-                        ? ext.hear_source : null,
-                    hear_source_raw:
-                      typeof ext?.hear_source_raw === 'string'
-                        ? ext.hear_source_raw : null,
+                honeybookAttributionSignal = honeybookCsvToNormalizedSignal({
+                  row: {
+                    source_id: row.source_id ?? null,
+                    partner1_first_name: row.partner1_first_name ?? null,
+                    partner1_last_name: row.partner1_last_name ?? null,
+                    partner1_email: row.partner1_email ?? null,
+                    partner1_phone: row.partner1_phone ?? null,
+                    partner2_first_name: row.partner2_first_name ?? null,
+                    partner2_last_name: row.partner2_last_name ?? null,
+                    partner2_email: row.partner2_email ?? null,
+                    partner2_phone: row.partner2_phone ?? null,
+                    wedding_date: row.wedding_date ?? null,
+                    status: row.status ?? null,
+                    inquiry_date: row.inquiry_date ?? null,
+                    booked_at: row.booked_at ?? null,
+                    lost_at: row.lost_at ?? null,
+                    source: row.source ?? null,
+                    raw_row: row.raw_row ?? null,
+                    extracted_identity: {
+                      hear_source:
+                        typeof ext?.hear_source === 'string' ? ext.hear_source : null,
+                      hear_source_raw:
+                        typeof ext?.hear_source_raw === 'string'
+                          ? ext.hear_source_raw : null,
+                    },
                   },
-                }
-                const attributionSignal = honeybookCsvToNormalizedSignal({
-                  row: attributionRow,
                   weddingId,
                   importRowId: provenanceDecision.importRowId,
                   mode: 'attribution',
                 })
-                pendingHoneybookSignals.push({
-                  signal: attributionSignal,
-                  rowSourceId: row.source_id ?? null,
-                  weddingId,
-                  sortKey: attributionSignal.signal_tier === 'high' ? 2
-                    : attributionSignal.signal_tier === 'medium' ? 1
-                    : 0,
-                })
               }
             } catch (err) {
-              // Signal-build failure is non-fatal — the legacy insert
-              // above committed; this row just doesn't get a cascade
-              // signal for this batch. Surface via warn so the gap is
-              // auditable.
+              // Signal-build failure is non-fatal. The legacy insert above
+              // committed, and the row still gets its own anchor signal.
+              // Surface via warn so the gap is auditable.
               console.warn(
-                `[crm-import] H3 honeybook-csv-to-signal build failed ` +
-                  `(wedding=${weddingId}):`,
+                `[crm-import] honeybook attribution signal build failed `
+                  + `(wedding=${weddingId}):`,
                 err instanceof Error ? err.message : err,
               )
             }
@@ -2172,18 +1996,36 @@ export async function commitNormalisedRows(args: {
         })
       }
 
-      // W29: queue this row's handles. Same reasoning as the related
-      // contacts above — written after the loop so a row that rolls back
-      // cannot stamp a couple whose wedding no longer exists, and so the
-      // couple mirror `mintWedding` fired without awaiting has landed.
-      const rowHandles = handlesFromRow(row)
-      if (rowHandles) {
-        pendingHandleStamps.push({
+      // W35: queue this row's cascade signals. Same reasoning as the
+      // related contacts above. Sent after the loop so a row that rolls
+      // back links nothing, and so the couple mirror that `mintWedding`
+      // fired without awaiting has had the rest of the loop to land.
+      //
+      // Every row gets an anchor signal, even one with no interactions:
+      // the row itself IS an observation, and it carries the handles and
+      // the earliest date that move `couples.handles` and `first_seen_at`.
+      // `firstSeenCandidateFor` therefore runs on every row now, not only
+      // on rows that happened to have a handle column.
+      {
+        const { buildRowSignals } = await import('./row-signals')
+        const signals = buildRowSignals({
+          row,
+          crmSource,
           weddingId,
-          handles: rowHandles,
-          occurredAt: firstSeenCandidateFor(row),
-          rowSourceId: row.source_id ?? null,
+          interactions: signalEligibleInteractions,
+          handles: handlesFromRow(row),
+          rowOccurredAt: firstSeenCandidateFor(row),
+          extraSignals: honeybookAttributionSignal
+            ? [honeybookAttributionSignal]
+            : [],
         })
+        if (signals.length > 0) {
+          pendingRowSignals.push({
+            weddingId,
+            rowSourceId: row.source_id ?? null,
+            signals,
+          })
+        }
       }
 
       // lost_deals (only if status='lost' AND a lost_deal payload exists)
@@ -2248,66 +2090,47 @@ export async function commitNormalisedRows(args: {
     }
   }
 
-  // H3 flush (PHASE-1-BATCH-2.md §3 phase A H3 + Pbatch2-11, 2026-05-26):
-  // dual-write the accumulated HoneyBook cascade signals through the
-  // Forwards Linker. Runs ONCE per import (post row-loop) so the
-  // judge budget can be sized proportional to the batch — the default
-  // `linkSignalBatch` budget is 25, which a 1000-row CSV with ~100
-  // medium-confidence rows would exhaust by row 25, leaving the
-  // remainder to default to fragments.
+  // W35 flush: the row signals, through the one writer.
   //
-  // Pbatch2-11 doctrine:
-  //   - judgeBudget = Math.min(rowCount, 200) — proportional to signal
-  //     count, capped at 200 to bound LLM cost per import. For a
-  //     typical Rixey HoneyBook backfill (~70 weddings → ~70-140
-  //     signals once attribution is included), the cap rarely binds;
-  //     for a multi-thousand-row historical archive it caps spend.
-  //   - confidence-sort pre-batch: high-tier signals (booked rows,
-  //     recognised-hear-source attribution rows) first so they get the
-  //     LLM judge when budget IS tight. Lower-tier signals consume
-  //     the deterministic matcher only (no judge call) and the
-  //     fragment-vs-cold-start route handles them.
+  // Runs before the related-contacts flush on purpose. Both resolve their
+  // couple through `couples.source_wedding_id`, and this one waits for the
+  // mirror when `mintWedding`'s fire-and-forget copy has not landed yet.
+  // Doing it first means an Agent link never arrives at a couple that does
+  // not exist.
   //
-  // Dual-write contract (same as Batch-1 M6/M7): legacy
-  // `interactions.insert` per-row above STAYS source-of-truth; the
-  // cascade write is added in parallel. A flush failure must NOT
-  // throw out of `commitNormalisedRows` — log + continue to the
-  // portal-provisioning block. The Forwards Linker's own emit code
-  // also writes per-signal `tracer_run_events` rows for the dashboard.
-  if (pendingHoneybookSignals.length > 0) {
+  // Filtered against the surviving weddings, so a row that rolled back
+  // mid-import links nothing. Never throws: the legacy rows are already
+  // committed, and a cascade failure must not fail an import that
+  // otherwise worked. Failures are counted and named, never swallowed.
+  if (pendingRowSignals.length > 0) {
     try {
-      const { linkSignalBatch } = await import(
-        '@/lib/services/identity/forwards-linker'
-      )
-      // Confidence-sort: high (2) → medium (1) → low (0). Stable sort
-      // preserves original arrival order within each tier so the
-      // judge sees rows in their natural CSV order (audit-friendly).
-      const sorted = [...pendingHoneybookSignals]
-        .sort((a, b) => b.sortKey - a.sortKey)
-        .map((p) => p.signal)
-      const budget = Math.min(sorted.length, 200)
-      const { summary } = await linkSignalBatch({
+      const { commitRowSignals } = await import('./row-signals')
+      const signalSummary = await commitRowSignals({
         supabase,
         venueId,
-        signals: sorted,
-        // adapter-source-justified: factual provenance label for the shared linkSignalBatch commit helper (per-signal origin), not a weddings.source attribution write.
-        source: `crm_import:${crmSource}`,
-        judgeBudget: budget,
+        crmSource,
+        pending: pendingRowSignals,
+        survivingWeddings: new Set(result.touchedWeddingIds ?? []),
       })
+      // The handle counts the import summary reports now come off the link
+      // results rather than a second pass over the couples table.
+      result.handlesRecorded = signalSummary.handlesRecorded
+      result.handleConflicts = signalSummary.handleConflicts
+      for (const skip of signalSummary.skipped) {
+        result.errors.push(`row_signal_skipped:${skip.row}:${skip.reason}`)
+      }
       console.log(
-        `[crm-import] H3 linkSignalBatch flushed: signals=${sorted.length} ` +
-          `budget=${budget} attached=${summary.attached} minted=${summary.minted} ` +
-          `fragment=${summary.fragment} candidate_medium=${summary.candidate_medium} ` +
-          `candidate_low=${summary.candidate_low} duplicate=${summary.duplicate} ` +
-          `cold_start=${summary.cold_start}`,
+        `[crm-import] row signals: rows=${pendingRowSignals.length} `
+        + `sent=${signalSummary.sent} attached=${signalSummary.attached} `
+        + `duplicate=${signalSummary.duplicate} minted=${signalSummary.minted} `
+        + `handles=${signalSummary.handlesRecorded} `
+        + `handle_conflicts=${signalSummary.handleConflicts} `
+        + `skipped=${signalSummary.skipped.length}`,
       )
     } catch (err) {
-      // Cascade flush failure is non-fatal — the legacy interactions
-      // rows above are source-of-truth. The Tracer batch sweep will
-      // pick up the same rows on its next pass.
       result.errors.push(
-        `H3 linkSignalBatch failed (signals=${pendingHoneybookSignals.length}): ` +
-          (err instanceof Error ? err.message : 'unknown'),
+        `row signal flush failed (rows=${pendingRowSignals.length}): `
+        + (err instanceof Error ? err.message : 'unknown'),
       )
     }
   }
@@ -2331,24 +2154,6 @@ export async function commitNormalisedRows(args: {
       `[crm-import] related contacts: seen=${summary.seen} `
       + `created=${summary.created} linked=${summary.linked} `
       + `roles=${summary.rolesRecorded} skipped=${summary.skipped.length}`,
-    )
-  }
-
-  // W29 flush (HANDLE-IDENTITY-SPEC.md §1 + §3): the handles the rows
-  // carried, onto their couples, through the cascade's own stamp. Filtered
-  // against the surviving weddings so a rolled-back row stamps nothing.
-  if (pendingHandleStamps.length > 0) {
-    const handleOutcome = await commitHandleStamps({
-      supabase,
-      venueId,
-      pending: pendingHandleStamps,
-      survivingWeddings: new Set(result.touchedWeddingIds ?? []),
-    })
-    result.handlesRecorded = handleOutcome.recorded
-    result.handleConflicts = handleOutcome.conflicts
-    console.log(
-      `[crm-import] handles: rows_with_handles=${pendingHandleStamps.length} `
-      + `recorded=${handleOutcome.recorded} conflicts=${handleOutcome.conflicts}`,
     )
   }
 

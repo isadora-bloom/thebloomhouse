@@ -73,6 +73,14 @@
  * uses `weddingId` from the signal, which the cascade already
  * resolved against venueId.
  *
+ * W35 (wave 5, 2026-09-12): the CSV-import commit path now sends its row
+ * signals through this wrapper rather than bare `linkSignal`. The CSV
+ * channels ('honeybook', 'web', 'csv_import') fall through to no lifecycle
+ * dispatch, which is correct. A backfill of historical rows must not move
+ * a lifecycle clock as though the couple had just rung. Using the wrapper
+ * anyway means an import that later carries an SMS or a Zoom row picks up
+ * the dispatch without another call-site edit.
+ *
  * No spine writes here
  * --------------------
  * This file is a dispatcher, not a chokepoint. It calls `linkSignal`
