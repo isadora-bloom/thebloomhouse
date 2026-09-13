@@ -82,7 +82,7 @@ const SURFACE_HINTS: SurfaceHint[] = [
   // Re-engagement
   {
     any: ['re-engage', 'reengage', 'cold lead', 'stale lead', 'lost lead', 'dormant'],
-    href: '/intel/re-engagement',
+    href: '/intel/reengagement',
     label: 'Open Re-engagement',
   },
   // Knowledge / FAQ
@@ -106,7 +106,7 @@ const SURFACE_HINTS: SurfaceHint[] = [
   // Pricing
   {
     any: ['pricing', 'rate card', 'min spend', 'minimum spend', 'price point'],
-    href: '/intel/pricing',
+    href: '/intel/pricing-history',
     label: 'Open Pricing',
   },
   // Discoveries
