@@ -44,6 +44,11 @@ import { UnmergeModal } from '@/components/identity/UnmergeModal'
 import { ResurrectionBanner } from '@/components/identity/ResurrectionBanner'
 import { humanActionLabel } from '@/lib/services/identity/action-labels'
 import { WhyThisCard } from '@/components/ui/why-this-card'
+// W37: the header used to print the raw lifecycle state into a grey chip,
+// which is the third of the three vocabularies. It now renders the same
+// pill the couples list and the pipeline do, from the stage the journey
+// reader derived.
+import { LifecyclePill } from '@/components/shared/lifecycle-pill'
 // W2 canonical wiring. The couple, the ribbon, the progression anchors,
 // the look-alike cohort and the forensic profile all now arrive from
 // getCoupleJourney through /api/intel/canonical/journey. The page used
@@ -439,9 +444,9 @@ export default function CoupleDetailPage() {
               {new Date(couple.wedding_date).toLocaleDateString()}
             </span>
           )}
-          <span className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-xs text-stone-600">
-            {couple.lifecycle_state ?? 'unknown'}
-          </span>
+          {journey?.operatorStage && (
+            <LifecyclePill stage={journey.operatorStage} showDisagreement />
+          )}
           <span className="text-xs text-stone-400">
             {channelSet.size} channels · {touchpoints.length} touchpoints
           </span>

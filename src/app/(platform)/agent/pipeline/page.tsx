@@ -16,6 +16,16 @@ import { formatSourceLabel } from '@/lib/utils/format-source-label'
 // The board itself stays wedding-keyed: dragging a card writes
 // weddings.status, and the spine has no equivalent write path yet.
 import { TriageRail, LifecycleStrip } from '../../intel/_canonical/triage-rail'
+// W37: one lifecycle vocabulary. The columns stay keyed on the board
+// stage, because dragging a card is what moves it. The pill on the card is
+// the shared one, so a card sitting in Tour Scheduled whose record says the
+// couple went quiet says so on its face instead of only in the audit.
+import { LifecyclePill } from '@/components/shared/lifecycle-pill'
+import {
+  deriveOperatorStage,
+  type OperatorStageResult,
+} from '@/lib/services/lifecycle/vocabulary'
+import type { LifecycleStage } from '@/lib/services/lifecycle/state-machine'
 import {
   DndContext,
   DragOverlay,
@@ -58,12 +68,21 @@ interface PipelineWedding {
   temperature_tier: string
   inquiry_date: string
   updated_at: string
+  /** The per-wedding machine stage (migration 278). Null when the machine
+   *  has not run on this wedding. Distinct from `status`, which is what the
+   *  board columns are keyed on and what a drag writes. */
+  lifecycle_stage: LifecycleStage | null
+  booked_at: string | null
   // Joined
   partner1_name: string | null
   partner2_name: string | null
   client_code: string | null
   code_extension: string | null
   venue_name: string | null
+  // W37: the one operator stage for this couple, derived from the record's
+  // own state and this wedding's machine stage together. Undefined while
+  // the page is still loading the couples it needs.
+  operator_stage?: OperatorStageResult
 }
 
 interface PipelineColumn {
@@ -236,6 +255,15 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip, risk }: { we
           <HeatBadge tier={wedding.temperature_tier} score={wedding.heat_score} variant="dot" />
         </div>
       </div>
+
+      {/* Where the couple stands, in the one vocabulary (W37). The column
+          already says where the board has them, so this pill earns its
+          place when the two disagree. */}
+      {wedding.operator_stage && (
+        <div className="mb-2">
+          <LifecyclePill stage={wedding.operator_stage} size="sm" showDisagreement />
+        </div>
+      )}
 
       {/* Source badge + client code */}
       <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -439,6 +467,8 @@ export default function PipelinePage() {
           inquiry_date,
           updated_at,
           code_extension,
+          lifecycle_stage,
+          booked_at,
           venues:venue_id ( name ),
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
@@ -518,6 +548,8 @@ export default function PipelinePage() {
             // updated-at-ok: feeds "Days in Stage" computation only;
             // see PipelineCardContent for the rationale + known limit.
             updated_at: row.updated_at,
+            lifecycle_stage: (row.lifecycle_stage as LifecycleStage | null) ?? null,
+            booked_at: (row.booked_at as string | null) ?? null,
             partner1_name: p1 ? personFullName(p1) : null,
             partner2_name: p2 ? personFullName(p2) : null,
             client_code: clientCode,
@@ -526,6 +558,54 @@ export default function PipelinePage() {
           }
         }
       )
+
+      // W37: the record's own state, so the card can show where the couple
+      // stands and not only where the board has them. One read of the
+      // spine, keyed on the wedding each couple mirrors. A wedding with no
+      // couple simply has no spine state, and the pill says so honestly
+      // rather than inventing one.
+      const spineByWedding = new Map<
+        string,
+        { lifecycle_state: string | null; merged_into_id: string | null; last_progression_at: string | null }
+      >()
+      const weddingIds = weddings.map((w) => w.id)
+      const SPINE_CHUNK = 500
+      for (let i = 0; i < weddingIds.length; i += SPINE_CHUNK) {
+        const slice = weddingIds.slice(i, i + SPINE_CHUNK)
+        let spineQuery = supabase
+          .from('couples')
+          .select('source_wedding_id, lifecycle_state, merged_into_id, last_progression_at')
+          .in('source_wedding_id', slice)
+        // Belt and braces: the wedding ids are already scope-filtered, and
+        // the couples table is venue-scoped anyway, but the filter is free.
+        if (venueIds && venueIds.length > 0) {
+          spineQuery = spineQuery.in('venue_id', venueIds)
+        }
+        const { data: spineRows } = await spineQuery
+        for (const row of spineRows ?? []) {
+          const key = row.source_wedding_id as string | null
+          if (!key) continue
+          spineByWedding.set(key, {
+            lifecycle_state: (row.lifecycle_state as string | null) ?? null,
+            merged_into_id: (row.merged_into_id as string | null) ?? null,
+            last_progression_at: (row.last_progression_at as string | null) ?? null,
+          })
+        }
+      }
+      // One clock for the whole load, so two cards cannot be derived
+      // against two different "nows".
+      const today = Date.now()
+      for (const w of weddings) {
+        const spine = spineByWedding.get(w.id)
+        w.operator_stage = deriveOperatorStage({
+          spineState: spine?.merged_into_id ? 'merged' : spine?.lifecycle_state ?? null,
+          machineStage: w.lifecycle_stage,
+          hasBooking: Boolean(w.booked_at) || w.status === 'booked',
+          weddingDate: w.wedding_date,
+          lastInboundAt: spine?.last_progression_at ?? null,
+          today,
+        })
+      }
 
       // Group by status into columns
       const grouped = PIPELINE_STAGES.map((stage) => ({

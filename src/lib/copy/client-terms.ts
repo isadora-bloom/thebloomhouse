@@ -74,6 +74,24 @@ export const CLIENT_TERMS: Readonly<Record<string, string>> = {
   ghost: 'gone quiet',
   agent: 'not a couple',
 
+  // — where the work is (the per-wedding stage machine) —
+  // `first_touch` is deliberately absent: it already means "where they
+  // found you" in the attribution sense a few blocks down, and one key
+  // cannot carry both meanings. The stage reads as "new enquiry" through
+  // `operatorStageLabel` instead.
+  'lifecycle stage': 'where the work is',
+  pre_touch: 'not in touch yet',
+  nurture: 'in conversation',
+  tour_scheduled: 'tour booked',
+  tour_completed: 'toured',
+  proposal_active: 'proposal out',
+  planning_active: 'planning',
+  day_of: 'wedding this week',
+  post_event: 'wedding done',
+  long_tail: 'after the wedding',
+  lost: 'gone quiet',
+  cancelled: 'cancelled',
+
   // — interest —
   heat: 'interest',
   'heat score': 'interest',
@@ -199,6 +217,97 @@ export function lifecycleLabel(state: string | null | undefined): string {
 export function lifecycleCount(state: string, n: number): string {
   const key = normaliseTerm(state).replace(/ /g, '_') as LifecycleKey
   return `${n} ${LIFECYCLE_PHRASE[key] ?? clientTerm(state)}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// The one operator vocabulary
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * There are two lifecycles underneath this app and a coordinator should
+ * never have to know that.
+ *
+ *   - `couples.lifecycle_state` has six values and answers "what is this
+ *     record". Decay, resurrection, the mirror and the post-wedding sweep
+ *     move it.
+ *   - the per-wedding state machine has thirteen stages and answers
+ *     "where is the work". Tours, proposals, the wedding date and a judge
+ *     move it.
+ *
+ * Neither owns the other, so the couples list, the pipeline and the couple
+ * page each used to show a different word for the same couple. These are
+ * the words that replace all three. The mapping that picks one of them
+ * lives in `src/lib/services/lifecycle/vocabulary.ts`; only the wording
+ * lives here.
+ *
+ * Order is the order a coordinator thinks about them: newest first,
+ * finished last, then the three that sit outside the funnel.
+ */
+export const OPERATOR_STAGE_ORDER = [
+  'new_enquiry',
+  'in_conversation',
+  'tour_booked',
+  'toured',
+  'proposal_out',
+  'booked',
+  'planning',
+  'this_week',
+  'wedding_done',
+  'gone_quiet',
+  'cancelled',
+  'not_a_couple',
+  'joined_up',
+] as const
+
+export type OperatorStageKey = (typeof OPERATOR_STAGE_ORDER)[number]
+
+const OPERATOR_STAGE_LABEL: Record<OperatorStageKey, string> = {
+  new_enquiry: 'New enquiry',
+  in_conversation: 'In conversation',
+  tour_booked: 'Tour booked',
+  toured: 'Toured',
+  proposal_out: 'Proposal out',
+  booked: 'Booked',
+  planning: 'Planning',
+  this_week: 'Wedding this week',
+  wedding_done: 'Wedding done',
+  gone_quiet: 'Gone quiet',
+  cancelled: 'Cancelled',
+  not_a_couple: 'Not a couple',
+  joined_up: 'Joined up',
+}
+
+/** Plural form for a count sentence: "4 tours booked". */
+const OPERATOR_STAGE_PHRASE: Record<OperatorStageKey, string> = {
+  new_enquiry: 'new enquiries',
+  in_conversation: 'in conversation',
+  tour_booked: 'tours booked',
+  toured: 'toured',
+  proposal_out: 'proposals out',
+  booked: 'booked',
+  planning: 'planning',
+  this_week: 'getting married this week',
+  wedding_done: 'weddings done',
+  gone_quiet: 'gone quiet',
+  cancelled: 'cancelled',
+  not_a_couple: 'not couples',
+  joined_up: 'joined up with another record',
+}
+
+/** One operator stage as the words on the pill. Unknown values fall back
+ *  to `clientTerm`, so a new stage degrades to its internal name rather
+ *  than to an empty pill. */
+export function operatorStageLabel(stage: string | null | undefined): string {
+  if (!stage) return 'Not placed yet'
+  const key = normaliseTerm(stage).replace(/ /g, '_') as OperatorStageKey
+  return OPERATOR_STAGE_LABEL[key] ?? clientTerm(stage)
+}
+
+/** An operator-stage count as a phrase: `operatorStageCount('tour_booked', 4)`
+ *  → "4 tours booked". */
+export function operatorStageCount(stage: string, n: number): string {
+  const key = normaliseTerm(stage).replace(/ /g, '_') as OperatorStageKey
+  return `${n} ${OPERATOR_STAGE_PHRASE[key] ?? clientTerm(stage)}`
 }
 
 // ─────────────────────────────────────────────────────────────────────
