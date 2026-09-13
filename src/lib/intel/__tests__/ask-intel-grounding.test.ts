@@ -119,6 +119,8 @@ const fakeReaders: import('@/lib/intel/tools').CanonicalReaders = {
       firstSeenViaHandle: false,
       firstChannel: null,
     },
+    operatorStage: null,
+    because: null,
     generatedAt: GENERATED_AT,
   }),
   getVenueOverview: async () => ({

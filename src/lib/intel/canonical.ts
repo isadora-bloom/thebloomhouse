@@ -26,6 +26,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AttributionResult } from '@/lib/services/attribution/couple-attribution'
 import type { CohortIntel } from '@/lib/services/cohort'
 import { computeHeatScore } from '@/lib/services/identity/heat-score'
+// W37: one lifecycle vocabulary. getCoupleJourney is the only reader that
+// speaks about a single couple's state, so it is where the two lifecycles
+// get reconciled for everything downstream of it.
+import {
+  deriveOperatorStage,
+  type OperatorStageResult,
+} from '@/lib/services/lifecycle/vocabulary'
+import type { LifecycleStage } from '@/lib/services/lifecycle/state-machine'
 // askIntel only (§6). The manifest and the grounding check live in
 // `@/lib/intel/tools`; it imports the readers back dynamically, so the two
 // modules are not a load-time cycle. Namespaced so the test can stub it.
@@ -518,6 +526,22 @@ export interface CoupleJourney {
   pointZeroAt: string | null
   /** Wave 3: the discovery summary. See `DiscoverySummary`. */
   discovery: DiscoverySummary
+  /**
+   * W37: the one operator-facing stage, derived from the spine state and
+   * the per-wedding machine stage together by
+   * `src/lib/services/lifecycle/vocabulary.ts`. The surfaces render this
+   * as a pill; Ask your data quotes it, so the brain and the screen say
+   * the same word about the same couple.
+   *
+   * Null only when the couple itself is null.
+   */
+  operatorStage: OperatorStageResult | null
+  /**
+   * The one-sentence reason behind `operatorStage`. Mirrors
+   * `operatorStage.because` so a caller that only wants the sentence does
+   * not have to know the result shape. Null when there is no couple.
+   */
+  because: string | null
   generatedAt: string
 }
 
@@ -550,6 +574,8 @@ export async function loadCoupleJourney(
     firstSeenAt: null,
     pointZeroAt: null,
     discovery: emptyDiscovery(),
+    operatorStage: null,
+    because: null,
     generatedAt,
   }
   if (!venueId || !coupleId) return empty
@@ -563,7 +589,7 @@ export async function loadCoupleJourney(
   const { data: c } = await supabase
     .from('couples')
     .select(
-      'id, venue_id, primary_contact_name, lifecycle_state, heat_score, wedding_date, source_wedding_id, merged_into_id, handles, first_seen_at, point_zero_at',
+      'id, venue_id, primary_contact_name, lifecycle_state, heat_score, wedding_date, source_wedding_id, merged_into_id, handles, first_seen_at, point_zero_at, last_progression_at',
     )
     .eq('id', coupleId)
     .eq('venue_id', venueId)
@@ -605,6 +631,14 @@ export async function loadCoupleJourney(
   // 4. Wave-4 forensic profile (keyed on the legacy wedding id). Best-
   //    effort enrichment — a missing/unreadable profile leaves it null.
   let identityProfile: Record<string, unknown> | null = null
+  // W37: and the machine stage, which lives on the mirrored wedding
+  // (`weddings.lifecycle_stage`, migration 278) because the thirteen-stage
+  // machine is per wedding, not per couple. Read here, not on the pages,
+  // so the vocabulary is reconciled once in the reader rather than three
+  // times on three surfaces. Best-effort: a couple with no mirrored
+  // wedding simply has no machine stage, and says so.
+  let machineStage: LifecycleStage | null = null
+  let hasBooking = false
   if (c.source_wedding_id) {
     try {
       const { data: prof } = await supabase
@@ -613,6 +647,22 @@ export async function loadCoupleJourney(
         .eq('wedding_id', c.source_wedding_id)
         .maybeSingle<{ profile: Record<string, unknown> | null }>()
       identityProfile = prof?.profile ?? null
+    } catch {
+      // enrichment, not a gate
+    }
+    try {
+      const { data: w } = await supabase
+        .from('weddings')
+        .select('lifecycle_stage, booked_at, status')
+        .eq('id', c.source_wedding_id)
+        .eq('venue_id', venueId)
+        .maybeSingle<{
+          lifecycle_stage: string | null
+          booked_at: string | null
+          status: string | null
+        }>()
+      machineStage = (w?.lifecycle_stage as LifecycleStage | null) ?? null
+      hasBooking = Boolean(w?.booked_at || w?.status?.toLowerCase() === 'booked')
     } catch {
       // enrichment, not a gate
     }
@@ -630,6 +680,16 @@ export async function loadCoupleJourney(
   const pointZeroAt = c.point_zero_at ?? null
   const discovery = buildDiscoverySummary(firstSeenAt, pointZeroAt, handles, ribbon)
 
+  // W37: one stage, one sentence, derived from both lifecycles together.
+  const operatorStage = deriveOperatorStage({
+    spineState: c.lifecycle_state ?? null,
+    machineStage,
+    hasBooking: hasBooking || c.lifecycle_state === 'booked',
+    weddingDate: c.wedding_date,
+    lastInboundAt: c.last_progression_at ?? null,
+    today: generatedAt,
+  })
+
   return {
     couple: {
       id: c.id,
@@ -645,6 +705,8 @@ export async function loadCoupleJourney(
     firstSeenAt,
     pointZeroAt,
     discovery,
+    operatorStage,
+    because: operatorStage.because,
     generatedAt,
   }
 }
@@ -664,6 +726,8 @@ export async function getCoupleJourney(
       firstSeenAt: null,
       pointZeroAt: null,
       discovery: emptyDiscovery(),
+      operatorStage: null,
+      because: null,
       generatedAt: new Date().toISOString(),
     }
   }
@@ -685,6 +749,7 @@ interface RawJourneyCoupleRow {
   handles: Partial<Record<string, string>> | null
   first_seen_at: string | null
   point_zero_at: string | null
+  last_progression_at: string | null
 }
 interface RawJourneyTouchpointRow {
   id: string

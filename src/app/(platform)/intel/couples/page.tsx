@@ -38,11 +38,18 @@ import {
   AlertCircle,
   Flame,
 } from 'lucide-react'
+// W37: one lifecycle vocabulary. This list used to derive its own
+// eight-value pill (Active / Cooling / Quiet / Lost / Booked / Completed /
+// Agent / New) while the pipeline spoke in board stages and the couple page
+// printed the raw state. All three now render the same pill from the same
+// derivation.
 import {
-  deriveStatusPill,
-  statusPillColor,
-  type StatusPill,
-} from '@/lib/services/identity/status-pill'
+  deriveOperatorStage,
+  type OperatorStage,
+  type OperatorStageResult,
+} from '@/lib/services/lifecycle/vocabulary'
+import { LifecyclePill } from '@/components/shared/lifecycle-pill'
+import { OPERATOR_STAGE_ORDER, operatorStageLabel } from '@/lib/copy/client-terms'
 import {
   computeHeatScore,
   heatBucket,
@@ -51,7 +58,13 @@ import {
 } from '@/lib/services/identity/heat-score'
 import { ReconstructionStatusBanner } from '@/components/identity/ReconstructionStatusBanner'
 
-type LifecycleState = 'channel_scoped' | 'booked' | 'resolved' | 'ghost' | 'agent'
+type LifecycleState =
+  | 'channel_scoped'
+  | 'booked'
+  | 'resolved'
+  | 'completed'
+  | 'ghost'
+  | 'agent'
 
 interface CoupleRow {
   id: string
@@ -66,28 +79,26 @@ interface CoupleRow {
   last_progression_at: string | null
   updated_at: string
   created_at: string
+  merged_into_id?: string | null
   touchpoints_count?: number
   last_touchpoint_at?: string | null
-  status_pill?: StatusPill
+  operator_stage?: OperatorStageResult
   heat_score?: number
 }
 
-// Susan-facing filters per §3. Map a friendly pill name to the
-// derivation. Booked/Past/Agent map straight from lifecycle_state;
-// Active/Cooling/Lost depend on last_progression_at.
-// 2026-05-20 rename: "Past" -> "Lost" (raw lifecycle 'ghost'); the
-// old "Lost" 120d-quiet pill was renamed to "Quiet" so the two are
-// distinct. "Completed" is the new post-wedding terminal-positive.
-const PILL_FILTERS: Array<{ key: StatusPill | 'all'; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'Active', label: 'Active' },
-  { key: 'Cooling', label: 'Cooling' },
-  { key: 'Quiet', label: 'Quiet' },
-  { key: 'Booked', label: 'Booked' },
-  { key: 'Completed', label: 'Completed' },
-  { key: 'Lost', label: 'Lost' },
-  { key: 'Agent', label: 'Agent' },
-]
+// The filters are the operator stages, in the order a coordinator thinks
+// about them, and a stage with nothing in it does not get a chip. Same
+// words as the pill, so filtering by what you can see is the whole
+// interaction.
+//
+// This surface reads the couples table only, so it has the spine state and
+// not the per-wedding machine stage, which lives on the mirrored wedding.
+// That is deliberate: the list says what each record IS. Where the record
+// and the pipeline disagree is the pipeline's job to show, and
+// lifecycleDisagreements() is where the whole venue's disagreements get
+// counted.
+const ALL_FILTER = 'all' as const
+type StageFilter = OperatorStage | typeof ALL_FILTER
 
 export default function CouplesListPage() {
   const router = useRouter()
@@ -96,7 +107,7 @@ export default function CouplesListPage() {
   const [rows, setRows] = useState<CoupleRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<StatusPill | 'all'>('all')
+  const [filter, setFilter] = useState<StageFilter>(ALL_FILTER)
   const [query, setQuery] = useState('')
   // Channel-scoped couples (anonymous Knot saves, partial-identity
   // signals) are real but low-signal and vastly outnumber the couples
@@ -113,7 +124,7 @@ export default function CouplesListPage() {
       let q = supabase
         .from('couples')
         .select(
-          'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, lifecycle_state, wedding_date, source_wedding_id, last_progression_at, updated_at, created_at',
+          'id, venue_id, primary_contact_name, primary_contact_email, primary_contact_phone, partner_contact_name, lifecycle_state, wedding_date, source_wedding_id, last_progression_at, updated_at, created_at, merged_into_id',
         )
         .eq('venue_id', venueId)
       if (!showChannelScoped) {
@@ -166,15 +177,21 @@ export default function CouplesListPage() {
           c.tps.push({ signal_tier: t.signal_tier, occurred_at: t.occurred_at })
         }
       }
+      // One clock for the whole page load, so two rows cannot be derived
+      // against two different "nows".
+      const today = Date.now()
       for (const c of couples) {
         const stat = perCouple.get(c.id)
         c.touchpoints_count = stat?.count ?? 0
         c.last_touchpoint_at = stat?.latest ?? null
         c.heat_score = stat ? computeHeatScore(stat.tps) : 0
-        c.status_pill = deriveStatusPill({
-          lifecycle_state: c.lifecycle_state,
-          last_progression_at: c.last_progression_at,
-          created_at: c.created_at,
+        c.operator_stage = deriveOperatorStage({
+          spineState: c.merged_into_id ? 'merged' : c.lifecycle_state,
+          machineStage: null,
+          hasBooking: c.lifecycle_state === 'booked',
+          weddingDate: c.wedding_date,
+          lastInboundAt: c.last_progression_at ?? c.created_at,
+          today,
         })
       }
       setRows(couples)
@@ -188,7 +205,7 @@ export default function CouplesListPage() {
 
   const filtered = useMemo(() => {
     let out = rows
-    if (filter !== 'all') out = out.filter((r) => r.status_pill === filter)
+    if (filter !== ALL_FILTER) out = out.filter((r) => r.operator_stage?.stage === filter)
     if (query.trim()) {
       const q = query.toLowerCase()
       out = out.filter(
@@ -203,22 +220,25 @@ export default function CouplesListPage() {
   }, [rows, filter, query])
 
   const counts = useMemo(() => {
-    const acc: Record<StatusPill | 'all', number> = {
-      all: rows.length,
-      Active: 0,
-      Cooling: 0,
-      Quiet: 0,
-      Lost: 0,
-      Booked: 0,
-      Completed: 0,
-      Agent: 0,
-      New: 0,
-    }
+    const acc: Partial<Record<StageFilter, number>> = { [ALL_FILTER]: rows.length }
     for (const r of rows) {
-      if (r.status_pill) acc[r.status_pill] += 1
+      const stage = r.operator_stage?.stage
+      if (stage) acc[stage] = (acc[stage] ?? 0) + 1
     }
     return acc
   }, [rows])
+
+  const stageFilters = useMemo(() => {
+    const chips: Array<{ key: StageFilter; label: string }> = [
+      { key: ALL_FILTER, label: 'All' },
+    ]
+    for (const stage of OPERATOR_STAGE_ORDER) {
+      if ((counts[stage] ?? 0) > 0) {
+        chips.push({ key: stage, label: operatorStageLabel(stage) })
+      }
+    }
+    return chips
+  }, [counts])
 
   return (
     <div className="mx-auto max-w-7xl p-8">
@@ -246,7 +266,7 @@ export default function CouplesListPage() {
       <ReconstructionStatusBanner />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {PILL_FILTERS.map((f) => (
+        {stageFilters.map((f) => (
           <button
             key={f.key}
             onClick={() => setFilter(f.key)}
@@ -258,7 +278,7 @@ export default function CouplesListPage() {
           >
             {f.label}{' '}
             <span className={filter === f.key ? 'opacity-70' : 'text-stone-400'}>
-              {counts[f.key as StatusPill | 'all']}
+              {counts[f.key] ?? 0}
             </span>
           </button>
         ))}
@@ -294,7 +314,7 @@ export default function CouplesListPage() {
             <tr>
               <th className="px-4 py-3">Couple</th>
               <th className="px-4 py-3">Contact</th>
-              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Where they are</th>
               <th className="px-4 py-3">Heat</th>
               <th className="px-4 py-3">Wedding date</th>
               <th className="px-4 py-3 text-right">Touchpoints</th>
@@ -323,7 +343,7 @@ export default function CouplesListPage() {
                 const name =
                   r.primary_contact_name ?? r.primary_contact_email ?? '(unnamed)'
                 const partner = r.partner_contact_name
-                const pill = r.status_pill ?? 'New'
+                const stage = r.operator_stage
                 const heat = r.heat_score ?? 0
                 const bucket = heatBucket(heat)
                 return (
@@ -351,13 +371,7 @@ export default function CouplesListPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${statusPillColor(
-                          pill,
-                        )}`}
-                      >
-                        {pill}
-                      </span>
+                      {stage && <LifecyclePill stage={stage} showDisagreement />}
                     </td>
                     <td className="px-4 py-3">
                       <span
