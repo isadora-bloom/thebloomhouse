@@ -334,3 +334,39 @@ No migrations between waves; `npm run migrate:pending` at the end.
 Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. linkSignal is the
 only spine writer. No database writes. W35 and W40 both touch `crm-import/index.ts`: W35 owns
 the commit path, W40 owns only `firstSeenCandidateFor`.
+
+## Wave 5 status (integrated 2026-09-12)
+
+All six workstreams merged on `consolidation`. Gate on the integrated head: tsc 0, vitest
+1485/1485, governance green, every guard green, golden 16/16, links OK, lint 0 errors.
+
+What is true now: CSV import (HoneyBook, web form, calculator, tour scheduler) commits through
+`linkSignal`, mint-first so the mirror yields exactly one couple per row, with handles and
+first-seen stamped by the spine itself; the venue's own social handles live on `venue_config`
+and are never stamped on a couple; "ago" labels tick again; one lifecycle vocabulary maps the
+thirteen-stage board onto the six spine states with a 131-case fixture, a disagreement audit
+to run after the reimport, and one pill on the couples list, the pipeline and the couple page;
+a two-venue isolation battery exists as a script and a CI job; 185 platform pages are audited
+(167 keep, 9 hidden behind `SCAFFOLD_PAGES`, 7 redirects, 2 delete-recommended: `/org`, `/sage`)
+and every kept page has a nav entry; the daily surfaces read the spine for last activity and
+the legacy-reads baseline is 256.
+
+Migrations owed to prod, all at once: 395, 397, 398, 399, 400, 401, 402, 403 via
+`npm run migrate:pending` then `npm run migrate:pending -- --apply --allow-prod`.
+
+What remains before the reimport is worth running (the plan's weeks 3, 5, 7 and 8 all need data):
+- Gmail reconnect (operator). Nothing else replaces it.
+- The reimport itself: HoneyBook CSVs through the UI, remerge, Calendly replay, Gmail backfill,
+  Knot CSVs, social replay, then `lifecycleDisagreements`, the lifecycle audit, and the battery.
+- Migrations above, then the older six with `--include-legacy`, 308 in the SQL editor.
+- Meta app credentials for Instagram DMs (operator).
+- Marketing-site repos: the "Your Instagram (optional)" field (operator or a separate session).
+
+Follow-ups for wave 6 (dry work still possible):
+- Delete `/org` and `/sage` full-page mirrors per the audit.
+- Progression events for non-HoneyBook CSV anchors need an event type (migration) so a web-form
+  import moves the decay clock the way a HoneyBook one does.
+- `propose_follow_ups` still logs a cost row through the brain's own client; the isolation
+  battery skips it for that reason. Decide whether a read tool may spend.
+- Instagram outbound replies through the disclosure guard once credentials exist.
+- Investor materials on measured numbers: the template can be written now, the numbers wait.

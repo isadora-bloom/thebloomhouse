@@ -87,6 +87,11 @@ const WAVE_MIGRATIONS: Pending[] = [
     file: '402_merge_couples_handles.sql',
     why: 'W22: merge_couples carries handles and records a handle contradiction (after 398)',
   },
+  {
+    file: '403_venue_config_social_handles.sql',
+    why: 'W36: the venue\x27s own social handles, excluded from stamping on couples',
+    probe: columnExists('venue_config', 'social_handles'),
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */
