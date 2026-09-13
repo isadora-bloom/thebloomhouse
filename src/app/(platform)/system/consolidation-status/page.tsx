@@ -27,6 +27,7 @@
 
 import Link from 'next/link'
 import { CheckCircle2, Clock, AlertTriangle, GitBranch, FileText } from 'lucide-react'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 
 // ---------------------------------------------------------------------------
 // Snapshot data — edit this block (and CHANGELOG.md) when a new phase ships.
@@ -248,6 +249,7 @@ function severityChip(sev: OpenGap['severity']) {
 export const dynamic = 'force-static'
 
 export default function ConsolidationStatusPage() {
+  assertNotScaffold('/system/consolidation-status')
   return (
     <div className="space-y-8 max-w-4xl">
       {/* Header */}

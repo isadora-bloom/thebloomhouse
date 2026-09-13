@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 import {
   AlertCircle,
   AlertTriangle,
@@ -55,6 +56,7 @@ const SEVERITY_LABEL: Record<SeverityValue, string> = {
 }
 
 export default function MarketingFlagsPage() {
+  assertNotScaffold('/intel/marketing-roi/flags')
   const [flags, setFlags] = useState<FlagPanelRow[]>([])
   const [loading, setLoading] = useState(true)
   const [detecting, setDetecting] = useState(false)

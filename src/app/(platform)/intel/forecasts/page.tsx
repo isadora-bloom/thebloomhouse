@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 import {
   TrendingUp,
   DollarSign,
@@ -101,6 +102,7 @@ function ForecastCardSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function ForecastsPage() {
+  assertNotScaffold('/intel/forecasts')
   const scope = useScope()
   const scopedVenueIds = scopeVenueFilter(scope)
 

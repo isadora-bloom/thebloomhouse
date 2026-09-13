@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAiName } from '@/lib/hooks/use-ai-name'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 import {
   AlertCircle,
   Loader2,
@@ -67,6 +68,7 @@ interface BuildResponse {
 }
 
 export default function MarketingDigestPage() {
+  assertNotScaffold('/intel/marketing-roi/digest')
   const aiName = useAiName()
   const [latest, setLatest] = useState<LatestRow | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>([])

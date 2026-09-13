@@ -24,6 +24,7 @@
  */
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 import {
   Sparkles,
   RefreshCw,
@@ -165,6 +166,7 @@ function visibleQuote(q: EvidenceQuote): string {
 }
 
 export default function IntelMatchesDashboard() {
+  assertNotScaffold('/intel/matches')
   const [data, setData] = useState<ListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

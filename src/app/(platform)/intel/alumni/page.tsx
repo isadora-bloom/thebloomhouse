@@ -17,6 +17,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { Loader2, RefreshCw, Sparkles, Users } from 'lucide-react'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 
 interface Archetype {
   id: string
@@ -80,6 +81,7 @@ function formatCurrency(cents: number | null | undefined): string {
 }
 
 export default function IntelAlumniDashboard() {
+  assertNotScaffold('/intel/alumni')
   const [data, setData] = useState<ListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

@@ -27,6 +27,13 @@
  * whether to keep `CONSOLIDATION_IN_FLIGHT = true`. When the phased
  * rollout completes, flip to `false` and the chip disappears
  * everywhere automatically.
+ *
+ * Wave 5 W39: /system/consolidation-status got a "hide" verdict in
+ * PLATFORM-PAGES-AUDIT.md — its content is a stale snapshot of the May
+ * 2026 Batch 1/2 rollout, superseded by NOVEMBER-PLAN.md months ago, and
+ * the page is now gated behind SCAFFOLD_PAGES. A kept page cannot link
+ * to a hidden one, so this chip is switched off rather than pointing
+ * every org admin at a 404.
  */
 
 import { useEffect, useState } from 'react'
@@ -36,7 +43,7 @@ import { AlertCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueScope } from '@/lib/contexts/venue-scope-context'
 
-const CONSOLIDATION_IN_FLIGHT = true
+const CONSOLIDATION_IN_FLIGHT = false
 const STATUS_HREF = '/system/consolidation-status'
 
 export function ConsolidationChip() {
