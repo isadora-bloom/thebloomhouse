@@ -11,6 +11,9 @@ export default defineConfig({
       // one is scripts/demo-reseed (NOVEMBER-PLAN.md W19); its generator
       // and plan builder are pure, so they are worth pinning.
       'scripts/**/__tests__/**/*.test.ts',
+      // Isolation battery (NOVEMBER-PLAN.md wave 5, W38) — proves the
+      // walker + checker catch a leak against a fake client, no database.
+      'tests/isolation/**/*.test.ts',
     ],
     globals: false,
   },
