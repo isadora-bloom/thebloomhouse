@@ -24,7 +24,7 @@ import {
   // Agent
   Sunrise,
   Mail, FileCheck, Kanban, Flame, Workflow, BarChart3,
-  HelpCircle, UsersRound, ListOrdered, Inbox, Newspaper, Activity, Brain,
+  HelpCircle, UsersRound, ListOrdered, Inbox, Newspaper, Activity, Brain, Bell,
   // Weddings
   Heart, CalendarRange, Upload, MessagesSquare, MessageCircleQuestion,
   Printer, MapPinIcon as TableMap,
@@ -33,7 +33,7 @@ import {
   TrendingUp, Sparkles as TrendsIcon, Star,
   MapPinIcon, XCircle, Share2, LineChart,
   MessageSquareText, GitMerge, UserCheck, Send, Briefcase, Camera,
-  Cloud,
+  Cloud, DollarSign, ScanLine,
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
   BookOpen, Store, Settings, MailX, ShieldAlert, Clock as ClockIcon,
@@ -102,14 +102,15 @@ export interface ModeConfig {
 // /agent/sequences, /agent/analytics, /agent/knowledge-gaps,
 // /agent/relationships, /agent/codes, /agent/omi-inbox,
 // /agent/notifications, /agent/errors, /agent/brain-dump,
-// /agent/brain-dump/grants
+// /agent/brain-dump/grants, /pulse (Wave 5 W39 — was bell-only), /agent/cohort
+// (no nav entry; reached from a "cohort" link on /agent/inbox)
 
 export const MODE_AGENT: ModeConfig = {
   mode: 'agent',
   label: 'Agent',
   description: 'Email drafting, inquiry funnel, and follow-up cadence.',
   icon: AgentMark,
-  matchPrefixes: ['/agent', '/today'],
+  matchPrefixes: ['/agent', '/today', '/pulse'],
   defaultHref: '/agent/inbox',
   sections: [
     {
@@ -124,6 +125,10 @@ export const MODE_AGENT: ModeConfig = {
         { label: 'Approval Queue', href: '/agent/drafts', icon: FileCheck, daily: true },
         { label: 'Pipeline', href: '/agent/pipeline', icon: Kanban, daily: true },
         { label: 'Leads & Heat Map', href: '/agent/leads', icon: Flame, daily: true },
+        // Wave 5 W39: was reachable only via the bell in the top bar
+        // (UX-AUDIT-NON-TECHNICAL.md finding 14). Everything the bell's
+        // top-three preview doesn't show lives here.
+        { label: 'Pulse', href: '/pulse', icon: Bell, daily: true },
       ],
     },
     {
@@ -220,15 +225,25 @@ export const MODE_WEDDINGS: ModeConfig = {
 // /intel/sources, /intel/roi, /intel/reach, /intel/trends, /intel/reviews,
 // /intel/weather (TIER 6, 2026-05-14),
 // /sage/voice-dna, /intel/tours, /intel/lost-deals,
-// /intel/social, /intel/forecasts, /intel/health,
+// /intel/social, /intel/health, /intel/marketing-spend (Wave 5 W39),
 // /intel/clients, /intel/clients/[id], /intel/matching,
 // /intel/annotations, /intel/team-compare, /intel/macro-correlations (T5-θ.1)
+//
+// No nav entry, but reachable by clicking through a kept page (Wave 5 W39
+// PLATFORM-PAGES-AUDIT.md — verdict "keep"): /intel/channels + /channels/
+// [slug] (from /intel/sources), /intel/marketing-roi (from /intel/channels).
 //
 // Hidden from sidebar (route still reachable by direct URL):
 //   /intel/campaigns — superseded by /intel/sources attribution view
 //                      (Stream ZZZ, 2026-05-03)
 //   /intel/capacity  — retired; redirects to /intel/portfolio
 //                      (Stream ZZZ, 2026-05-03)
+//
+// Gated behind SCAFFOLD_PAGES (Wave 5 W39 — built, no nav entry, no link
+// from any kept page; see src/lib/scaffold-gate.ts + PLATFORM-PAGES-AUDIT.md):
+//   /intel/discoveries, /intel/matches, /intel/alumni, /intel/referrals,
+//   /intel/forecasts, /intel/marketing-roi/digest,
+//   /intel/marketing-roi/flags, /intel/marketing-roi/recommendations
 //
 // Org-level intel pages (/intel/portfolio, /intel/company, /intel/team,
 // /intel/regions, /intel/benchmark) move to ORG_ADMIN gear menu — they
@@ -275,9 +290,10 @@ export const MODE_INTEL: ModeConfig = {
         // ($4K projected for Q1 2028) because future-quarter inquiries
         // don't exist yet. Coordinator decisions need real seasonal
         // forecasting, not pipeline-snapshot-mislabeled-as-forecast.
-        // Route still exists at /intel/forecasts (reachable via direct
-        // URL) so the underlying service can be reused if a real
-        // forecasting stream replaces this page.
+        // Wave 5 W39: gated behind SCAFFOLD_PAGES rather than just left
+        // off nav — a coordinator hitting the raw URL would have seen the
+        // same mislabeled hockey-stick chart. The service is still there
+        // for a real forecasting stream to reuse.
       ],
     },
     {
@@ -303,6 +319,18 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'Source quality', href: '/intel/source-quality', icon: BarChart3 },
         // Wave 6E — marketing-agency tracker. "Is Hawthorn paying off?"
         { label: 'Marketing Agencies', href: '/intel/agencies', icon: Briefcase },
+        // Wave 5 W39: the manual spend-entry form feeding the ROI heatmap
+        // (/intel/marketing-roi, itself reached today only by clicking
+        // through Channels) had no nav entry and no in-app link at all —
+        // a coordinator could type "Add spend at /intel/marketing-spend"
+        // in an error message but never click there.
+        { label: 'Marketing Spend', href: '/intel/marketing-spend', icon: DollarSign },
+        // Wave 5 W39: same story as Marketing Spend above — the pixel
+        // that closes the cross-session attribution gap the TBH Report
+        // calls its biggest coverage hole had no nav entry and no link
+        // from anywhere, including the TBH Report page that shows the
+        // pixel's coverage status without a way to go install it.
+        { label: 'Site Pixel', href: '/portal/pixel-config', icon: ScanLine },
         // Social integration -- operator-driven weekly capture of
         // engagement data Instagram / TikTok / Facebook / Pinterest do
         // not expose via API. V1 = Instagram New Followers only;
@@ -565,6 +593,13 @@ export const MODES: ModeConfig[] = [MODE_AGENT, MODE_WEDDINGS, MODE_INTEL, MODE_
 // /intel/portfolio, /intel/company, /intel/team, /intel/regions,
 // /intel/benchmark
 //
+// Wave 5 W39 (PLATFORM-PAGES-AUDIT.md, verdict "delete", not yet removed —
+// recorded for the integrator): /org renders this exact GEAR_GROUPS list as
+// a full page and /sage renders MODE_SAGE.sections the same way, but the
+// gear icon and the mode strip both link straight to a leaf page
+// (defaultHref), never to these indexes, so neither has an inbound link
+// anywhere in the app.
+//
 // group_admin sees the gear menu but with rail items scoped to their
 // group (Team filtered to group venues, Portfolio analytics filtered to
 // group, Billing per-venue still visible).
@@ -708,4 +743,4 @@ export function modeForPath(pathname: string): NavMode | null {
  * If you add a new page, add it to the relevant section + bump the
  * enumeration date in the file header.
  */
-export const NAV_CONFIG_VERIFIED_AT = '2026-09-08'
+export const NAV_CONFIG_VERIFIED_AT = '2026-09-12'

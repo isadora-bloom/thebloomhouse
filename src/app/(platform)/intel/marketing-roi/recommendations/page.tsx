@@ -12,9 +12,11 @@
  */
 
 import { MarketingRecommendationsDashboard } from '@/components/intel/MarketingRecommendationsDashboard'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 
 export const dynamic = 'force-dynamic'
 
 export default function MarketingRecommendationsPage() {
+  assertNotScaffold('/intel/marketing-roi/recommendations')
   return <MarketingRecommendationsDashboard />
 }

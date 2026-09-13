@@ -23,6 +23,7 @@
  */
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 import {
   Sparkles,
   RefreshCw,
@@ -464,6 +465,7 @@ function DiscoveryCard({
 }
 
 export default function DiscoveriesDashboard() {
+  assertNotScaffold('/intel/discoveries')
   const [data, setData] = useState<ListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

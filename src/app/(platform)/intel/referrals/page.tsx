@@ -20,6 +20,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { ArrowUpRight, Loader2, RefreshCw, Share2 } from 'lucide-react'
+import { assertNotScaffold } from '@/lib/scaffold-gate'
 
 interface ReferralRow {
   id: string
@@ -65,6 +66,7 @@ function relativeTime(iso: string | null | undefined): string {
 }
 
 export default function IntelReferralsDashboard() {
+  assertNotScaffold('/intel/referrals')
   const [data, setData] = useState<ListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
