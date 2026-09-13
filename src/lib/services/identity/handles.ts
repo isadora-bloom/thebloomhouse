@@ -14,6 +14,7 @@
  * Anything else, including whitespace inside the handle, is rejected.
  * A rejected handle returns null so a caller never stores junk.
  */
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { HandlePlatform } from './sources/types'
 
 const PROFILE_HOSTS: Record<HandlePlatform, string[]> = {
@@ -84,6 +85,32 @@ export function normalizeHandles(
   return Object.keys(out).length > 0 ? out : null
 }
 
+/**
+ * Wave 5 (W36): normalise a form's worth of handle inputs, reporting which
+ * platforms failed rather than silently dropping them the way
+ * `normalizeHandles` does. Used by the venue-settings "Your social
+ * handles" save so a junk value (a page link, stray punctuation, the
+ * wrong platform's shape) is rejected with a message instead of vanishing.
+ * A blank field is not an error.
+ */
+export function normalizeHandleInputs(
+  input: Partial<Record<HandlePlatform, string>>,
+): { handles: Partial<Record<HandlePlatform, string>>; invalid: HandlePlatform[] } {
+  const handles: Partial<Record<HandlePlatform, string>> = {}
+  const invalid: HandlePlatform[] = []
+  for (const key of Object.keys(input) as HandlePlatform[]) {
+    const raw = (input[key] ?? '').trim()
+    if (!raw) continue
+    const normalized = normalizeHandle(key, raw)
+    if (!normalized) {
+      invalid.push(key)
+      continue
+    }
+    handles[key] = normalized
+  }
+  return { handles, invalid }
+}
+
 /** True when two handle maps share at least one platform with the same
  *  value. Platform-scoped on purpose: "rosie" on Instagram and "rosie" on
  *  TikTok are not evidence of the same person. */
@@ -96,4 +123,109 @@ export function handlesIntersect(
     if (a[key] && b[key] && a[key] === b[key]) return key
   }
   return null
+}
+
+/**
+ * Wave 5 (W36, NOVEMBER-PLAN.md): a venue's own handle pasted above a
+ * couple's quoted reply, or appearing beside a genuine prospect in a
+ * screenshot, is not evidence about the couple. Remove any (platform,
+ * handle) pair from `handles` that equals the venue's own handle on the
+ * same platform.
+ *
+ * Followers lists need no special case: a venue does not follow itself,
+ * and if its own handle ever turned up there this same removal applies.
+ */
+export function stripVenueHandles(
+  handles: Partial<Record<HandlePlatform, string>> | null | undefined,
+  venueHandles: Partial<Record<HandlePlatform, string>> | null | undefined,
+): Partial<Record<HandlePlatform, string>> | null {
+  if (!handles) return null
+  if (!venueHandles) return handles
+  const out: Partial<Record<HandlePlatform, string>> = {}
+  for (const key of Object.keys(handles) as HandlePlatform[]) {
+    const value = handles[key]
+    if (!value) continue
+    if (venueHandles[key] === value) continue
+    out[key] = value
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** Platforms `platform_configs` (migration 324) covers. A strict subset of
+ *  HandlePlatform — the legacy table predates knot/weddingwire/zola/twitter
+ *  handles and never will hold them. */
+const LEGACY_PLATFORM_CONFIG_PLATFORMS: HandlePlatform[] = [
+  'instagram', 'tiktok', 'facebook', 'pinterest',
+]
+
+const VENUE_HANDLES_TTL_MS = 10 * 60 * 1000
+const venueHandlesCache = new Map<
+  string,
+  { at: number; handles: Partial<Record<HandlePlatform, string>> | null }
+>()
+
+/**
+ * The venue's own handles. Canonical source is `venue_config.social_handles`
+ * (migration 403). `platform_configs.venue_handle` (migration 324) is the
+ * legacy source — the per-platform social-integration config that predates
+ * the venue-wide handle map. Where venue_config has nothing for a platform
+ * legacy still holds, the legacy value is normalised and copied across once
+ * (a best-effort write that never blocks the caller), so the two agree from
+ * then on and every future read comes straight from venue_config.
+ *
+ * Cached ten minutes per venue: this is read on every inbound email and
+ * every vision-candidate batch, and a venue's own handles change rarely.
+ */
+export async function getVenueSocialHandles(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<Partial<Record<HandlePlatform, string>> | null> {
+  const hit = venueHandlesCache.get(venueId)
+  if (hit && Date.now() - hit.at < VENUE_HANDLES_TTL_MS) return hit.handles
+
+  const handles = await loadVenueSocialHandles(supabase, venueId)
+  venueHandlesCache.set(venueId, { at: Date.now(), handles })
+  return handles
+}
+
+async function loadVenueSocialHandles(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<Partial<Record<HandlePlatform, string>> | null> {
+  const { data: configRow } = await supabase
+    .from('venue_config')
+    .select('social_handles')
+    .eq('venue_id', venueId)
+    .maybeSingle()
+  const current =
+    normalizeHandles(
+      (configRow as { social_handles?: Record<string, string | null> | null } | null)
+        ?.social_handles ?? null,
+    ) ?? {}
+
+  const { data: legacyRows } = await supabase
+    .from('platform_configs')
+    .select('platform, venue_handle')
+    .eq('venue_id', venueId)
+    .in('platform', LEGACY_PLATFORM_CONFIG_PLATFORMS)
+
+  const toCopy: Partial<Record<HandlePlatform, string>> = {}
+  for (const row of (legacyRows ?? []) as Array<{ platform: string; venue_handle: string | null }>) {
+    const platform = row.platform as HandlePlatform
+    if (current[platform]) continue // venue_config already holds this platform; it wins
+    const normalized = normalizeHandle(platform, row.venue_handle)
+    if (normalized) toCopy[platform] = normalized
+  }
+
+  const merged = { ...current, ...toCopy }
+
+  if (Object.keys(toCopy).length > 0) {
+    try {
+      await supabase.from('venue_config').update({ social_handles: merged }).eq('venue_id', venueId)
+    } catch (err) {
+      console.warn(`[handles] legacy venue_handle copy failed for venue ${venueId}:`, err)
+    }
+  }
+
+  return Object.keys(merged).length > 0 ? merged : null
 }

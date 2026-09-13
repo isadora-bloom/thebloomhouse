@@ -19,6 +19,8 @@ import { useEffect, useState } from 'react'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
+import { normalizeHandleInputs } from '@/lib/services/identity/handles'
+import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 import {
   Save,
   MapPin,
@@ -30,7 +32,36 @@ import {
   Activity,
   Star,
   RefreshCw,
+  AtSign,
 } from 'lucide-react'
+
+/** Wave 5 W36. Every platform a handle can belong to (HandlePlatform), in
+ *  the order shown on the settings form. Not just the four platform_configs
+ *  covers — the venue's own handle is worth excluding on every platform a
+ *  couple's signal can carry one on. */
+const HANDLE_PLATFORMS: Array<{ key: HandlePlatform; label: string; placeholder: string }> = [
+  { key: 'instagram', label: 'Instagram', placeholder: 'yourvenue' },
+  { key: 'facebook', label: 'Facebook', placeholder: 'yourvenue' },
+  { key: 'tiktok', label: 'TikTok', placeholder: 'yourvenue' },
+  { key: 'pinterest', label: 'Pinterest', placeholder: 'yourvenue' },
+  { key: 'twitter', label: 'Twitter / X', placeholder: 'yourvenue' },
+  { key: 'knot', label: 'The Knot', placeholder: 'yourvenue' },
+  { key: 'weddingwire', label: 'WeddingWire', placeholder: 'yourvenue' },
+  { key: 'zola', label: 'Zola', placeholder: 'yourvenue' },
+]
+
+type SocialHandlesForm = Record<HandlePlatform, string>
+
+const EMPTY_SOCIAL_HANDLES: SocialHandlesForm = {
+  instagram: '',
+  facebook: '',
+  tiktok: '',
+  pinterest: '',
+  twitter: '',
+  knot: '',
+  weddingwire: '',
+  zola: '',
+}
 
 interface VenueLocation {
   address_line1: string | null
@@ -114,6 +145,8 @@ export default function VenueInfoSettingsPage() {
   const supabase = createClient()
   const [data, setData] = useState<VenueLocation>(EMPTY)
   const [owner, setOwner] = useState<OwnerPresence>(EMPTY_OWNER)
+  const [socialHandles, setSocialHandles] = useState<SocialHandlesForm>(EMPTY_SOCIAL_HANDLES)
+  const [socialHandleErrors, setSocialHandleErrors] = useState<Partial<Record<HandlePlatform, string>>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -147,7 +180,7 @@ export default function VenueInfoSettingsPage() {
           .maybeSingle(),
         supabase
           .from('venue_config')
-          .select('owner_note_to_couples, owner_photo_url')
+          .select('owner_note_to_couples, owner_photo_url, social_handles')
           .eq('venue_id', venueId)
           .maybeSingle(),
       ])
@@ -160,6 +193,10 @@ export default function VenueInfoSettingsPage() {
       if (errs.length > 0) setError(errs.join(' | '))
       setData((venueRes.data as VenueLocation | null) ?? EMPTY)
       setOwner((configRes.data as OwnerPresence | null) ?? EMPTY_OWNER)
+      const storedHandles =
+        (configRes.data as { social_handles?: Record<string, string> | null } | null)
+          ?.social_handles ?? {}
+      setSocialHandles({ ...EMPTY_SOCIAL_HANDLES, ...storedHandles })
       setLoading(false)
     }
     load()
@@ -168,11 +205,37 @@ export default function VenueInfoSettingsPage() {
     }
   }, [venueId, supabase])
 
+  /** Wave 5 W36. Normalises every non-blank social-handle field via the
+   *  same normalizeHandleInputs() the identity pipeline's stripVenueHandles()
+   *  will later compare against. A field that fails to normalise (junk,
+   *  wrong shape, a page URL) is reported per-field and blocks the save
+   *  rather than silently dropping the value the operator typed. */
+  function buildSocialHandlesPayload(): {
+    handles: Partial<Record<HandlePlatform, string>>
+    errors: Partial<Record<HandlePlatform, string>>
+  } {
+    const { handles, invalid } = normalizeHandleInputs(socialHandles)
+    const errors: Partial<Record<HandlePlatform, string>> = {}
+    for (const platform of invalid) {
+      const label = HANDLE_PLATFORMS.find((p) => p.key === platform)?.label ?? platform
+      errors[platform] = `Doesn't look like a ${label} handle — paste just the username, or the profile link.`
+    }
+    return { handles, errors }
+  }
+
   async function save() {
     if (!venueId) return
-    setSaving(true)
     setSaved(false)
     setError(null)
+
+    const { handles: normalizedSocialHandles, errors: handleErrors } = buildSocialHandlesPayload()
+    setSocialHandleErrors(handleErrors)
+    if (Object.keys(handleErrors).length > 0) {
+      setError('Fix the highlighted social handle before saving.')
+      return
+    }
+
+    setSaving(true)
     const venuesPayload = {
       address_line1: data.address_line1 || null,
       city: data.city || null,
@@ -202,6 +265,7 @@ export default function VenueInfoSettingsPage() {
     const configPayload = {
       owner_note_to_couples: owner.owner_note_to_couples || null,
       owner_photo_url: owner.owner_photo_url || null,
+      social_handles: normalizedSocialHandles,
     }
     // Two parallel updates — venue_config and venues are independent
     // tables. Promise.all so the user sees one success/failure decision
@@ -220,12 +284,26 @@ export default function VenueInfoSettingsPage() {
       setError(configRes.error.message)
       return
     }
+    // Reflect the normalised form back into the fields (lower case, no
+    // leading @, no URL, cleared fields actually cleared) so what's on
+    // screen matches what's stored.
+    setSocialHandles({ ...EMPTY_SOCIAL_HANDLES, ...normalizedSocialHandles })
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
   }
 
   function set<K extends keyof VenueLocation>(key: K, value: VenueLocation[K]) {
     setData((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function setSocialHandle(platform: HandlePlatform, value: string) {
+    setSocialHandles((prev) => ({ ...prev, [platform]: value }))
+    setSocialHandleErrors((prev) => {
+      if (!prev[platform]) return prev
+      const next = { ...prev }
+      delete next[platform]
+      return next
+    })
   }
 
   // ---------- Wave 8 — auto-derive handlers ----------
@@ -818,6 +896,38 @@ export default function VenueInfoSettingsPage() {
               onChange={(e) => set('facebook_page_id', e.target.value || null)}
             />
           </div>
+        </div>
+      </section>
+
+      {/* ---------- Wave 5 W36 — the venue's own social handles ---------- */}
+      <section className="mb-8 rounded-xl border border-sage-100 bg-white p-6">
+        <div className="flex items-center gap-2 mb-2">
+          <AtSign className="w-4 h-4 text-sage-700" />
+          <h2 className="font-medium text-sage-900">Your social handles</h2>
+        </div>
+        <p className="text-xs text-sage-500 leading-relaxed mb-4">
+          {aiName} excludes these from a couple&apos;s identity — a link to
+          your own Instagram in a signature, or your own account in a
+          screenshot, should never be read as evidence about who a couple
+          is. Leave a platform blank if you&apos;re not on it.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {HANDLE_PLATFORMS.map(({ key, label, placeholder }) => (
+            <div key={key}>
+              <label className="block text-xs font-medium text-sage-700 mb-1">
+                {label}
+              </label>
+              <input
+                className={`${inputCls} ${socialHandleErrors[key] ? 'border-red-300 focus:ring-red-200' : ''}`}
+                placeholder={placeholder}
+                value={socialHandles[key]}
+                onChange={(e) => setSocialHandle(key, e.target.value)}
+              />
+              {socialHandleErrors[key] ? (
+                <p className="text-[11px] text-red-600 mt-1">{socialHandleErrors[key]}</p>
+              ) : null}
+            </div>
+          ))}
         </div>
       </section>
 

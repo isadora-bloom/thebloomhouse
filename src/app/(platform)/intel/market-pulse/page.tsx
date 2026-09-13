@@ -26,7 +26,7 @@ import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel
 import { MeOrMarketCard } from '@/components/intel/MeOrMarketCard'
 import { EmptyState } from '@/components/ui/empty-state'
 import { inferRecommendationDestination } from '@/lib/utils/recommendation-routing'
-import { nowMs } from '@/lib/utils/clock'
+import { useNow } from '@/lib/hooks/use-now'
 import {
   BarChart,
   Bar,
@@ -585,9 +585,9 @@ function RecommendationsSection({
   onDismiss: (id: string) => void
   loading: boolean
 }) {
-  // One clock read per mount; the "Nd ago" labels below derive from it
-  // rather than calling Date.now() inside the render map.
-  const currentTime = useMemo(() => nowMs(), [])
+  // Wave 5 W36: ticks every minute so the "Nd ago" labels below don't
+  // freeze for as long as the tab stays open.
+  const currentTime = useNow()
 
   if (loading) {
     return (

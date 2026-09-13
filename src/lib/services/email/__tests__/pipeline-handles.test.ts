@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest'
 import { handlesForEmailSignal } from '../pipeline'
 import { emailToNormalizedSignal } from '@/lib/services/identity/email-to-signal'
 import { stampHandlesAndFirstSeen } from '@/lib/services/identity/route-by-tier'
+import { stripVenueHandles } from '@/lib/services/identity/handles'
 import { FakeSpineDb } from '@/lib/services/__tests__/fake-spine-db'
 
 const IG_URL = 'https://www.instagram.com/rosie.hoyle/'
@@ -80,6 +81,40 @@ describe('handlesForEmailSignal — URL shapes that are not people', () => {
     const body = `${IG_URL}\nand https://www.tiktok.com/@the.hoyles`
     expect(handlesForEmailSignal({ direction: 'inbound', body }))
       .toEqual({ instagram: 'rosie.hoyle', tiktok: 'the.hoyles' })
+  })
+})
+
+describe('stripVenueHandles — the email path (W36, wave 5)', () => {
+  const VENUE_HANDLES = { instagram: 'rixeymanor' }
+
+  it('drops the venue\'s own link quoted in a signature but keeps a prospect\'s on another platform', () => {
+    const body = [
+      'Hi! We loved the tour, thank you!',
+      '',
+      'Rosie',
+      'https://www.tiktok.com/@the.hoyles',
+      '',
+      '--',
+      'Follow us: https://www.instagram.com/rixeymanor/',
+    ].join('\n')
+
+    const raw = handlesForEmailSignal({ direction: 'inbound', body })
+    expect(raw).toEqual({ instagram: 'rixeymanor', tiktok: 'the.hoyles' })
+
+    const stripped = stripVenueHandles(raw, VENUE_HANDLES)
+    expect(stripped).toEqual({ tiktok: 'the.hoyles' })
+  })
+
+  it('a prospect who happens to paste only the venue\'s own link yields no handles at all', () => {
+    const body = `Hi! Loved the tour.\n\nFollow us: ${'https://www.instagram.com/rixeymanor/'}`
+    const raw = handlesForEmailSignal({ direction: 'inbound', body })
+    expect(stripVenueHandles(raw, VENUE_HANDLES)).toBeNull()
+  })
+
+  it('a prospect\'s own Instagram link is untouched — it is not the venue\'s handle', () => {
+    const body = `Hi!\n\nRosie\nhttps://www.instagram.com/rosie.hoyle/`
+    const raw = handlesForEmailSignal({ direction: 'inbound', body })
+    expect(stripVenueHandles(raw, VENUE_HANDLES)).toEqual({ instagram: 'rosie.hoyle' })
   })
 })
 
