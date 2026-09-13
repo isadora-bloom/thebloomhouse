@@ -334,8 +334,16 @@ function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTou
       const venueId = scope.venueId!
 
       const [conflictRes, cohortRes] = await Promise.all([
-        // 1. Conflict count.
+        // 1. Conflict count: rows where the raw self-reported source
+        // disagreed with a resolved identity. This is a diagnostic about
+        // the raw attribution_events ledger itself, not a fact the spine
+        // restates — none of the six canonical readers expose it, and
+        // getSourceAttribution deliberately reads the DERIVED first-touch
+        // rather than raw conflict rows (INTEL-CANONICAL-API.md §2.2).
         sb
+          // legacy-read-ok: conflict_with_legacy_source is a raw
+          // attribution_events column with no canonical/spine reader —
+          // see the comment above.
           .from('attribution_events')
           .select('id', { count: 'exact', head: true })
           .eq('venue_id', venueId)
@@ -370,7 +378,14 @@ function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTou
       //   (b) fetch resolved_wedding_ids from candidate_identities
       //   matching those wedding source platforms
       //   (c) diff in memory
+      // This diagnostic specifically targets the RAW self-reported
+      // `weddings.source` value (to flag when a tracked platform's own
+      // inquiry never resolved a candidate identity on that platform).
+      // getSourceAttribution reads the derived first-touch channel
+      // instead (INTEL-CANONICAL-API.md §2.2) — a different, and for
+      // this check the wrong, number.
       const { data: trackedSourceWeddings } = await sb
+        // legacy-read-ok: raw self-reported source, see the comment above.
         .from('weddings')
         .select('id, source')
         .eq('venue_id', venueId)
@@ -428,8 +443,16 @@ function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTou
       setMultiTouchLoading(true)
       const venueId = scope.venueId!
 
-      // Multi-touch — window-bound by decided_at. PC.4 fix #4.
+      // Multi-touch — window-bound by decided_at. PC.4 fix #4. The
+      // platforms-per-wedding distribution needs every raw
+      // attribution_events row for the window (to count distinct
+      // platforms per couple); none of the six canonical readers return a
+      // per-couple channel list, only aggregate channel stats
+      // (getSourceAttribution's ChannelStat[]). The booked-couple filter
+      // just below already reads the spine (couples.lifecycle_state)
+      // rather than weddings.status.
       const { data: attribData } = await sb
+        // legacy-read-ok: per-couple raw channel list, see the comment above.
         .from('attribution_events')
         .select('wedding_id, source_platform')
         .eq('venue_id', venueId)

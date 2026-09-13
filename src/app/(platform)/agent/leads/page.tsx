@@ -22,6 +22,7 @@ import { EssentialsSlider } from '@/components/shell/essentials-slider'
 // client codes, import warnings and risk flags all hang off the wedding
 // row and the spine does not carry them yet.
 import { TriageRail, useCanonicalDaily } from '../../intel/_canonical/triage-rail'
+import { withLastActivity } from '@/lib/intel/adapters/lead-list-view'
 import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
@@ -481,7 +482,20 @@ export default function LeadsPage() {
 
       // Migration 316: heat_score / temperature_tier moved to wedding_heat
       // view. Fetch weddings + heat in parallel, join + sort in memory.
+      //
+      // The row SET here is gated on `status`
+      // (inquiry/tour_scheduled/tour_completed/proposal_sent), the
+      // 7-13-stage pipeline vocabulary. The spine's `couples.lifecycle_state`
+      // is a coarser 6-value concept and cannot answer "which weddings are
+      // in tour_scheduled" (see LifecycleStrip's own caption: a couple can
+      // be resolved on the spine while its wedding row still says inquiry).
+      // W37 (this wave) owns building the status<->lifecycle mapping; until
+      // it lands there is no spine equivalent for this filter. Everything
+      // this query can hand off already has: last_activity_at below comes
+      // from the spine via lastActivityByWedding, not from this row.
       let query = supabase
+        // legacy-read-ok: status-based pipeline-stage filter has no spine
+        // equivalent yet — see the comment above.
         .from('weddings')
         .select(`
           id,
@@ -652,12 +666,10 @@ export default function LeadsPage() {
   // wedding. Overlaying it here rather than inside fetchLeads keeps the
   // two loads independent: the table renders as soon as the wedding rows
   // land, and the activity column fills in when the spine map arrives.
+  // withLastActivity is the same merge /agent/pipeline uses, so the two
+  // pages cannot disagree on what "last activity" means for a couple.
   const leadsWithActivity = useMemo(
-    () =>
-      leads.map((l) => ({
-        ...l,
-        last_activity_at: lastActivityByWedding[l.id] ?? null,
-      })),
+    () => withLastActivity(leads, lastActivityByWedding),
     [leads, lastActivityByWedding],
   )
 

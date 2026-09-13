@@ -15,7 +15,6 @@ import { formatSourceLabel } from '@/lib/utils/format-source-label'
 // from getDailyList + getVenueOverview, the same call /agent/leads makes.
 // The board itself stays wedding-keyed: dragging a card writes
 // weddings.status, and the spine has no equivalent write path yet.
-import { TriageRail, LifecycleStrip } from '../../intel/_canonical/triage-rail'
 // W37: one lifecycle vocabulary. The columns stay keyed on the board
 // stage, because dragging a card is what moves it. The pill on the card is
 // the shared one, so a card sitting in Tour Scheduled whose record says the
@@ -26,6 +25,8 @@ import {
   type OperatorStageResult,
 } from '@/lib/services/lifecycle/vocabulary'
 import type { LifecycleStage } from '@/lib/services/lifecycle/state-machine'
+import { TriageRail, LifecycleStrip, useCanonicalDaily } from '../../intel/_canonical/triage-rail'
+import { withLastActivity } from '@/lib/intel/adapters/lead-list-view'
 import {
   DndContext,
   DragOverlay,
@@ -83,6 +84,11 @@ interface PipelineWedding {
   // own state and this wedding's machine stage together. Undefined while
   // the page is still loading the couples it needs.
   operator_stage?: OperatorStageResult
+  // W40: newest touchpoint on the couple's spine ribbon, resolved back to
+  // this wedding through couples.source_wedding_id. Overlaid after the
+  // fetch by withLastActivity — the same merge /agent/leads uses. Null
+  // when the spine has no touchpoint recorded for this couple yet.
+  last_activity_at: string | null
 }
 
 interface PipelineColumn {
@@ -294,6 +300,16 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip, risk }: { we
           {days}d in stage
         </span>
       </div>
+
+      {/* W40: last real activity, from the spine (couples + touchpoints,
+          resolved via source_wedding_id). Hidden rather than shown as
+          '---' when the spine has no touchpoint for this couple yet —
+          that is a data-maturity fact, not a card-layout one. */}
+      {wedding.last_activity_at && (
+        <div className="mt-1 text-[10px] text-sage-400">
+          Active {formatDate(wedding.last_activity_at)}
+        </div>
+      )}
     </>
   )
 }
@@ -421,6 +437,11 @@ export default function PipelinePage() {
   const [totalLeads, setTotalLeads] = useState(0)
   const [activeWedding, setActiveWedding] = useState<PipelineWedding | null>(null)
 
+  // Canonical spine read — the same call /agent/leads makes for its "Last
+  // Activity" column, so a couple cannot show two different last-activity
+  // values depending on which page it is viewed from.
+  const { lastActivityByWedding } = useCanonicalDaily()
+
   const supabase = createClient()
   const navigateToClient = (id: string) => router.push(`/intel/clients/${id}`)
 
@@ -455,7 +476,19 @@ export default function PipelinePage() {
       // Fetch all non-completed/cancelled weddings with people.
       // Migration 316: heat_score / temperature_tier moved to wedding_heat
       // view. Fetch weddings + heat in parallel, join + sort in memory.
+      //
+      // The kanban columns are `status`
+      // (inquiry..booked/lost/contracted), a 7-stage pipeline vocabulary
+      // with no spine equivalent — `couples.lifecycle_state` is the
+      // coarser 6-value concept LifecycleStrip renders separately, on
+      // purpose, rather than pretending the two counts are one question.
+      // W37 (this wave) owns building that mapping; until it lands there
+      // is no spine read that can answer "which weddings are in
+      // tour_scheduled". last_activity_at below is overlaid from the
+      // spine after this fetch, not read from this row.
       let query = supabase
+        // legacy-read-ok: status-based pipeline-stage filter has no spine
+        // equivalent yet — see the comment above.
         .from('weddings')
         .select(`
           id,
@@ -555,6 +588,9 @@ export default function PipelinePage() {
             client_code: clientCode,
             code_extension: (row.code_extension as string | null | undefined) ?? null,
             venue_name: venueName,
+            // Overlaid from the spine below via withLastActivity, once the
+            // canonical daily-list call returns.
+            last_activity_at: null,
           }
         }
       )
@@ -725,6 +761,20 @@ export default function PipelinePage() {
     venueId: scope.venueId ?? null,
   })
 
+  // ---- Last activity, from the spine ----
+  // Overlaid at render time rather than inside fetchPipeline, same
+  // reasoning as /agent/leads: the board renders as soon as the wedding
+  // rows land, and last-activity fills in when the spine map arrives.
+  // withLastActivity is the identical merge /agent/leads uses.
+  const columnsWithActivity = useMemo(
+    () =>
+      columns.map((col) => ({
+        ...col,
+        weddings: withLastActivity(col.weddings, lastActivityByWedding),
+      })),
+    [columns, lastActivityByWedding],
+  )
+
   return (
     <div className="space-y-6">
       {/* ---- Header ---- */}
@@ -811,7 +861,7 @@ export default function PipelinePage() {
           onDragEnd={handleDragEnd}
         >
           <div className="flex gap-4 overflow-x-auto pb-4 -mx-6 lg:-mx-8 px-6 lg:px-8">
-            {columns.map((column) => (
+            {columnsWithActivity.map((column) => (
               <DroppableColumn key={column.key} column={column} showVenueChip={showVenueChip} riskFlags={riskFlags} />
             ))}
           </div>
