@@ -187,26 +187,133 @@ against real data.
 
 ### Wave 6 — wire forward what's already flowing in
 
-| # | Workstream | Owns (files) | Done when |
-|---|---|---|---|
-| W41 | Reach what's already built: nav entry for `/intel/marketing-roi/recommendations` (Intel → Conversion, near Marketing Spend); a daily-reachable door for the Knot leads CSV re-upload (not just onboarding) — likely a link from `/intel/sources/track` or `/agent/brain-dump` into the structured `crm-import` flow rather than a UI rebuild; delete `/org` and `/sage` per the W39 "delete" verdict | `nav-config.ts`, `intel/marketing-roi/recommendations/page.tsx` (remove gate), `org/page.tsx`, `sage/page.tsx` (delete), one new link | A coordinator can reach the reallocation page and re-run a Knot leads import without knowing a URL; `/org` and `/sage` are gone; `check:links` still passes |
-| W42 | Finish the Instagram follower-screenshot capture: wire the existing `vision-prompt.ts` into `/api/intel/social-integration/capture`, enable the file input in `CaptureNowModal.tsx` | `capture/route.ts`, `CaptureNowModal.tsx`, `vision-prompt.ts` | A screenshot of a followers list produces the same `social_captures`/`social_engagements` rows the text-paste path produces today, tested against a real screenshot fixture |
-| W43 | Make review sentiment real: run sentiment/theme extraction at ingestion time (Google Places poll, CSV/paste import, and the brain-dump `reviews_from_screenshot` case) so `reviews.sentiment_score`/`themes` actually get written | `google-places.ts`, `data-import.ts`, brain-dump route's review case | `/intel/reviews`'s sentiment trend renders a real direction, not "—", on a venue with reviews |
-| W44 | Add a tours channel to the correlation engine, so social volume (already reaching `marketing_metric` via brain-dump) can be paired against it | `correlation-engine.ts`, `format-series-label.ts` | `/intel/macro-correlations` can show a real Instagram/TikTok-volume-vs-tours-booked card when the data supports it, `enoughData`-gated like everything else |
-| W45 | Weather severity: add a severity/alert field to weather ingestion, fix or remove the dead tornado-keyword branch in `weather-cancellation.ts`, widen the "active anomaly" window so a weekend event is still visible the following week | `weather.ts`, `weather-cancellation.ts`, `climate-context.ts`, one migration | A severe-weather day from the past 7-14 days surfaces in the hypothesis prompt and on `/intel/weather`'s "notable past weather" section, not just same-day |
-| — | Carried forward from the existing "Follow-ups for wave 5" list, unchanged | `crm-import/index.ts` (progression event type), `phrase-selector.ts` decision, Instagram reply send path (blocked on Meta credentials — operator), investor-materials template | As already scoped in NOVEMBER-PLAN.md |
+All five run in parallel, in separate worktrees, from `git reset --hard consolidation` — disjoint files, no shared ownership, no sequencing between them.
+
+| # | Workstream | Model | Owns (files) | Done when |
+|---|---|---|---|---|
+| W41 | Reach what's already built: nav entry for `/intel/marketing-roi/recommendations` (Intel → Conversion, near Marketing Spend); a daily-reachable door for the Knot leads CSV re-upload (not just onboarding) — likely a link from `/intel/sources/track` or `/agent/brain-dump` into the structured `crm-import` flow rather than a UI rebuild; delete `/org` and `/sage` per the W39 "delete" verdict | Haiku | `nav-config.ts`, `intel/marketing-roi/recommendations/page.tsx` (remove gate), `org/page.tsx`, `sage/page.tsx` (delete), one new link | A coordinator can reach the reallocation page and re-run a Knot leads import without knowing a URL; `/org` and `/sage` are gone; `check:links` still passes |
+| W42 | Finish the Instagram follower-screenshot capture: wire the existing `vision-prompt.ts` into `/api/intel/social-integration/capture`, enable the file input in `CaptureNowModal.tsx` | Sonnet | `capture/route.ts`, `CaptureNowModal.tsx`, `vision-prompt.ts` | A screenshot of a followers list produces the same `social_captures`/`social_engagements` rows the text-paste path produces today, tested against a real screenshot fixture |
+| W43 | Make review sentiment real: run sentiment/theme extraction at ingestion time (Google Places poll, CSV/paste import, and the brain-dump `reviews_from_screenshot` case) so `reviews.sentiment_score`/`themes` actually get written | Sonnet | `google-places.ts`, `data-import.ts`, brain-dump route's review case | `/intel/reviews`'s sentiment trend renders a real direction, not "—", on a venue with reviews |
+| W44 | Add a tours channel to the correlation engine, so social volume (already reaching `marketing_metric` via brain-dump) can be paired against it | Opus | `correlation-engine.ts`, `format-series-label.ts` | `/intel/macro-correlations` can show a real Instagram/TikTok-volume-vs-tours-booked card when the data supports it, `enoughData`-gated like everything else |
+| W45 | Weather severity: add a severity/alert field to weather ingestion, fix or remove the dead tornado-keyword branch in `weather-cancellation.ts`, widen the "active anomaly" window so a weekend event is still visible the following week | Sonnet | `weather.ts`, `weather-cancellation.ts`, `climate-context.ts`, one migration | A severe-weather day from the past 7-14 days surfaces in the hypothesis prompt and on `/intel/weather`'s "notable past weather" section, not just same-day |
+| — | Carried forward from the existing "Follow-ups for wave 5" list, unchanged | — | `crm-import/index.ts` (progression event type), `phrase-selector.ts` decision, Instagram reply send path (blocked on Meta credentials — operator), investor-materials template | As already scoped in NOVEMBER-PLAN.md |
+
+### Reference pattern: the Rixey portal, read-only, `C:\Users\Ismar\rixey-portal`
+
+Per Isadora 2026-09-14: the couple's experience should closely match the
+original Rixey portal, which already solved this well. Checked, read-only,
+not modified (per `CLAUDE.md`'s source-codebase rule). The pattern that
+matters:
+
+Rixey is **one app, shared components, a role prop** — not two divergent
+implementations. `src/pages/Dashboard.jsx` (the couple's view) and
+`src/pages/admin/AdminWeddingProfile.jsx` (the coordinator's view) both
+import and mount the exact same `TimelineBuilder`, `TableLayoutPlanner`, and
+`GuestList` components against the same `weddingId`, differing only by a
+prop: the couple's page passes `userId`, the admin page passes `isAdmin`.
+Same rows, same live data, both sides can edit, the component itself (not a
+second implementation) decides what an admin can do that a couple can't.
+
+Contracts run the *other* way from what Bloom does today: Rixey's
+`ContractPanel` lives under `pages/admin/`, mounted from
+`AdminWeddingProfile.jsx` — contract management is coordinator-primary
+there, the couple's dashboard only references "Contracts & Payments" as a
+status line, not a full search UI. Worth matching that direction rather than
+the reverse.
+
+This reframes W46/W47/W49 below: the target isn't "give the coordinator a
+second, read-only view of what the couple built," it's "extract one shared
+component per feature and mount it on both sides with a role prop," matching
+Rixey exactly. W48 has no direct Rixey equivalent (the identity-reconstruction
+profile is a Bloom-only concept) so it keeps its original shape.
+
+**What this does and doesn't mean, per Isadora 2026-09-14:** the thing worth
+copying from Rixey is the *architecture* (one component, one set of rows, a
+role prop), not necessarily the specific UI. Bloom's own couple-side builders
+were checked and, on a skim, look at least as capable as Rixey's — the
+konva table editor has drag/rotate/group-select and a floor-plan background
+image Rixey's canvas wasn't confirmed to have, the timeline builder has
+auto-time-chaining and sunset calculation. W47 and W49 below already reflect
+this: they extract *Bloom's own* existing couple-side builder into a shared
+component, they do not propose porting Rixey's implementation in. Nothing
+here was feature-compared line by line, so treat "keep Bloom's version, just
+share it" as the default, and flag it back if an implementer finds a specific
+piece where Rixey's is genuinely richer — that's a call for whoever builds
+it, not a mandate baked into this plan.
 
 ### Wave 7 — coordinator/couple parity and the reconciliation layer
 
-| # | Workstream | Owns (files) | Done when |
-|---|---|---|---|
-| W46 | Coordinator contract search: surface the couple-side contract search (already built, already works) on the coordinator's own wedding page, scoped to coordinator role | `portal/weddings/[id]/page.tsx`, `couple/contracts` API (read-scope extension) | A coordinator can search a wedding's contracts by name/vendor/content from `/portal/weddings/[id]` without switching to the couple portal |
-| W47 | Coordinator can build/edit the day-of timeline, not just view it | `portal/weddings/[id]/page.tsx` (TimelineTab), `_couple-pages/timeline/page.tsx` (extract the shared builder) | A coordinator can add/edit/reorder a timeline event from the wedding page and it's the same row the couple sees |
-| W48 | Personal/relationship info on the actual meeting page: bring a coordinator-appropriate view of the identity-reconstruction profile onto `/portal/weddings/[id]`, not just `/intel/clients/[id]` | `portal/weddings/[id]/page.tsx`, `ReconstructedIdentityPanel.tsx` | The wedding page shows the couple's story/preferences, not just logistics, without opening a different tool |
-| W49 | One connected table map: link `guest_list`/`seating_tables` data into the konva table-map editor so a coordinator can assign a named guest to a table visually | `table-map/page.tsx`, `seating/page.tsx` (shared data model), `GuestsTab` | Dragging a guest's name onto a table in the visual editor writes the same assignment the couple's seating page reads, both directions |
-| W50 | Turn on freeform detail capture in the live pipeline: wire the existing (currently dead) `specialRequests` catch-all into email/call processing, cost-gated so it doesn't add a model call to every message (e.g. only on messages the classifier already flags high-signal) | `extraction.ts`, `email/pipeline.ts` | A test email mentioning an unusual reception detail produces a structured, reviewable row, not just raw text |
-| W51 | Planning Notes from venue conversations, not only the couple's chatbot: extend note extraction to coordinator-venue interactions | `planning-extraction.ts`, `email/pipeline.ts` | A detail mentioned on a call or in an email to the venue lands in Planning Notes the same way a Sage-chat mention does |
-| W52 | Commitment reconciliation: a scheduled check (30/14/7 days out) diffing captured commitments (W50/W51 output) against the day-of timeline, flagging anything mentioned but missing | New `src/lib/services/commitments/**`, a cron entry, a coordinator-facing queue (new tab or reuse the knowledge-gaps shape) | Given a test wedding with a planning note mentioning a groom's cake and no matching timeline event, the flag fires before the wedding date |
+Sequencing within wave 7: W46, W47, W49 all touch `portal/weddings/[id]/page.tsx`
+— coordinate by tab, same convention the real plan already uses for shared
+files (e.g. wave 5's W35/W40 split of `crm-import/index.ts`): W46 owns a new
+contracts tab or extends VendorsTab only, W47 owns TimelineTab only, W49 owns
+GuestsTab plus the table-map route only. All three can still run in parallel
+worktrees under that split. W50 and W51 both touch `email/pipeline.ts` —
+same pattern, W50 owns the extraction-invocation call site, W51 owns the
+planning-notes call site. **W52 depends on W50 and W51 landing first** (it
+diffs their output against the timeline, there's nothing to diff before
+they exist) — not parallel with them, runs after. W48 is fully independent,
+can run alongside anything else in this wave.
+
+| # | Workstream | Model | Owns (files) | Done when |
+|---|---|---|---|---|
+| W46 | Contracts, Rixey-shaped: build the coordinator-primary contract panel (search, view, key terms) on `/portal/weddings/[id]`, matching `ContractPanel`'s admin-first placement; keep a simplified status view on the couple's side rather than the current couple-only search | Sonnet | `portal/weddings/[id]/page.tsx` (new tab or extend VendorsTab), `couple/contracts` API (extend read scope to coordinator role), `_couple-pages/contracts/page.tsx` (simplify, don't remove) | A coordinator can search a wedding's contracts by name/vendor/content from `/portal/weddings/[id]`; the couple still sees their contracts, at a lighter level |
+| W47 | One shared timeline builder, Rixey-shaped: extract the couple's timeline builder (`_couple-pages/timeline/page.tsx`) into a component that both `_couple-pages/timeline` and `/portal/weddings/[id]` (TimelineTab) mount against the same `timeline` rows, gated by an `isAdmin`/role prop the way `TimelineBuilder weddingId userId` vs `TimelineBuilder weddingId isAdmin` does in Rixey | Sonnet | `portal/weddings/[id]/page.tsx` (TimelineTab only), `_couple-pages/timeline/page.tsx`, new shared component | A coordinator can add/edit/reorder a timeline event from the wedding page; it's the same row, same component family, the couple sees the edit live |
+| W48 | Personal/relationship info on the actual meeting page: bring a coordinator-appropriate view of the identity-reconstruction profile onto `/portal/weddings/[id]`, not just `/intel/clients/[id]` (no Rixey equivalent — Bloom-only concept) | Opus | `portal/weddings/[id]/page.tsx` (new section, own file), `ReconstructedIdentityPanel.tsx` | The wedding page shows the couple's story/preferences, not just logistics, without opening a different tool |
+| W49 | One connected table map, Rixey-shaped: extract the couple's table/guest components into shared pieces (matching `TableLayoutPlanner` + `GuestList`, both mounted on both sides against the same `weddingId`) so a coordinator can assign a named guest to a table visually and the couple sees the same assignment | Sonnet | `table-map/page.tsx`, `seating/page.tsx` (shared data model), `portal/weddings/[id]/page.tsx` (GuestsTab only), new shared components | Dragging a guest's name onto a table in the visual editor writes the same assignment the couple's seating page reads, both directions, one component family not two |
+| W50 | Turn on freeform detail capture in the live pipeline: wire the existing (currently dead) `specialRequests` catch-all into email/call processing, cost-gated so it doesn't add a model call to every message (e.g. only on messages the classifier already flags high-signal) | Opus | `extraction.ts`, `email/pipeline.ts` (extraction call site only) | A test email mentioning an unusual reception detail produces a structured, reviewable row, not just raw text |
+| W51 | Planning Notes from venue conversations, not only the couple's chatbot: extend note extraction to coordinator-venue interactions | Opus | `planning-extraction.ts`, `email/pipeline.ts` (planning-notes call site only) | A detail mentioned on a call or in an email to the venue lands in Planning Notes the same way a Sage-chat mention does |
+| W52 | Commitment reconciliation: a scheduled check (30/14/7 days out) diffing captured commitments (W50/W51 output) against the day-of timeline, flagging anything mentioned but missing | Opus | New `src/lib/services/commitments/**`, a cron entry, a coordinator-facing queue (new tab or reuse the knowledge-gaps shape) | Given a test wedding with a planning note mentioning a groom's cake and no matching timeline event, the flag fires before the wedding date |
+
+### Wave 8 — surface it all, three audiences, and close the couple-experience loop
+
+This is the direct answer to "build a plan for how to surface all ingested
+data and use it in CEO and coordinator decision-making, and how to improve
+the couple's experience." Two of these (W55, W56) are genuine new capability,
+not wiring; the rest compose screens out of what waves 6-7 just finished.
+
+**Three-audience surfacing matrix** — where each data category lands today,
+and the gap wave 8 closes:
+
+| Data category | CEO sees it? | Coordinator sees it? | Couple sees it? | Gap this wave closes |
+|---|---|---|---|---|
+| Marketing spend / channel ROI | Scattered across `/intel/sources`, `/intel/channels`, `/intel/marketing-roi` | Same, buried in Intel submenus | No, nor should they | W53: one consolidated story; W54: a link in from daily nav |
+| Tour weekday conversion | Real, on `/intel/cohort`, but nobody's told to look there | Same | No | W53, W54 |
+| Reviews (volume/stars, and after W43, sentiment) | Same gap | Same gap | Indirectly — `review-language.ts` already feeds Sage's tone (working today) | W57: an alert, not just a chart |
+| Social volume (after W44, vs tours) | Not yet built anywhere | Not yet built anywhere | No | W53 |
+| Weather (after W45, with severity) | No | `/intel/weather` only | No | W56 |
+| Identity/personal profile | No (nor should they) | After W48, yes | **No — never personalises anything the couple sees, checked directly this session** | W55 |
+| Commitment reconciliation (after W52) | No | Yes, the new queue | Indirectly, by not having things fall through | Already covered by W52 |
+
+| # | Workstream | Model | Owns (files) | Depends on | Done when |
+|---|---|---|---|---|---|
+| W53 | CEO "monthly story": one screen (or a generated one-pager, reusing the TBH Report's print styling pattern) that pulls response time, weekday tour conversion, channel ROI, and review volume/rating into a single narrated view, instead of five separate pages | Sonnet | New `src/app/(platform)/intel/monthly-story/page.tsx` (or extend an existing summary page — implementer's call), reusing existing canonical reads only, no new computation | W41 (reallocation page must be reachable to cite it), W43 (real sentiment to cite) | A CEO can open one page and get every answer from report 2's scenario without hunting across Intel |
+| W54 | Coordinator daily-surface links: `/today` and `/agent/leads` get a one-line pointer out to the deeper answers (weekday conversion, channel spend) instead of leaving them undiscoverable in Intel submenus | Sonnet | `today/page.tsx`, `today/view-model.ts` (links only, no new data) | W41 | A coordinator on `/today` can get to the weekday-conversion table and the reallocation page in one click, not zero |
+| W55 | Couple-experience personalisation: wire the identity/preference data already captured (today Intel-only) into the couple-portal Sage prompt layer, so the product's own stated USP ("4-layer custom voice") actually reaches the couple, not just venue-facing drafts | Opus | `src/lib/services/brain/**` (the couple-portal prompt builder specifically — do not touch the venue-facing draft brain), `couple_identity_profile` read path | None — identity data already exists, this is purely a wiring job, can start immediately | A couple whose profile notes a specific preference or detail gets a portal response that reflects it, verified against a fixture couple, not just theoretically wired |
+| W56 | Weather-aware and conversion-informed couple nudges: surface honest, plain-language weather context on the couple's wedding-day view, and use real weekday-conversion data to make midweek tour slots an honest, informed suggestion during booking rather than an unexplained default | Sonnet | `_couple-pages/**` (wedding-day weather card), tour-booking/scheduling surface (wherever tour slots are offered to an inquiring couple) | W44, W45 | A couple sees real forecast context for their date; an inquiring lead offered a midweek tour sees why, backed by the real conversion number, not marketing copy |
+| W57 | Review-buzz alert: once sentiment is real (W43), wire a "review tone is slipping" flag into `/pulse` or `/today`, so the CEO's Monday question is something the coordinator already knows about, not something raised cold in a meeting | Sonnet | `pulse-aggregator.ts` or `today` surfacing logic | W43 | A venue with a declining sentiment trend shows a flagged item on `/pulse` before the next monthly meeting, not only on a chart nobody opened |
+
+**Parallel execution summary, waves 6-8**
+
+```
+Wave 6 (no dependencies among these five, all parallel):
+  W41  W42  W43  W44  W45
+
+Wave 7:
+  W46  W47  W49  W48   <- four parallel (tab-scoped split on portal/weddings/[id]/page.tsx
+                            for W46/W47/W49; W48 fully independent)
+  W50  W51              <- two parallel (call-site split on email/pipeline.ts)
+  W52                    <- after W50 + W51 land, not parallel with them
+
+Wave 8:
+  W53 (needs W41, W43)   W54 (needs W41)   W57 (needs W43)   <- parallel once their deps land
+  W55                                                          <- independent, can start wave 6's first day
+  W56 (needs W44, W45)                                         <- after wave 6
+```
+
+W55 is the one item across all three waves with zero dependencies on anything
+else in this plan — it could start today, in parallel with wave 6, if there's
+a spare Opus slot.
 
 ### What stays parked, on purpose
 
