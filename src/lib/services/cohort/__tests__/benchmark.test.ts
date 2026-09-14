@@ -48,6 +48,8 @@ interface FakeVenue {
   id: string
   is_demo: boolean
   onboarded: boolean
+  /** Migration 410 opt-in. Defaults to `onboarded` in the fake. */
+  optedIn?: boolean
   name: string
 }
 
@@ -72,7 +74,12 @@ function peerSetSupabase(world: FakeVenue[] = WORLD) {
     }
     if (table === 'venue_config') {
       return {
-        data: world.map((v) => ({ venue_id: v.id, onboarding_completed: v.onboarded })),
+        data: world.map((v) => ({
+          venue_id: v.id,
+          onboarding_completed: v.onboarded,
+          // Migration 410: opted in unless the fixture says otherwise.
+          benchmark_participation: v.optedIn ?? v.onboarded,
+        })),
       }
     }
     return { data: [] }
@@ -148,6 +155,22 @@ describe('summarisePeerMetric', () => {
 // ---------------------------------------------------------------------------
 
 describe('benchmarkPeerSet', () => {
+  it('leaves out a venue that finished setup but never opted in (migration 410)', async () => {
+    const world: FakeVenue[] = WORLD.map((v) => (v.id === REAL_B ? { ...v, optedIn: false } : v))
+    const set = await benchmarkPeerSet(REAL_A, peerSetSupabase(world))
+    expect(set.callerOptedIn).toBe(true)
+    expect(set.peerVenueIds).not.toContain(REAL_B)
+    expect(set.peerVenueIds).toContain(REAL_C)
+  })
+
+  it('reads nobody for a caller that has not opted in', async () => {
+    const world: FakeVenue[] = WORLD.map((v) => (v.id === REAL_A ? { ...v, optedIn: false } : v))
+    const set = await benchmarkPeerSet(REAL_A, peerSetSupabase(world))
+    expect(set.callerOptedIn).toBe(false)
+    expect(set.peerVenueIds).toEqual([])
+    expect(set.mode).toBe('real')
+  })
+
   it('never returns the caller as its own peer', async () => {
     for (const id of [REAL_A, REAL_B, REAL_C, DEMO_1, DEMO_4]) {
       const set = await benchmarkPeerSet(id, peerSetSupabase())

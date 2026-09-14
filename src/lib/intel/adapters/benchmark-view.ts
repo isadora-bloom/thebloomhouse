@@ -102,6 +102,9 @@ export interface BenchmarkView {
   /** False when the peer set is below the threshold. The page then prints
    *  `gateMessage` and nothing else. */
   enoughPeers: boolean
+  /** False when the venue has not switched benchmarks on in Settings. The
+   *  page then shows where the switch is instead of the peer count. */
+  optedIn: boolean
   /** Plain-English reason the page is blank, with the count in it. Null
    *  when there are enough peers. */
   gateMessage: string | null
@@ -198,6 +201,13 @@ function buildRow(row: BenchmarkComparison): BenchmarkRowView {
 /** The blank-page message. It names the count, because "not yet" without
  *  a number is the kind of thing an owner has to come back and ask about. */
 function gateMessageFor(result: VenueBenchmark): string {
+  if (!result.callerOptedIn) {
+    return (
+      'Benchmarks are switched off for your venue. Nothing of yours is shared and nothing from other venues is read ' +
+      'until you turn them on under Settings, where the switch says exactly what is shared: anonymised middle figures, ' +
+      'never a venue name and never the numbers of any one venue.'
+    )
+  }
   const have = result.peerCount
   const need = result.minPeers
   const noun = have === 1 ? 'venue' : 'venues'
@@ -252,6 +262,7 @@ export function buildBenchmarkView(result: VenueBenchmark): BenchmarkView {
 
   return {
     enoughPeers: result.enoughPeers,
+    optedIn: result.callerOptedIn,
     gateMessage: result.enoughPeers ? null : gateMessageFor(result),
     demoPeers: result.demoPeers,
     demoLabel: result.demoPeers

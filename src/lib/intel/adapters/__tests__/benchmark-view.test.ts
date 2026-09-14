@@ -45,6 +45,7 @@ function result(over: Partial<VenueBenchmark> = {}): VenueBenchmark {
     venueId: VENUE,
     mode: 'real',
     demoPeers: false,
+    callerOptedIn: true,
     peerCount: 4,
     minPeers: 3,
     enoughPeers: true,
@@ -232,5 +233,19 @@ describe('buildBenchmarkView', () => {
     // the view does not even carry that.
     expect(serialised).not.toContain(VENUE)
     expect(serialised).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
+  })
+})
+
+describe('buildBenchmarkView, opt-in (migration 410)', () => {
+  it('says the switch is off and where it is, and reads no peer count, when the venue has not opted in', () => {
+    const view = buildBenchmarkView(
+      result({ callerOptedIn: false, enoughPeers: false, peerCount: 0, qualifyingVenueCount: 0 }),
+    )
+    expect(view.optedIn).toBe(false)
+    expect(view.enoughPeers).toBe(false)
+    expect(view.gateMessage).toContain('switched off')
+    expect(view.gateMessage).toContain('Settings')
+    expect(view.gateMessage).not.toContain('need more venues')
+    expect(view.rows).toEqual([])
   })
 })

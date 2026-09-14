@@ -361,6 +361,10 @@ export interface BenchmarkPeerSet {
    *  working. 'real' for everybody else. */
   mode: BenchmarkMode
   callerIsDemo: boolean
+  /** Doctrine INV-24.1-A (migration 410): a real venue only takes part when
+   *  it said yes in Settings. False here means no peer was read and the
+   *  surface says where the switch is. Demo venues are always in. */
+  callerOptedIn: boolean
   /** Peer venue ids. Internal to this module: they are turned into plain
    *  numbers before anything is returned to a surface. The caller's own
    *  id is never in here. */
@@ -378,6 +382,7 @@ interface VenueRow {
 interface VenueConfigRow {
   venue_id: string
   onboarding_completed: boolean | null
+  benchmark_participation: boolean | null
 }
 
 /**
@@ -406,7 +411,7 @@ export async function benchmarkPeerSet(
 
   const [venuesRes, configRes] = await Promise.all([
     db.from('venues').select('id, is_demo'),
-    db.from('venue_config').select('venue_id, onboarding_completed'),
+    db.from('venue_config').select('venue_id, onboarding_completed, benchmark_participation'),
   ])
   if (venuesRes.error) throw new Error(`[benchmark] venues read failed: ${venuesRes.error.message}`)
   if (configRes.error) {
@@ -418,20 +423,33 @@ export async function benchmarkPeerSet(
   const onboarded = new Set(
     configs.filter((c) => c.onboarding_completed === true).map((c) => c.venue_id),
   )
+  // Opt-in is the doctrine's condition (INV-24.1-A), onboarding is the
+  // plan's. A real venue needs both: it finished setup, and it said yes.
+  const optedIn = new Set(
+    configs.filter((c) => c.benchmark_participation === true).map((c) => c.venue_id),
+  )
 
   const caller = venues.find((v) => v.id === venueId)
   const callerIsDemo = caller?.is_demo === true
+  const callerOptedIn = callerIsDemo || optedIn.has(venueId)
 
   const qualifies = (v: VenueRow): boolean =>
-    callerIsDemo ? v.is_demo === true : v.is_demo !== true && onboarded.has(v.id)
+    callerIsDemo
+      ? v.is_demo === true
+      : v.is_demo !== true && onboarded.has(v.id) && optedIn.has(v.id)
 
   const qualifying = venues.filter(qualifies)
   // Exclude the caller first, by id, before the list is used for anything.
-  const peerVenueIds = qualifying.filter((v) => v.id !== venueId).map((v) => v.id)
+  // A caller that has not opted in reads nobody: the peer list is empty
+  // before any peer id can leave this function.
+  const peerVenueIds = callerOptedIn
+    ? qualifying.filter((v) => v.id !== venueId).map((v) => v.id)
+    : []
 
   return {
     mode: callerIsDemo ? 'demo' : 'real',
     callerIsDemo,
+    callerOptedIn,
     peerVenueIds,
     qualifyingVenueCount: qualifying.length,
   }
@@ -554,6 +572,9 @@ export interface VenueBenchmark {
   mode: BenchmarkMode
   /** True when the peers are demo venues, so the surface can say so. */
   demoPeers: boolean
+  /** False when this venue has not switched benchmarks on (migration 410).
+   *  Nothing was read from any peer in that case. */
+  callerOptedIn: boolean
   /** Peers in the set, before any per-metric filtering. */
   peerCount: number
   /** Peers needed before anything is compared. */
@@ -607,6 +628,7 @@ export async function buildVenueBenchmark(
       venueId,
       mode: peers.mode,
       demoPeers: peers.mode === 'demo',
+      callerOptedIn: peers.callerOptedIn,
       peerCount: peers.peerVenueIds.length,
       minPeers: BENCHMARK_MIN_PEERS,
       enoughPeers: false,
@@ -640,6 +662,7 @@ export async function buildVenueBenchmark(
     venueId,
     mode: peers.mode,
     demoPeers: peers.mode === 'demo',
+    callerOptedIn: peers.callerOptedIn,
     peerCount: peers.peerVenueIds.length,
     minPeers: BENCHMARK_MIN_PEERS,
     enoughPeers: true,

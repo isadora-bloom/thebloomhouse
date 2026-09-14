@@ -1241,6 +1241,9 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
       {/* ------------------------------------------------------------------ */}
       <SendingDomainSection venueId={scope.venueId} />
 
+      {/* Cross-venue benchmarks: the venue's own switch (migration 410). */}
+      <BenchmarkParticipationSection venueId={scope.venueId} />
+
       {/* ------------------------------------------------------------------ */}
       {/* Integrations — Calendly                                             */}
       {/* ------------------------------------------------------------------ */}
@@ -1526,6 +1529,106 @@ interface SendingDomainState {
   checkedAt: string | null
   hasResendDomain: boolean
   records: SendingDomainRecord[]
+}
+
+/**
+ * Cross-venue benchmarks are opt-in, default off (doctrine INV-24.1-A,
+ * migration 410). This is the only place the switch moves. The copy says
+ * exactly what is shared when it is on, because a venue owner should not
+ * have to guess.
+ */
+function BenchmarkParticipationSection({ venueId }: { venueId: string | null | undefined }) {
+  const [participating, setParticipating] = useState<boolean | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    if (!venueId) return
+    let cancelled = false
+    async function load() {
+      try {
+        const resp = await fetch('/api/settings/benchmark-participation')
+        const json = (await resp.json()) as { participating?: boolean; error?: string }
+        if (cancelled) return
+        if (!resp.ok) {
+          setMessage({ type: 'error', text: json.error ?? 'Could not load your benchmark setting.' })
+          return
+        }
+        setParticipating(json.participating === true)
+      } catch (err) {
+        if (!cancelled) {
+          setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Could not load your benchmark setting.' })
+        }
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [venueId])
+
+  const handleToggle = useCallback(async () => {
+    if (!venueId || participating === null) return
+    const next = !participating
+    setSaving(true)
+    setMessage(null)
+    try {
+      const resp = await fetch('/api/settings/benchmark-participation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participating: next }),
+      })
+      const json = (await resp.json()) as { participating?: boolean; error?: string }
+      if (!resp.ok) {
+        setMessage({ type: 'error', text: json.error ?? 'Could not save that.' })
+        return
+      }
+      setParticipating(json.participating === true)
+      setMessage({
+        type: 'success',
+        text: json.participating
+          ? 'Benchmarks are on. Your anonymised middle figures now count for other venues, and theirs for you.'
+          : 'Benchmarks are off. Nothing of yours is shared and nothing from other venues is read.',
+      })
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Could not save that.' })
+    } finally {
+      setSaving(false)
+    }
+  }, [venueId, participating])
+
+  if (!venueId || participating === null) return null
+
+  return (
+    <section className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+      <div>
+        <h2 className="text-lg font-serif text-sage-900">Benchmarks against other venues</h2>
+        <p className="text-sm text-sage-600 mt-1 max-w-2xl">
+          Off unless you turn it on. When it is on, your figures join an anonymised middle: other venues see a
+          median and quartiles across at least three venues, never your name and never your own numbers on their
+          own. You see the same about them. Turn it off and nothing of yours is shared from then on.
+        </p>
+      </div>
+      <div className="flex items-center gap-4">
+        <button
+          type="button"
+          onClick={handleToggle}
+          disabled={saving}
+          className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+            participating
+              ? 'bg-sage-800 text-white border-sage-800 hover:bg-sage-900'
+              : 'bg-white text-sage-800 border-sage-300 hover:bg-sage-50'
+          } disabled:opacity-60`}
+        >
+          {saving ? 'Saving' : participating ? 'On. Turn off' : 'Off. Turn on'}
+        </button>
+        <span className="text-sm text-sage-600">{participating ? 'Taking part' : 'Not taking part'}</span>
+      </div>
+      {message && (
+        <p className={`text-sm ${message.type === 'error' ? 'text-red-700' : 'text-emerald-700'}`}>{message.text}</p>
+      )}
+    </section>
+  )
 }
 
 function SendingDomainSection({ venueId }: { venueId: string | null | undefined }) {

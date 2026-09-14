@@ -140,7 +140,7 @@ async function BenchmarkBody() {
       {!view.enoughPeers ? (
         <div className="bg-surface border border-border rounded-xl p-6 sm:p-8">
           <h2 className="font-heading text-xl font-semibold text-sage-900">
-            Benchmarks need more venues
+            {view.optedIn ? 'Benchmarks need more venues' : 'Benchmarks are switched off for your venue'}
           </h2>
           <p className="mt-3 text-sm text-sage-700 leading-relaxed max-w-2xl">{view.gateMessage}</p>
           <p className="mt-4 text-sm text-sage-600 leading-relaxed max-w-2xl">

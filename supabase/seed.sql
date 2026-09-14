@@ -39,6 +39,12 @@ INSERT INTO venue_config (id, venue_id, business_name, primary_color, secondary_
 INSERT INTO venue_config (id, venue_id, business_name, primary_color, secondary_color, accent_color, font_pair, timezone, catering_model, bar_model, capacity, base_price, coordinator_name, coordinator_email, coordinator_phone, portal_tagline) VALUES
   ('cccc0001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222204', 'Rose Hill Gardens', '#B8908A', '#8FBC8F', '#DAA520', 'lora_raleway', 'America/New_York', 'byob', 'byob', 180, 9500, 'Olivia Ross', 'olivia@rosehillgardens.com', '703-555-0401', 'Bloom where you''re planted');
 
+-- Wave 8 follow-up (migration 410): the demo venues take part in cross-venue
+-- benchmarks so the demo shows the page working. Real venues opt in from
+-- Settings; the column defaults to false.
+UPDATE venue_config SET benchmark_participation = true
+WHERE venue_id IN ('22222222-2222-2222-2222-222222222201', '22222222-2222-2222-2222-222222222202', '22222222-2222-2222-2222-222222222203', '22222222-2222-2222-2222-222222222204');
+
 -- ============================================
 -- 4. VENUE AI CONFIG (personalities)
 -- ============================================

@@ -413,7 +413,13 @@ export default function CoupleDashboard() {
         // per dashboard load. Each result is null-tolerant (fail-soft) so
         // a misconfigured RLS policy doesn't break the page; we log a
         // console.warn for debuggability per round-6 follow-up.
-        const weddingPackageLabel = (wedding as { package?: string | null }).package ?? null
+        // package_name is what every import and the booking form write;
+        // weddings.package (migration 009) has no writer left, kept as the
+        // fallback for rows from before the rename (W57's report, 2026-09-14).
+        const weddingPackageLabel =
+          (wedding as { package_name?: string | null; package?: string | null }).package_name ??
+          (wedding as { package?: string | null }).package ??
+          null
         // Same `%`/`_` escape applied here that's used downstream when
         // resolving the package catalog row (round-6 #1a fix).
         const escapedPackageLabel =

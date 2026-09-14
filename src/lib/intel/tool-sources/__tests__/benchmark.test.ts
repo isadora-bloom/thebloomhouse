@@ -31,7 +31,13 @@ function supabaseWith(rows: Row[]) {
   return makeFakeSupabase((table) => {
     if (table === 'venues') return { data: rows.map((r) => ({ id: r.id, is_demo: r.is_demo })) }
     if (table === 'venue_config') {
-      return { data: rows.map((r) => ({ venue_id: r.id, onboarding_completed: r.onboarded })) }
+      return {
+        data: rows.map((r) => ({
+          venue_id: r.id,
+          onboarding_completed: r.onboarded,
+          benchmark_participation: r.onboarded,
+        })),
+      }
     }
     return { data: [] }
   })
