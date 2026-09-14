@@ -1,13 +1,32 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+/**
+ * Lead scoring — every couple still in play, hottest first.
+ *
+ * W62 (wave 9). This page used to open with `supabase.from('weddings')`
+ * in the browser, join `people` for the names and fetch `wedding_heat`
+ * for a temperature. The `legacy-read-ok` tag on that query said the
+ * spine's six lifecycle states could not express the thirteen-stage
+ * pipeline and that W37 owned the mapping. W37 shipped it, so the tag is
+ * gone and so is the query.
+ *
+ * Everything on this page now comes from two canonical calls:
+ *   - /api/intel/canonical/lead-board  (couples, touchpoints,
+ *     progression events, fragments) via `useLeadBoard`, with the stage
+ *     derived by `deriveOperatorStage` and the heat by `buildHeatWhy`;
+ *   - /api/intel/canonical/daily-list  behind the TriageRail, unchanged.
+ *
+ * Nothing here decides what a number means. The filters, the sort, the
+ * distribution and the stage all run through the pure adapter at
+ * `src/lib/intel/adapters/lead-board-view.ts`, which /agent/pipeline runs
+ * too, so the two pages cannot disagree about one couple.
+ */
+
+import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
-import { createClient } from '@/lib/supabase/client'
-import { personFullName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 import { VenueChip } from '@/components/intel/venue-chip'
-// Stream HHH Bug 10: InlineInsightBanner removed from /agent/leads.
 import { HeatBadge } from '@/components/intel/heat-badge'
 import { RiskFlagChip, useBatchRiskFlags } from '@/components/intel/risk-flag-chip'
 import {
@@ -16,15 +35,23 @@ import {
 } from '@/components/intel/auto-context-chip'
 import { SoloPill, useBatchPartnerCounts } from '@/components/intel/solo-pill'
 import { EssentialsSlider } from '@/components/shell/essentials-slider'
-// W2 canonical wiring. The four triage counts an operator opens this
-// page for now come from getDailyList + getVenueOverview through
-// /api/intel/canonical/daily-list, rendered by the same component
-// /agent/pipeline uses. The heat-tier table below stays wedding-keyed:
-// client codes, import warnings and risk flags all hang off the wedding
-// row and the spine does not carry them yet.
+import { LifecyclePill } from '@/components/shared/lifecycle-pill'
 import { TriageRail, useCanonicalDaily } from '../../intel/_canonical/triage-rail'
-import { withLastActivity } from '@/lib/intel/adapters/lead-list-view'
-import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
+import { useLeadBoard } from '../../intel/_canonical/lead-board-data'
+import {
+  HEAT_BUCKETS,
+  fillMissingActivity,
+  filterLeadCards,
+  heatBucketTier,
+  heatDistribution,
+  selectLeadList,
+  sortLeadCards,
+  type LeadCard,
+  type LeadSortField,
+  type SortDirection,
+} from '@/lib/intel/adapters/lead-board-view'
+import { styleForTier } from '@/lib/heat/tier-colors'
+import { heatLabel, type HeatBucket } from '@/lib/services/identity/heat-score'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import {
@@ -32,97 +59,32 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  Users,
-  Calendar,
-  Clock,
   AlertTriangle,
   Search,
   Upload,
 } from 'lucide-react'
+import type { ImportWarning } from '@/lib/intel/readers/lead-board'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface Lead {
-  id: string
-  venue_id: string
-  status: string
-  source: string | null
-  // null (not 0) means the wedding_heat read failed for this batch —
-  // the score is unknown, not zero. See heatUnavailable below.
-  heat_score: number | null
-  temperature_tier: string | null
-  inquiry_date: string
-  wedding_date: string | null
-  guest_count_estimate: number | null
-  code_extension: string | null
-  // T5-γ.1: provenance flag — null/'live' = pipeline-ingested,
-  // 'imported_high'/'imported_medium' = CRM, 'imported_low' = Gmail
-  // backfill, 'manual' = coordinator hand-entry. Surfaced as inline
-  // chip so coordinator can spot which lead profiles came from
-  // backfill vs live data.
-  confidence_flag: string | null
-  // T5-Rixey-UU Bug F: real "last activity" derived from
-  // MAX(interactions.timestamp). Not weddings.updated_at — that gets
-  // bumped to NOW() by every batch import / reconciliation /
-  // lead-source derivation pass, so every row would show today.
-  last_activity_at: string | null
-  // T5-Rixey-UU Bug G: import-time warnings surfaced inline as a
-  // "needs review" badge. Currently we surface couple_name issues; the
-  // jsonb is shaped as { field, issue, value }[] so future warning
-  // categories slot in without a UI change.
-  import_warnings: ImportWarning[] | null
-  // Joined
-  partner1_name: string | null
-  partner2_name: string | null
-  client_code: string | null
-  venue_name: string | null
-}
-
-interface ImportWarning {
-  field: string
-  issue: string
-  value?: string | null
-}
-
-type TierFilter = 'all' | 'hot' | 'warm' | 'cool' | 'cold' | 'frozen'
-// T5-Rixey-UU Bug F: 'last_activity' replaces the old 'updated_at'
-// sort key. Sort is by MAX(interactions.timestamp), not by
-// weddings.updated_at (which gets bumped to NOW() by every batch
-// import / reconciliation pass and so was useless as a sort axis).
-type SortField = 'heat_score' | 'inquiry_date' | 'last_activity'
-type SortDir = 'asc' | 'desc'
+type BucketFilter = HeatBucket | 'all'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-// Heat tier styles now sourced from src/lib/heat/tier-colors (the
-// single-source HeatBadge primitive uses the same map). Pre-fix this
-// page redeclared the tier styles inline, drifting from /agent/pipeline
-// and /intel/clients/[id] over time. ARCH-20.2.1.
-const HEAT_TIER_FILTERS: { key: TierFilter; label: string }[] = [
+/** The filter row. Four buckets, from `heatBucket()` on the spine — not
+ *  the legacy view's five tiers, which were a different scale. */
+const BUCKET_FILTERS: { key: BucketFilter; label: string }[] = [
   { key: 'all', label: 'All' },
-  ...(Object.keys(TIER_STYLES) as HeatTier[]).map((k) => ({
-    key: k as TierFilter,
-    label: TIER_STYLES[k].label,
-  })),
+  ...HEAT_BUCKETS.map((b) => ({ key: b as BucketFilter, label: heatLabel(b) })),
 ]
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function coupleName(p1: string | null, p2: string | null): string {
-  if (p1 && p2) return `${p1} & ${p2}`
-  return p1 || p2 || 'Unknown'
-}
-
-function daysSince(dateStr: string): number {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  return Math.floor(diff / (1000 * 60 * 60 * 24))
-}
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '---'
@@ -135,12 +97,15 @@ function formatDate(dateStr: string | null): string {
 
 // T5-Rixey-UU Bug E: source pill colours stay per-source for visual
 // scanability, but the LABEL always comes from formatSourceLabel() so
-// we never leak raw snake_case ('venue_calculator', 'calendly',
-// 'other', 'direct') into the table cell.
+// we never leak a raw channel name ('the_knot', 'weddingwire') into the
+// table cell. The value itself is now the channel the couple first
+// arrived on, from the touchpoint ribbon, rather than the hand-set
+// `weddings.source` column that nobody reliably filled in.
 function sourceBadge(source: string | null): { bg: string; text: string; label: string } {
   const label = formatSourceLabel(source)
   switch (source) {
     case 'the_knot':
+    case 'knot':
       return { bg: 'bg-rose-50', text: 'text-rose-700', label }
     case 'wedding_wire':
     case 'weddingwire':
@@ -160,6 +125,7 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
       return { bg: 'bg-emerald-50', text: 'text-emerald-700', label }
     case 'website':
     case 'web_form':
+    case 'web':
       return { bg: 'bg-teal-50', text: 'text-teal-700', label }
     case 'venue_calculator':
       return { bg: 'bg-amber-50', text: 'text-amber-700', label }
@@ -169,6 +135,7 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
       return { bg: 'bg-amber-50', text: 'text-amber-700', label }
     case 'direct':
       return { bg: 'bg-slate-50', text: 'text-slate-700', label }
+    case 'gmail':
     case 'calendly':
     case 'acuity':
     case 'honeybook':
@@ -179,9 +146,8 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
   }
 }
 
-// T5-Rixey-UU Bug G: detect rows whose import_warnings include an
-// unresolved couple_name issue. Coordinator gets a 'needs review'
-// chip on the lead row.
+// T5-Rixey-UU Bug G: rows whose import warnings include an unresolved
+// couple_name issue get a 'needs review' chip.
 function hasCoupleNameWarning(warnings: ImportWarning[] | null | undefined): boolean {
   if (!warnings || !Array.isArray(warnings)) return false
   return warnings.some(
@@ -189,27 +155,8 @@ function hasCoupleNameWarning(warnings: ImportWarning[] | null | undefined): boo
   )
 }
 
-function statusLabel(status: string): string {
-  const map: Record<string, string> = {
-    inquiry: 'Inquiry',
-    tour_scheduled: 'Tour Scheduled',
-    tour_completed: 'Tour Completed',
-    proposal_sent: 'Proposal Sent',
-    booked: 'Booked',
-    lost: 'Lost',
-    completed: 'Completed',
-    cancelled: 'Cancelled',
-  }
-  return map[status] ?? status
-}
-
 // ---------------------------------------------------------------------------
 // Confidence flag chip (T5-γ.1)
-//
-// Surfaces wedding.confidence_flag inline. Coordinator needs to
-// distinguish "this lead came in live this week" from "this lead was
-// inferred from a Gmail backfill or hand-entered." Pre-fix the leads
-// table presented all rows the same.
 // ---------------------------------------------------------------------------
 
 function confidenceFlagBadge(flag: string): { bg: string; text: string; label: string; title: string } | null {
@@ -301,33 +248,19 @@ function BarSkeleton() {
 // Heat Distribution Bar
 // ---------------------------------------------------------------------------
 
-function HeatDistributionBar({ leads }: { leads: Lead[] }) {
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { hot: 0, warm: 0, cool: 0, cold: 0, frozen: 0, unavailable: 0 }
-    for (const lead of leads) {
-      // heat_score === null means the wedding_heat read failed for this
-      // lead, not that it scored zero. Counting it as 'cool' would draw
-      // the exact confidently-wrong bar this file was audited for.
-      if (lead.heat_score === null) {
-        c.unavailable++
-        continue
-      }
-      const tier = lead.temperature_tier || 'cool'
-      if (c[tier] !== undefined) c[tier]++
-      else c.cool++
-    }
-    return c
-  }, [leads])
-
-  const total = leads.length
+function HeatDistributionBar({ cards }: { cards: LeadCard[] }) {
+  const counts = useMemo(() => heatDistribution(cards), [cards])
+  const total = cards.length || 1
 
   const segments = [
-    { key: 'hot', color: '#EF4444', count: counts.hot },
-    { key: 'warm', color: '#F59E0B', count: counts.warm },
-    { key: 'cool', color: '#3B82F6', count: counts.cool },
-    { key: 'cold', color: '#1E40AF', count: counts.cold },
-    { key: 'frozen', color: '#6B7280', count: counts.frozen },
-    { key: 'unavailable', color: '#D1D5DB', count: counts.unavailable },
+    ...HEAT_BUCKETS.map((b) => ({
+      key: b as string,
+      color: styleForTier(heatBucketTier(b)).color,
+      count: counts[b],
+    })),
+    // Unknown is its own segment. Folding it into the coldest bucket is
+    // how a failed read used to read as a confident wall of cold leads.
+    { key: 'unknown', color: '#D1D5DB', count: counts.unknown },
   ].filter((s) => s.count > 0)
 
   return (
@@ -336,7 +269,6 @@ function HeatDistributionBar({ leads }: { leads: Lead[] }) {
         Heat Distribution
       </h2>
 
-      {/* Bar */}
       <div className="h-8 rounded-full overflow-hidden flex bg-sage-100">
         {segments.map((seg) => (
           <div
@@ -357,35 +289,34 @@ function HeatDistributionBar({ leads }: { leads: Lead[] }) {
         ))}
       </div>
 
-      {/* Legend */}
       <div className="flex items-center gap-4 mt-3 flex-wrap">
-        {HEAT_TIER_FILTERS.filter((t) => t.key !== 'all').map((tier) => {
-          const style = styleForTier(tier.key)
-          return (
-            <div key={tier.key} className="flex items-center gap-1.5">
-              <span
-                className="w-3 h-3 rounded-full"
-                style={{ backgroundColor: style.color }}
-              />
-              <span className="text-xs text-sage-600">
-                {tier.label}{' '}
-                <span className="font-medium text-sage-800">
-                  ({counts[tier.key] ?? 0})
-                </span>
-              </span>
-            </div>
-          )
-        })}
-        {counts.unavailable > 0 && (
+        {HEAT_BUCKETS.map((b) => (
+          <div key={b} className="flex items-center gap-1.5">
+            <span
+              className="w-3 h-3 rounded-full"
+              style={{ backgroundColor: styleForTier(heatBucketTier(b)).color }}
+            />
+            <span className="text-xs text-sage-600">
+              {heatLabel(b)}{' '}
+              <span className="font-medium text-sage-800">({counts[b]})</span>
+            </span>
+          </div>
+        ))}
+        {counts.unknown > 0 && (
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#D1D5DB' }} />
             <span className="text-xs text-sage-600">
-              Unavailable{' '}
-              <span className="font-medium text-sage-800">({counts.unavailable})</span>
+              Unknown{' '}
+              <span className="font-medium text-sage-800">({counts.unknown})</span>
             </span>
           </div>
         )}
       </div>
+
+      <p className="mt-3 text-xs text-sage-500">
+        Interest is the time-decayed sum of every real signal from a couple, on a
+        fortnightly half-life. Four levels, from the same rule the rest of the app uses.
+      </p>
     </div>
   )
 }
@@ -402,10 +333,10 @@ function SortHeader({
   onSort,
 }: {
   label: string
-  field: SortField
-  currentField: SortField
-  currentDir: SortDir
-  onSort: (field: SortField) => void
+  field: LeadSortField
+  currentField: LeadSortField
+  currentDir: SortDirection
+  onSort: (field: LeadSortField) => void
 }) {
   const isActive = field === currentField
 
@@ -436,225 +367,33 @@ export default function LeadsPage() {
   const router = useRouter()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
-  const [leads, setLeads] = useState<Lead[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  // Heat is fetched from wedding_heat in parallel with the wedding rows.
-  // Its error used to be discarded, so a permissions/timeout failure on
-  // that one query rendered every lead as heat 0 / Frozen, confidently
-  // and indistinguishably from a lead that genuinely has no engagement
-  // yet (UX-AUDIT-NON-TECHNICAL.md finding 2). This flag drives a banner
-  // and an honest "unavailable" state on the rows instead.
-  const [heatUnavailable, setHeatUnavailable] = useState(false)
-  const [tierFilter, setTierFilter] = useState<TierFilter>('all')
+  const [bucketFilter, setBucketFilter] = useState<BucketFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [sortField, setSortField] = useState<SortField>('heat_score')
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [sortField, setSortField] = useState<LeadSortField>('heat')
+  const [sortDir, setSortDir] = useState<SortDirection>('desc')
 
-  const supabase = createClient()
+  const {
+    cards,
+    loading,
+    error,
+    heatAvailable,
+    unattachedFragments,
+    truncated,
+    warnings,
+    reload,
+  } = useLeadBoard()
 
-  // Canonical spine read. Supplies the "Last Activity" column below; the
-  // TriageRail further down makes the same call, and React de-duplicates
-  // neither, so this is one extra request per page load in exchange for
-  // the column no longer being derived from a table that never carried
-  // half the channels.
+  // The daily-list call the TriageRail already makes. Used here only as
+  // the fallback for last-activity when the ribbon read is degraded.
   const { lastActivityByWedding } = useCanonicalDaily()
 
-  // ---- Fetch leads ----
-  const fetchLeads = useCallback(async () => {
-    if (scope.loading) return
-    try {
-      // Build venue filter from scope
-      let venueIds: string[] | null = null
-      if (scope.level === 'venue' && scope.venueId) {
-        venueIds = [scope.venueId]
-      } else if (scope.level === 'group' && scope.groupId) {
-        const { data: members } = await supabase
-          .from('venue_group_members')
-          .select('venue_id')
-          .eq('group_id', scope.groupId)
-        venueIds = (members ?? []).map((r) => r.venue_id as string)
-      } else if (scope.orgId) {
-        const { data: orgVenues } = await supabase
-          .from('venues')
-          .select('id')
-          .eq('org_id', scope.orgId)
-        venueIds = (orgVenues ?? []).map((v) => v.id as string)
-      }
+  // ---- The list: couples still in play ----
+  const leadCards = useMemo(
+    () => fillMissingActivity(selectLeadList(cards), lastActivityByWedding),
+    [cards, lastActivityByWedding],
+  )
 
-      // Migration 316: heat_score / temperature_tier moved to wedding_heat
-      // view. Fetch weddings + heat in parallel, join + sort in memory.
-      //
-      // The row SET here is gated on `status`
-      // (inquiry/tour_scheduled/tour_completed/proposal_sent), the
-      // 7-13-stage pipeline vocabulary. The spine's `couples.lifecycle_state`
-      // is a coarser 6-value concept and cannot answer "which weddings are
-      // in tour_scheduled" (see LifecycleStrip's own caption: a couple can
-      // be resolved on the spine while its wedding row still says inquiry).
-      // W37 (this wave) owns building the status<->lifecycle mapping; until
-      // it lands there is no spine equivalent for this filter. Everything
-      // this query can hand off already has: last_activity_at below comes
-      // from the spine via lastActivityByWedding, not from this row.
-      let query = supabase
-        // legacy-read-ok: status-based pipeline-stage filter has no spine
-        // equivalent yet — see the comment above.
-        .from('weddings')
-        .select(`
-          id,
-          venue_id,
-          status,
-          source,
-          inquiry_date,
-          wedding_date,
-          guest_count_estimate,
-          code_extension,
-          confidence_flag,
-          import_warnings,
-          venues:venue_id ( name ),
-          people!people_wedding_id_fkey ( role, first_name, last_name ),
-          client_codes!client_codes_wedding_id_fkey ( code )
-        `)
-        .in('status', ['inquiry', 'tour_scheduled', 'tour_completed', 'proposal_sent'])
-        // Step 5c (RM-1123, 2026-05-13): non_couple_at IS NULL filters
-        // out soft-tombstoned non-couple weddings (bus drivers, vendor
-        // texts, autoreplies that pre-Step-5b minted ghosts). The
-        // tombstone cron sets this column; readers everywhere honour
-        // the filter so a non-couple never appears as an active lead.
-        .is('non_couple_at', null)
-      // NOTE: previously filtered `.gt('heat_score', 0)`. Removed because
-      // it was masking a real bug: inquiries whose initial_inquiry event
-      // never triggered recalculateHeatScore sat at 0 indefinitely, so
-      // whole swathes of active leads were invisible. Fixed upstream in
-      // email-pipeline (the initial_inquiry insert now runs through
-      // recordEngagementEventsBatch). Migration 316 makes this structurally
-      // impossible: heat is a view, derived live. Showing zeros honestly
-      // means a coordinator sees "this lead hasn't engaged yet" instead of
-      // "this lead doesn't exist".
-      if (venueIds && venueIds.length > 0) {
-        query = query.in('venue_id', venueIds)
-      }
-      let heatQuery = supabase.from('wedding_heat').select('wedding_id, heat_score, temperature_tier')
-      if (venueIds && venueIds.length > 0) {
-        heatQuery = heatQuery.in('venue_id', venueIds)
-      }
-      const [{ data: rawData, error: fetchError }, { data: heatRows, error: heatError }] = await Promise.all([
-        query,
-        heatQuery,
-      ])
-
-      if (fetchError) throw fetchError
-
-      // heatError is surfaced, not discarded: a failed wedding_heat read
-      // (permissions, a missing view, a timeout) must not render every
-      // lead as a confident heat 0 / Frozen. When it fails, heat_score /
-      // temperature_tier stay null for this batch rather than default —
-      // null means "we don't know", 0 means "we know and it's cold".
-      setHeatUnavailable(!!heatError)
-      if (heatError) {
-        console.error('Failed to fetch wedding_heat:', heatError)
-      }
-
-      const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
-      if (!heatError) {
-        for (const h of heatRows ?? []) {
-          heatByWedding.set(h.wedding_id as string, {
-            heat_score: (h.heat_score as number) ?? 0,
-            temperature_tier: (h.temperature_tier as string) ?? 'cool',
-          })
-        }
-      }
-      const data = (rawData ?? [])
-        .map((row: any) => {
-          const heat = heatByWedding.get(row.id as string)
-          return {
-            ...row,
-            heat_score: heatError ? null : heat?.heat_score ?? 0,
-            temperature_tier: heatError ? null : heat?.temperature_tier ?? 'cool',
-          }
-        })
-        .sort((a: any, b: any) => (b.heat_score ?? -1) - (a.heat_score ?? -1))
-
-      // Last Activity = the newest touchpoint on the couple's spine
-      // ribbon, resolved back to this wedding through
-      // couples.source_wedding_id, and computed server-side in
-      // /api/intel/canonical/daily-list.
-      //
-      // It used to be MAX(interactions.timestamp), itself a fix for an
-      // older bug: weddings.updated_at is bumped by every batch import
-      // and reconciliation pass, so sorting by it showed every lead as
-      // active today. The spine answers the same question from the table
-      // that actually receives every channel — `interactions` never
-      // carried Knot views, Calendly bookings or portal clicks, so a
-      // couple could be busy on three channels and read as silent here.
-      const mapped: Lead[] = (data ?? []).map((row: any) => {
-        const people = row.people ?? []
-        // 2026-05-09: collapse Knot-relay nickname rows into the
-        // calculator-submission legal-name row before picking a
-        // partner1/partner2 representative. Without this, a venue
-        // with both rows would render "Jen B" instead of "Jennifer
-        // Biaksangi" in the inbox.
-        const canonicalP1 = pickCanonicalPeople(
-          people.filter((p: any) => p.role === 'partner1'),
-        )
-        const canonicalP2 = pickCanonicalPeople(
-          people.filter((p: any) => p.role === 'partner2'),
-        )
-        const p1 = canonicalP1[0]
-        const p2 = canonicalP2[0]
-        const codes = row.client_codes ?? []
-        const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
-        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
-        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
-
-        // T5-Rixey-UU Bug G: parse import_warnings jsonb defensively —
-        // some rows may have legacy non-array values from earlier
-        // import passes.
-        const rawWarnings = row.import_warnings as unknown
-        const importWarnings: ImportWarning[] | null = Array.isArray(rawWarnings)
-          ? (rawWarnings as ImportWarning[])
-          : null
-
-        return {
-          id: row.id,
-          venue_id: row.venue_id,
-          status: row.status,
-          source: row.source,
-          // row.heat_score/temperature_tier are already null when the
-          // wedding_heat read failed (set above) — do not re-default
-          // them to 0/'cool' here, that would recreate the swallow.
-          heat_score: row.heat_score as number | null,
-          temperature_tier: row.temperature_tier as string | null,
-          inquiry_date: row.inquiry_date,
-          wedding_date: row.wedding_date,
-          guest_count_estimate: row.guest_count_estimate,
-          code_extension: row.code_extension ?? null,
-          confidence_flag: (row.confidence_flag as string | null) ?? null,
-          // Filled in below from the canonical spine map, once it lands.
-          last_activity_at: null,
-          import_warnings: importWarnings,
-          partner1_name: p1 ? personFullName(p1) : null,
-          partner2_name: p2 ? personFullName(p2) : null,
-          client_code: clientCode,
-          venue_name: venueName,
-        }
-      })
-
-      setLeads(mapped)
-      setError(null)
-    } catch (err) {
-      console.error('Failed to fetch leads:', err)
-      setError('Failed to load lead scoring data')
-    } finally {
-      setLoading(false)
-    }
-  }, [scope.loading, scope.level, scope.venueId, scope.groupId, supabase])
-
-  useEffect(() => {
-    fetchLeads()
-  }, [fetchLeads])
-
-  // ---- Sorting ----
-  const handleSort = (field: SortField) => {
+  const handleSort = (field: LeadSortField) => {
     if (field === sortField) {
       setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
     } else {
@@ -663,96 +402,28 @@ export default function LeadsPage() {
     }
   }
 
-  // ---- Last activity, from the spine ----
-  // The canonical daily-list call returns the newest touchpoint per
-  // wedding. Overlaying it here rather than inside fetchLeads keeps the
-  // two loads independent: the table renders as soon as the wedding rows
-  // land, and the activity column fills in when the spine map arrives.
-  // withLastActivity is the same merge /agent/pipeline uses, so the two
-  // pages cannot disagree on what "last activity" means for a couple.
-  const leadsWithActivity = useMemo(
-    () => withLastActivity(leads, lastActivityByWedding),
-    [leads, lastActivityByWedding],
-  )
-
-  // ---- Filtering + sorting ----
-  const filteredLeads = useMemo(() => {
-    let result = [...leadsWithActivity]
-
-    // Tier filter
-    if (tierFilter !== 'all') {
-      result = result.filter((l) => l.temperature_tier === tierFilter)
-    }
-
-    // Search
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      result = result.filter(
-        (l) =>
-          coupleName(l.partner1_name, l.partner2_name).toLowerCase().includes(q) ||
-          (l.source?.toLowerCase().includes(q) ?? false)
-      )
-    }
-
-    // Sort
-    result.sort((a, b) => {
-      let aVal: number
-      let bVal: number
-
-      switch (sortField) {
-        case 'heat_score':
-          // Unavailable heat (null) sorts to the bottom rather than
-          // pretending to be 0 — a cold lead is a known quantity, an
-          // unavailable one is not.
-          aVal = a.heat_score ?? -1
-          bVal = b.heat_score ?? -1
-          break
-        case 'inquiry_date':
-          aVal = new Date(a.inquiry_date).getTime()
-          bVal = new Date(b.inquiry_date).getTime()
-          break
-        case 'last_activity':
-          // Treat null last-activity as 0 so weddings with no
-          // recorded interaction sort to the bottom on desc.
-          aVal = a.last_activity_at ? new Date(a.last_activity_at).getTime() : 0
-          bVal = b.last_activity_at ? new Date(b.last_activity_at).getTime() : 0
-          break
-        default:
-          return 0
-      }
-
-      return sortDir === 'desc' ? bVal - aVal : aVal - bVal
+  const visibleCards = useMemo(() => {
+    const filtered = filterLeadCards(leadCards, {
+      bucket: bucketFilter === 'all' ? null : bucketFilter,
+      query: searchQuery,
     })
+    return sortLeadCards(filtered, sortField, sortDir)
+  }, [leadCards, bucketFilter, searchQuery, sortField, sortDir])
 
-    return result
-  }, [leadsWithActivity, tierFilter, searchQuery, sortField, sortDir])
+  const bucketCounts = useMemo(() => heatDistribution(leadCards), [leadCards])
 
-  // ---- Summary ----
-  const tierCounts = useMemo(() => {
-    const c: Record<string, number> = {}
-    for (const t of HEAT_TIER_FILTERS) {
-      if (t.key === 'all') continue
-      c[t.key] = leads.filter((l) => l.temperature_tier === t.key).length
-    }
-    return c
-  }, [leads])
-
-  // ---- Risk flags batch fetch (T5-ζ.2) ----
-  // One POST per page load, keyed on the underlying loaded lead set.
-  // Filter/sort state changes do NOT refetch — the hook dedupes +
-  // sorts the input so it only fires when the actual ID set changes.
-  const allWeddingIds = useMemo(() => leads.map((l) => l.id), [leads])
-  const riskFlags = useBatchRiskFlags(allWeddingIds, {
-    venueId: scope.venueId ?? null,
-  })
-  // Wave 1C (2026-05-09): one chip per lead surfacing the highest-priority
-  // pinned auto-context note (or category-only redaction for sensitive).
-  // Same batch pattern as risk flags.
+  // ---- Batched chips ----
+  // These three hooks are wedding-keyed. A couple minted from a fragment
+  // has no wedding to key on, so it is left out rather than fetched under
+  // a made-up id.
+  const allWeddingIds = useMemo(
+    () => leadCards.map((c) => c.weddingId).filter((id): id is string => Boolean(id)),
+    [leadCards],
+  )
+  const riskFlags = useBatchRiskFlags(allWeddingIds, { venueId: scope.venueId ?? null })
   const autoContextChips = useBatchAutoContextChips(allWeddingIds, {
     venueId: scope.venueId ?? null,
   })
-  // Wave 2D (2026-05-09): Solo pill batch fetch. Defensive — only renders
-  // on a clean partner_count=1; NULL / unknown stays silent.
   const partnerCounts = useBatchPartnerCounts(allWeddingIds, {
     venueId: scope.venueId ?? null,
   })
@@ -766,14 +437,13 @@ export default function LeadsPage() {
             Lead Scoring
           </h1>
           <p className="text-sage-600">
-            See every lead ranked by engagement heat score — from hot prospects ready to book down to cold leads that need a nudge. Click any lead to view their full profile and history.
+            Every couple still in play, ranked by how much real interest they have
+            shown. Click a row for their full history.
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {/* W42: a coordinator back from the weekend with a Knot or
-              HoneyBook export had no way in from this page — the only
-              upload entry point was buried under onboarding. Same form,
-              same route, one click away. */}
+              HoneyBook export had no way in from this page. */}
           <Link
             href="/admin/imports/upload"
             className="inline-flex items-center gap-1.5 text-sm text-sage-600 hover:text-sage-900"
@@ -781,25 +451,20 @@ export default function LeadsPage() {
             <Upload className="w-4 h-4" aria-hidden />
             Import a file
           </Link>
-          {/* T4-D Essentials slider — controls density on this surface. */}
           <EssentialsSlider surface="/agent/leads" />
         </div>
       </div>
-
-      {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity
-          risk insights now route to /pulse + /intel/dashboard only. */}
 
       {/* ---- Error ---- */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-red-700">
+            We could not load your leads. Nothing below is a count of anything.{' '}
+            <span className="text-red-600">{error}</span>
+          </p>
           <button
-            onClick={() => {
-              setError(null)
-              setLoading(true)
-              fetchLeads()
-            }}
+            onClick={reload}
             className="ml-auto text-sm font-medium text-red-600 hover:text-red-800 transition-colors"
           >
             Retry
@@ -807,22 +472,19 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* ---- Heat unavailable ----
-           wedding_heat failed to load for this batch. Heat is unknown,
-           not zero, and every "Heat unavailable" row below is a lead
-           whose real interest level we could not read, not a cold one. */}
-      {heatUnavailable && !loading && (
+      {/* ---- Heat unavailable (W17 banner) ----
+           The touchpoint ribbon failed to load for this batch. Interest
+           is unknown, not zero, and every "unknown" row below is a lead
+           whose real interest we could not read, not a cold one. */}
+      {!heatAvailable && !loading && !error && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-800">
-            We could not load interest levels for this list. The scores below are unavailable,
-            not zero, retry or check the wedding_heat permissions.
+            We could not read the signal history for this list, so interest levels below
+            are unknown rather than zero.
           </p>
           <button
-            onClick={() => {
-              setLoading(true)
-              fetchLeads()
-            }}
+            onClick={reload}
             className="ml-auto text-sm font-medium text-amber-700 hover:text-amber-900 transition-colors"
           >
             Retry
@@ -830,59 +492,68 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* ---- Today's list (canonical) ----
-           Four counts, one reader, every threshold sourced. Same
-           component as /agent/pipeline, so the two pages cannot tell you
-           different numbers of couples are going cold. */}
+      {/* ---- Partial reads ---- */}
+      {!loading && !error && (truncated || warnings.length > 0) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+          <p className="font-medium">This list is partial.</p>
+          <ul className="mt-1 list-disc pl-5 space-y-0.5">
+            {truncated && <li>More couples exist than one board can hold.</li>}
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ---- Today's list (canonical) ---- */}
       <TriageRail activeBucket="highIntent" />
 
       {/* ---- Heat Distribution Bar ---- */}
       {loading ? (
         <BarSkeleton />
-      ) : leads.length > 0 ? (
-        <HeatDistributionBar leads={leads} />
+      ) : leadCards.length > 0 ? (
+        <HeatDistributionBar cards={leadCards} />
       ) : null}
 
       {/* ---- Filters ---- */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-        {/* Tier tabs */}
         <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1">
-          {HEAT_TIER_FILTERS.map((tier) => {
-            const style = tier.key !== 'all' ? styleForTier(tier.key) : null
+          {BUCKET_FILTERS.map((bucket) => {
+            const style =
+              bucket.key !== 'all' ? styleForTier(heatBucketTier(bucket.key)) : null
             return (
-            <button
-              key={tier.key}
-              onClick={() => setTierFilter(tier.key)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                tierFilter === tier.key
-                  ? 'bg-surface text-sage-900 shadow-sm'
-                  : 'text-sage-600 hover:text-sage-800'
-              }`}
-            >
-              {style && (
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: style.color }}
-                />
-              )}
-              {tier.label}
-              {tier.key !== 'all' && (
-                <span
-                  className={`text-xs px-1.5 py-0.5 rounded-full ${
-                    tierFilter === tier.key
-                      ? 'bg-sage-100 text-sage-700'
-                      : 'bg-sage-100/50 text-sage-500'
-                  }`}
-                >
-                  {tierCounts[tier.key] ?? 0}
-                </span>
-              )}
-            </button>
+              <button
+                key={bucket.key}
+                onClick={() => setBucketFilter(bucket.key)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  bucketFilter === bucket.key
+                    ? 'bg-surface text-sage-900 shadow-sm'
+                    : 'text-sage-600 hover:text-sage-800'
+                }`}
+              >
+                {style && (
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: style.color }}
+                  />
+                )}
+                {bucket.label}
+                {bucket.key !== 'all' && (
+                  <span
+                    className={`text-xs px-1.5 py-0.5 rounded-full ${
+                      bucketFilter === bucket.key
+                        ? 'bg-sage-100 text-sage-700'
+                        : 'bg-sage-100/50 text-sage-500'
+                    }`}
+                  >
+                    {bucketCounts[bucket.key as HeatBucket] ?? 0}
+                  </span>
+                )}
+              </button>
             )
           })}
         </div>
 
-        {/* Search */}
         <div className="relative sm:ml-auto">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400" />
           <input
@@ -898,20 +569,24 @@ export default function LeadsPage() {
       {/* ---- Leads Table ---- */}
       {loading ? (
         <TableSkeleton />
-      ) : filteredLeads.length === 0 ? (
+      ) : visibleCards.length === 0 ? (
         <div className="bg-surface border border-border rounded-xl p-12 shadow-sm text-center">
           <Flame className="w-12 h-12 text-sage-300 mx-auto mb-4" />
           <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">
-            {searchQuery
-              ? 'No matching leads'
-              : tierFilter !== 'all'
-                ? `No ${tierFilter} leads`
-                : 'No scored leads yet'}
+            {error
+              ? 'Nothing to show while the read is failing'
+              : searchQuery
+                ? 'No matching leads'
+                : bucketFilter !== 'all'
+                  ? `Nothing at ${heatLabel(bucketFilter as HeatBucket).toLowerCase()}`
+                  : 'No couples in play yet'}
           </h3>
           <p className="text-sm text-sage-600 max-w-md mx-auto">
-            {searchQuery
-              ? `No leads match "${searchQuery}".`
-              : 'Lead scores are calculated automatically based on engagement events. As inquiries interact with the venue, their heat scores will appear here.'}
+            {error
+              ? 'This is an empty screen because the read failed, not because you have no leads.'
+              : searchQuery
+                ? `No leads match "${searchQuery}".`
+                : 'Interest levels are built from real signals as they arrive. Until a couple does something, there is nothing here to rank.'}
           </p>
         </div>
       ) : (
@@ -927,13 +602,13 @@ export default function LeadsPage() {
                   </th>
                   <th className="text-left px-4 py-3">
                     <span className="text-xs font-semibold uppercase tracking-wider text-sage-500">
-                      Source
+                      First seen on
                     </span>
                   </th>
                   <th className="text-left px-4 py-3">
                     <SortHeader
-                      label="Heat Score"
-                      field="heat_score"
+                      label="Interest"
+                      field="heat"
                       currentField={sortField}
                       currentDir={sortDir}
                       onSort={handleSort}
@@ -941,7 +616,7 @@ export default function LeadsPage() {
                   </th>
                   <th className="text-left px-4 py-3">
                     <span className="text-xs font-semibold uppercase tracking-wider text-sage-500">
-                      Tier
+                      Level
                     </span>
                   </th>
                   <th className="text-left px-4 py-3">
@@ -955,8 +630,8 @@ export default function LeadsPage() {
                   </th>
                   <th className="text-left px-4 py-3">
                     <SortHeader
-                      label="Days Since Inquiry"
-                      field="inquiry_date"
+                      label="Days Known"
+                      field="first_seen"
                       currentField={sortField}
                       currentDir={sortDir}
                       onSort={handleSort}
@@ -964,61 +639,52 @@ export default function LeadsPage() {
                   </th>
                   <th className="text-left px-4 py-3">
                     <span className="text-xs font-semibold uppercase tracking-wider text-sage-500">
-                      Status
+                      Stage
                     </span>
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredLeads.map((lead) => {
-                  const tierStyle = styleForTier(lead.temperature_tier)
-                  const source = sourceBadge(lead.source)
-                  const daysSinceInquiry = daysSince(lead.inquiry_date)
+                {visibleCards.map((card) => {
+                  const source = sourceBadge(card.sourceChannel)
+                  const tier = card.heatBucket ? heatBucketTier(card.heatBucket) : null
+                  const href = card.weddingId
+                    ? `/intel/clients/${card.weddingId}`
+                    : `/intel/couples/${card.coupleId}`
 
                   return (
                     <tr
-                      key={lead.id}
-                      onClick={() => router.push(`/intel/clients/${lead.id}`)}
+                      key={card.coupleId}
+                      onClick={() => router.push(href)}
                       className="hover:bg-sage-50/50 cursor-pointer transition-colors"
                     >
                       {/* Couple */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-sm font-medium text-sage-900 hover:text-sage-700 underline-offset-2 hover:underline">
-                            {coupleName(lead.partner1_name, lead.partner2_name)}
+                            {card.names}
                           </span>
-                          {lead.client_code && (
+                          {card.clientCode && (
                             <span className="text-xs font-mono text-sage-500">
-                              {formatBloomNumber(lead.client_code, lead.code_extension)}
+                              {formatBloomNumber(card.clientCode, card.codeExtension)}
                             </span>
                           )}
-                          {/* T5-γ.1: confidence_flag chip — surfaces
-                              when this wedding came in via backfill
-                              rather than live pipeline. Hidden for
-                              null and 'live' (the common path) so the
-                              cell stays uncluttered. */}
-                          {lead.confidence_flag && lead.confidence_flag !== 'live' && (
-                            <ConfidenceFlagChip flag={lead.confidence_flag} />
+                          {card.confidenceFlag && card.confidenceFlag !== 'live' && (
+                            <ConfidenceFlagChip flag={card.confidenceFlag} />
                           )}
-                          {showVenueChip && <VenueChip venueName={lead.venue_name} />}
-                          {/* Risk-flag chip (T5-ζ.2). Hidden if no
-                              cached risk_flag insight or zero flags. */}
-                          <RiskFlagChip summary={riskFlags[lead.id]} />
-                          {/* Wave 1C: highest-priority auto-context chip.
-                              Sensitive notes redact to category only;
-                              non-sensitive notes show body on hover. */}
-                          <AutoContextChipRender chip={autoContextChips[lead.id]} />
-                          {/* Wave 2D: Solo pill — wedding has
-                              partner_count=1 set by chokepoint or
-                              backfill. Defensive: only on positive 1. */}
-                          <SoloPill partnerCount={partnerCounts[lead.id] ?? null} />
-                          {/* T5-Rixey-UU Bug G: import-warning badge
-                              for couple_name issues. Surfaces when the
-                              CRM-import pipeline couldn't confidently
-                              split a concatenated name like
-                              'Megandcooperrosenberg'. Coordinator clicks
-                              through to the lead detail to fix. */}
-                          {hasCoupleNameWarning(lead.import_warnings) && (
+                          {showVenueChip && <VenueChip venueName={card.venueName} />}
+                          {card.weddingId && (
+                            <>
+                              <RiskFlagChip summary={riskFlags[card.weddingId]} />
+                              <AutoContextChipRender
+                                chip={autoContextChips[card.weddingId]}
+                              />
+                              <SoloPill
+                                partnerCount={partnerCounts[card.weddingId] ?? null}
+                              />
+                            </>
+                          )}
+                          {hasCoupleNameWarning(card.importWarnings) && (
                             <span
                               className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700"
                               title="Imported couple-name couldn't be confidently parsed — needs review."
@@ -1029,7 +695,8 @@ export default function LeadsPage() {
                         </div>
                       </td>
 
-                      {/* Source */}
+                      {/* First seen on — the channel the first real signal
+                          arrived through, not a hand-set source column. */}
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${source.bg} ${source.text}`}
@@ -1038,58 +705,61 @@ export default function LeadsPage() {
                         </span>
                       </td>
 
-                      {/* Heat Score. null (not 0) means the wedding_heat
-                          read failed for this batch — say so, don't draw
-                          a confident badge on a default. */}
+                      {/* Interest. Null means the ribbon read failed for
+                          this batch — say so, don't draw a confident badge
+                          on a default. */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          {lead.heat_score === null ? (
-                            <span className="text-xs text-amber-700 italic">Heat unavailable</span>
+                          {card.heatScore === null ? (
+                            <span className="text-xs text-amber-700 italic">Unknown</span>
                           ) : (
-                            <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="pill" />
+                            <HeatBadge
+                              tier={tier}
+                              score={card.heatScore}
+                              variant="pill"
+                              title={card.heatWhy ?? undefined}
+                            />
                           )}
                         </div>
                       </td>
 
-                      {/* Tier */}
+                      {/* Level */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          {lead.heat_score === null ? (
-                            <span className="text-xs text-amber-700 italic">Unavailable</span>
+                          {card.heatScore === null ? (
+                            <span className="text-xs text-amber-700 italic">Unknown</span>
                           ) : (
                             <>
-                              <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="dot" />
-                              <span className="text-sm text-sage-700 capitalize">
-                                {tierStyle.label}
+                              <HeatBadge tier={tier} score={card.heatScore} variant="dot" />
+                              <span className="text-sm text-sage-700">
+                                {card.heatLabel}
                               </span>
                             </>
                           )}
                         </div>
                       </td>
 
-                      {/* Last Activity — MAX(interactions.timestamp).
-                          Renders '—' for weddings with zero recorded
-                          interactions (rather than misleadingly
-                          showing weddings.updated_at which gets
-                          bumped on every batch import). */}
+                      {/* Last Activity — newest touchpoint on the couple's
+                          ribbon. '---' means nothing has been recorded,
+                          which is a fact rather than a layout problem. */}
                       <td className="px-4 py-3">
                         <span className="text-sm text-sage-600">
-                          {formatDate(lead.last_activity_at)}
+                          {formatDate(card.lastActivityAt)}
                         </span>
                       </td>
 
-                      {/* Days Since Inquiry */}
+                      {/* Days Known — since the first signal of any kind. */}
                       <td className="px-4 py-3">
                         <span className="text-sm text-sage-600 tabular-nums">
-                          {daysSinceInquiry}d
+                          {card.daysSinceFirstSeen === null
+                            ? '---'
+                            : `${card.daysSinceFirstSeen}d`}
                         </span>
                       </td>
 
-                      {/* Status */}
+                      {/* Stage — the one pill. */}
                       <td className="px-4 py-3">
-                        <span className="text-sm text-sage-600">
-                          {statusLabel(lead.status)}
-                        </span>
+                        <LifecyclePill stage={card.stage} size="sm" showDisagreement />
                       </td>
                     </tr>
                   )
@@ -1098,6 +768,17 @@ export default function LeadsPage() {
             </table>
           </div>
         </div>
+      )}
+
+      {/* ---- What is not on this list ----
+           Fragments are signals that never attached to anybody. Saying
+           the number out loud is the difference between "these are your
+           leads" and "these are the leads we could identify". */}
+      {!loading && !error && unattachedFragments !== null && unattachedFragments > 0 && (
+        <p className="text-xs text-sage-500">
+          {unattachedFragments} signal{unattachedFragments === 1 ? '' : 's'} could not be
+          matched to anyone and are not counted above.
+        </p>
       )}
     </div>
   )
