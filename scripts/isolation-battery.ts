@@ -293,7 +293,8 @@ const KNOWN_WRITE_SOURCES: Record<string, string> = {
     'runPropose calls composeFollowUpDraft, which drives the inquiry brain; the brain logs a cost ' +
     'row to api_costs on every call (see the comment above runPropose in ' +
     'src/lib/intel/tool-sources/follow-ups.ts). That write happens outside the guarded client this ' +
-    'script controls, so this source is never called. Finding for a future workstream, not fixed here.',
+    'script controls, so this source is never called. However, the api_costs row is an audit of spend, ' +
+    'not product state, and is intentionally preserved even though this is a read tool.',
 }
 
 // ---------------------------------------------------------------------------

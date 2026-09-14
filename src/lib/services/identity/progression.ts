@@ -212,6 +212,20 @@ export function progressionEventTypeFor(
     if (action === 'crm_imported_inquiry') return 'crm_inquiry'
     if (action === 'crm_imported_booked') return 'contract_signed'
   }
+  // Wave 6 W45 — CSV anchor progression coverage.
+  // Extend crm_imported_* mapping to all CSV channels: web_form,
+  // generic_csv (including tour-scheduler variant), dubsado, aisle_planner.
+  // The same semantic mapping applies: imported inquiries show as
+  // crm_inquiry, imported bookings as contract_signed, imported losses
+  // return null (terminal state, not progression). Progression eligibility
+  // is channel-agnostic once the action_type is known; extending coverage
+  // from honeybook only to all CSV sources homogenises the decay clock.
+  // See row-signals.ts for how crm_imported_* action types are produced
+  // from row status and interaction data.
+  if (channel === 'web' || channel === 'csv_import' || channel === 'dubsado' || channel === 'aisle_planner') {
+    if (action === 'crm_imported_inquiry') return 'crm_inquiry'
+    if (action === 'crm_imported_booked') return 'contract_signed'
+  }
   if (channel === 'knot' || channel === 'weddingwire' || channel === 'zola') {
     if (action === 'inquiry' || action === 'inquiry_form' || action === 'message') return 'new_channel_inquiry'
   }
