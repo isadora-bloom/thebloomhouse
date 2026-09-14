@@ -1671,6 +1671,12 @@ export interface WeddingFkSpec {
   unique_source?: string
   unique_partial?: boolean
   has_fk: boolean
+  /**
+   * Set when the table exists only in a migration on disk that has not been
+   * applied to this database yet. The merge skips it cleanly and records
+   * the skip; it is not a failure.
+   */
+  pending_migration?: string
 }
 
 /** A loser row that could not move because the winner already holds the key. */
@@ -1692,6 +1698,8 @@ export interface MergeTableOutcome {
   error?: string
   /** The loser had more rows than the per-row fallback could walk. */
   truncated?: boolean
+  /** The table is in a migration that has not been applied yet. */
+  absent?: boolean
 }
 
 export interface MergeWeddingsResult {
@@ -1726,6 +1734,16 @@ const CASCADE: readonly WeddingFkSpec[] = (
 const PER_ROW_CAP = 500
 
 /**
+ * "That table does not exist here." PostgREST answers PGRST205 from its
+ * schema cache; Postgres answers 42P01 when the request gets that far.
+ */
+function isMissingTable(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  if (error.code === 'PGRST205' || error.code === '42P01') return true
+  return /could not find the table|relation .* does not exist/i.test(error.message ?? '')
+}
+
+/**
  * Soft-merge `duplicateId` into `canonicalId`.
  *
  * Every row keyed to the losing wedding follows it to the winner. What
@@ -1747,6 +1765,11 @@ const PER_ROW_CAP = 500
  *   - skip_view              a view has no rows of its own
  *   - skip_history           a record of a past merge; rewriting it lies
  *   - skip_self_reference    weddings' own columns; the tombstone owns them
+ *
+ * An entry carrying `pending_migration` comes from a migration on disk that
+ * has not been applied to this database yet. It is in the cascade from the
+ * day the migration is written; until the migration lands the table answers
+ * PGRST205 and the merge records the skip rather than calling it a failure.
  *
  * A failure on one table is recorded and the merge carries on. Nothing is
  * dropped silently: the final activity_log row lists per-table counts,
@@ -1886,6 +1909,13 @@ export async function mergeWeddings(
       reassigned[`${table}.${column}`] = outcome.moved
       return
     }
+    if (spec.pending_migration && isMissingTable(error)) {
+      // The migration that creates this table is written but not applied to
+      // this database yet. Nothing to move, and nothing wrong: record the
+      // skip so the audit says which table and which migration.
+      outcome.absent = true
+      return
+    }
     // One table failing must not abort the other 100. Record it; the audit
     // row and the return value both carry it.
     outcome.error = error.message
@@ -1976,6 +2006,7 @@ export async function mergeWeddings(
           failed_tables: failures,
           strategy_counts: strategyCounts,
           truncated_tables: outcomes.filter((o) => o.truncated).map((o) => o.table),
+          pending_tables_not_applied_yet: outcomes.filter((o) => o.absent).map((o) => o.table),
         },
       }),
       { op: 'merge_weddings.audit', venueId },

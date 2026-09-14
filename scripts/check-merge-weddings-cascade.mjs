@@ -28,6 +28,11 @@
  *   - in the file, gone from the schema: stale. Warning, exit 0 — a
  *     PostgREST update against a missing table is a no-op, so it costs a
  *     wasted request, not correctness.
+ *   - in the file with a `pending_migration` and absent live: expected,
+ *     not drift. The migration is written but not applied to this
+ *     database; the merge skips the table and records the skip. Reported
+ *     so the gap is visible. The reverse (pending, but the table is live
+ *     now) is a nudge to regenerate.
  *   - the file's per-table strategies are reported so a human reading CI
  *     output can see what a merge will actually do.
  *
@@ -146,8 +151,19 @@ async function main() {
   for (const { table_name, column_name } of fkRows) schemaKeys.add(`${table_name}.${column_name}`)
   for (const t of relations) schemaKeys.add(`${t}.wedding_id`)
 
+  // A pending entry describes a migration on disk that this database has
+  // not had applied yet. Absent live is the expected state for one, so it
+  // is reported, not counted as stale. The reverse — pending but present —
+  // means the migration landed and the file wants regenerating.
+  const pendingByKey = new Map()
+  for (const t of doc.tables ?? []) {
+    if (t.pending_migration) pendingByKey.set(`${t.table}.${t.column}`, t.pending_migration)
+  }
+
   const missing = [...schemaKeys].filter((k) => !fileKeys.has(k)).sort()
-  const stale = [...fileKeys].filter((k) => !schemaKeys.has(k)).sort()
+  const stale = [...fileKeys].filter((k) => !schemaKeys.has(k) && !pendingByKey.has(k)).sort()
+  const pendingWaiting = [...pendingByKey.keys()].filter((k) => !schemaKeys.has(k)).sort()
+  const pendingLanded = [...pendingByKey.keys()].filter((k) => schemaKeys.has(k)).sort()
 
   const counts = {}
   for (const t of doc.tables ?? []) counts[t.strategy] = (counts[t.strategy] ?? 0) + 1
@@ -155,6 +171,12 @@ async function main() {
   console.log(`generated file:   ${fileKeys.size} wedding-keyed columns (watermark migration ${doc.migration_watermark})`)
   console.log(`live schema:      ${schemaKeys.size} wedding-keyed columns`)
   for (const [s, n] of Object.entries(counts).sort()) console.log(`  ${s.padEnd(22)} ${n}`)
+  if (pendingWaiting.length > 0) {
+    console.log('')
+    console.log(`${pendingWaiting.length} pending, waiting on a migration this database has not had applied:`)
+    for (const k of pendingWaiting) console.log(`    - ${k.padEnd(40)} ${pendingByKey.get(k)}`)
+    console.log('  Expected, not drift. The merge skips them and records the skip.')
+  }
   console.log('')
 
   if (missing.length > 0) {
@@ -175,6 +197,13 @@ async function main() {
     for (const k of stale) console.warn(`    - ${k}`)
     console.warn('  Not a failure: an update against a missing table is a no-op.')
     console.warn('  Regenerate to tidy: npx tsx scripts/gen-wedding-fk-tables.ts')
+  }
+
+  if (pendingLanded.length > 0) {
+    console.warn(`⚠  ${pendingLanded.length} pending entr${pendingLanded.length === 1 ? 'y is' : 'ies are'} now live:`)
+    for (const k of pendingLanded) console.warn(`    - ${k.padEnd(40)} ${pendingByKey.get(k)}`)
+    console.warn('  The migration landed. Regenerate so the strategy comes from the schema:')
+    console.warn('  npx tsx scripts/gen-wedding-fk-tables.ts')
   }
 
   console.log('✓ cascade file matches the live schema')
