@@ -8,19 +8,13 @@
  *
  * We deliberately do not modify e2e/helpers/seed.ts.
  */
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
+import { adminClient } from './seed'
 
 let _admin: SupabaseClient | null = null
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    throw new Error('voice-training-seed: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing from env')
-  }
-  _admin = createClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+  _admin = adminClient()
   return _admin
 }
 

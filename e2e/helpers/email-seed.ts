@@ -7,20 +7,14 @@
  * cascade-deleted when the venue or wedding rows are cleaned up by seed.ts
  * (interactions.venue_id and drafts.venue_id are ON DELETE CASCADE).
  */
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
 import type { TestContext } from './seed'
+import { adminClient } from './seed'
 
 let _admin: SupabaseClient | null = null
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    throw new Error('email-seed: missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY')
-  }
-  _admin = createClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+  _admin = adminClient()
   return _admin
 }
 

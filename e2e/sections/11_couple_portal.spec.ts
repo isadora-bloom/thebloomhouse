@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
 import {
   createContext,
   createTestOrg,
@@ -7,6 +7,7 @@ import {
   createTestWedding,
   cleanup,
   TestContext,
+  adminClient,
 } from '../helpers/seed'
 import {
   seedChecklistItem,
@@ -43,9 +44,7 @@ import {
 let _admin: SupabaseClient
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
-  _admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+  _admin = adminClient()
   return _admin
 }
 
@@ -62,7 +61,7 @@ test.describe('§11 Couple Portal', () => {
   })
 
   // -------------------------------------------------------------------------
-  // a) Unauth redirect: /couple/{slug}/dashboard -> /couple/login
+  // a) Unauth redirect: /couple/{slug} -> /couple/login
   // -------------------------------------------------------------------------
   test('a) unauth user hitting couple route is redirected to login', async ({ browser }) => {
     const { orgId } = await createTestOrg(ctx)
@@ -71,7 +70,7 @@ test.describe('§11 Couple Portal', () => {
     const context = await browser.newContext()
     const page = await context.newPage()
     try {
-      await page.goto(`/couple/${slug}/dashboard`, { waitUntil: 'domcontentloaded' })
+      await page.goto(`/couple/${slug}`, { waitUntil: 'domcontentloaded' })
       // Give middleware time to redirect
       await page.waitForLoadState('domcontentloaded')
       const url = page.url()

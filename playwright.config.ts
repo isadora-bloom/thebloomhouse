@@ -1,24 +1,14 @@
 import { defineConfig, devices } from '@playwright/test'
-import * as path from 'path'
-import * as fs from 'fs'
+import { loadE2EEnv } from './e2e/helpers/env'
 
-// Load .env.local manually (no dotenv dep installed; minimal parser)
-const envPath = path.join(__dirname, '.env.local')
-if (fs.existsSync(envPath)) {
-  const raw = fs.readFileSync(envPath, 'utf-8')
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const idx = trimmed.indexOf('=')
-    if (idx === -1) continue
-    const key = trimmed.slice(0, idx).trim()
-    let value = trimmed.slice(idx + 1).trim()
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
-    }
-    if (!process.env[key]) process.env[key] = value
-  }
-}
+// The harness env. `.env.test` by default, `E2E_ENV_FILE` to name another,
+// NEVER `.env.local` — that file points at production on every developer
+// machine and is how the old suite came to seed and clean up against the
+// live project. loadE2EEnv throws outright if the resulting
+// NEXT_PUBLIC_SUPABASE_URL carries the production project ref, so a
+// mis-pointed run dies here rather than at the first insert.
+// See E2E-PLAN.md, "the one thing wrong with it".
+const E2E_ENV = loadE2EEnv()
 
 const USE_LOCAL = process.env.E2E_USE_LOCAL !== 'false'
 // Local port is 3100 by default to avoid collisions with other Next dev
@@ -76,6 +66,16 @@ export default defineConfig({
         timeout: 180_000,
         stdout: 'ignore',
         stderr: 'pipe',
+        // Next loads `.env.local` itself, so pointing the harness at
+        // `.env.test` is only half the job — the app under test would
+        // still have come up on production. Anything already present in
+        // process.env wins over Next's own dotenv loading, so handing the
+        // branch values in here closes that second door. AI_E2E_STUB
+        // keeps the run off the real model (see src/lib/ai/e2e-stub.ts).
+        env: {
+          ...E2E_ENV.values,
+          AI_E2E_STUB: process.env.AI_E2E_STUB ?? '1',
+        },
       }
     : undefined,
 })

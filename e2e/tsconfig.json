@@ -1,0 +1,13 @@
+{
+  "//": "The root tsconfig excludes e2e/, so the suite went untyped for its whole life. This project type-checks it: npx tsc --noEmit -p e2e.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@/*": ["../src/*"]
+    }
+  },
+  "include": ["**/*.ts", "../playwright.config.ts"],
+  "exclude": ["../node_modules"]
+}

@@ -5,12 +5,17 @@
  * users, and weddings. Each record is tagged with a per-run `testId` in its
  * name (e.g. `[e2e:abc123]`) so `cleanup(testId)` can remove them.
  *
- * IMPORTANT: This helper talks directly to the live Supabase project defined
- * in .env.local. Tests should always call `cleanup()` in `afterEach` or
- * `afterAll`.
+ * IMPORTANT: this helper owns the ONLY Supabase clients in the suite.
+ * `adminClient()` (service role) and `anonClient()` are built from the env
+ * file named by `E2E_ENV_FILE` (default `.env.test`) and refuse the
+ * production project ref outright — see `./env.ts`. Every other helper and
+ * every spec goes through these two functions; nothing under `e2e/` calls
+ * `createClient` itself. Tests should still call `cleanup()` in
+ * `afterEach` or `afterAll`.
  */
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import * as crypto from 'crypto'
+import { loadE2EEnv, assertNotProduction } from './env'
 
 export type Role = 'super_admin' | 'org_admin' | 'venue_manager' | 'coordinator' | 'readonly' | 'couple'
 
@@ -26,17 +31,51 @@ export interface TestContext {
 }
 
 let _admin: SupabaseClient | null = null
-function admin(): SupabaseClient {
+let _anon: SupabaseClient | null = null
+
+/**
+ * The suite's single service-role client.
+ *
+ * Built from the loaded harness env, and re-checked against the
+ * production ref at call time as well as at load time — the second check
+ * costs nothing and catches a caller that mutated `process.env` after the
+ * file was read.
+ */
+export function adminClient(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    throw new Error('Seed helper: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing from env (.env.local not loaded?)')
+  const env = loadE2EEnv()
+  if (!env.supabaseUrl || !env.serviceRoleKey) {
+    throw new Error(
+      `Seed helper: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing. ` +
+        `Fill ${env.envFile} with the test-branch credentials (see .env.test.example).`
+    )
   }
-  _admin = createClient(url, key, {
+  assertNotProduction(env.supabaseUrl, 'adminClient()')
+  _admin = createClient(env.supabaseUrl, env.serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   })
   return _admin
+}
+
+/** The suite's single anon client. Same env, same refusal. */
+export function anonClient(): SupabaseClient {
+  if (_anon) return _anon
+  const env = loadE2EEnv()
+  if (!env.supabaseUrl || !env.anonKey) {
+    throw new Error(
+      `Seed helper: NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY missing. ` +
+        `Fill ${env.envFile} with the test-branch credentials (see .env.test.example).`
+    )
+  }
+  assertNotProduction(env.supabaseUrl, 'anonClient()')
+  _anon = createClient(env.supabaseUrl, env.anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+  return _anon
+}
+
+function admin(): SupabaseClient {
+  return adminClient()
 }
 
 export function newTestId(): string {

@@ -13,18 +13,14 @@
  *   - clean up any rate_limit_buckets rows created under a test prefix
  *   - clean up sage_conversations rows created during the test
  */
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
 import type { TestContext } from './seed'
+import { adminClient } from './seed'
 
 let _admin: SupabaseClient | null = null
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    throw new Error('sage-seed: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing')
-  }
-  _admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+  _admin = adminClient()
   return _admin
 }
 
