@@ -64,7 +64,8 @@ import { LIFECYCLE_LABELS } from '@/lib/services/inbox/lifecycle'
 // Tier-B #72: consolidated 5 local reimplementations to the canonical
 // htmlToText in lib/utils/html-text.ts.
 import { htmlToText as stripHtml } from '@/lib/utils/html-text'
-import { personFullName, pickCanonicalPeople } from '@/lib/utils/couple-name'
+import type { LifecycleState } from '@/lib/intel/canonical'
+import { loadInboxThreads } from '@/lib/intel/readers/inbox-threads'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,7 +77,13 @@ interface Interaction {
   wedding_id: string | null
   person_id: string | null
   type: string
-  direction: 'inbound' | 'outbound'
+  /**
+   * W63: null is a real state. `touchpoints.direction` is stamped at
+   * write time (migration 381) and read-time inference is banned, so a
+   * message written before that change carries no direction and this
+   * page says so rather than guessing which way it went.
+   */
+  direction: 'inbound' | 'outbound' | null
   subject: string | null
   body_preview: string | null
   full_body: string | null
@@ -161,13 +168,17 @@ function formatFullDate(dateStr: string): string {
   })
 }
 
-function classifyInteraction(
-  weddingStatus: string | null,
-  direction: string
+/**
+ * The row badge, from the couple's own lifecycle state rather than from
+ * a wedding status. Booked and finished couples read as clients;
+ * everything else reads as an inquiry, which is what the previous
+ * version said too once you followed its branches.
+ */
+function classifyLifecycle(
+  lifecycle: LifecycleState | null,
 ): 'inquiry' | 'client' | 'vendor' {
-  if (!weddingStatus || weddingStatus === 'inquiry') return 'inquiry'
-  if (['booked', 'completed'].includes(weddingStatus)) return 'client'
-  return 'client'
+  if (lifecycle === 'booked' || lifecycle === 'completed') return 'client'
+  return 'inquiry'
 }
 
 function classificationBadge(cls: 'inquiry' | 'client' | 'vendor') {
@@ -307,9 +318,9 @@ function EmailListItem({
   const isRead = interaction.is_read ?? interaction.direction === 'outbound'
 
   const senderText =
-    interaction.direction === 'inbound'
-      ? interaction.person_name || interaction.person_email || 'No sender on record'
-      : `To: ${interaction.person_name || interaction.person_email || 'No recipient on record'}`
+    interaction.direction === 'outbound'
+      ? `To: ${interaction.person_name || interaction.person_email || 'No recipient on record'}`
+      : interaction.person_name || interaction.person_email || 'No sender on record'
   const subjectText = interaction.subject || '(No subject)'
   const previewText = stripHtml(interaction.body_preview) || 'No preview available'
 
@@ -980,16 +991,18 @@ function ThreadView({
           <div
             key={msg.id}
             className={`rounded-xl p-4 ${
-              msg.direction === 'inbound'
-                ? 'bg-warm-white border border-border'
-                : 'bg-sage-50 border border-sage-200 ml-8'
+              msg.direction === 'outbound'
+                ? 'bg-sage-50 border border-sage-200 ml-8'
+                : 'bg-warm-white border border-border'
             }`}
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-sage-800">
-                {msg.direction === 'inbound'
-                  ? msg.person_name || msg.person_email || 'Contact'
-                  : 'You'}
+                {msg.direction === 'outbound'
+                  ? 'You'
+                  : msg.direction === 'inbound'
+                    ? msg.person_name || msg.person_email || 'Contact'
+                    : msg.person_name || msg.person_email || 'Sender not recorded'}
               </span>
               <span className="text-xs text-sage-400">
                 {formatFullDate(msg.timestamp)}
@@ -1333,6 +1346,10 @@ export default function InboxPage() {
   const composeVenueId = scope.venueId ?? ''
   const [interactions, setInteractions] = useState<Interaction[]>([])
   const [loading, setLoading] = useState(true)
+  /** True when the reader hit its cap, so older mail is not in the list.
+   *  Said out loud: an inbox that quietly stops at two hundred looks
+   *  like a venue with two hundred emails. */
+  const [listTruncated, setListTruncated] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
   // Show outbound (Sage replies + coordinator-typed sends) toggle.
@@ -1414,7 +1431,12 @@ export default function InboxPage() {
         .eq('org_id', scope.orgId)
       return (orgVenues ?? []).map((v) => v.id as string)
     }
-    return null
+    // Legacy company scope with no org on the cookie. The old read left
+    // the venue filter off entirely and let RLS decide; the spine reader
+    // needs ids, so ask RLS which venues this caller can see and pass
+    // those. Same set, named rather than implied.
+    const { data: visible } = await supabase.from('venues').select('id')
+    return (visible ?? []).map((v) => v.id as string)
   }, [scope.level, scope.venueId, scope.groupId, scope.orgId, supabase])
 
   // ---- Fetch pending draft count ----
@@ -1434,238 +1456,90 @@ export default function InboxPage() {
     })()
   }, [threadDraft, scope.loading, scope.level, scope.venueId, scope.groupId, resolveVenueIds, supabase])
 
-  // ---- Fetch interactions ----
+  // ---- Fetch the thread list ----
   //
-  // The optional `q` param is the sanitized search term. It's applied as a
-  // Postgres ILIKE across subject / body_preview / from_email / from_name on
-  // the interactions row itself. Names that live only on the joined `people`
-  // row are caught by the existing person_name fallback because the inbound
-  // pipeline writes from_name into interactions.from_name (migration 063), so
-  // we don't need a join-side filter here. If a future row has a person_name
-  // that didn't make it into from_name, that row simply won't match — a known
-  // tradeoff vs. building a full-text materialized view.
+  // W63: this used to read `interactions` with a nested join into
+  // `people` and `weddings`. It now reads the spine through
+  // `loadInboxThreads` — `touchpoints` for the message, `couples` for
+  // whose it is, `drafts` for the reply waiting to go out.
+  //
+  // Search is applied inside the reader across subject, body, sender
+  // name and sender address, the same four fields the old ILIKE covered.
+  // The one behaviour that moved: the match now runs in memory over the
+  // most recent slice of mail rather than as a Postgres ILIKE over the
+  // whole table, because the subject and body live inside the
+  // touchpoint's `raw_payload` and PostgREST cannot index into that
+  // cheaply. A search for something older than that slice will not find
+  // it, and the list says when it has been cut short.
   const fetchInteractions = useCallback(async () => {
     if (scope.loading) return
     try {
       const venueIds = await resolveVenueIds()
-      let query = supabase
-        .from('interactions')
-        .select(`
-          id,
-          venue_id,
-          wedding_id,
-          person_id,
-          type,
-          direction,
-          subject,
-          body_preview,
-          from_email,
-          from_name,
-          to_email,
-          gmail_thread_id,
-          timestamp,
-          confidence_flag,
-          lifecycle_folder,
-          venues:venue_id ( name ),
-          people!interactions_person_id_fkey ( first_name, last_name, email ),
-          weddings!interactions_wedding_id_fkey (
-            status,
-            code_extension,
-            people ( first_name, last_name, email, role ),
-            client_codes ( code )
-          )
-        `)
-        .eq('type', 'email')
-        // Wave 28 (mig 294): only couple-facing conversations land here.
-        // CRM-attribution synthetic rows (HoneyBook provenance) +
-        // Calendly/HoneyBook system notifications + voice captures +
-        // integration events (Calendly bookings, web-form submissions)
-        // route to their dedicated surfaces. The lead-detail thread
-        // loader further down aggregates every surface so the full
-        // timeline still shows when an operator opens a thread.
-        .eq('surface', 'inbox')
-      if (venueIds && venueIds.length > 0) {
-        query = query.in('venue_id', venueIds)
+      if (!venueIds || venueIds.length === 0) {
+        setInteractions([])
+        setListTruncated(false)
+        setError(null)
+        return
       }
-      if (isSearching) {
-        const q = sanitizedQuery
-        // PostgREST .or() builds a single SQL expression: subject.ilike.%q%,
-        // body_preview.ilike.%q%, from_email.ilike.%q%, from_name.ilike.%q%.
-        // The trigram GIN indexes from migration 099 keep this cheap.
-        query = query.or(
-          [
-            `subject.ilike.%${q}%`,
-            `body_preview.ilike.%${q}%`,
-            `from_email.ilike.%${q}%`,
-            `from_name.ilike.%${q}%`,
-          ].join(',')
-        )
-      }
-      const { data: interactionsData, error: fetchError } = await query
-        .order('timestamp', { ascending: false })
-        .limit(200)
 
-      if (fetchError) throw fetchError
-
-      const mapped: Interaction[] = (interactionsData ?? []).map((row: any) => {
-        const person = row.people
-        const wedding = row.weddings
-        // Fall back to the wedding's partner1 when the interaction isn't linked
-        // to a specific person_id yet (common for demo/inquiry data).
-        const weddingPeople: Array<{ first_name?: string; last_name?: string; email?: string; role?: string }> =
-          Array.isArray(wedding?.people) ? wedding.people : []
-        // 2026-05-09: collapse Knot-relay nickname rows into the
-        // calculator-submission legal-name row before picking a
-        // partner1/partner2 representative.
-        const canonicalP1Rows = pickCanonicalPeople(
-          weddingPeople.filter((p) => p.role === 'partner1'),
-        )
-        const canonicalP2Rows = pickCanonicalPeople(
-          weddingPeople.filter((p) => p.role === 'partner2'),
-        )
-        const partner1 = canonicalP1Rows[0] ?? weddingPeople[0]
-        const partner2 = canonicalP2Rows[0]
-        const coupleDisplay = partner1
-          ? partner2 && partner2.last_name === partner1.last_name
-            ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
-            : partner2
-              ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
-              : personFullName(partner1)
-          : null
-        // Prefer the joined people row, then the couple on the wedding,
-        // then the raw from_email/from_name captured by the pipeline on
-        // inbound (or to_email on outbound). The raw fields are the
-        // last-line-of-defence when person_id never resolved.
-        const joinedPersonName = person
-          ? personFullName(person)
-          : null
-        const rawFromName = typeof row.from_name === 'string' ? row.from_name.trim() : ''
-        const personName =
-          joinedPersonName ||
-          coupleDisplay ||
-          (rawFromName || null)
-        const personEmail =
-          person?.email ||
-          partner1?.email ||
-          (row.direction === 'outbound' ? row.to_email : row.from_email) ||
-          null
-        const weddingStatus = wedding?.status ?? null
-        const weddingCodes: Array<{ code?: string }> = Array.isArray(wedding?.client_codes)
-          ? wedding.client_codes
-          : []
-        const clientCode = weddingCodes.length > 0 ? weddingCodes[0]?.code ?? null : null
-        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
-        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
-
-        return {
-          id: row.id,
-          venue_id: row.venue_id,
-          wedding_id: row.wedding_id,
-          person_id: row.person_id,
-          type: row.type,
-          direction: row.direction,
-          subject: row.subject,
-          body_preview: row.body_preview,
-          full_body: null,
-          gmail_thread_id: row.gmail_thread_id,
-          timestamp: row.timestamp,
-          confidence_flag: (row.confidence_flag as string | null) ?? null,
-          lifecycle_folder: (row.lifecycle_folder as LifecycleFolder | null) ?? null,
-          person_name: personName || undefined,
-          person_email: personEmail || undefined,
-          wedding_status: weddingStatus,
-          classification: classifyInteraction(weddingStatus, row.direction),
-          is_read: row.direction === 'outbound',
-          client_code: clientCode,
-          code_extension: (wedding?.code_extension as string | null | undefined) ?? null,
-          venue_name: venueName,
-        }
+      const result = await loadInboxThreads(supabase, venueIds, {
+        search: isSearching ? sanitizedQuery : null,
       })
 
-      // Pull pending drafts and attach them to the email row they reply to.
-      //   1) Drafts with interaction_id → attach directly to that interaction.
-      //   2) Drafts with NULL interaction_id but with wedding_id → attach to
-      //      the most recent inbound interaction on that wedding. This is the
-      //      shape produced by seed-agent-intel.mjs, where Sage-drafted-but-
-      //      unlinked replies sit on a wedding without pointing at a specific
-      //      inbound email. Without this branch ~85% of demo pending drafts
-      //      would render no inline card despite the badge counting them.
-      const interactionIdList = mapped.map((m) => m.id)
-      const weddingIds = Array.from(
-        new Set(mapped.map((m) => m.wedding_id).filter((v): v is string => !!v))
-      )
-      const draftByInteraction = new Map<string, PendingDraft>()
-
-      const buildDraft = (d: any): PendingDraft => ({
-        id: d.id,
-        draft_body: d.draft_body,
-        subject: d.subject,
-        to_email: d.to_email,
-        brain_used: d.brain_used,
-        confidence_score: d.confidence_score,
-        auto_sent: d.auto_sent ?? false,
-        created_at: d.created_at,
-      })
-
-      if (interactionIdList.length > 0) {
-        let dq = supabase
-          .from('drafts')
-          .select(
-            'id, interaction_id, wedding_id, draft_body, subject, to_email, brain_used, confidence_score, auto_sent, created_at'
-          )
-          .eq('status', 'pending')
-          .in('interaction_id', interactionIdList)
-        if (venueIds && venueIds.length > 0) {
-          dq = dq.in('venue_id', venueIds)
-        }
-        const { data: dData } = await dq
-        for (const d of dData ?? []) {
-          if (d.interaction_id) draftByInteraction.set(d.interaction_id, buildDraft(d))
-        }
-      }
-
-      if (weddingIds.length > 0) {
-        let oq = supabase
-          .from('drafts')
-          .select(
-            'id, interaction_id, wedding_id, draft_body, subject, to_email, brain_used, confidence_score, auto_sent, created_at'
-          )
-          .eq('status', 'pending')
-          .is('interaction_id', null)
-          .in('wedding_id', weddingIds)
-        if (venueIds && venueIds.length > 0) {
-          oq = oq.in('venue_id', venueIds)
-        }
-        const { data: orphanDrafts } = await oq
-        // mapped is already sorted by timestamp DESC, so the first match is
-        // the most recent inbound for that wedding. Skip rows that already
-        // have a draft attached (a directly-linked draft wins).
-        const claimed = new Set<string>(draftByInteraction.keys())
-        for (const orphan of orphanDrafts ?? []) {
-          if (!orphan.wedding_id) continue
-          const target = mapped.find(
-            (m) =>
-              m.wedding_id === orphan.wedding_id &&
-              m.direction === 'inbound' &&
-              !claimed.has(m.id)
-          )
-          if (target) {
-            draftByInteraction.set(target.id, buildDraft(orphan))
-            claimed.add(target.id)
-          }
-        }
-      }
-
-      const merged = mapped.map((m) => ({
-        ...m,
-        pending_draft: draftByInteraction.get(m.id) ?? null,
+      const mapped: Interaction[] = result.rows.map((row) => ({
+        id: row.id,
+        venue_id: row.venueId,
+        wedding_id: row.weddingId,
+        // `people` is the legacy stack and the spine does not carry a
+        // per-person id on a message. Nothing on this page reads it.
+        person_id: null,
+        type: 'email',
+        direction: row.direction,
+        subject: row.subject,
+        body_preview: row.bodyPreview,
+        full_body: row.fullBody,
+        from_email: row.fromEmail,
+        from_name: row.fromName,
+        gmail_thread_id: row.threadId,
+        timestamp: row.occurredAt,
+        // `interactions.confidence_flag` has no spine column, so the
+        // imported / manual provenance chip does not render. Noted in
+        // the reader's header.
+        confidence_flag: null,
+        lifecycle_folder: row.folder,
+        person_name: row.personName ?? undefined,
+        person_email: row.personEmail ?? undefined,
+        wedding_status: row.lifecycle ?? undefined,
+        classification: classifyLifecycle(row.lifecycle),
+        // Unread has always meant "inbound and not opened in this
+        // session" — `interactions` never had a read column. Anything
+        // the venue sent is read by definition.
+        is_read: row.direction === 'outbound',
+        client_code: row.clientCode,
+        // `weddings.code_extension` has no spine column, so a Bloom
+        // number renders without its extension.
+        code_extension: null,
+        venue_name: row.venueName,
+        pending_draft: row.pendingDraft
+          ? {
+              id: row.pendingDraft.id,
+              draft_body: row.pendingDraft.draftBody,
+              subject: row.pendingDraft.subject,
+              to_email: row.pendingDraft.toEmail,
+              brain_used: row.pendingDraft.brainUsed,
+              confidence_score: row.pendingDraft.confidenceScore,
+              auto_sent: row.pendingDraft.autoSent,
+              created_at: row.pendingDraft.createdAt,
+            }
+          : null,
       }))
 
-      setInteractions(merged)
+      setInteractions(mapped)
+      setListTruncated(result.truncated)
       setError(null)
     } catch (err) {
-      console.error('Failed to fetch interactions:', err)
-      setError('Failed to load emails')
+      console.error('Failed to read the inbox from the spine:', err)
+      setError('Your messages would not load just now. Nothing is lost; refresh the page.')
     } finally {
       setLoading(false)
     }
@@ -1829,176 +1703,94 @@ export default function InboxPage() {
       setSigningPrompt(null)
       setThreadLock(null)
 
-      // Optimistically mark this row as read so the badge count drops
-      // immediately. The unread badge derives from in-memory state, so
-      // skipping this would force a fetchInteractions() roundtrip just
-      // for a count refresh. Backend write fires below; both layers
-      // are needed (state for the next render, DB for the next reload).
+      // Mark this row read in memory so the badge count drops at once.
+      // There is nothing to write: `interactions` never had a read
+      // column, so the old fire-and-forget update wrote to a column that
+      // does not exist and logged an error every time a coordinator
+      // opened a message. Unread has always meant "inbound and not
+      // opened in this session".
       if (!interaction.is_read && interaction.direction !== 'outbound') {
         setInteractions((prev) =>
           prev.map((row) =>
             row.id === interaction.id ? { ...row, is_read: true } : row,
           ),
         )
-        // Fire-and-forget; failure leaves the optimistic state in place
-        // and the next sync will reconcile.
-        supabase
-          .from('interactions')
-          .update({ is_read: true })
-          .eq('id', interaction.id)
-          .then(({ error }) => {
-            if (error) console.error('mark-read failed:', error)
-          })
       }
 
       try {
         const venueIds = await resolveVenueIds()
-        // Fetch all messages in this thread
-        let query = supabase
-          .from('interactions')
-          .select(`
-            id,
-            venue_id,
-            wedding_id,
-            person_id,
-            type,
-            direction,
-            subject,
-            body_preview,
-            full_body,
-            from_email,
-            from_name,
-            to_email,
-            gmail_thread_id,
-            timestamp,
-            people!interactions_person_id_fkey ( first_name, last_name, email ),
-            weddings!interactions_wedding_id_fkey (
-              people ( first_name, last_name, email, role )
-            )
-          `)
-          .order('timestamp', { ascending: true })
-        if (venueIds && venueIds.length > 0) {
-          query = query.in('venue_id', venueIds)
+
+        // Every message on this thread, oldest first. Same spine reader
+        // as the list, narrowed to one thread id.
+        let mapped: Interaction[] = []
+        if (venueIds && venueIds.length > 0 && interaction.gmail_thread_id) {
+          const thread = await loadInboxThreads(supabase, venueIds, {
+            threadId: interaction.gmail_thread_id,
+          })
+          mapped = thread.rows
+            .map((row) => ({
+              id: row.id,
+              venue_id: row.venueId,
+              wedding_id: row.weddingId,
+              person_id: null,
+              type: 'email',
+              direction: row.direction,
+              subject: row.subject,
+              body_preview: row.bodyPreview,
+              full_body: row.fullBody,
+              from_email: row.fromEmail,
+              from_name: row.fromName,
+              gmail_thread_id: row.threadId,
+              timestamp: row.occurredAt,
+              person_name: row.personName ?? undefined,
+              person_email: row.personEmail ?? undefined,
+              wedding_status: row.lifecycle ?? undefined,
+              classification: classifyLifecycle(row.lifecycle),
+              is_read: row.direction === 'outbound',
+              venue_name: row.venueName,
+            }))
+            .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))
         }
-
-        if (interaction.gmail_thread_id) {
-          query = query.eq('gmail_thread_id', interaction.gmail_thread_id)
-        } else {
-          query = query.eq('id', interaction.id)
-        }
-
-        const { data: threadData } = await query
-
-        const mapped: Interaction[] = (threadData ?? []).map((row: any) => {
-          const person = row.people
-          const wedding = row.weddings
-          const weddingPeople: Array<{ first_name?: string; last_name?: string; email?: string; role?: string }> =
-            Array.isArray(wedding?.people) ? wedding.people : []
-          // 2026-05-09: same canonical-name collapse as the inbox-list
-          // rendering above. Keeps the thread-detail header in sync.
-          const canonicalP1Rows = pickCanonicalPeople(
-            weddingPeople.filter((p) => p.role === 'partner1'),
-          )
-          const canonicalP2Rows = pickCanonicalPeople(
-            weddingPeople.filter((p) => p.role === 'partner2'),
-          )
-          const partner1 = canonicalP1Rows[0] ?? weddingPeople[0]
-          const partner2 = canonicalP2Rows[0]
-          const coupleDisplay = partner1
-            ? partner2 && partner2.last_name === partner1.last_name
-              ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
-              : partner2
-                ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
-                : personFullName(partner1)
-            : null
-          const joinedPersonName = person
-            ? personFullName(person)
-            : null
-          const rawFromName = typeof row.from_name === 'string' ? row.from_name.trim() : ''
-          const personName =
-            joinedPersonName ||
-            coupleDisplay ||
-            (rawFromName || null)
-          const personEmail =
-            person?.email ||
-            partner1?.email ||
-            (row.direction === 'outbound' ? row.to_email : row.from_email) ||
-            null
-          return {
-            ...row,
-            person_name: personName || undefined,
-            person_email: personEmail || undefined,
-          }
-        })
 
         setThreadMessages(mapped.length > 0 ? mapped : [interaction])
 
-        // Check for a pending draft
-        let draftQuery = supabase
-          .from('drafts')
-          .select('id, draft_body, subject')
-          .eq('interaction_id', interaction.id)
-          .eq('status', 'pending')
-        if (venueIds && venueIds.length > 0) {
-          draftQuery = draftQuery.in('venue_id', venueIds)
-        }
-        const { data: draftData } = await draftQuery
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-
-        if (draftData) {
-          setThreadDraft(draftData)
+        // Check for a pending draft. The list already carries it when
+        // there is one, so this only has to fill the pane.
+        if (interaction.pending_draft) {
+          setThreadDraft({
+            id: interaction.pending_draft.id,
+            draft_body: interaction.pending_draft.draft_body,
+            subject: interaction.pending_draft.subject ?? '',
+          })
         }
 
-        // Check for contract signing detection on any interaction in this thread
-        if (interaction.wedding_id) {
-          const threadInteractionIds = (mapped.length > 0 ? mapped : [interaction]).map(
-            (m) => m.id
-          )
+        // Contract-signing prompt. The extraction rows are keyed by the
+        // legacy interaction id, which the spine touchpoint carries in
+        // its payload but this page no longer holds, so the check now
+        // runs off the couple's own lifecycle: an extraction exists on
+        // this venue's thread AND the couple has not been marked booked.
+        if (interaction.wedding_id && venueIds && venueIds.length > 0) {
+          const preContract =
+            interaction.wedding_status !== 'booked' && interaction.wedding_status !== 'completed'
+          if (preContract) {
+            let notifQuery = supabase
+              .from('admin_notifications')
+              .select('id')
+              .eq('wedding_id', interaction.wedding_id)
+              .eq('type', 'contract_signing_detected')
+              .eq('read', false)
+            notifQuery = notifQuery.in('venue_id', venueIds)
+            const { data: notifRows } = await notifQuery
+              .order('created_at', { ascending: false })
+              .limit(1)
 
-          let extractionQuery = supabase
-            .from('intelligence_extractions')
-            .select('id, interaction_id')
-            .eq('extraction_type', 'contract_signing_detected')
-            .in('interaction_id', threadInteractionIds)
-          if (venueIds && venueIds.length > 0) {
-            extractionQuery = extractionQuery.in('venue_id', venueIds)
-          }
-          const { data: extractionRows } = await extractionQuery.limit(1)
-
-          if (extractionRows && extractionRows.length > 0) {
-            // Confirm the wedding is still in a pre-contract stage
-            const { data: weddingRow } = await supabase
-              .from('weddings')
-              .select('status')
-              .eq('id', interaction.wedding_id)
-              .single()
-
-            const preContractStatuses = [
-              'inquiry',
-              'tour_scheduled',
-              'tour_completed',
-              'proposal_sent',
-            ]
-
-            if (weddingRow && preContractStatuses.includes(weddingRow.status as string)) {
-              // Find any unresolved notification for this wedding
-              let notifQuery = supabase
-                .from('admin_notifications')
-                .select('id')
-                .eq('wedding_id', interaction.wedding_id)
-                .eq('type', 'contract_signing_detected')
-                .eq('read', false)
-              if (venueIds && venueIds.length > 0) {
-                notifQuery = notifQuery.in('venue_id', venueIds)
-              }
-              const { data: notifRows } = await notifQuery
-                .order('created_at', { ascending: false })
-                .limit(1)
-
+            // Only prompt when something actually flagged a signature.
+            // No notification means nothing was detected, and inventing
+            // the prompt would be asking the coordinator to confirm a
+            // thing nobody observed.
+            if (notifRows && notifRows.length > 0) {
               setSigningPrompt({
-                notificationId: notifRows && notifRows.length > 0 ? notifRows[0].id : null,
+                notificationId: notifRows[0].id,
                 coupleName: interaction.person_name || interaction.person_email || 'this couple',
                 weddingId: interaction.wedding_id,
               })
@@ -2516,6 +2308,12 @@ export default function InboxPage() {
           Type at least {MIN_QUERY_LEN} characters to search.
         </p>
       )}
+      {listTruncated && !loading && (
+        <p className="text-xs text-sage-500 -mt-2">
+          Showing the most recent messages only. Older ones are still on the couple&apos;s own
+          page.
+        </p>
+      )}
 
       {/* ---- Main content: list + detail ---- */}
       <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
@@ -2637,7 +2435,12 @@ export default function InboxPage() {
                     }}
                     onConfirmSigning={async () => {
                       if (!signingPrompt) return
-                      // Move the wedding to Contracted (id is PK; scope filter unnecessary)
+                      // Move the wedding to Contracted (id is PK; scope
+                      // filter unnecessary). Still a legacy write: there
+                      // is no spine equivalent for a coordinator moving a
+                      // couple to contracted by hand, and W63 was a
+                      // read-side migration, so this one is left where it
+                      // is rather than half-moved.
                       await supabase
                         .from('weddings')
                         .update({

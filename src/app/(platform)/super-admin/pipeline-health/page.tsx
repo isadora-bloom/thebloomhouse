@@ -8,11 +8,17 @@
  *
  * Sections:
  *   1. 24h headline cards: emails in, drafts queued, auto-send queue, errors
- *   2. Gmail sync health per venue (email_sync_state + gmail_connections)
- *   3. Stuck drafts — auto_send_pending older than 15 min (never claimed)
- *   4. Recent auto-send failures — status='auto_send_failed' with last_error
- *   5. Unresolved error_logs in the last 24h
- *   6. AI cost today vs yesterday
+ *   2. Messages in per venue, last 24h
+ *   3. Gmail sync health per venue (email_sync_state + gmail_connections)
+ *   4. Stuck drafts — auto_send_pending older than 15 min (never claimed)
+ *   5. Recent auto-send failures — status='auto_send_failed' with last_error
+ *   6. Unresolved error_logs in the last 24h
+ *
+ * W63: the ingest headline used to count inbound rows in `interactions`,
+ * which is the legacy stack. It now reads `touchpoints` through
+ * `loadInboundWindowCounts`, so "emails ingested" on this page means the
+ * same thing it means everywhere else — and a message that arrived on a
+ * channel `interactions` never carried is finally counted.
  *
  * All reads use the authenticated Supabase client. RLS must allow
  * super_admin to read cross-venue for agent/intel tables; this is the
@@ -23,6 +29,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { loadInboundWindowCounts } from '@/lib/intel/readers/venue-spine-counts'
 import {
   Activity,
   AlertCircle,
@@ -98,6 +105,15 @@ interface ErrorRow {
   created_at: string
 }
 
+/** Messages a venue took in over the window. A venue sitting at zero
+ *  while the rest of the estate is busy is the thing this page exists to
+ *  make obvious. */
+interface IngestRow {
+  venue_id: string
+  venue_name: string
+  messages_24h: number
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -148,6 +164,7 @@ export default function PipelineHealthPage() {
   const [failed, setFailed] = useState<FailedDraft[]>([])
   const [recentErrors, setRecentErrors] = useState<ErrorRow[]>([])
   const [queryErrors, setQueryErrors] = useState<string[]>([])
+  const [ingest, setIngest] = useState<IngestRow[]>([])
 
   const fetchAll = useCallback(async () => {
     setRefreshing(true)
@@ -166,25 +183,27 @@ export default function PipelineHealthPage() {
     const nowMinus24 = iso(24)
     const nowMinus48 = iso(48)
 
-    // Emails ingested (inbound interactions, type=email) last 24h + prior 24h.
-    const [inbound24, inbound48] = await Promise.all([
-      supabase
-        .from('interactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('direction', 'inbound')
-        .eq('type', 'email')
-        .gte('timestamp', nowMinus24),
-      supabase
-        .from('interactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('direction', 'inbound')
-        .eq('type', 'email')
-        .gte('timestamp', nowMinus48)
-        .lt('timestamp', nowMinus24),
-    ])
-    if (inbound24.error) errs.push(`interactions(24h): ${inbound24.error.message}`)
-    const emails24 = inbound24.count ?? 0
-    const emailsPrev = inbound48.count ?? 0
+    // Messages ingested last 24h + the 24h before it, off the spine.
+    // Direction is the column migration 381 stamps at write time; rows
+    // it never reached are reported as unstamped rather than guessed
+    // into the inbound total.
+    let emails24 = 0
+    let emailsPrev = 0
+    let unstamped = 0
+    let ingestByVenue: Record<string, number> = {}
+    try {
+      const inbound = await loadInboundWindowCounts(supabase, {
+        fromIso: nowMinus24,
+        toIso: new Date().toISOString(),
+        priorFromIso: nowMinus48,
+      })
+      emails24 = inbound.current
+      emailsPrev = inbound.prior ?? 0
+      unstamped = inbound.unknownDirection
+      ingestByVenue = inbound.currentByVenue
+    } catch (err) {
+      errs.push(`touchpoints(24h): ${err instanceof Error ? err.message : String(err)}`)
+    }
     const emailDelta = emailsPrev > 0 ? Math.round(((emails24 - emailsPrev) / emailsPrev) * 100) : 0
 
     // Drafts awaiting review (status='pending')
@@ -215,9 +234,12 @@ export default function PipelineHealthPage() {
 
     setHeadlines([
       {
-        label: 'Emails ingested (24h)',
+        label: 'Messages ingested (24h)',
         value: String(emails24),
-        sub: `vs ${emailsPrev} prior 24h`,
+        sub:
+          unstamped > 0
+            ? `vs ${emailsPrev} prior 24h · ${unstamped} with no direction stamped`
+            : `vs ${emailsPrev} prior 24h`,
         delta: emailDelta,
         icon: Inbox,
         tone: 'teal',
@@ -245,6 +267,20 @@ export default function PipelineHealthPage() {
         tone: (errs24.count ?? 0) > 0 ? 'rose' : 'sage',
       },
     ])
+
+    // --- Messages in, per venue (spine) ---
+    // Every venue gets a row, including the ones at zero: a venue that
+    // has stopped ingesting is invisible in a list built only from the
+    // venues that did.
+    setIngest(
+      venues
+        .map((v) => ({
+          venue_id: v.id,
+          venue_name: v.name,
+          messages_24h: ingestByVenue[v.id] ?? 0,
+        }))
+        .sort((a, b) => a.messages_24h - b.messages_24h),
+    )
 
     // --- Gmail sync health per connection ---
     // Multi-gmail (050) moved last_sync_at + error_message onto each
@@ -463,6 +499,37 @@ export default function PipelineHealthPage() {
               )
             })}
       </div>
+
+      {/* Messages in, per venue — quietest first */}
+      <section className="bg-surface border border-border rounded-xl overflow-hidden">
+        <header className="px-5 py-3 border-b border-border flex items-center gap-2">
+          <Inbox className="w-4 h-4 text-sage-700" />
+          <h2 className="text-sm font-semibold text-sage-900">Messages in, per venue (24h)</h2>
+          <span className="text-xs text-sage-500">
+            quietest first · counted on the spine, every channel
+          </span>
+        </header>
+        {ingest.length === 0 ? (
+          <p className="p-5 text-sm text-sage-500">
+            No venues visible. Either the venue read was denied, or there are none.
+          </p>
+        ) : (
+          <div className="divide-y divide-border">
+            {ingest.map((r) => (
+              <div key={r.venue_id} className="px-5 py-2.5 flex items-center justify-between gap-4">
+                <p className="text-sm text-sage-900 truncate">{r.venue_name}</p>
+                <p
+                  className={`text-sm font-semibold tabular-nums shrink-0 ${
+                    r.messages_24h === 0 ? 'text-amber-700' : 'text-sage-700'
+                  }`}
+                >
+                  {r.messages_24h}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Gmail sync health */}
       <section className="bg-surface border border-border rounded-xl overflow-hidden">

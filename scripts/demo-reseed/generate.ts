@@ -73,8 +73,10 @@ const CHANNEL_WEIGHTS: Record<DemoChannel, number> = {
   instagram: 12,
   gmail: 18,
   // Calendly is never an origin — a tour booking always follows an
-  // inquiry on some other channel.
+  // inquiry on some other channel. Nor is HoneyBook: the contract is the
+  // end of a story, never its start.
   calendly: 0,
+  honeybook: 0,
 }
 
 /** `weddings.status` for each lifecycle. CHECK list from migration 001. */
@@ -480,6 +482,21 @@ function buildBooked(ctx: TimelineContext): {
       'inbound',
       contractBody(rng),
       ['contract_signed'],
+    ),
+    // The contract itself, on the channel the spine recognises. This is
+    // what writes the `contract_signed` row in couple_progression_events
+    // — the couple's email above says they are signing, but only this
+    // records that they did. Heat is left empty so the signing points
+    // are not counted twice.
+    step(
+      signedDaysAgo,
+      rng.int(9 * 60, 21 * 60),
+      'honeybook',
+      'contract_signed',
+      'highest',
+      'inbound',
+      'Contract signed.',
+      [],
     ),
   )
   return { steps, inquiryDaysAgo, responseDelayHours, tourDaysAgo, signedDaysAgo }

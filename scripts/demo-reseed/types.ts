@@ -25,6 +25,12 @@ export type DemoChannel =
   | 'instagram'
   | 'website'
   | 'calendly'
+  // Never an origin. A booked story ends with the contract landing here,
+  // because `contract_signed` is the progression event the spine writes
+  // for channel='honeybook' and nothing else (progression.ts) — without
+  // it the demo has booked couples and no record of when they signed,
+  // and anything measuring how long a couple took to decide reads empty.
+  | 'honeybook'
 
 /** Where the story ends up. Maps onto `weddings.status` (the CHECK list
  *  in migration 001) via `WEDDING_STATUS_FOR_LIFECYCLE` in generate.ts. */
