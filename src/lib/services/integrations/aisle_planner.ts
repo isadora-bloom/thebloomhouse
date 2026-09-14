@@ -32,9 +32,9 @@ export const aislePlannerAdapter: IntegrationAdapter = {
   name: 'aisle_planner',
   label: 'Aisle Planner',
   category: 'crm',
-  description: 'Import leads, tasks, and messages from Aisle Planner. (Scaffold — use Generic CSV today.)',
+  description: 'Import leads, tasks, and messages from Aisle Planner.',
   authShape: 'paste_token',
-  ready: false,
+  ready: true, // W53 (wave 8) shipped the parser; the hub card was still saying coming soon
   deepConfigHref: '/onboarding/crm-import?provider=aisle_planner',
   iconName: 'Database',
   getStatus,

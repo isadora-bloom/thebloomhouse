@@ -5,6 +5,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+import { parseSafetyFlags, assertNotProd, requireApply } from './_safety.mjs'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -35,6 +36,10 @@ const CSV_FILES = [
 ]
 
 async function main() {
+  // Dry by default, like its siblings. --apply --allow-prod to write (found
+  // unguarded by the 2026-09-14 audit).
+  const { apply, allowProd } = parseSafetyFlags(process.argv)
+  assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd })
   // Import the adapter — circular dep (honeybook ↔ index) is now resolved via
   // lazy import inside commitHoneybook, so top-level import is safe here.
   const { honeybookAdapter } = await import('../src/lib/services/crm-import/honeybook.js')
@@ -57,6 +62,7 @@ async function main() {
     // Parse via adapter — parse() takes AdapterConfig with csvText string
     const parseResult = await honeybookAdapter.parse({ csvText: csvBuffer.toString('utf8') })
     console.log(`  Parsed: ${parseResult.rows.length} couples, ${parseResult.warnings.length} warnings`)
+    if (!requireApply(apply, 'phase2-run-honeybook-import')) continue
     if (parseResult.warnings.length) {
       for (const w of parseResult.warnings.slice(0, 5)) console.log(`    WARN: ${w}`)
     }

@@ -5,6 +5,7 @@
 // Usage: npx tsx scripts/phase2-replay-calendly.ts
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+import { parseSafetyFlags, assertNotProd, requireApply } from './_safety.mjs'
 import { replayCalendlyFromQa } from '../src/lib/services/identity/replay/calendly-replay'
 
 const env = Object.fromEntries(
@@ -17,6 +18,11 @@ const VENUE_ID = 'f3d10226-4c5c-47ad-b89b-98ad63842492'
 const supabase = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
 
 async function main() {
+  // Dry by default, like its siblings. --apply --allow-prod to write (found
+  // unguarded by the 2026-09-14 audit).
+  const { apply, allowProd } = parseSafetyFlags(process.argv)
+  assertNotProd(env.NEXT_PUBLIC_SUPABASE_URL, { allowProd })
+  if (!requireApply(apply, 'phase2-replay-calendly')) return
   console.log('Running Calendly replay (D.3)…')
   const result = await replayCalendlyFromQa({ supabase, venueId: VENUE_ID })
   console.log(`processed: ${result.processed}  linked: ${result.linked}`)

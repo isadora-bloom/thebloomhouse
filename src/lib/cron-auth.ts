@@ -36,7 +36,6 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   // Identity-resolution mutations
   'data_integrity_sweep',
   'backtrace_scan',
-  'identity_backtrack',
   'phase_b_sweep',
   'merge_people_aliases',
   'booked_data_recovery',

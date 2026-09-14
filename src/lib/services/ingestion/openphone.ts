@@ -446,6 +446,9 @@ export async function writeInboundInteractionAndClassify(
   const { supabase, venueId, row, logPrefix, externalMessageId } = args
   let weddingId = row.wedding_id
 
+  // html-stripped-justified: SMS, voicemail and Instagram DM bodies reach
+  // this chokepoint as plain text from the provider (W30); there is no HTML
+  // to strip. The email pipeline strips before it gets here.
   const { data: insertedInteraction, error: interErr } = await supabase
     .from('interactions')
     .insert({

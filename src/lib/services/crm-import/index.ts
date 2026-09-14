@@ -72,7 +72,7 @@ import type { Cents } from '@/lib/types/monetary'
 import type { Surface } from '@/lib/services/email/surface-classifier'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
-import { normalizeHandles } from '@/lib/services/identity/handles'
+import { normalizeHandles, stripVenueHandles, getVenueSocialHandles } from '@/lib/services/identity/handles'
 import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 
 /** Stable identifier for the per-row crm_source column. Mirrors the
@@ -1053,6 +1053,12 @@ export async function commitNormalisedRows(args: {
     }
     return result
   }
+
+  // W36 closed this for email and vision signals but not for CSV rows: a
+  // prospect quoting the venue's own Instagram in a free-text column could
+  // still stamp it onto a couple. Read the venue's handles once per import
+  // (found by the 2026-09-14 audit).
+  const venueOwnHandles = await getVenueSocialHandles(supabase, venueId)
 
   for (const row of rows) {
     // #88 (Stream PPP, 2026-05-03): per-row client-side rollback. The
@@ -2054,7 +2060,7 @@ export async function commitNormalisedRows(args: {
           crmSource,
           weddingId,
           interactions: signalEligibleInteractions,
-          handles: handlesFromRow(row),
+          handles: stripVenueHandles(handlesFromRow(row), venueOwnHandles),
           rowOccurredAt: firstSeenCandidateFor(row),
           extraSignals: honeybookAttributionSignal
             ? [honeybookAttributionSignal]

@@ -561,7 +561,7 @@ export const EXPECTED_SHAPES: ExpectedShape[] = [
   },
 ]
 
-// 44 = questions 1-37 in BLOOM-TEST-QUESTIONS.md (31/32 in the "**31.
+// 45 = questions 1-37 in BLOOM-TEST-QUESTIONS.md (31/32 in the "**31.
 // (NEW)...**" form, Q37 added to the runner 2026-07-07) + the 32a/32b
 // false-premise variants + Tier-12 Q38-41 (added 2026-07-07, R2) +
 // Tier-13 Q42 (added 2026-09-14, wave 7 / W48) + Tier-14 Q43 (added

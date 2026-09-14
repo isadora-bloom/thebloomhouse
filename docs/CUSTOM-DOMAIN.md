@@ -178,4 +178,4 @@ If something breaks after domain cutover:
 - `APP_CANONICAL_HOST` is production-only; preview and development deployments ignore it
 - Redirects are 308 (permanent redirect), which preserves HTTP method and body
 - All internal app URLs (email links, Stripe checkout returns, etc.) automatically route through the canonical domain
-- Old Vercel preview URLs (e.g., `myapp-staging.vercel.app`) can be kept for testing after cutover; they will redirect to the canonical domain
+- Preview deployments (`*.vercel.app` hosts where `VERCEL_ENV` is not `production`) are never redirected, so previews keep working after cutover. The production `*.vercel.app` alias does redirect to the canonical domain

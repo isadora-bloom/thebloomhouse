@@ -215,7 +215,7 @@ describe('the fallback log', () => {
     const prevKey = process.env.RESEND_API_KEY
     delete process.env.RESEND_API_KEY
     try {
-      await sendEmail({
+      await sendEmail({ // disclosure-justified: From-resolution test, fixture body, no couple-facing send
         to: 'couple@example.com',
         subject: 'Hi',
         html: '<p>hi</p>',
@@ -251,7 +251,7 @@ describe('the fallback log', () => {
     const prevKey = process.env.RESEND_API_KEY
     delete process.env.RESEND_API_KEY
     try {
-      await sendEmail({
+      await sendEmail({ // disclosure-justified: From-resolution test, fixture body, no couple-facing send
         to: 'couple@example.com',
         subject: 'Hi',
         html: '<p>hi</p>',
@@ -271,7 +271,7 @@ describe('the fallback log', () => {
     const prevKey = process.env.RESEND_API_KEY
     delete process.env.RESEND_API_KEY
     try {
-      await sendEmail({
+      await sendEmail({ // disclosure-justified: From-resolution test, fixture body, no couple-facing send
         to: 'ops@example.com',
         subject: 'Alert',
         html: '<p>alert</p>',

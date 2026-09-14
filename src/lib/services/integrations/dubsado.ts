@@ -33,9 +33,9 @@ export const dubsadoAdapter: IntegrationAdapter = {
   name: 'dubsado',
   label: 'Dubsado',
   category: 'crm',
-  description: 'Import projects, communications, and contracts from Dubsado. (Scaffold — use Generic CSV today.)',
+  description: 'Import projects, communications, and contracts from Dubsado.',
   authShape: 'paste_token',
-  ready: false,
+  ready: true, // W53 (wave 8) shipped the parser; the hub card was still saying coming soon
   deepConfigHref: '/onboarding/crm-import?provider=dubsado',
   iconName: 'Database',
   getStatus,

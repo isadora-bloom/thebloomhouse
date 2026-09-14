@@ -51,10 +51,12 @@ export async function middleware(request: NextRequest) {
   const canonicalHost = process.env.APP_CANONICAL_HOST
   if (canonicalHost) {
     const hostname = request.headers.get('host') || ''
-    const isProduction = process.env.NODE_ENV === 'production'
     const isLocal = hostname.startsWith('localhost:') || hostname === 'localhost'
+    // Vercel builds previews with NODE_ENV=production, so NODE_ENV cannot tell
+    // a preview from production. VERCEL_ENV can: 'production' | 'preview' |
+    // 'development'. A preview host is never redirected, whatever the var says.
     const isVercelPreview =
-      isProduction === false && /\.vercel\.app$/.test(hostname)
+      process.env.VERCEL_ENV !== 'production' && /\.vercel\.app$/.test(hostname)
 
     if (!isLocal && !isVercelPreview && hostname !== canonicalHost) {
       const canonicalUrl = request.nextUrl.clone()

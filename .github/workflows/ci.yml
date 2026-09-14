@@ -55,7 +55,8 @@ jobs:
       # regression fails CI WITHOUT a TEST-BRANCH DB. The full DB-backed golden harness
       # (tests/golden/run-golden-cases.ts) remains the deeper, manual phase-gate.
       - name: Vitest suite (was NOT gated before — contract + cascade + golden-subset tests; all pure/mock, CI-safe)
-        run: npx vitest run
+        # Capped: on a loaded runner two jsdom files fail to start a worker under full parallelism (2026-09-14 audit).
+        run: npx vitest run --maxWorkers=4
 
       - name: Unit tests — writeOrLog (HARDENING-SCOPE Area 1 — failed writes logged not swallowed)
         run: npx tsx scripts/test-write-or-log.ts
@@ -235,6 +236,12 @@ jobs:
 
       - name: Sage disclosure guard — every outbound Sage send routes through appendAIDisclosure (Stream EEEE)
         run: node scripts/check-sage-disclosure-enforced.mjs
+
+      - name: Handle ratchet — people.platform_handles reads may only decrease (wave 3 W22)
+        run: node scripts/check-no-platform-handles-reads.mjs
+
+      - name: Benchmark stays server-only — no browser import of the cross-venue reader (wave 8 W56)
+        run: node scripts/check-no-browser-benchmark-import.mjs
 
       - name: Plan-tier enforcement guard — every paid-tier API route calls requirePlan (PROJECT-AUDIT-V2 GAP-12)
         run: node scripts/check-plan-enforcement.mjs

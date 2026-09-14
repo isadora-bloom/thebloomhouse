@@ -26,6 +26,7 @@ import { escapeHtml } from './templates'
 import { readGeneratedFrom } from './generate'
 import { mintSignToken } from './sign'
 import { asContractStatus, canSend } from './status'
+import { appUrl } from '@/lib/app-url'
 
 type Db = SupabaseClient
 
@@ -39,8 +40,8 @@ export interface SendResult {
 
 /** Where the couple lands. Under /join, which is already a public prefix. */
 export function signUrlFor(token: string): string {
-  const base = process.env.NEXT_PUBLIC_APP_URL || 'https://bloom-house-iota.vercel.app'
-  return `${base.replace(/\/+$/, '')}/join/contract/${token}`
+  // W59: one URL builder, so the link follows a custom-domain cutover.
+  return appUrl(`/join/contract/${token}`)
 }
 
 /**
