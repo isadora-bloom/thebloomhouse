@@ -31,6 +31,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
 import { appUrl } from '@/lib/app-url'
 import { randomUUID, createHash } from 'crypto'
+import { escapeHtml } from '@/lib/services/contracts/templates'
 import {
   getPlatformAuth,
   unauthorized,
@@ -273,6 +274,22 @@ export async function POST(request: NextRequest) {
     }
     const roleLabel = roleLabelMap[role] ?? role
 
+    // S5 (2026-09-14 security audit, item 10). orgName, inviterName and
+    // roleLabel all reach this builder as free text — an org name typed
+    // in settings, a first/last name off user_profiles, or in the
+    // last-resort branch an email address read back from auth.users. They
+    // went into the markup raw. escapeHtml is the same helper the
+    // contract templates use. The invite link is escaped too: it carries
+    // a token and ends up inside both an href and the visible text.
+    //
+    // Auth on this route is S1's; this change touches only the builder.
+    const safeOrgName = escapeHtml(orgName)
+    const safeInviterName = escapeHtml(inviterName)
+    const safeRoleLabel = escapeHtml(roleLabel)
+    const safeInviteLink = escapeHtml(inviteLink)
+
+    // The subject is a plain-text header, not markup — escaping it would
+    // put a literal &amp; in front of the recipient.
     const subject = `You've been invited to ${orgName} on The Bloom House`
     const htmlBody = `<!DOCTYPE html>
 <html>
@@ -282,7 +299,7 @@ export async function POST(request: NextRequest) {
     <tr>
       <td style="background:#7D8471;padding:28px;">
         <h1 style="margin:0;font-size:22px;font-weight:600;color:#FFFFFF;font-family:Georgia,serif;">
-          ${orgName}
+          ${safeOrgName}
         </h1>
         <p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.85);">
           Team invitation on The Bloom House
@@ -293,18 +310,18 @@ export async function POST(request: NextRequest) {
       <td style="padding:28px;">
         <h2 style="margin:0 0 12px;font-size:20px;">You're invited</h2>
         <p style="margin:0 0 14px;font-size:15px;line-height:1.55;">
-          <strong>${inviterName}</strong> has invited you to join <strong>${orgName}</strong> on The Bloom House.
+          <strong>${safeInviterName}</strong> has invited you to join <strong>${safeOrgName}</strong> on The Bloom House.
         </p>
         <p style="margin:0 0 20px;font-size:15px;line-height:1.55;">
-          You've been invited as a <strong>${roleLabel}</strong>.
+          You've been invited as a <strong>${safeRoleLabel}</strong>.
         </p>
         <p style="margin:0 0 24px;">
-          <a href="${inviteLink}" style="display:inline-block;padding:12px 24px;background:#7D8471;color:#FFFFFF;text-decoration:none;border-radius:8px;font-weight:600;">
+          <a href="${safeInviteLink}" style="display:inline-block;padding:12px 24px;background:#7D8471;color:#FFFFFF;text-decoration:none;border-radius:8px;font-weight:600;">
             Accept invitation
           </a>
         </p>
         <p style="margin:0 0 12px;font-size:13px;color:#6B7280;">
-          Or visit <a href="${inviteLink}" style="color:#7D8471;">${inviteLink}</a>
+          Or visit <a href="${safeInviteLink}" style="color:#7D8471;">${safeInviteLink}</a>
         </p>
         <p style="margin:0;font-size:13px;color:#6B7280;">
           This invitation expires in 7 days.
@@ -314,7 +331,7 @@ export async function POST(request: NextRequest) {
     <tr>
       <td style="padding:20px 28px;border-top:1px solid #F3F4F6;">
         <p style="margin:0;font-size:12px;color:#6B7280;text-align:center;">
-          ${orgName} &middot; Powered by The Bloom House
+          ${safeOrgName} &middot; Powered by The Bloom House
         </p>
       </td>
     </tr>

@@ -70,13 +70,31 @@ function header(role: CoupleSurfaceRole, totalContracts: number): string {
 }
 
 describe('ContractCard', () => {
-  it('shows both roles the file name, the vendor and the link to the file', () => {
+  it('shows both roles the file name, the vendor and a way to open the file', () => {
     for (const role of ['couple', 'coordinator'] as const) {
       const html = card(role)
       expect(html).toContain('crestwood-catering.pdf')
       expect(html).toContain('Crestwood Catering')
-      expect(html).toContain('https://example.test/signed/crestwood-catering.pdf')
+      expect(html).toContain('title="View file"')
     }
+  })
+
+  it('does not put a stored signed URL in the markup', () => {
+    // S5 (2026-09-14 security audit, item 6). The View control used to be
+    // `<a href={contract.file_url}>` with a year-long signed URL read off
+    // the row. It is now a button that mints a sixty-second URL on click,
+    // so the credential is not in the page at all — not in the HTML, not
+    // in the page source a screenshot catches, not in a referrer.
+    for (const role of ['couple', 'coordinator'] as const) {
+      const html = card(role)
+      expect(html).not.toContain('https://example.test/signed/crestwood-catering.pdf')
+    }
+  })
+
+  it('still offers the View control when only the storage path survives', () => {
+    // Rows written after the change carry a path and a null file_url.
+    const html = card('couple', { file_url: null })
+    expect(html).toContain('title="View file"')
   })
 
   it('gives the couple delete and the assistant, under the venue name for the assistant', () => {

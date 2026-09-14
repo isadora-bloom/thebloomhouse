@@ -192,8 +192,30 @@ function LogoUploadField({
       setErr('Logo must be under 5 MB. Try compressing it first.')
       return
     }
-    if (!/^image\//.test(file.type)) {
-      setErr('That file is not an image.')
+    // S5 (2026-09-14 security audit, item 11). `image/svg+xml` passes
+    // `^image\/` and an SVG is a document: it can carry <script>, and the
+    // bucket serves it from the app's own storage origin under a URL the
+    // portal then renders. The venue logo is shown to every couple, so a
+    // poisoned SVG is a stored XSS with a captive audience.
+    //
+    // This upload goes straight from the browser to Supabase Storage —
+    // there is no server route in this path to sniff magic bytes in. So
+    // the client-side check below is the first gate and the bucket's own
+    // `allowed_mime_types` on `venue-assets` is the enforcing one; a
+    // caller who skips this page still has to get past the bucket. The
+    // extension check catches the rename-to-.png dodge on the way in.
+    const allowedLogoTypes = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/gif',
+    ])
+    if (!allowedLogoTypes.has(file.type.toLowerCase())) {
+      setErr('Use a PNG, JPEG, WebP or GIF. SVG files are not accepted.')
+      return
+    }
+    if (/\.svgz?$/i.test(file.name)) {
+      setErr('SVG files are not accepted.')
       return
     }
 
@@ -252,7 +274,7 @@ function LogoUploadField({
               {uploading ? 'Uploading...' : logoUrl ? 'Replace logo' : 'Upload logo'}
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 className="hidden"
                 onChange={handleFile}
                 disabled={uploading || !venueId}
@@ -448,8 +470,25 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
       setAssetUploadError('File must be under 10 MB. Try compressing it first.')
       return
     }
-    if (!/^image\//.test(file.type) && file.type !== 'application/pdf') {
-      setAssetUploadError('Only image files and PDFs are supported.')
+    // S5 (2026-09-14 security audit, item 11): same reasoning as the logo
+    // field above. Brand assets get attached to outbound email and
+    // rendered in the portal, so an SVG here is the same stored-XSS
+    // shape. Allowlist the raster formats and PDF; refuse the rest.
+    const allowedAssetTypes = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/gif',
+      'application/pdf',
+    ])
+    if (!allowedAssetTypes.has(file.type.toLowerCase())) {
+      setAssetUploadError(
+        'Only PNG, JPEG, WebP, GIF and PDF files are supported. SVG files are not accepted.',
+      )
+      return
+    }
+    if (/\.svgz?$/i.test(file.name)) {
+      setAssetUploadError('SVG files are not accepted.')
       return
     }
 
@@ -921,7 +960,7 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
                     {uploadingAsset ? 'Uploading...' : newAssetUrl ? 'Replace file' : 'Upload file'}
                     <input
                       type="file"
-                      accept="image/*,application/pdf"
+                      accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
                       className="hidden"
                       onChange={(e) => {
                         const f = e.target.files?.[0]

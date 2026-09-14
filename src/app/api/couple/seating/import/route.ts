@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
-import { parseSeatingFile, commitSeatingChart, type ParsedSeatingChart } from '@/lib/services/couple-portal/seating-import'
+import {
+  parseSeatingFile,
+  commitSeatingChart,
+  validateParsedSeatingChart,
+  SeatingChartShapeError,
+  type ParsedSeatingChart,
+} from '@/lib/services/couple-portal/seating-import'
 
 const MAX_BYTES = 20 * 1024 * 1024 // 20 MB
 
@@ -36,10 +42,23 @@ export async function POST(request: NextRequest) {
     const replace = formData.get('replaceExisting') === 'true'
     if (!chartJson) return badRequest('Missing chart data')
 
+    // S5 (2026-09-14 security audit, item 11). This used to be
+    // `JSON.parse(...)` assigned to a typed variable, which is a cast and
+    // not a check — the browser decided the shape, the field types and
+    // how many rows got written. validateParsedSeatingChart rebuilds the
+    // chart field by field with caps on tables and guests.
+    if (chartJson.length > 5 * 1024 * 1024) {
+      return NextResponse.json(
+        { error: 'That chart is too large to commit.' },
+        { status: 413 },
+      )
+    }
+
     let chart: ParsedSeatingChart
     try {
-      chart = JSON.parse(chartJson)
-    } catch {
+      chart = validateParsedSeatingChart(JSON.parse(chartJson))
+    } catch (error) {
+      if (error instanceof SeatingChartShapeError) return badRequest(error.message)
       return badRequest('Invalid chart JSON')
     }
 

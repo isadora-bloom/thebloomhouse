@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState, use as usePromise } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { safeHref } from '@/lib/utils/safe-url'
 import {
   Loader2,
   ArrowLeft,
@@ -233,7 +234,7 @@ export default function AgencyDetailPage({
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--bh-muted)]">
             {agency.website ? (
               <a
-                href={agency.website}
+                href={safeHref(agency.website)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 hover:text-[var(--bh-ink)]"

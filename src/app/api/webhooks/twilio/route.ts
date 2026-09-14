@@ -40,6 +40,7 @@ import { writeOrLog } from '@/lib/db/write-or-log'
 import { randomUUID } from 'crypto'
 import { createServiceClient } from '@/lib/supabase/service'
 import { verifyTwilioSignature } from '@/lib/services/sms/twilio-signature'
+import { pgArrayElement } from '@/lib/supabase/filter-escape'
 // resolvePersonOnly + mintWedding are dynamically imported below; the
 // top-level static import was resolveIdentity pre-Step-5b.
 import { enqueueIdentityReconstruction } from '@/lib/services/identity/enqueue-reconstruction'
@@ -84,7 +85,17 @@ async function locateVenueAndDirection(
     .from('multi_channel_inbox_settings')
     .select('venue_id, twilio_phone_numbers, sms_enabled')
     .eq('sms_enabled', true)
-    .or(`twilio_phone_numbers.cs.{${toPhone}},twilio_phone_numbers.cs.{${fromPhone}}`)
+    // S5 (2026-09-14 audit item 12). Both numbers arrive in the webhook
+    // body. The signature check upstream is what makes them Twilio's, but
+    // this filter string is built before anything has parsed them as
+    // phone numbers, and `{…}` / `,` are the array literal's own
+    // separators — an unescaped value re-writes the condition. S2 owns the
+    // Stripe and Calendly webhooks; this one is ours, and this is the
+    // only line of it that changes.
+    .or(
+      `twilio_phone_numbers.cs.{${pgArrayElement(toPhone)}},` +
+        `twilio_phone_numbers.cs.{${pgArrayElement(fromPhone)}}`,
+    )
     .limit(2)
 
   if (error) {

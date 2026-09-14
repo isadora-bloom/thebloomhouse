@@ -26,6 +26,12 @@
 
 import { callAIJson } from '@/lib/ai/client'
 import { createServiceClient } from '@/lib/supabase/service'
+import { safeFetch } from '@/lib/security/safe-fetch'
+import {
+  MAX_ASSET_BYTES,
+  readCappedBody,
+  supabaseStorageHosts,
+} from '@/lib/security/fetch-limits'
 
 // ---------------------------------------------------------------------------
 // Prompt versioning
@@ -293,17 +299,25 @@ export async function loadAssetBytes(asset: MatchedAsset): Promise<Buffer | null
       return Buffer.from(arrayBuf)
     }
 
-    // Fallback: external URL fetch.
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10_000)
-    try {
-      const res = await fetch(asset.url, { signal: controller.signal })
-      if (!res.ok) return null
-      const arrayBuf = await res.arrayBuffer()
-      return Buffer.from(arrayBuf)
-    } finally {
-      clearTimeout(timer)
-    }
+    // Fallback: URL-paste legacy rows.
+    //
+    // S5 (2026-09-14 security audit, item 9). This was a bare fetch of
+    // whatever string sat in brand_assets.url, and the bytes it returned
+    // were attached to an email the venue sent to a couple. That is SSRF
+    // with an exfiltration channel built in: point the row at
+    // http://169.254.169.254/latest/meta-data/iam/security-credentials/
+    // and the instance credentials arrive in somebody's inbox as
+    // "ceremony.jpg". safeFetch refuses private and link-local
+    // addresses on every redirect hop; the allowlist narrows it further
+    // to the project's own Supabase host, which is where a legacy
+    // URL-paste row should be pointing anyway.
+    const res = await safeFetch(
+      asset.url,
+      { signal: AbortSignal.timeout(10_000) },
+      { hostAllowlist: supabaseStorageHosts() },
+    )
+    if (!res.ok) return null
+    return await readCappedBody(res, MAX_ASSET_BYTES)
   } catch (err) {
     console.warn(
       '[asset-matcher] loadAssetBytes failed:',

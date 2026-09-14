@@ -6,6 +6,7 @@ import {
   serverError,
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { requireAgencyScope } from '@/lib/services/intel/agency-access'
 import { createServiceClient } from '@/lib/supabase/service'
 import { listEngagementsForAgency } from '@/lib/services/intel/marketing-agencies'
 
@@ -46,6 +47,10 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
   if (!auth) return unauthorized()
   const { id } = await ctx.params
   if (!id) return badRequest('agency id required')
+  // S5 (2026-09-14 audit item 5): the [id] segment is caller supplied and
+  // every read below uses the service-role client, so scope it here.
+  const denied = await requireAgencyScope(id, auth)
+  if (denied) return denied
 
   const sp = request.nextUrl.searchParams
   const venueIdParam = sp.get('venue_id')

@@ -113,6 +113,16 @@ export function UserMenu({ compact = false }: UserMenuProps) {
 
   async function handleSignOut() {
     clearDemoCookiesClientSide()
+    // S5 (2026-09-14 security audit, item 12). The helper above cannot
+    // touch bloom_demo_token — it is HttpOnly, so only the server can
+    // expire it, and without this call a demo session survived sign-out
+    // for its full 24 hours on that machine. Failures are swallowed:
+    // signing out must not be blocked by a cookie-clearing round trip.
+    try {
+      await fetch('/demo/exit', { method: 'POST' })
+    } catch {
+      // Nothing to tell the user; the sign-out below still happens.
+    }
     const supabase = createClient()
     await supabase.auth.signOut()
     router.push('/login')

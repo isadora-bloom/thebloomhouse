@@ -4,8 +4,10 @@ import {
   unauthorized,
   badRequest,
   serverError,
+  refuseDemo,
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { requireAgencyScope } from '@/lib/services/intel/agency-access'
 import {
   endEngagement,
   softDeleteEngagement,
@@ -28,8 +30,17 @@ export async function PATCH(request: NextRequest, ctx: RouteContext) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 
-  const { engagementId } = await ctx.params
+  const { id: agencyId, engagementId } = await ctx.params
   if (!engagementId) return badRequest('engagement id required')
+  // S5 (2026-09-14 audit item 5): the [id] segment is caller supplied and
+  // every read below uses the service-role client, so scope it here.
+  const denied = await requireAgencyScope(agencyId, auth)
+  if (denied) return denied
+  // S5 (2026-09-14 audit item 5): the demo identity is an anonymous
+  // visitor sharing one seeded venue. It may read an agency; it may not
+  // change one.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: Record<string, unknown>
   try {
@@ -64,8 +75,17 @@ export async function DELETE(request: NextRequest, ctx: RouteContext) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 
-  const { engagementId } = await ctx.params
+  const { id: agencyId, engagementId } = await ctx.params
   if (!engagementId) return badRequest('engagement id required')
+  // S5 (2026-09-14 audit item 5): the [id] segment is caller supplied and
+  // every read below uses the service-role client, so scope it here.
+  const denied = await requireAgencyScope(agencyId, auth)
+  if (denied) return denied
+  // S5 (2026-09-14 audit item 5): the demo identity is an anonymous
+  // visitor sharing one seeded venue. It may read an agency; it may not
+  // change one.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     await softDeleteEngagement(engagementId)

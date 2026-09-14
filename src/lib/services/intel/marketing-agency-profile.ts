@@ -117,6 +117,7 @@ export async function createContact(
 export async function updateContact(
   contactId: string,
   patch: Partial<Omit<CreateContactInput, 'agencyId'>>,
+  agencyId?: string,
 ): Promise<AgencyContactRow> {
   const service = createServiceClient()
 
@@ -146,22 +147,29 @@ export async function updateContact(
   if (patch.notes !== undefined) update.notes = patch.notes
   if (patch.isPrimary !== undefined) update.is_primary = patch.isPrimary
 
-  const { data, error } = await service
-    .from('agency_contacts')
-    .update(update)
-    .eq('id', contactId)
-    .select('*')
-    .single()
+  let q = service.from('agency_contacts').update(update).eq('id', contactId)
+  // S5 (2026-09-14 audit item 5). See softDeleteContact.
+  if (agencyId) q = q.eq('agency_id', agencyId)
+  const { data, error } = await q.select('*').single()
   if (error) throw new Error(`update contact failed: ${error.message}`)
   return rowToContact(data as ContactRowFromDb)
 }
 
-export async function softDeleteContact(contactId: string): Promise<void> {
+export async function softDeleteContact(
+  contactId: string,
+  agencyId?: string,
+): Promise<void> {
   const service = createServiceClient()
-  const { error } = await service
+  let q = service
     .from('agency_contacts')
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', contactId)
+  // S5 (2026-09-14 audit item 5). The route has already proved the agency
+  // belongs to the caller; pinning the child row to that agency too means
+  // a contact id from a different agency cannot ride in on a URL whose
+  // [id] segment is one the caller does own.
+  if (agencyId) q = q.eq('agency_id', agencyId)
+  const { error } = await q
   if (error) throw new Error(`delete contact failed: ${error.message}`)
 }
 
@@ -273,12 +281,18 @@ export async function createDocument(
   return rowToDocument(data as DocumentRowFromDb)
 }
 
-export async function softDeleteDocument(documentId: string): Promise<void> {
+export async function softDeleteDocument(
+  documentId: string,
+  agencyId?: string,
+): Promise<void> {
   const service = createServiceClient()
-  const { error } = await service
+  let q = service
     .from('agency_documents')
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', documentId)
+  // S5 (2026-09-14 audit item 5). See softDeleteContact.
+  if (agencyId) q = q.eq('agency_id', agencyId)
+  const { error } = await q
   if (error) throw new Error(`delete document failed: ${error.message}`)
 }
 
@@ -381,25 +395,36 @@ export async function createKpi(input: CreateKpiInput): Promise<AgencyKpiRow> {
   return rowToKpi(data as KpiRowFromDb)
 }
 
-export async function retireKpi(kpiId: string, endedAt?: string): Promise<AgencyKpiRow> {
+export async function retireKpi(
+  kpiId: string,
+  endedAt?: string,
+  agencyId?: string,
+): Promise<AgencyKpiRow> {
   const service = createServiceClient()
   const end = endedAt ?? new Date().toISOString().slice(0, 10)
-  const { data, error } = await service
+  let q = service
     .from('agency_kpi_commitments')
     .update({ effective_to: end })
     .eq('id', kpiId)
-    .select('*')
-    .single()
+  // S5 (2026-09-14 audit item 5). See softDeleteContact.
+  if (agencyId) q = q.eq('agency_id', agencyId)
+  const { data, error } = await q.select('*').single()
   if (error) throw new Error(`retire kpi failed: ${error.message}`)
   return rowToKpi(data as KpiRowFromDb)
 }
 
-export async function softDeleteKpi(kpiId: string): Promise<void> {
+export async function softDeleteKpi(
+  kpiId: string,
+  agencyId?: string,
+): Promise<void> {
   const service = createServiceClient()
-  const { error } = await service
+  let q = service
     .from('agency_kpi_commitments')
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', kpiId)
+  // S5 (2026-09-14 audit item 5). See softDeleteContact.
+  if (agencyId) q = q.eq('agency_id', agencyId)
+  const { error } = await q
   if (error) throw new Error(`delete kpi failed: ${error.message}`)
 }
 
@@ -505,11 +530,17 @@ export async function createActivity(
   return rowToActivity(data as ActivityRowFromDb)
 }
 
-export async function softDeleteActivity(activityId: string): Promise<void> {
+export async function softDeleteActivity(
+  activityId: string,
+  agencyId?: string,
+): Promise<void> {
   const service = createServiceClient()
-  const { error } = await service
+  let q = service
     .from('agency_activity_log')
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', activityId)
+  // S5 (2026-09-14 audit item 5). See softDeleteContact.
+  if (agencyId) q = q.eq('agency_id', agencyId)
+  const { error } = await q
   if (error) throw new Error(`delete activity failed: ${error.message}`)
 }

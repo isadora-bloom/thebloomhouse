@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
+import { mintSignedUrl } from '@/lib/storage/signed-url'
 import {
   Store,
   Plus,
@@ -514,19 +515,16 @@ export default function VendorsPage() {
 
       if (uploadErr) throw uploadErr
 
-      // Get signed URL (valid for 1 year)
-      const { data: urlData } = await supabase.storage
-        .from('vendor-contracts')
-        .createSignedUrl(storagePath, 60 * 60 * 24 * 365)
-
-      const signedUrl = urlData?.signedUrl || null
-
+      // S5 (2026-09-14 audit item 6). This used to mint a signed URL with
+      // a one-year TTL and store it on the vendor row. The path is the
+      // durable reference; the link is minted on click, for sixty
+      // seconds, in handleViewContract below.
       // Update vendor record
       await supabase
         .from('booked_vendors')
         .update({
           contract_uploaded: true,
-          contract_url: signedUrl,
+          contract_url: null,
           contract_storage_path: storagePath,
           contract_date: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -544,7 +542,7 @@ export default function VendorsPage() {
         filename: file.name,
         file_type: fileType,
         storage_path: storagePath,
-        file_url: signedUrl,
+        file_url: null,
         vendor_id: vendorId,
         vendor_name: vendor?.vendor_name || getTypeConfig(vendor?.vendor_type || '').label,
         status: 'uploaded',
@@ -586,10 +584,21 @@ export default function VendorsPage() {
     }
   }
 
-  function handleViewContract(vendor: BookedVendor) {
-    if (vendor.contract_url) {
-      window.open(vendor.contract_url, '_blank')
+  async function handleViewContract(vendor: BookedVendor) {
+    // S5 (2026-09-14 audit item 6): mint on click, sixty seconds, from
+    // the stored path. contract_url is only read as a fallback for rows
+    // written before this change.
+    const fresh = await mintSignedUrl(
+      supabase,
+      'vendor-contracts',
+      vendor.contract_storage_path,
+    )
+    const target = fresh ?? vendor.contract_url
+    if (target) {
+      window.open(target, '_blank')
+      return
     }
+    setError('That contract is no longer available. Try uploading it again.')
   }
 
   async function handleRemoveContract(vendorId: string) {

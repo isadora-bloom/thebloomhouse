@@ -30,6 +30,7 @@ import {
   type CoupleSurfaceRole,
 } from './surface-role'
 import { asContractStatus, statusLabel } from '@/lib/services/contracts/status'
+import { mintSignedUrl } from '@/lib/storage/signed-url'
 import {
   FileText,
   Upload,
@@ -258,6 +259,16 @@ export function ContractCard({
     }
   }
 
+  async function handleViewFile() {
+    // S5 (2026-09-14 audit item 6). Mint from the stored path at click
+    // time; fall back to a legacy stored URL only for rows written before
+    // this change.
+    const supabase = createClient()
+    const fresh = await mintSignedUrl(supabase, 'contracts', contract.storage_path)
+    const target = fresh ?? contract.file_url
+    if (target) window.open(target, '_blank', 'noopener,noreferrer')
+  }
+
   async function handleAnalyzeClick() {
     // If it's an image type and we have storage, try downloading and converting
     if (contract.storage_path && ['image', 'jpg', 'jpeg', 'png', 'webp'].includes(contract.file_type || '')) {
@@ -367,16 +378,18 @@ export function ContractCard({
 
           {/* Actions */}
           <div className="flex items-center gap-2 shrink-0">
-            {caps.canDownload && contract.file_url && (
-              <a
-                href={contract.file_url}
-                target="_blank"
-                rel="noopener noreferrer"
+            {caps.canDownload && (contract.storage_path || contract.file_url) && (
+              // S5 (2026-09-14 audit item 6): the href used to be a
+              // year-long signed URL read straight off the row. It is now
+              // minted on click and lives for sixty seconds.
+              <button
+                type="button"
+                onClick={handleViewFile}
                 className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                 title="View file"
               >
                 <ExternalLink className="w-4 h-4" />
-              </a>
+              </button>
             )}
             {caps.canAnalyse && !isAnalyzed && (
               <button
@@ -690,12 +703,9 @@ export function ContractLibrary({
 
       if (storageErr) throw storageErr
 
-      // Get signed URL
-      const { data: urlData } = await supabase.storage
-        .from('contracts')
-        .createSignedUrl(storagePath, 60 * 60 * 24 * 365)
-
-      const signedUrl = urlData?.signedUrl || null
+      // S5 (2026-09-14 audit item 6). Was a one-year signed URL persisted
+      // in contracts.file_url. The path is what gets stored; the link is
+      // minted for sixty seconds when the couple clicks View file.
 
       // Determine file type
       const ext = uploadFile.name.split('.').pop()?.toLowerCase() || ''
@@ -715,7 +725,7 @@ export function ContractLibrary({
           filename: uploadFile.name,
           fileType,
           storagePath,
-          fileUrl: signedUrl,
+          fileUrl: null,
           vendorId: uploadVendorId || undefined,
           vendorName: linkedVendor?.vendor_name || undefined,
         }),

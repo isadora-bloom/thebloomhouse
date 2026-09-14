@@ -57,37 +57,6 @@ const DEMO_MARKERS = [
 
 const MUTATING_VERBS = ['POST', 'PATCH', 'PUT', 'DELETE']
 
-// ---------------------------------------------------------------------------
-// Handoff list, not an allowlist.
-//
-// These ten routes fail the rule. They are the /api/intel/agencies/[id]
-// cluster, which the same 2026-09-14 audit assigned to workstream S5
-// because it has a deeper problem than a missing demo check: none of them
-// verify that the agency id in the path belongs to the caller's venue at
-// all. S5's fix routes every one of them through assertCanAccessVenue,
-// which satisfies this guard as a side effect. Editing them here would
-// have collided with that work for a line each.
-//
-// The list is a ratchet, not an exemption:
-//   - nothing may be added to it. A new mutating route with no demo check
-//     fails the build, full stop.
-//   - an entry that no longer violates the rule FAILS the build, so the
-//     list cannot outlive the work it is waiting on. When S5 lands, this
-//     block goes with it.
-// ---------------------------------------------------------------------------
-const AWAITING_S5 = [
-  'src/app/api/intel/agencies/[id]/route.ts',
-  'src/app/api/intel/agencies/[id]/activity/route.ts',
-  'src/app/api/intel/agencies/[id]/activity/[activityId]/route.ts',
-  'src/app/api/intel/agencies/[id]/contacts/route.ts',
-  'src/app/api/intel/agencies/[id]/contacts/[contactId]/route.ts',
-  'src/app/api/intel/agencies/[id]/documents/route.ts',
-  'src/app/api/intel/agencies/[id]/documents/[documentId]/route.ts',
-  'src/app/api/intel/agencies/[id]/engagements/[engagementId]/route.ts',
-  'src/app/api/intel/agencies/[id]/kpis/route.ts',
-  'src/app/api/intel/agencies/[id]/kpis/[kpiId]/route.ts',
-]
-
 function walk(dir) {
   const out = []
   let entries
@@ -157,34 +126,17 @@ for (const file of files) {
   violations.push({ file: normalised, verbs })
 }
 
-// Split the handoff list out of the violations, and check it has not gone
-// stale. A pending entry that now passes is work that landed — the line
-// has to go, or the list starts meaning nothing.
-const pending = new Set(AWAITING_S5)
-const stillPending = violations.filter((v) => pending.has(v.file))
-const remaining = violations.filter((v) => !pending.has(v.file))
-const stale = AWAITING_S5.filter((p) => !violations.some((v) => v.file === p))
-
-if (stale.length > 0) {
-  console.log(
-    `\n${stale.length} route(s) in the S5 handoff list no longer violate the rule:\n`,
-  )
-  for (const f of stale) console.log(`  ${f}`)
-  console.log(
-    '\nThe work landed. Delete these lines from AWAITING_S5 in this script,\nand delete the whole block once the list is empty.',
-  )
-  process.exit(1)
-}
-
-if (stillPending.length > 0) {
-  console.log(
-    `\n${stillPending.length} route(s) still awaiting the S5 agency-cluster fix (see AWAITING_S5):`,
-  )
-  for (const v of stillPending) console.log(`  ${v.file}   (${v.verbs.join(', ')})`)
-}
-
-violations.length = 0
-violations.push(...remaining)
+// The AWAITING_S5 handoff list lived here: ten /api/intel/agencies/[id]
+// routes that failed this rule and were left to workstream S5, because
+// they had a deeper problem than a missing demo check — none of them
+// verified that the agency id in the path belonged to the caller's venue.
+//
+// S5 landed. Every route in that cluster now runs requireAgencyScope
+// (src/lib/services/intel/agency-access.ts) and, on the mutating verbs,
+// refuseDemo. The list was written as a ratchet that could not outlive
+// the work, so it goes out with it. Nothing replaces it: a mutating
+// route with platform auth and no demo refusal fails the build, and
+// there are no exceptions left.
 
 if (violations.length > 0) {
   console.log(
@@ -211,7 +163,5 @@ may not write.`)
 }
 
 console.log(
-  stillPending.length > 0
-    ? `Demo refusal on writes: ${files.length} API routes scanned, ${stillPending.length} awaiting S5 (listed above), everything else accounts for the demo identity.`
-    : `Demo refusal on writes: ${files.length} API routes scanned, every mutating platform-auth route accounts for the demo identity.`,
+  `Demo refusal on writes: ${files.length} API routes scanned, every mutating platform-auth route accounts for the demo identity.`,
 )

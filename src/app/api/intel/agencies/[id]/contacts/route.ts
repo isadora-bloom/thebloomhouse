@@ -4,8 +4,10 @@ import {
   unauthorized,
   badRequest,
   serverError,
+  refuseDemo,
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { requireAgencyScope } from '@/lib/services/intel/agency-access'
 import {
   listContacts,
   createContact,
@@ -22,6 +24,10 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
   if (!auth) return unauthorized()
   const { id } = await ctx.params
   if (!id) return badRequest('agency id required')
+  // S5 (2026-09-14 audit item 5): the [id] segment is caller supplied and
+  // every read below uses the service-role client, so scope it here.
+  const denied = await requireAgencyScope(id, auth)
+  if (denied) return denied
   try {
     const contacts = await listContacts(id)
     return NextResponse.json({ contacts })
@@ -37,6 +43,15 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
   if (!auth) return unauthorized()
   const { id } = await ctx.params
   if (!id) return badRequest('agency id required')
+  // S5 (2026-09-14 audit item 5): the [id] segment is caller supplied and
+  // every read below uses the service-role client, so scope it here.
+  const denied = await requireAgencyScope(id, auth)
+  if (denied) return denied
+  // S5 (2026-09-14 audit item 5): the demo identity is an anonymous
+  // visitor sharing one seeded venue. It may read an agency; it may not
+  // change one.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   let body: Record<string, unknown>
   try {
     body = await request.json()

@@ -17,6 +17,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { safeHref } from '@/lib/utils/safe-url'
 import {
   Calendar,
   ArrowLeft,
@@ -150,7 +151,7 @@ export default async function CalendlyIntegrationPage() {
                   <code className="text-xs text-sage-600 truncate block">{link.url}</code>
                 </div>
                 <a
-                  href={link.url}
+                  href={safeHref(link.url)}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="shrink-0 text-sage-600 hover:text-sage-900"
@@ -182,7 +183,7 @@ export default async function CalendlyIntegrationPage() {
                   <code className="text-xs text-sage-600 truncate block">{link.url}</code>
                 </div>
                 <a
-                  href={link.url}
+                  href={safeHref(link.url)}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="shrink-0 text-sage-600 hover:text-sage-900"

@@ -1926,11 +1926,14 @@ function InviteStatusBadge({
       const res = await fetch('/api/portal/invite-couple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // S5 (2026-09-14 security audit, item 10): email and partnerEmail
+        // are no longer sent. The route derives the recipients from the
+        // wedding's own people rows — the same rows this component read
+        // them from — so the browser no longer gets to say who receives a
+        // registration credential.
         body: JSON.stringify({
           weddingId,
           venueId,
-          email: partner1.email,
-          partnerEmail: partner2?.email || null,
           coupleName,
         }),
       })

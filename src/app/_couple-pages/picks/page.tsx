@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
+import { safeHref } from '@/lib/utils/safe-url'
 import {
   Sparkles,
   Search,
@@ -129,7 +130,7 @@ function PickCard({ pick }: { pick: StorefrontPick }) {
 
         {pick.affiliate_link && (
           <a
-            href={pick.affiliate_link}
+            href={safeHref(pick.affiliate_link)}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-medium text-white transition-colors hover:opacity-90 mt-2"

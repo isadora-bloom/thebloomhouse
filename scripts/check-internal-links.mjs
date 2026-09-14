@@ -176,6 +176,16 @@ function isResolved(link, routePages, apiRoutes) {
   for (const route of routePages) {
     if (matchesRoute(link, route)) return true
   }
+  // ...or to a route handler that does not live under /api. Next allows
+  // a route.ts anywhere in the app tree, and some of them are the point:
+  // /demo/exit expires the HttpOnly demo cookies, which only the server
+  // can do, and it is fetched and linked like any other path. Checking
+  // apiRoutes here still requires a real route.ts on disk — it widens
+  // what counts as a route, not what counts as resolved. (S5,
+  // 2026-09-14.)
+  for (const route of apiRoutes) {
+    if (matchesRoute(link, route)) return true
+  }
   return false
 }
 

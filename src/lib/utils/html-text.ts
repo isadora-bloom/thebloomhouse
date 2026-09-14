@@ -22,6 +22,29 @@
  * tags become newlines so "Hi<br>How are you" becomes "Hi\nHow are you"
  * instead of collapsing. Common entities decoded. Numeric + hex
  * entities decoded too.
+ *
+ * THIS IS NOT A SANITISER. S5 (2026-09-14 security audit, item 12) notes
+ * it here because the name reads like one and the old
+ * `validation.sanitizeHtml` next door claimed to be one and was not.
+ *
+ * What that means in practice:
+ *   - The output of htmlToText is TEXT. Put it in a text node, a prompt,
+ *     a regex, a database column read as text. It is safe there because
+ *     it is not markup any more.
+ *   - The output is NOT safe to re-inject as HTML. `&lt;script&gt;`
+ *     arrives here as an entity and leaves as a literal `<script>`,
+ *     because decoding entities is the job. Feeding that back into
+ *     dangerouslySetInnerHTML would hand a browser exactly the tag the
+ *     sender encoded to get past you.
+ *   - A regex pipeline over HTML is a best-effort reading of what a
+ *     parser would do, and adversarial input can disagree with it. That
+ *     is fine for extraction, where being wrong means a mangled field.
+ *     It is not fine for a security boundary, where being wrong means
+ *     script execution.
+ *
+ * Need to render untrusted HTML? Escape it with `escapeHtml`
+ * (src/lib/services/contracts/templates.ts), or reach for a real
+ * parser-based sanitiser and get the surface reviewed.
  */
 
 const HTML_ENTITY_MAP: Record<string, string> = {

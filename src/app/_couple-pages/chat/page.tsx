@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { Send, Sparkles, AlertCircle, Loader2, RotateCcw, FileText, Brain, Paperclip, X, File as FileIcon } from 'lucide-react'
 import { getSectionBySlug } from '@/lib/services/sage/portal-sections'
+import { mintSignedUrl, HANDOFF_SIGNED_URL_TTL_SECONDS } from '@/lib/storage/signed-url'
 
 // TODO: Derive venue_id from wedding or session
 // ---------------------------------------------------------------------------
@@ -415,11 +416,14 @@ export default function SageChatPage() {
         return null
       }
 
-      const { data: urlData } = await supabase.storage
-        .from('contracts')
-        .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
-
-      return urlData?.signedUrl || null
+      // S5 (2026-09-14 audit item 6). Was a one-year signed URL. The URL
+      // is handed straight to /api/portal/sage, which fetches it within
+      // the same request, so five minutes is generous. A year of it meant
+      // every chat attachment a couple ever sent stayed readable by
+      // anyone who got hold of the link.
+      return await mintSignedUrl(supabase, 'contracts', storagePath, {
+        ttlSeconds: HANDOFF_SIGNED_URL_TTL_SECONDS,
+      })
     } catch (err) {
       console.error('File upload failed:', err)
       return null

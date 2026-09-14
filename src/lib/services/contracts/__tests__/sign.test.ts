@@ -21,7 +21,9 @@ import {
   looksLikeToken,
   mintSignToken,
   signContract,
+  signTokenExpired,
   validSignedName,
+  SIGN_TOKEN_TTL_DAYS,
   type PublicContractView,
 } from '../sign'
 import { DEFAULT_CONTRACT_TEMPLATE, type ContractPackageSnapshot } from '../templates'
@@ -222,6 +224,9 @@ describe('venue isolation', () => {
         status: 'sent',
         filename: 'HM-agreement.pdf',
         sign_token: other.tokenHash,
+        // S5 item 7: a live signing link needs a sent_at to measure its
+        // thirty days from. Without one the row reads as expired.
+        sent_at: new Date().toISOString(),
         generated_from: {
           snapshot: OTHER_VENUE_SNAPSHOT,
           template: DEFAULT_CONTRACT_TEMPLATE,
@@ -253,6 +258,9 @@ describe('venue isolation', () => {
         kind: 'generated',
         status: 'sent',
         sign_token: other.tokenHash,
+        // S5 item 7: a live signing link needs a sent_at to measure its
+        // thirty days from. Without one the row reads as expired.
+        sent_at: new Date().toISOString(),
         generated_from: {
           snapshot: OTHER_VENUE_SNAPSHOT,
           template: DEFAULT_CONTRACT_TEMPLATE,
@@ -312,7 +320,12 @@ describe('signContract', () => {
     })
     expect(second.ok).toBe(false)
     if (second.ok) return
-    expect(second.reason).toMatch(/already been signed/i)
+    // S5 (2026-09-14 audit item 7) changed the refusal a second tap gets.
+    // Signing now nulls sign_token, so the second attempt does not resolve
+    // to a row at all and gets the deliberately uninformative not-found
+    // line rather than "already been signed". The claim the test exists to
+    // make — one signature, and the first one stands — is unchanged.
+    expect(second.reason).toMatch(/not valid/i)
 
     // And the first signature is untouched.
     expect(db.table('contracts')[0].signed_name).toBe('Chloe Barnes')
@@ -360,5 +373,110 @@ describe('signContract', () => {
     })
     expect(result.ok).toBe(false)
     expect(db.calls).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// S5 (2026-09-14 security audit, item 7): the link expires, and signing
+// retires it.
+// ---------------------------------------------------------------------------
+
+const SENT_AT = '2026-09-14T11:00:00Z'
+const DAY = 24 * 60 * 60 * 1000
+
+describe('signing link expiry', () => {
+  it('signTokenExpired measures thirty days from the send', () => {
+    const sent = Date.parse(SENT_AT)
+    expect(signTokenExpired(SENT_AT, new Date(sent + 29 * DAY))).toBe(false)
+    expect(signTokenExpired(SENT_AT, new Date(sent + SIGN_TOKEN_TTL_DAYS * DAY - 1))).toBe(false)
+    expect(signTokenExpired(SENT_AT, new Date(sent + 31 * DAY))).toBe(true)
+  })
+
+  it('treats a row with no sent_at, or a junk one, as expired', () => {
+    expect(signTokenExpired(null)).toBe(true)
+    expect(signTokenExpired(undefined)).toBe(true)
+    expect(signTokenExpired('')).toBe(true)
+    expect(signTokenExpired('not a date')).toBe(true)
+  })
+
+  it('opens on day 29 and refuses on day 31', async () => {
+    const { token } = seedContract(db, { sent_at: SENT_AT })
+    const sent = Date.parse(SENT_AT)
+
+    const fresh = await loadContractForSigning(
+      token,
+      db.asClient(),
+      new Date(sent + 29 * DAY),
+    )
+    expect(fresh.ok).toBe(true)
+
+    const stale = await loadContractForSigning(
+      token,
+      db.asClient(),
+      new Date(sent + 31 * DAY),
+    )
+    expect(stale.ok).toBe(false)
+    if (stale.ok) return
+    expect(stale.reason).toMatch(/expired/i)
+  })
+
+  it('does not render the contract body once the link has expired', async () => {
+    const { token } = seedContract(db, { sent_at: SENT_AT })
+    const result = await loadContractForSigning(
+      token,
+      db.asClient(),
+      new Date(Date.parse(SENT_AT) + 60 * DAY),
+    )
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).not.toMatch(/crestwood/i)
+    expect(result.reason).not.toMatch(/18,500/)
+  })
+
+  it('will not put a signature on an expired link', async () => {
+    const { token } = seedContract(db, { sent_at: SENT_AT })
+    const result = await signContract({
+      token,
+      typedName: 'Chloe Barnes',
+      db: db.asClient(),
+      now: new Date(Date.parse(SENT_AT) + 45 * DAY),
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/expired/i)
+    const row = db.table('contracts')[0]
+    expect(row.status).toBe('sent')
+    expect(row.signed_name).toBeNull()
+  })
+})
+
+describe('the link retires itself once signed', () => {
+  it('nulls sign_token on a successful signature', async () => {
+    const { token } = seedContract(db, { sent_at: SENT_AT })
+    const result = await signContract({
+      token,
+      typedName: 'Chloe Barnes',
+      db: db.asClient(),
+      now: new Date(Date.parse(SENT_AT) + DAY),
+    })
+    expect(result.ok).toBe(true)
+    const row = db.table('contracts')[0]
+    expect(row.status).toBe('signed')
+    expect(row.signed_name).toBe('Chloe Barnes')
+    expect(row.sign_token).toBeNull()
+  })
+
+  it('the emailed link stops working the moment it has been used', async () => {
+    const { token } = seedContract(db, { sent_at: SENT_AT })
+    const now = new Date(Date.parse(SENT_AT) + DAY)
+
+    const signed = await signContract({ token, typedName: 'Chloe Barnes', db: db.asClient(), now })
+    expect(signed.ok).toBe(true)
+    // The signing response still shows them their own signature once.
+    if (signed.ok) expect(signed.view.signedName).toBe('Chloe Barnes')
+
+    // A later open of the same URL resolves to nothing at all.
+    const reopened = await loadContractForSigning(token, db.asClient(), now)
+    expect(reopened.ok).toBe(false)
   })
 })

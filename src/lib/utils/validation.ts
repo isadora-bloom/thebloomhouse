@@ -57,52 +57,40 @@ export function isValidUrl(url: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// HTML sanitization
+// HTML sanitization — REMOVED (S5, 2026-09-14 security audit, item 12)
 // ---------------------------------------------------------------------------
-
-const DANGEROUS_TAGS = [
-  'script',
-  'iframe',
-  'object',
-  'embed',
-  'form',
-  'input',
-  'textarea',
-  'select',
-  'button',
-  'applet',
-  'meta',
-  'link',
-  'base',
-  'style',
-]
-
-/**
- * Strips dangerous HTML tags (script, iframe, object, embed, form elements,
- * etc.) from a string. Keeps safe tags like p, br, strong, em, a, ul, li.
- */
-export function sanitizeHtml(html: string): string {
-  let sanitized = html
-
-  for (const tag of DANGEROUS_TAGS) {
-    // Remove opening tags with attributes
-    const openPattern = new RegExp(`<${tag}[^>]*>`, 'gi')
-    sanitized = sanitized.replace(openPattern, '')
-
-    // Remove closing tags
-    const closePattern = new RegExp(`</${tag}>`, 'gi')
-    sanitized = sanitized.replace(closePattern, '')
-  }
-
-  // Remove event handlers from remaining tags
-  sanitized = sanitized.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
-  sanitized = sanitized.replace(/\s+on\w+\s*=\s*\S+/gi, '')
-
-  // Remove javascript: URLs
-  sanitized = sanitized.replace(/javascript\s*:/gi, '')
-
-  return sanitized
-}
+//
+// `sanitizeHtml` lived here: a denylist of tag names, stripped with
+// `new RegExp('<' + tag + '[^>]*>')`, plus a pass over `on*=` attributes
+// and the literal string `javascript:`.
+//
+// It did not work, and it could not have. A regex denylist over HTML
+// loses to the parser every time:
+//
+//   <scr<script>ipt>   the inner match is removed and the outer halves
+//                      join back up into a live <script>
+//   <img src=x onerror = alert(1)>
+//                      the attribute pass wants `\s+on\w+\s*=`; a
+//                      newline or an unquoted value past the first
+//                      space walks straight through
+//   <a href="java&#115;cript:...">
+//                      entity-encoded, so the `javascript:` strip never
+//                      sees it, and the browser decodes it anyway
+//   <svg/onload=alert(1)>
+//                      no space before the handler at all
+//
+// A function named "sanitize" that does not sanitize is worse than no
+// function, because the next person to need one finds it and stops
+// looking. It had no importers anywhere in the repo — it was a loaded
+// gun on a shelf, not a live hole — so it is deleted rather than
+// rewritten.
+//
+// If you need to render untrusted HTML: don't. Escape it
+// (`escapeHtml` in src/lib/services/contracts/templates.ts) or strip it
+// to text (`htmlToText` in src/lib/utils/html-text.ts, which is explicit
+// that it produces TEXT and is not a sanitiser). If a surface genuinely
+// has to render rich HTML from a stranger, that needs a real parser-based
+// sanitiser and its own review, not a helper added back here.
 
 // ---------------------------------------------------------------------------
 // Text utilities
