@@ -26,43 +26,35 @@ import {
  * calls Google's customers:listAccessibleCustomers to populate the
  * dropdown. This keeps the OAuth round-trip fast.
  */
+const SETTINGS_PATH = '/settings/integrations/google-ads'
+
 export async function GET(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // W54: these redirects used to be bare paths. NextResponse.redirect
+  // needs an absolute URL and throws on a relative one, so every error
+  // branch here was itself a 500 rather than the settings page saying
+  // what went wrong. Built against the request origin now.
+  const back = (query: string) =>
+    NextResponse.redirect(new URL(`${SETTINGS_PATH}${query}`, request.nextUrl.origin))
 
   const sp = request.nextUrl.searchParams
   const code = sp.get('code')
   const state = sp.get('state')
   const errorParam = sp.get('error')
 
-  if (errorParam) {
-    return NextResponse.redirect(
-      `/settings/integrations/google-ads?error=${encodeURIComponent(errorParam)}`,
-    )
-  }
-  if (!code || !state) {
-    return NextResponse.redirect(
-      '/settings/integrations/google-ads?error=missing_code_or_state',
-    )
-  }
+  if (errorParam) return back(`?error=${encodeURIComponent(errorParam)}`)
+  if (!code || !state) return back('?error=missing_code_or_state')
+
   const stateCheck = verifyOauthState(state)
   if (!stateCheck.ok) {
-    return NextResponse.redirect(
-      `/settings/integrations/google-ads?error=${encodeURIComponent(stateCheck.reason)}`,
-    )
+    return back(`?error=${encodeURIComponent(stateCheck.reason)}`)
   }
-  if (stateCheck.venueId !== auth.venueId) {
-    return NextResponse.redirect(
-      '/settings/integrations/google-ads?error=venue_mismatch',
-    )
-  }
+  if (stateCheck.venueId !== auth.venueId) return back('?error=venue_mismatch')
 
   const envCheck = readGoogleAdsOauthEnv()
-  if (!envCheck.ok) {
-    return NextResponse.redirect(
-      '/settings/integrations/google-ads?error=not_configured',
-    )
-  }
+  if (!envCheck.ok) return back('?error=not_configured')
 
   try {
     const tokens = await exchangeCodeForTokens({ env: envCheck.env, code })
@@ -71,13 +63,9 @@ export async function GET(request: NextRequest) {
       tokens,
       connectedBy: auth.userId,
     })
-    return NextResponse.redirect('/settings/integrations/google-ads?ok=1')
+    return back('?ok=1')
   } catch (err) {
     console.error('[google-ads-oauth/callback]', err)
-    return NextResponse.redirect(
-      `/settings/integrations/google-ads?error=${encodeURIComponent(
-        err instanceof Error ? err.message.slice(0, 200) : 'exchange_failed',
-      )}`,
-    )
+    return back('?error=exchange_failed')
   }
 }

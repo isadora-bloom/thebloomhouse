@@ -41,6 +41,19 @@ const UNIQUE_KEYS: Record<string, string[]> = {
   // constraint turns a second run into an update, so a fake that let the
   // duplicate through would prove the opposite of what the test claims.
   commitment_reconciliation: ['wedding_id', 'commitment_key'],
+  // W54 (wave 8). `uniq_marketing_spend_records_dedupe`, migration 263.
+  // An ad connector re-running a day it already pulled must land on this
+  // constraint and refresh the row rather than adding a second one. A
+  // fake without the key would let the duplicate through and the
+  // idempotence test would pass while the real thing doubled the spend.
+  marketing_spend_records: ['venue_id', 'channel', 'campaign_id', 'spend_date'],
+  // W54. One ad connection per venue per platform, migrations 310 and
+  // 407. The token-renewal path upserts on venue_id, so without these
+  // the fake would quietly file a second row and the test would read the
+  // stale one.
+  google_ads_connections: ['venue_id'],
+  meta_ads_connections: ['venue_id'],
+  tiktok_ads_connections: ['venue_id'],
 }
 
 /** Timestamps compare as time, everything else as a number or a string. */

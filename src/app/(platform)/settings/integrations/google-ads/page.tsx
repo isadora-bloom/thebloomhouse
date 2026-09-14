@@ -41,6 +41,9 @@ export default function GoogleAdsIntegrationPage() {
   const sp = useSearchParams()
   const [state, setState] = useState<ConfigState | null>(null)
   const [loading, setLoading] = useState(true)
+  const [customerInput, setCustomerInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -52,6 +55,7 @@ export default function GoogleAdsIntegrationPage() {
       }
       const j = (await resp.json()) as ConfigState
       setState(j)
+      setCustomerInput(j.connection?.customerId ?? '')
     } finally {
       setLoading(false)
     }
@@ -62,6 +66,26 @@ export default function GoogleAdsIntegrationPage() {
 
   const connect = () => {
     window.location.href = '/api/integrations/google-ads/oauth/start'
+  }
+
+  const saveCustomer = async () => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const resp = await fetch('/api/integrations/google-ads/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId: customerInput }),
+      })
+      if (!resp.ok) {
+        const j = (await resp.json().catch(() => null)) as { error?: string } | null
+        setSaveError(j?.error ?? 'That account could not be saved.')
+        return
+      }
+      await load()
+    } finally {
+      setSaving(false)
+    }
   }
 
   if (loading || !state) {
@@ -213,10 +237,9 @@ export default function GoogleAdsIntegrationPage() {
                     : null}
                 </p>
               ) : (
-                <p className="text-xs text-[var(--bh-muted)]">
-                  Customer not yet selected — pick the Google Ads account
-                  this venue wants Bloom to read from. (Picker coming
-                  next.)
+                <p className="text-sm text-amber-800">
+                  Connected, but no account has been chosen yet, so nothing
+                  is being read. Enter the account id below.
                 </p>
               )}
               {state.connection.connectedAt ? (
@@ -225,13 +248,36 @@ export default function GoogleAdsIntegrationPage() {
                   {new Date(state.connection.connectedAt).toLocaleString()}
                 </p>
               ) : null}
-              <button
-                type="button"
-                onClick={connect}
-                className="mt-2 inline-flex items-center gap-1 rounded-md border border-[var(--bh-line)] bg-white px-3 py-1.5 text-xs hover:bg-[var(--bh-sage-50)]"
-              >
-                Re-authorize
-              </button>
+
+              <div className="flex flex-wrap items-end gap-2 pt-2">
+                <label className="text-xs text-[var(--bh-muted)]">
+                  Account id
+                  <input
+                    value={customerInput}
+                    onChange={(e) => setCustomerInput(e.target.value)}
+                    placeholder="123-456-7890"
+                    className="mt-1 block w-56 rounded-md border border-[var(--bh-line)] px-2 py-1.5 font-mono text-sm"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void saveCustomer()}
+                  disabled={saving}
+                  className="rounded-md bg-[var(--bh-sage-700)] px-3 py-1.5 text-xs text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save account'}
+                </button>
+                <button
+                  type="button"
+                  onClick={connect}
+                  className="inline-flex items-center gap-1 rounded-md border border-[var(--bh-line)] bg-white px-3 py-1.5 text-xs hover:bg-[var(--bh-sage-50)]"
+                >
+                  Reconnect
+                </button>
+              </div>
+              {saveError ? (
+                <p className="text-xs text-rose-700">{saveError}</p>
+              ) : null}
             </div>
           ) : state.connection?.status === 'error' ? (
             <div className="mt-3 space-y-2">
@@ -275,11 +321,11 @@ export default function GoogleAdsIntegrationPage() {
         <h2 className="font-serif text-lg">What this unlocks</h2>
         <ul className="mt-3 space-y-2 text-sm">
           <li>
-            <strong>Real keyword + match-type per gclid.</strong> Every
-            ad-click captured by the site pixel becomes a precise
-            attribution — "this lead came from the keyword
-            &lsquo;rixey manor wedding venue&rsquo; on a broad-match
-            campaign", not just "Google Ads".
+            <strong>The real keyword behind each ad click.</strong> Every
+            ad click the site records becomes a precise answer, not the
+            blanket &lsquo;Google Ads&rsquo;. You see which search words
+            brought somebody to you and whether it was a broad match or an
+            exact one.
           </li>
           <li>
             <strong>Brand-search vs non-brand split.</strong> Without
