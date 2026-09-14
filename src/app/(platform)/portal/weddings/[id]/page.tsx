@@ -51,6 +51,13 @@ import { WeddingAddressesSection } from '@/components/portal/wedding-addresses-s
 import { WeddingPrioritiesWidget } from '@/components/portal/wedding-priorities-widget'
 import { WeddingFinalisationsWidget } from '@/components/portal/wedding-finalisations-widget'
 import { WeddingExtractionSummary } from '@/components/portal/wedding-extraction-summary'
+import { ContractLibrary } from '@/components/couple/contract-library'
+import { TimelineBuilder } from '@/components/couple/timeline-builder'
+import {
+  CollapsibleSection,
+  CoupleStorySection,
+  WALKTHROUGH_HEADINGS,
+} from './_components/walkthrough-sections'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -643,7 +650,10 @@ function VendorsTab({ vendors, weddingId, venueId }: { vendors: BookedVendorRow[
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {vendor.contract_uploaded && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-200">
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-200"
+                  title={`Read and search the file itself in the ${WALKTHROUGH_HEADINGS.contracts.toLowerCase()} section further down this page`}
+                >
                   <FileText className="w-2.5 h-2.5" />
                   Contract
                 </span>
@@ -744,6 +754,14 @@ function TimelineTab({ items }: { items: TimelineItemRow[] }) {
       <div className="text-center py-12">
         <Clock className="w-10 h-10 text-sage-300 mx-auto mb-3" />
         <p className="text-sm text-sage-500">No day-of timeline items yet.</p>
+        {/* This tab lists per-event timeline rows. The couple's builder
+            writes a single config blob instead (the schema fork noted in
+            migration 188), so an empty list here does not mean an empty
+            day. Point at the section that reads the blob. */}
+        <p className="text-xs text-sage-400 mt-2">
+          The couple builds their day in the {WALKTHROUGH_HEADINGS.timeline.toLowerCase()} section
+          further down this page, which is where you can edit it too.
+        </p>
       </div>
     )
   }
@@ -1972,6 +1990,9 @@ function InviteStatusBadge({
 export default function WeddingProfilePage() {
   const params = useParams()
   const weddingId = params.id as string
+  // Venue's own name for the assistant. Passed into the shared couple
+  // components so a white-label venue never sees another venue's name.
+  const pageAiName = useAiName()
 
   const [activeTab, setActiveTab] = useState<TabKey>('overview')
   const [loading, setLoading] = useState(true)
@@ -2330,6 +2351,53 @@ export default function WeddingProfilePage() {
           <LifecycleHistory weddingId={weddingId} venueId={wedding.venue_id} />
         )}
       </div>
+
+      {/* ================================================================== */}
+      {/* Walkthrough sections (wave 6, W43)                                  */}
+      {/*                                                                     */}
+      {/* Three things a final walkthrough needs that used to live on other   */}
+      {/* screens: who the couple are in their own words, their signed        */}
+      {/* paperwork, and the running order for the day. Below the tabs and    */}
+      {/* collapsed by default, so the page a coordinator knows is unchanged  */}
+      {/* until they open one. Each mounts its component only while open.     */}
+      {/* ================================================================== */}
+      {wedding && (
+        <div className="space-y-4">
+          <CollapsibleSection
+            heading={WALKTHROUGH_HEADINGS.story}
+            subheading="Reconstructed from what they have told you, with the quote behind every claim"
+            icon={Sparkles}
+          >
+            <CoupleStorySection weddingId={weddingId} venueId={wedding.venue_id} />
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            heading={WALKTHROUGH_HEADINGS.contracts}
+            subheading="Everything the couple has uploaded, searchable. They add and remove; you read."
+            icon={FileText}
+          >
+            <ContractLibrary
+              weddingId={weddingId}
+              role="coordinator"
+              aiName={pageAiName}
+            />
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            heading={WALKTHROUGH_HEADINGS.timeline}
+            subheading="The couple's own builder. Edits here save to the same place their portal reads."
+            icon={Clock}
+          >
+            <TimelineBuilder
+              weddingId={weddingId}
+              venueId={wedding.venue_id}
+              role="coordinator"
+              exportName={clientCode ?? weddingId}
+              onSaved={fetchData}
+            />
+          </CollapsibleSection>
+        </div>
+      )}
     </div>
   )
 }

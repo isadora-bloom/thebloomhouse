@@ -142,6 +142,18 @@ export const CLIENT_TERMS: Readonly<Record<string, string>> = {
   venue_id: 'venue',
   'merged into': 'joined up with',
 
+  // — the walkthrough sections on a coordinator's wedding page —
+  // Three internal nouns a coordinator should never have to learn to run
+  // a final walkthrough. "Identity profile" in particular is the forensic
+  // reconstruction; to the person in the room it is simply who the couple
+  // are, in their own words.
+  'identity profile': 'who they are, in their own words',
+  'couple story': 'who they are, in their own words',
+  contract: 'signed paperwork',
+  contracts: 'signed paperwork',
+  timeline: 'running order for the day',
+  'day of timeline': 'running order for the day',
+
   // — handle identity (Wave 3, HANDLE-IDENTITY-SPEC.md) —
   handle: 'social handle',
   handles: 'social handles',
