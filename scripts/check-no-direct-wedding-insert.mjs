@@ -93,7 +93,7 @@ function scan(file) {
     if (GRANDFATHERED.has(rel)) {
       // Grandfathered — emit an informational line but don't fail.
       // Keeps the audit trail visible without blocking CI.
-      // eslint-disable-next-line no-console
+       
       console.log(`grandfathered: ${rel}:${line}`)
     } else {
       OFFENDERS.push({ file: rel, line })
@@ -104,26 +104,26 @@ function scan(file) {
 walk(SRC_DIR)
 
 if (OFFENDERS.length === 0) {
-  // eslint-disable-next-line no-console
+   
   console.log('OK — no new direct wedding INSERT sites detected.')
   process.exit(0)
 }
 
-// eslint-disable-next-line no-console
+ 
 console.error('\nFAIL — new direct `.from(\'weddings\').insert(` call sites detected:\n')
 for (const o of OFFENDERS) {
-  // eslint-disable-next-line no-console
+   
   console.error(`  ${o.file}:${o.line}`)
 }
-// eslint-disable-next-line no-console
+ 
 console.error(
   '\nUse `mintWedding` from `src/lib/services/identity/mint-wedding.ts` instead.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'If this is a legitimate canonical writer, add it to CANONICAL in this script.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'See docs/IDENTITY-CHOKEPOINT-MIGRATION.md for the migration path.\n',
 )

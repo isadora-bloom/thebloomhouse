@@ -146,7 +146,7 @@ export async function POST(req: Request) {
       // picked up automatically).
       for (const { table_name, column_name } of fkRows) {
         if (SKIP_TABLES.has(table_name)) continue
-        // eslint-disable-next-line no-await-in-loop -- order matters; one table at a time
+         
         await runDelete(`${table_name}.${column_name}`, async () => {
           const { count, error } = await supabase
             .from(table_name)

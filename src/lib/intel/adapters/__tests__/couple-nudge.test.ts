@@ -187,7 +187,7 @@ function fakeSupabase(fixtures: Record<string, Row[]>) {
   return {
     from(table: string) {
       const preds: Array<(r: Row) => boolean> = []
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const chain: any = {}
       chain.select = () => chain
       chain.eq = (c: string, v: unknown) => {
@@ -206,7 +206,7 @@ function fakeSupabase(fixtures: Record<string, Row[]>) {
       }
       return chain
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any
 }
 

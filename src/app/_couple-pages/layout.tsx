@@ -118,11 +118,11 @@ export default async function CoupleLayout({
   return (
     <>
       {/* Google Fonts for venue font pair */}
-      {/* eslint-disable-next-line @next/next/no-page-custom-font */}
+      { }
       <link rel="preconnect" href="https://fonts.googleapis.com" />
-      {/* eslint-disable-next-line @next/next/no-page-custom-font */}
+      { }
       <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-      {/* eslint-disable-next-line @next/next/no-page-custom-font */}
+      { }
       <link href={fontUrl} rel="stylesheet" />
 
       <div style={cssVars} className="min-h-screen bg-[#FAFAF8]">

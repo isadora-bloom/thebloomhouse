@@ -581,7 +581,7 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   return (
     <div className="space-y-8">
       {/* Inject Google Font for preview */}
-      {/* eslint-disable-next-line @next/next/no-page-custom-font */}
+      { }
       <link rel="stylesheet" href={fontUrl} />
 
       {/* Header */}

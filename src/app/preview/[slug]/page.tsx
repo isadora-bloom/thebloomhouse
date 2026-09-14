@@ -93,7 +93,7 @@ export default function SagePreviewPage() {
     }
 
     loadVenue()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [slug])
 
   // Auto-scroll on new messages

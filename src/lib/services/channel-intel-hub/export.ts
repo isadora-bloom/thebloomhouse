@@ -322,7 +322,7 @@ export async function generateExport(args: ExportArgs): Promise<ExportResult> {
   if (error) {
     // Soft-fail: still return the body. The operator gets the export,
     // the audit row is missing (lower priority).
-    // eslint-disable-next-line no-console
+     
     console.warn('[channel-intel-hub.export] persist failed:', error.message)
   }
 
@@ -357,7 +357,7 @@ export function renderFrozenExport(
   // Lightweight render: reconstruct the ChannelSnapshot shape enough for
   // the HTML renderer. The frozen jsonb is exhaustive enough that we
   // don't need to re-derive anything.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const s = snapshotJsonb as any
   const fake: ChannelSnapshot = {
     venue_id: '',

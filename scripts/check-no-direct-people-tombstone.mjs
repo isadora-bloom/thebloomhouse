@@ -86,7 +86,7 @@ function scan(file) {
     const upto = text.slice(0, match.index)
     const line = upto.split('\n').length
     if (GRANDFATHERED.has(rel)) {
-      // eslint-disable-next-line no-console
+       
       console.log(`grandfathered: ${rel}:${line}`)
     } else {
       OFFENDERS.push({ file: rel, line })
@@ -97,30 +97,30 @@ function scan(file) {
 walk(SRC_DIR)
 
 if (OFFENDERS.length === 0) {
-  // eslint-disable-next-line no-console
+   
   console.log('OK — no new direct people.merged_into_id writers detected.')
   process.exit(0)
 }
 
-// eslint-disable-next-line no-console
+ 
 console.error(
   "\nFAIL — new direct `.from('people').update({ ... merged_into_id ... })` call sites detected:\n",
 )
 for (const o of OFFENDERS) {
-  // eslint-disable-next-line no-console
+   
   console.error(`  ${o.file}:${o.line}`)
 }
-// eslint-disable-next-line no-console
+ 
 console.error(
   '\nUse `softTombstonePerson` or `mergePeople` from `src/lib/services/identity/merge-people.ts` instead.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'Setting merged_into_id directly skips FK child reassignment '
     + '(interactions, drafts, engagement_events, contacts, tangential_signals) '
     + 'and orphans them to a tombstoned parent.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'See MERGED-INTO-ID-TRACE-2026-05-12.md for the trace + rationale.\n',
 )

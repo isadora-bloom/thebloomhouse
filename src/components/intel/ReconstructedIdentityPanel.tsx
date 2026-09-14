@@ -277,7 +277,7 @@ export function ReconstructedIdentityPanel({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   const [revealSensitive, setRevealSensitive] = useState(false)
   const [venueRevealFlag, setVenueRevealFlag] = useState(false)
   const [showNames, setShowNames] = useState(true)

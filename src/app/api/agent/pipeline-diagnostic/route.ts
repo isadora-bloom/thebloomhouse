@@ -20,7 +20,7 @@ async function countQuery(
   table: string,
   apply: (q: ReturnType<ReturnType<typeof createServiceClient>['from']>) => unknown
 ): Promise<CountResult> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const base = (supabase.from(table) as any).select('id', { count: 'exact', head: true })
   const q = apply(base) as { count: number | null; error: { message: string } | null }
   const { count, error } = await q
@@ -43,19 +43,19 @@ export async function GET() {
 
   // ---- Interactions ----
   const interactionsAll = await countQuery(supabase, 'interactions', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId)
   )
   const interactionsEmailInbound = await countQuery(supabase, 'interactions', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId).eq('type', 'email').eq('direction', 'inbound')
   )
   const interactionsNoPerson = await countQuery(supabase, 'interactions', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId).eq('type', 'email').eq('direction', 'inbound').is('person_id', null)
   )
   const interactionsOrphanCandidates = await countQuery(supabase, 'interactions', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any)
       .eq('venue_id', venueId)
       .eq('type', 'email')
@@ -66,19 +66,19 @@ export async function GET() {
 
   // ---- People ----
   const peopleAll = await countQuery(supabase, 'people', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId)
   )
   const peopleLinked = await countQuery(supabase, 'people', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId).not('wedding_id', 'is', null)
   )
   const peopleUnlinked = await countQuery(supabase, 'people', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId).is('wedding_id', null)
   )
   const peopleNameless = await countQuery(supabase, 'people', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any)
       .eq('venue_id', venueId)
       .eq('role', 'partner1')
@@ -89,17 +89,17 @@ export async function GET() {
 
   // ---- Weddings ----
   const weddingsAll = await countQuery(supabase, 'weddings', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId)
   )
   const weddingsInquiry = await countQuery(supabase, 'weddings', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId).eq('status', 'inquiry')
   )
 
   // ---- Extractions ----
   const extractionsAll = await countQuery(supabase, 'intelligence_extractions', (q) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q as any).eq('venue_id', venueId)
   )
 

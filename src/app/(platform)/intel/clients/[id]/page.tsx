@@ -639,7 +639,7 @@ export default function ClientProfilePage() {
   // (HeatHistoryPanel reads them) but the inline sparkline now derives
   // from engagement_events.occurred_at instead — see heatSparkline
   // below. Setter retained so the fetch keeps working.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   const [_scoreHistory, setScoreHistory] = useState<LeadScoreRow[]>([])
   const [drafts, setDrafts] = useState<DraftRow[]>([])
   const [draftFeedback, setDraftFeedback] = useState<DraftFeedbackRow[]>([])

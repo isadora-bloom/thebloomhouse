@@ -225,7 +225,7 @@ export async function linkSignalWithLifecycle(
     // Lifecycle dispatch failures NEVER affect the LinkResult. Match
     // the existing Twilio call-site pattern that swallows the same
     // error class today.
-    // eslint-disable-next-line no-console
+     
     console.warn(
       '[link-with-lifecycle] dispatch failed (non-fatal):',
       err instanceof Error ? err.message : err,

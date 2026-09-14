@@ -47,7 +47,7 @@ const CHAIN_METHODS = [
 export function makeFakeSupabase(resolve: FakeResolver): SupabaseClient {
   function builder(table: string) {
     const calls: FilterCall[] = []
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const chain: any = {}
     for (const method of CHAIN_METHODS) {
       chain[method] = (...args: unknown[]) => {

@@ -93,7 +93,7 @@ async function main() {
   const loserIds: string[] = []
   let page = 0
   const PAGE_SIZE = 1000
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const { data, error } = await sb
       .from('weddings')

@@ -129,7 +129,7 @@ function resolveVenueTier(basePrice: number | null): VenueTier {
 // Market data row → typed MarketData
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 function toMarketData(row: any): MarketData {
   return {
     regionKey: row.region_key,
@@ -155,7 +155,7 @@ function toMarketData(row: any): MarketData {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 function toBenchmarkRow(row: any): BenchmarkRow {
   return {
     benchmarkKey: row.benchmark_key,

@@ -470,12 +470,12 @@ function main() {
   // Emit results
   // ---------------------------------------------------------------------
   for (const line of info) {
-    // eslint-disable-next-line no-console
+     
     console.log(line)
   }
 
   if (violations.length === 0) {
-    // eslint-disable-next-line no-console
+     
     console.log(
       `\nOK — migration / mapper / signal-builder are in sync. `
         + `${BUILDER_FILES.length} builders scanned · `

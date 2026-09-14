@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
         .eq('id', auditId)
     }
   } catch (err) {
-    // eslint-disable-next-line no-console
+     
     console.warn('[channel-truth] share audit write failed:', err)
   }
 

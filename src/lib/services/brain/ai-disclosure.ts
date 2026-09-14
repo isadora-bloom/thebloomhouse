@@ -158,7 +158,7 @@ export function appendAIDisclosure(body: string, ctx: DisclosureContext = {}): s
   // 2026-05-11: also sanitize first-person physical-presence claims (see
   // universal-rules PHYSICAL PRESENCE BOUNDARY). Same guard the modern
   // appendAIDisclosureWithVersion runs — back-compat callers benefit too.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+   
   const { scrubPhysicalPresenceClaims } = require('./physical-presence-guard') as
     typeof import('./physical-presence-guard')
   const sanitized = scrubPhysicalPresenceClaims(body).body
@@ -206,7 +206,7 @@ export function appendAIDisclosureWithVersion(
   // sent message.
   // Lazy require to avoid module-load cycle — disclosure + presence guard
   // are independent concerns, kept that way.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+   
   const { scrubPhysicalPresenceClaims } = require('./physical-presence-guard') as
     typeof import('./physical-presence-guard')
   const scrubbed = scrubPhysicalPresenceClaims(body)

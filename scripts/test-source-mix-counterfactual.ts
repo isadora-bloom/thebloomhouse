@@ -78,7 +78,7 @@ console.log('\n=== eligibleSourcesFromScorecard ===')
     // disqualifying — null CAC
     { source: 'walk_in',   spendInWindow: 100, firstTouchBookings: 2, costPerBooking: null, autoLinkRate: 0.5 },
   ]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const eligible = eligibleSourcesFromScorecard(rows as any)
   assert(eligible.length === 3, 'three qualifying sources')
   const names = eligible.map((s) => s.source).sort()

@@ -98,13 +98,13 @@ async function pageTable<T>(
   venueId: string,
   extra?: (q: ReturnType<SupabaseClient['from']> extends infer R ? unknown : never) => unknown,
   // Use any here to be generous with Supabase's chainable query type.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   filterFn?: (q: any) => any,
 ): Promise<T[]> {
   const rows: T[] = []
   let from = 0
   while (rows.length < 50_000) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     let q: any = sb.from(table).select(columns).eq('venue_id', venueId)
     if (filterFn) q = filterFn(q)
     q = q.range(from, from + PAGE_SIZE - 1)
@@ -140,7 +140,7 @@ export async function loadAttributionDataset(
     'id, venue_id, wedding_id, source_platform, role, intent_class, prompt_version_classified_under, intent_classified_at, decided_at, reverted_at',
     venueId,
     undefined,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q: any) => q.is('reverted_at', null),
   )
 
@@ -165,7 +165,7 @@ export async function loadAttributionDataset(
     // discovery_sources may not be populated for every venue; swallow
     // so the page does not 500 on a venue with no Calendly intake.
     discovery = []
-    // eslint-disable-next-line no-console
+     
     console.warn('[channel-truth] discovery_sources load failed:', err)
   }
 
@@ -178,7 +178,7 @@ export async function loadAttributionDataset(
       'id, venue_id, wedding_id, axis, stated_value, forensic_value, magnitude_score, confidence_0_100, status, last_observed_at',
       venueId,
       undefined,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       (q: any) => q.eq('axis', 'crm_source').eq('status', 'active'),
     )
   } catch {

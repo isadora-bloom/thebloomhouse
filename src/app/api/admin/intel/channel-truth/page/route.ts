@@ -61,11 +61,11 @@ export async function GET(req: NextRequest) {
           payload,
         })
         if (auditRes.error) {
-          // eslint-disable-next-line no-console
+           
           console.warn('[channel-truth] audit write failed:', auditRes.error)
         }
       } catch (auditErr) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[channel-truth] audit write threw:', auditErr)
       }
     }

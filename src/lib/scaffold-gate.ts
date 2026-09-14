@@ -27,7 +27,7 @@ import { notFound } from 'next/navigation'
 export function assertNotScaffold(path: string): void {
   if (process.env.SCAFFOLD_PAGES === '1') return
   if (process.env.NODE_ENV !== 'production') {
-    // eslint-disable-next-line no-console -- deliberate operator-facing note, not an error
+     
     console.warn(
       `[scaffold-gate] ${path} is hidden behind SCAFFOLD_PAGES. Set SCAFFOLD_PAGES=1 to view it locally.`
     )

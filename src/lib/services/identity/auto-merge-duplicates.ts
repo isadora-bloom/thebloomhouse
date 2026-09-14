@@ -205,7 +205,7 @@ export async function findDuplicatePartnerRows(
   const all: PersonRow[] = []
   // Loop is bounded by the count of active people per venue —
   // breaks as soon as a page returns < PAGE rows.
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     let q = supabase
       .from('people')

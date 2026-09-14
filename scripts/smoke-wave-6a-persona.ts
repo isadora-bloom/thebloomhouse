@@ -128,7 +128,7 @@ async function main() {
 
 // Smoke-test script: relax the heavily-narrowed Supabase generics so we
 // can insert/update with literal payloads. Safe — service-role client.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 async function runFixtureTest(sb: any) {
   const FIXTURE_PERSONA = 'wave6a-fixture-persona'
 

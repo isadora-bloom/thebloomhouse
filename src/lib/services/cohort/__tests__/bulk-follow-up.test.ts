@@ -51,7 +51,7 @@ function makeFakeClient(fixtures: Record<string, Row[]>, insertedDrafts: Row[]) 
   return {
     from(table: string) {
       const preds: Array<(r: Row) => boolean> = []
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const chain: any = {}
       chain.select = () => chain
       chain.eq = (c: string, v: unknown) => {

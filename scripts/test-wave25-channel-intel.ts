@@ -45,7 +45,7 @@ async function main() {
 
   // 1) List channels
   console.log('Channels with >=10 AE in last 365d:')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const channels = await listChannelsForVenue({ venueId: rixey.id, windowDays: 365, supabase: sb as any })
   for (const c of channels) {
     console.log(`  ${c.source_platform.padEnd(28)} slug=${c.channel_slug.padEnd(24)} ae=${c.ae_count}`)
@@ -53,13 +53,13 @@ async function main() {
 
   // 2) Compute Knot snapshot
   console.log('\n--- Computing the_knot snapshot (365d) ---')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const snap = await computeChannelSnapshot({
     venueId: rixey.id,
     sourcePlatform: 'the_knot',
     windowDays: 365,
     persist: false,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     supabase: sb as any,
   })
 

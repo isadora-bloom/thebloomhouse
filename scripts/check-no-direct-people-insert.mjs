@@ -137,7 +137,7 @@ function scan(file) {
     const upto = text.slice(0, match.index)
     const line = upto.split('\n').length
     if (GRANDFATHERED.has(rel)) {
-      // eslint-disable-next-line no-console
+       
       console.log(`grandfathered: ${rel}:${line}`)
     } else {
       OFFENDERS.push({ file: rel, line })
@@ -148,26 +148,26 @@ function scan(file) {
 walk(SRC_DIR)
 
 if (OFFENDERS.length === 0) {
-  // eslint-disable-next-line no-console
+   
   console.log('OK — no new direct people INSERT sites detected.')
   process.exit(0)
 }
 
-// eslint-disable-next-line no-console
+ 
 console.error('\nFAIL — new direct `.from(\'people\').insert(` call sites detected:\n')
 for (const o of OFFENDERS) {
-  // eslint-disable-next-line no-console
+   
   console.error(`  ${o.file}:${o.line}`)
 }
-// eslint-disable-next-line no-console
+ 
 console.error(
   '\nUse `mintPerson` from `src/lib/services/identity/mint-person.ts` instead.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'If this is a legitimate canonical writer, add it to CANONICAL in this script.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'See bloom-identity-resolution-doctrine.md §"Order of work" step 5/G3.\n',
 )

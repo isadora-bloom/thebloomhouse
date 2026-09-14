@@ -132,13 +132,13 @@ async function pageRows<T>(
   table: string,
   columns: string,
   venueId: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   filterFn?: (q: any) => any,
 ): Promise<T[]> {
   const rows: T[] = []
   let from = 0
   while (rows.length < 50_000) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     let q: any = sb.from(table).select(columns).eq('venue_id', venueId)
     if (filterFn) q = filterFn(q)
     q = q.range(from, from + PAGE_SIZE - 1)
@@ -285,7 +285,7 @@ export async function computeChannelSnapshot(
     'attribution_events',
     'id, venue_id, wedding_id, source_platform, role, intent_class, bucket, tier, signal_class, prompt_version_classified_under, intent_classified_at, decided_at',
     venueId,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q: any) => q.is('reverted_at', null).gte('decided_at', windowStartIso),
   )
 
@@ -336,7 +336,7 @@ export async function computeChannelSnapshot(
       'marketing_spend_records',
       'channel, spend_date, amount_cents',
       venueId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       (q: any) => q.gte('spend_date', windowStartIso.slice(0, 10)),
     )
   } catch {
@@ -389,7 +389,7 @@ export async function computeChannelSnapshot(
       'disagreement_findings',
       'id, axis, stated_value, forensic_value, magnitude_score, last_observed_at',
       venueId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       (q: any) => q.eq('axis', 'crm_source').eq('status', 'active'),
     )
     // Filter to those touching this channel — either stated or forensic
@@ -781,7 +781,7 @@ async function persistSnapshot(
     // Soft-fail: the snapshot is still returned to the caller. Cache miss
     // is preferable to a failed page render. Wave 24 reconciliation
     // pattern.
-    // eslint-disable-next-line no-console
+     
     console.warn('[channel-intel-hub] persist failed:', error.message)
   }
 }
@@ -806,7 +806,7 @@ export async function listChannelsForVenue(args: {
     'attribution_events',
     'source_platform',
     args.venueId,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (q: any) => q.is('reverted_at', null).gte('decided_at', windowStart.toISOString()),
   )
   const counts = new Map<string, number>()

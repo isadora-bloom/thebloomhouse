@@ -129,7 +129,7 @@ function scan(file) {
     const upto = text.slice(0, match.index)
     const line = upto.split('\n').length
     if (GRANDFATHERED.has(rel)) {
-      // eslint-disable-next-line no-console
+       
       console.log(`grandfathered: ${rel}:${line} — ${GRANDFATHERED.get(rel)}`)
     } else {
       OFFENDERS.push({ file: rel, line })
@@ -140,32 +140,32 @@ function scan(file) {
 walk(SRC_DIR)
 
 if (OFFENDERS.length === 0) {
-  // eslint-disable-next-line no-console
+   
   console.log('OK — no new direct people.first_name / people.last_name writers detected.')
   process.exit(0)
 }
 
-// eslint-disable-next-line no-console
+ 
 console.error(
   "\nFAIL — new direct `.from('people').update({ ... first_name OR last_name ... })` call sites detected:\n",
 )
 for (const o of OFFENDERS) {
-  // eslint-disable-next-line no-console
+   
   console.error(`  ${o.file}:${o.line}`)
 }
-// eslint-disable-next-line no-console
+ 
 console.error(
   '\nRoute through `captureNameEvidence` from '
     + '`src/lib/services/identity/name-capture.ts` instead.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'Writing first_name / last_name directly skips the picker — '
     + 'the displayed name diverges from the name_evidence chain, '
     + 'and every later signal has to fight the existing column instead '
     + 'of layering on top.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'See bloom-constitution.md + name-capture.ts header comments for the '
     + 'chokepoint contract.\n',

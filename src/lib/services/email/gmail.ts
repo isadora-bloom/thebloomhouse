@@ -21,11 +21,11 @@ import { htmlToText } from '@/lib/utils/html-text'
 // Graceful dependency check
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 let google: any = null
 
 try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+   
   const googleapis = require('googleapis')
   google = googleapis.google
 } catch {

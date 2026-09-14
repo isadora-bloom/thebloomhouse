@@ -85,7 +85,7 @@ function makeClient(db: Db): SupabaseClient {
       return { data: rows().slice(from, to + 1), error: null }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const api: any = {
       select: () => api,
       eq: (column: string, value: unknown) => {
@@ -242,7 +242,7 @@ function build(specs: Spec[], timezone = 'UTC', extra: Db = {}): Fixture {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 const run = (source: typeof timeSeriesSource, args: Record<string, unknown>, db: Db): Promise<any> =>
   source.run(VENUE, args, deps(db))
 

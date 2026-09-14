@@ -358,7 +358,7 @@ export function mapRoomsConfig(flags: Record<string, unknown>): VenueRoomsConfig
  * a venueId from a query param.
  */
 export async function loadCoupleVenueConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<CouplePortalVenueConfig> {
@@ -393,7 +393,7 @@ export async function loadCoupleVenueConfig(
 // ---------------------------------------------------------------------------
 
 async function loadFlags(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string,
   extraColumns: string[] = []
@@ -410,7 +410,7 @@ async function loadFlags(
 }
 
 export async function loadBarConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueBarConfig> {
@@ -419,7 +419,7 @@ export async function loadBarConfig(
 }
 
 export async function loadRehearsalConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueRehearsalConfig> {
@@ -428,7 +428,7 @@ export async function loadRehearsalConfig(
 }
 
 export async function loadShuttleConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueShuttleConfig> {
@@ -437,7 +437,7 @@ export async function loadShuttleConfig(
 }
 
 export async function loadFloorPlan(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueFloorPlanConfig> {
@@ -446,7 +446,7 @@ export async function loadFloorPlan(
 }
 
 export async function loadTablesConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueTablesConfig> {
@@ -455,7 +455,7 @@ export async function loadTablesConfig(
 }
 
 export async function loadStaffingConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueStaffingConfig> {
@@ -464,7 +464,7 @@ export async function loadStaffingConfig(
 }
 
 export async function loadRoomsConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueRoomsConfig> {
@@ -473,7 +473,7 @@ export async function loadRoomsConfig(
 }
 
 export async function loadSeatingConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: SupabaseClient<any, 'public', any>,
   venueId: string
 ): Promise<VenueSeatingConfig> {

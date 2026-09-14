@@ -20,7 +20,7 @@ const PAGE = 1000
  * the safety net against the implicit 1000-row PostgREST cap.
  */
 export async function fetchAllRows<T>(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   makeQuery: () => any,
 ): Promise<T[]> {
   const out: T[] = []

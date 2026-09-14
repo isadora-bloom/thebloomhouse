@@ -503,33 +503,33 @@ for (const h of GRANDFATHER_HITS) {
 }
 for (const [file, hits] of grandfatherFiles) {
   const tables = [...new Set(hits.map((h) => `${h.table}.${h.op}`))].join(', ')
-  // eslint-disable-next-line no-console
+   
   console.log(`grandfathered: ${file} — ${tables} — ${GRANDFATHERED.get(file)}`)
 }
 
 if (OFFENDERS.length === 0) {
-  // eslint-disable-next-line no-console
+   
   console.log(`\nOK — no new direct insert/upsert sites detected on guarded tables: ${GUARDED_TABLES.join(', ')}.`)
   process.exit(0)
 }
 
-// eslint-disable-next-line no-console
+ 
 console.error('\nFAIL — direct insert/upsert/RPC sites detected on guarded cascade tables:\n')
 for (const o of OFFENDERS) {
-  // eslint-disable-next-line no-console
+   
   console.error(`  ${o.file}:${o.line}: ${o.table} ${o.op} outside chokepoint`)
 }
-// eslint-disable-next-line no-console
+ 
 console.error(
   '\nRoute through the cascade barrel at `@/lib/spine/cascade` (linkSignal /'
     + ' lockAndMintCouple / mintPerson / mintWedding).',
 )
-// eslint-disable-next-line no-console
+ 
 console.error(
   'If this is a legitimate non-cascade writer (operator-driven admin shape,'
     + ' status-change touchpoint, etc.), add it to GRANDFATHERED in this script'
     + ' with a one-line justification.',
 )
-// eslint-disable-next-line no-console
+ 
 console.error('See CASCADE-CANONICAL-WRITER.md + CONSOLIDATION-PLAN-PHASED.md §1.6.\n')
 process.exit(1)
