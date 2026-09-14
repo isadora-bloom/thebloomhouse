@@ -26,7 +26,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/observability/logger'
-import { insertCandidateMatch } from '@/lib/services/identity/tracer'
+import { insertCandidateMatch } from '@/lib/services/identity/spine-writers'
 
 const RECENT_WINDOW_MS = 18 * 30 * 86_400_000 // ~18 months
 

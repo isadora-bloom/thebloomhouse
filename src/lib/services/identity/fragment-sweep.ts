@@ -53,7 +53,7 @@ import { logEvent } from '@/lib/observability/logger'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { scoreCandidate, type MatchableRecord } from './matcher'
 import { lockAndMintCouple } from './mint-couple'
-import { insertCandidateMatch } from './tracer'
+import { insertCandidateMatch } from './spine-writers'
 import type { NormalizedSignal } from './sources'
 
 // ---------------------------------------------------------------------------

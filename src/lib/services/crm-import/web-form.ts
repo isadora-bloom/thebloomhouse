@@ -35,10 +35,11 @@
  *                            body = readable concatenation of the
  *                            relevant filled-in form fields + free-text
  *                            notes, occurred_at = submission timestamp.
- *     * tangential_signals — source_platform='website_form' (or
- *                            'website_<provider>'), signal_type=
- *                            'form_submission', payload = full form data.
- *                            Powers funnel + timing analytics.
+ *     * a spine touchpoint  — W35 hands every committed row to
+ *                            `linkSignal`, so the submission lands on the
+ *                            couple it minted or attached to. W68 removed
+ *                            the duplicate `tangential_signals` row this
+ *                            adapter used to write beside it.
  *
  *   This is on top of the standard people insert that
  *   commitNormalisedRows() handles.
@@ -896,9 +897,8 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       // T5-Rixey-BBB: form submissions are touchpoint class. The
       // lead used the calculator AFTER discovering the venue — the
       // upstream source (the_knot / google / referral / etc.) is
-      // recovered via the cluster walk against tangential_signals
-      // (Knot view, IG follow) or earlier interactions on the same
-      // person identity.
+      // recovered from the couple's earlier touchpoints (Knot view,
+      // IG follow) or earlier interactions on the same person identity.
       // signal-class-justified: web-form submissions are touchpoint, not source
       signal_class: 'touchpoint',
       // Wave 28 (mig 294): the form submission IS the event, not an
@@ -925,7 +925,7 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
     // T5-Rixey-TT adapter-as-facts: web-form intake leaves
     // weddings.source NULL. The factual provenance lives in
     // crm_source='web_form' + source_detail (provider name) + the
-    // tangential_signals row written in commit(). Lead-source-
+    // spine touchpoint W35 writes for the row. Lead-source-
     // derivation Priority-3 reads the form-submission interaction
     // and stamps lead_source='website' from the structural signal,
     // which is the right path because:
@@ -1018,7 +1018,7 @@ function previewWebForm(rows: NormalisedLeadRow[]): PreviewResult {
 // ---------------------------------------------------------------------------
 // commit() — funnel through commitNormalisedRows for the standard
 // weddings + people + interactions writes, then add the web-form-specific
-// extras (tangential_signals row + source_provenance stamp).
+// extras (the F8 post-extract identity dispatch + source_provenance stamp).
 // ---------------------------------------------------------------------------
 
 async function commitWebForm(args: {
@@ -1026,9 +1026,9 @@ async function commitWebForm(args: {
   venueId: string
   rows: NormalisedLeadRow[]
   /** §7 OPERATOR-BLOCK item 4 dry-run pass-through. The web-form
-   *  adapter does extra work after commitNormalisedRows (tangential_
-   *  signals insert + post-extract identity dispatch) — both are
-   *  side-effecting writes that MUST be skipped in dry-run. */
+   *  adapter does extra work after commitNormalisedRows (the F8
+   *  post-extract identity dispatch) — a side-effecting write that MUST
+   *  be skipped in dry-run. */
   preview?: boolean
 }): Promise<CommitResult> {
   const { supabase, venueId, rows } = args
@@ -1057,53 +1057,24 @@ async function commitWebForm(args: {
   })
 
   if (!baseResult.ok) return baseResult
-  // Dry-run: skip the tangential_signals insert + the F8 post-extract
-  // identity dispatch (both side-effecting writes).
+  // Dry-run: skip the F8 post-extract identity dispatch (a side-effecting
+  // write).
   if (isDryRun) return baseResult
 
-  // Write one tangential_signals row per submission. We don't need to
-  // join back to the inserted wedding — the per-row identity payload is
-  // enough for the funnel + timing analytics that read this table.
-  const tangentialRows = rows.map((r) => ({
-    venue_id: venueId,
-    signal_type: 'form_submission',
-    source_platform: 'website_form',
-    action_class: 'inquiry',
-    extracted_identity: {
-      first_name: r.partner1_first_name ?? null,
-      last_name: r.partner1_last_name ?? null,
-      email: r.partner1_email ?? null,
-      phone: r.partner1_phone ?? null,
-      partner_first_name: r.partner2_first_name ?? null,
-      partner_last_name: r.partner2_last_name ?? null,
-      guest_count: r.guest_count_estimate ?? null,
-      wedding_date: r.wedding_date ?? null,
-      reference: r.source_id ?? null,
-    },
-    source_context: r.source_detail ?? 'web_form_import',
-    signal_date: r.inquiry_date ?? new Date().toISOString(),
-    // C-INGEST-5 Finding 2 fix (2026-05-08): was writing confirmed_match
-    // with matched_person_id=null + confidence=1.0, which inflated the
-    // confirmed-match rate on /admin/sources-parity and blocked FK
-    // joins from finding the person. Writes unmatched instead;
-    // phase_b_sweep promotes when the inquiry's person row arrives.
-    match_status: 'unmatched',
-    matched_person_id: null,
-    confidence_score: null,
-    // T5-Rixey-BBB: form-submission tangentials are touchpoint
-    // class — the lead's interaction tool, not the discovery channel.
-    // signal-class-justified: form_submission is a touchpoint signal_type
-    signal_class: 'touchpoint' as const,
-  }))
-
-  if (tangentialRows.length > 0) {
-    const { error: tangErr } = await supabase.from('tangential_signals').insert(tangentialRows)
-    if (tangErr) {
-      baseResult.errors.push(`web_form tangential_signals write failed: ${tangErr.message}`)
-      // Don't flip ok=false — the core inserts succeeded; the tangential
-      // is auxiliary funnel-analytics data, not lead state.
-    }
-  }
+  // W68: the per-submission `tangential_signals` row that used to be
+  // written here is gone, and nothing replaces it.
+  //
+  // It was already redundant. W35 (wave 5) taught `commitNormalisedRows`
+  // to hand every row it commits to `linkSignal` — see ./row-signals.ts —
+  // so each web-form submission reaches the spine as a touchpoint on the
+  // couple the row minted or attached to, carrying the same identity the
+  // tangential row carried, with a UNIQUE(venue_id, channel, external_id)
+  // dedup the tangential table never had. Writing the pool row as well
+  // meant one submission recorded twice in two identity systems, which is
+  // the exact condition migration 400 set out to end.
+  //
+  // The funnel and timing analytics that read the pool read historical
+  // rows; the live answer for a web-form submission is its touchpoint.
 
   // F8 (2026-05-12): post-extract identity dispatch for the notes
   // free-text body-extract. commitNormalisedRows already runs
@@ -1324,7 +1295,7 @@ export const webFormAdapter: CrmAdapter = {
   description:
     'Import submissions from your own pricing calculator or web form. Pre-built hints for a '
     + 'pricing-calculator export, Typeform, Jotform, and Google Forms; supply a column-mapping JSON for any other form. '
-    + 'Each submission becomes weddings + interactions(type=web_form) + tangential_signals(form_submission). '
+    + 'Each submission becomes weddings + interactions(type=web_form) + a touchpoint on the couple. '
     + 'Tagged confidence_flag=imported_high (first-party) and source_provenance=web_form_import.',
   ready: true,
   parse: parseWebForm,

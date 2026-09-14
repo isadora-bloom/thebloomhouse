@@ -21,7 +21,7 @@
  * `secondary_record_type` CHECK constraints to include `'touchpoint'`.
  * Before mig 360, route-by-tier.ts:128-152 (medium/low branch) tried to
  * INSERT a candidate_match with `secondary_record_type='touchpoint'`
- * and hit a 23514 CHECK violation. `insertCandidateMatch` (tracer.ts:395)
+ * and hit a 23514 CHECK violation. `insertCandidateMatch` (spine-writers.ts)
  * swallows every non-23505 error as a logged warning. Net effect: every
  * medium/low Knot signal landed as an orphan touchpoint with NO
  * candidate_matches row — invisible to the operator review queue.
@@ -125,7 +125,7 @@ import {
   coupleToMatchableRecord,
   insertCandidateMatch,
   type CoupleForMatch,
-} from '../src/lib/services/identity/tracer'
+} from '../src/lib/services/identity/spine-writers'
 
 // ---------------------------------------------------------------------------
 // Env loader — mirrors backfill-couples-bridge.ts and the other

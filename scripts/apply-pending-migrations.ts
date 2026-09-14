@@ -128,6 +128,10 @@ const WAVE_MIGRATIONS: Pending[] = [
     why: 'S3 (2026-09-14 security audit): folder-scoped storage policies, token column grants, demo-anon reach into credentials, env-var-name indirection, twilio number uniqueness, hashed invite and vendor tokens, venue_config writes gated on role. STEPS 1 and 2 touch the storage schema and may report "must be owner of table objects" through exec_sql, like 308; they raise a WARNING and the rest still applies. Run `node scripts/check-live-policies.mjs` after, and if the storage lines still read NEEDS 411, paste those two steps into the SQL editor',
     probe: tableExists('twilio_number_claims'),
   },
+  {
+    file: '412_tangential_comment.sql',
+    why: "W68: corrects 400's tangential_signals comment, which claimed 'no new rows' while four adapters were still inserting. Comment only, no DDL, so there is nothing to probe for",
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */

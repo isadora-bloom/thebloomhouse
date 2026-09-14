@@ -1,45 +1,26 @@
 /**
- * Spine write primitives (Phase B Backwards Tracer retired 2026-09).
+ * Spine write primitives.
  *
- * HISTORY: this file used to be the "Phase B Backwards Tracer" — a
- * batch orchestrator with five stages (anchor_discovery,
- * cross_channel_coalesce, agent_infer, decay_sweep, validate) driven
- * by tracer-runner.ts and dispatched from the nightly cron. Wave 3
- * of NOVEMBER-PLAN.md (HANDLE-IDENTITY-SPEC.md §5) retired it:
+ * The shared matcher and insert helpers the cascade is built out of:
+ * `insertTouchpoint`, `insertFragment`, `insertCandidateMatch`,
+ * `loadRecentCouples`, and the two record-shaping functions the matcher
+ * scores against. Every one of them is called from inside the cascade —
+ * `forwards-linker.ts` (linkSignal), `route-by-tier.ts`,
+ * `agent-link.ts`, `fragment-sweep.ts`, `handle-convergence.ts`,
+ * `knot-visitor-match.ts` — and by nothing outside it. That is why
+ * `check-cascade-only-writer.mjs` lists this file as a chokepoint: it is
+ * where the spine's INSERTs physically live.
  *
- *   - cross_channel_coalesce moved to `fragment-sweep.ts`, under the
- *     nightly fragment sweep (`sweepFragmentsForVenue`). Same audit
- *     rows, same score threshold. See that file's header.
- *   - agent_infer is dead: agent-class detection now happens at
- *     ingestion (Wave 2 W20 — HoneyBook parents/planners minted as
- *     Agent-class people directly, not inferred after the fact from
- *     shared emails across wedding dates).
- *   - decay_sweep is dead: it only ever called `decayStaleCouples`
- *     (decay.ts) and wrapped the call in tracer_run_events telemetry.
- *     The daily `heat_decay` cron already calls `decayStaleCouples`
- *     directly via `runDecaySweepAllVenues`, so nothing was lost.
- *   - anchor_discovery / validate were telemetry-only bookkeeping for
- *     the orchestrator's own run lifecycle (cold-start detection,
- *     end-of-run counts). No other consumer read them directly; they
- *     went with the orchestrator.
- *   - tracer-runner.ts (the cron entry, the auto-trigger queue on
- *     `venues.identity_tracer_requested_at`, and the operator "Run
- *     now" trigger) is deleted outright.
- *
- * WHAT REMAINS: the shared matcher/insert primitives below. These
- * were always doctrinally separate from the orchestrator — the code
- * comment used to say so explicitly ("these helpers were the
- * touchpoint_sweep's matcher/insert primitives... linkSignal and
- * applyTierRouting still import them"). The Forwards Linker
- * (`forwards-linker.ts`) and tier router (`route-by-tier.ts`) are
- * both live chokepoints per `check-cascade-only-writer.mjs` and both
- * import from this file, as do `agent-link.ts` and
- * `knot-visitor-match.ts`. Kept at this same path/filename
- * specifically so none of those four files needed an import-path
- * change as part of the Wave 3 retirement — they belong to other
- * workstreams / are out-of-scope call sites, not mine to edit for a
- * cosmetic rename. `fragment-sweep.ts` imports `insertCandidateMatch`
- * from here too.
+ * Naming (W68, wave 9): this file was called `tracer.ts` until now,
+ * after the Phase B Backwards Tracer — a batch orchestrator that wave 3
+ * (W26, HANDLE-IDENTITY-SPEC.md §5) retired. Its stages went to
+ * `fragment-sweep.ts` (the cross-channel coalesce), to ingestion (W20's
+ * agent-class detection), to the `heat_decay` cron (`decayStaleCouples`),
+ * or nowhere (the run-lifecycle telemetry), and `tracer-runner.ts` was
+ * deleted. W26 kept the filename only so the six importers did not need
+ * touching in the same commit. A file named after a thing that no longer
+ * exists teaches every reader the wrong shape of the system, so the name
+ * now says what the file is.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'

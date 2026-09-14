@@ -29,30 +29,35 @@
  *     identifier) plus the FULL browsing history (paths visited), so a
  *     real couple's website journey is attached to their record.
  *
- *   - ANONYMOUS visitors (no email) stay aggregate - one
- *     tangential_signals row each (signal_type='website_visit'). They
- *     carry the visitor_id so that IF the same visitor_id later turns
- *     up identified, the cross-source matcher can stitch the history.
+ *   - ANONYMOUS visitors (no email) stay aggregate. W68 routes them
+ *     through `linkSignal`, the one spine writer, as channel 'web'
+ *     signals at tier 'low'. They carry no reachable identifier, so the
+ *     cascade lands each as a fragment, and a fragment is promoted onto
+ *     a couple the moment a real identity arrives. Before W68 they went
+ *     into `tangential_signals`, a pool nothing promoted out of.
  *
  *   - site_visits is OPTIONAL. When supplied alongside site_visitors
  *     (the route passes it as a second CSV), each visitor's pageviews
  *     are joined on visitor_id and folded into the interaction body /
- *     the tangential signal payload. site_visits on its own (no
- *     site_visitors) is ingested as anonymous pageview signals.
+ *     the signal's raw_payload. site_visits on its own (no
+ *     site_visitors) is ingested as anonymous pageview signals at tier
+ *     'aggregate_only', which the heat score ignores by name.
  *
  * visitor_id as an external identifier:
  *   visitor_id is the stable cross-link key. It is written into every
- *   interaction's extracted_identity.visitor_id and every tangential
- *   signal's extracted_identity.visitor_id. When a website signal and
- *   a couple share a visitor_id, downstream identity resolution can
- *   cross-link a browsing history to a real couple.
+ *   interaction's extracted_identity.visitor_id and every spine signal's
+ *   raw_payload.visitor_id, and it derives the signal's external_id, so
+ *   a re-upload of an overlapping export is a no-op rather than a second
+ *   row. When a website signal and a couple share a visitor_id,
+ *   downstream identity resolution can cross-link a browsing history to
+ *   a real couple.
  *
  * Constraint note: this adapter does NOT write attribution_events
  * directly - that table is keyed on candidate_identity_id and owned by
  * the identity service. UTM first/last touch is recorded the
  * Bloom-canonical way: weddings.utm_* (stamped by commitNormalisedRows)
- * for identified visitors, and the tangential_signals payload for
- * anonymous ones. The identity / attribution crons promote those into
+ * for identified visitors, and the signal's raw_payload for anonymous
+ * ones. The identity / attribution crons promote those into
  * attribution_events.
  */
 
@@ -68,6 +73,7 @@ import type {
 } from './index'
 import { commitNormalisedRows } from './index'
 import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
+import type { NormalizedSignal } from '@/lib/services/identity/sources/types'
 
 // ---------------------------------------------------------------------------
 // Column detection - case-insensitive, accepts snake_case + Title Case.
@@ -303,7 +309,8 @@ interface SiteVisitorsAdapterConfig extends AdapterConfig {
 }
 
 interface SiteVisitorsParseResult extends ParseResult {
-  /** Visitors with no email - written as anonymous tangential_signals. */
+  /** Visitors with no email - routed through linkSignal as anonymous
+   *  channel-web signals (W68). */
   anonymousVisitors?: ParsedVisitor[]
   /** Pageviews for visitor_ids that did not appear in site_visitors -
    *  written as anonymous website_visit signals. */
@@ -533,7 +540,7 @@ function previewSiteVisitors(rows: NormalisedLeadRow[]): PreviewResult {
 
 // ---------------------------------------------------------------------------
 // commit() - identified visitors funnel through commitNormalisedRows;
-// anonymous visitors + orphan pageviews go straight to tangential_signals.
+// anonymous visitors + orphan pageviews go straight through linkSignal.
 // ---------------------------------------------------------------------------
 
 async function commitSiteVisitors(args: {
@@ -590,20 +597,97 @@ async function commitSiteVisitors(args: {
     }
   }
 
-  // Dry-run: skip the anonymous/orphan tangential_signals writes
-  // entirely (no identity to dedup), return the rows-level preview.
+  // Dry-run: skip the anonymous/orphan spine writes entirely (no
+  // identity to dedup), return the rows-level preview.
   if (isDryRun) return result
 
-  // Anonymous visitors -> one tangential_signals row each. They carry
-  // the visitor_id so a later identified signal with the same
-  // visitor_id can stitch the history.
-  const anonRows = anonymous.map((v) => ({
-    venue_id: venueId,
-    signal_type: 'website_visit',
-    source_platform: 'website',
-    action_class: 'visit',
-    extracted_identity: {
-      // Anonymous: no email. visitor_id is the only cross-link key.
+  // W68: anonymous visitors and orphan pageviews go through `linkSignal`,
+  // the one spine writer, instead of the retired tangential pool. Nothing
+  // about their standing changes: neither carries a reachable identifier,
+  // so `hasSufficientIdentity` refuses to mint and each lands as a
+  // fragment. Fragments are the pool the tangential table was reaching
+  // for, and unlike that table they get promoted onto a couple the moment
+  // a real identity arrives.
+  const signals = [
+    ...anonymous.map(anonymousVisitorToSignal),
+    ...orphanPageviews.map(orphanPageviewToSignal),
+  ]
+
+  let signalsWritten = 0
+  if (signals.length > 0) {
+    try {
+      const { linkSignalBatch } = await import('@/lib/services/identity/forwards-linker')
+      const { summary } = await linkSignalBatch({
+        supabase,
+        venueId,
+        signals,
+        // adapter-source-justified: this is linkSignalBatch's telemetry
+        //   label (tracer_run_events.source), not weddings.source. The
+        //   adapter writes no attribution decision anywhere.
+        source: 'website_pixel_import',
+        // A pixel export is thousands of rows of one anonymous person
+        // each. Paying the judge on any of them would be money spent to
+        // learn nothing; the matcher alone decides.
+        judgeBudget: 0,
+      })
+      signalsWritten =
+        summary.attached +
+        summary.candidate_medium +
+        summary.candidate_low +
+        summary.minted +
+        summary.fragment +
+        summary.cold_start
+    } catch (err) {
+      result.errors.push(
+        `website-pixel spine write: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      // Auxiliary funnel data - do not flip ok=false on its own.
+    }
+  }
+  // Fold the anonymous-signal count into interactionsInserted so the
+  // operator summary reflects "signals written". Identified visitors
+  // already contributed their own interaction counts.
+  result.interactionsInserted += signalsWritten
+
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// Anonymous visitor / orphan pageview -> NormalizedSignal (W68).
+//
+// Both are channel 'web'. Neither sets `primary_name`: a pixel first name
+// with no surname and no reachable identifier is a hint, not an identity,
+// and putting it in `primary_name` would let a two-token display string
+// mint a couple out of an anonymous browser. It rides as `identity_hint`,
+// which is what the matcher reads and what a fragment row stores.
+//
+// `external_id` is derived, not random, so a re-upload of an overlapping
+// export is a no-op at the UNIQUE(venue_id, channel, external_id) level
+// rather than a second row. Exported for the unit tests.
+// ---------------------------------------------------------------------------
+
+/** Lower-case, punctuation-free slug for a derived external_id part. */
+function idSlug(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80)
+}
+
+export function anonymousVisitorToSignal(v: ParsedVisitor): NormalizedSignal {
+  const occurredAt = v.first_seen_at ?? v.last_seen_at ?? new Date().toISOString()
+  const key = v.visitor_id ? idSlug(v.visitor_id) : `anon-${idSlug(occurredAt)}`
+  return {
+    external_id: `web:visitor:${key}`,
+    channel: 'web',
+    action_type: 'web_visit',
+    occurred_at: occurredAt,
+    // A first-party website visit is real evidence of interest and no
+    // evidence at all of who. 'low' is the honest reading: it can
+    // corroborate a couple the matcher already likes, it can never
+    // attach on its own.
+    signal_tier: 'low',
+    identity_hint: v.first_name ?? (v.visitor_id ? `visitor ${v.visitor_id}` : null),
+    primary_name: null,
+    raw_payload: {
+      kind: 'website_pixel_anonymous_visitor',
       visitor_id: v.visitor_id,
       first_name: v.first_name,
       utm_source: v.first_source,
@@ -614,61 +698,37 @@ async function commitSiteVisitors(args: {
       pageview_count: v.pageview_count,
       visit_count: v.visit_count,
       ip_country: v.ip_country,
+      source_context: `website visit (visitor ${v.visitor_id ?? 'unknown'})`,
     },
-    source_context: `website visit (visitor ${v.visitor_id ?? 'unknown'})`,
-    signal_date: v.first_seen_at ?? v.last_seen_at ?? new Date().toISOString(),
-    match_status: 'unmatched' as const,
-    matched_person_id: null,
-    confidence_score: null,
-    // First-party website visit is a discovery-channel (source) signal.
-    signal_class: 'source' as const,
-  }))
+  }
+}
 
-  // Orphan pageviews (visitor never in site_visitors) -> one signal each.
-  // Kept lean - these are aggregate browsing data.
-  const orphanRows = orphanPageviews.map((pv) => ({
-    venue_id: venueId,
-    signal_type: 'website_visit',
-    source_platform: 'website',
-    action_class: 'visit',
-    extracted_identity: {
+export function orphanPageviewToSignal(pv: ParsedPageview): NormalizedSignal {
+  const occurredAt = pv.ts ?? new Date().toISOString()
+  const key = idSlug(
+    [pv.visitor_id ?? 'unknown', pv.session_id ?? '', pv.path ?? '', occurredAt].join('|'),
+  )
+  return {
+    external_id: `web:pageview:${key}`,
+    channel: 'web',
+    action_type: 'pageview',
+    occurred_at: occurredAt,
+    // One pageview by a visitor who never appeared in the visitor export
+    // is browsing volume, nothing more. 'aggregate_only' keeps it out of
+    // the heat score (heat-score.ts skips that tier by name).
+    signal_tier: 'aggregate_only',
+    identity_hint: pv.visitor_id ? `visitor ${pv.visitor_id}` : null,
+    primary_name: null,
+    raw_payload: {
+      kind: 'website_pixel_orphan_pageview',
       visitor_id: pv.visitor_id,
       path: pv.path,
       query: pv.query,
       referrer: pv.referrer,
       session_id: pv.session_id,
+      source_context: `pageview ${pv.path ?? ''}`,
     },
-    source_context: `pageview ${pv.path ?? ''}`,
-    signal_date: pv.ts ?? new Date().toISOString(),
-    match_status: 'unmatched' as const,
-    matched_person_id: null,
-    confidence_score: null,
-    signal_class: 'source' as const,
-  }))
-
-  const allTangential = [...anonRows, ...orphanRows]
-  const CHUNK = 500
-  let signalsWritten = 0
-  for (let i = 0; i < allTangential.length; i += CHUNK) {
-    const chunk = allTangential.slice(i, i + CHUNK)
-    if (chunk.length === 0) continue
-    // signal-class-justified: every anonymous-visitor and orphan-pageview
-    //   row is built above with signal_class='source' - a first-party
-    //   website visit is a discovery-channel signal.
-    const { error } = await supabase.from('tangential_signals').insert(chunk)
-    if (error) {
-      result.errors.push(`website-pixel tangential_signals insert: ${error.message}`)
-      // Auxiliary funnel data - do not flip ok=false on its own.
-      continue
-    }
-    signalsWritten += chunk.length
   }
-  // Fold the anonymous-signal count into interactionsInserted so the
-  // operator summary reflects "signals written". Identified visitors
-  // already contributed their own interaction counts.
-  result.interactionsInserted += signalsWritten
-
-  return result
 }
 
 // ---------------------------------------------------------------------------

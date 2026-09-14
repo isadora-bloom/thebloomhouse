@@ -568,6 +568,11 @@ export async function ingestInstagramDm(
           // (legacy.weddingId above); the classifier still runs either
           // way so the row carries an intent_class.
           allowMint: false,
+          // W68: the DM rides through the chokepoint as `type: 'sms'`, so
+          // say out loud where it came from. The label lands on
+          // `planning_notes.source_channel` for anything the loose-detail
+          // capture lifts out of the message.
+          looseDetailChannel: 'instagram',
         })
       } catch (err) {
         console.warn(

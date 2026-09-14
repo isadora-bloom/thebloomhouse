@@ -36,6 +36,14 @@
  * new violation the guard fails on. The function takes a `logPrefix` and
  * explicit mint options so SMS behaviour is byte-for-byte unchanged; see
  * `__tests__/openphone.test.ts` for the row-shape parity test.
+ *
+ * Being the chokepoint means the per-message work that belongs to EVERY
+ * inbound channel belongs here rather than in one channel's pipeline.
+ * W68 moved the W50 loose-detail capture in on that argument: it had been
+ * wired into `email/pipeline.ts` alone, so a couple who texted their
+ * groom's-cake plan instead of emailing it had it read once and recorded
+ * nowhere. It runs after classification, out of band, idempotent per
+ * interaction id.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -45,6 +53,7 @@ import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 // import cycle the dynamic `await import('@/lib/services/identity/mint-wedding')`
 // calls below are written to avoid.
 import type { WeddingSource } from '@/lib/services/identity/mint-wedding'
+import { scheduleLooseDetailCapture } from '@/lib/services/commitments/capture'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -422,6 +431,15 @@ export interface WriteInboundInteractionArgs {
   /** Metadata object for the post-mint heat-fire. Caller-built so SMS
    *  keeps its exact `{ source: 'openphone', channel, ... }` shape. */
   postMintHeatMetadata?: Record<string, unknown>
+  /** W68: the channel label the loose-detail capture stamps on the
+   *  planning notes it writes (`planning_notes.source_channel`). Defaults
+   *  to the classifier's own sms / voicemail / call reading of `row.type`.
+   *  Instagram DMs arrive here as `type: 'sms'` (W30 mirrors them through
+   *  this chokepoint), so that caller passes 'instagram' and the note says
+   *  where it actually came from. */
+  looseDetailChannel?: string
+  /** Correlation id threaded into the loose-detail capture's log lines. */
+  correlationId?: string | null
 }
 
 export interface WriteInboundInteractionResult {
@@ -575,6 +593,44 @@ export async function writeInboundInteractionAndClassify(
           mintErr instanceof Error ? mintErr.message : String(mintErr),
         )
       }
+    }
+
+    // W68 — loose-detail capture on the SMS / voicemail / Instagram-DM
+    // chokepoint, the same call the email pipeline has made since W50.
+    //
+    // The gap it closes: a couple texting "my uncle is bringing the
+    // groom's cake down on the Friday" produced a classified interaction,
+    // a heat bump and nothing else. W50 lifted those sentences into
+    // planning notes and reconciled them against the day-of timeline, but
+    // wired the call into `email/pipeline.ts` only, so the finding held
+    // for email and for nothing else. Couples do not confine themselves
+    // to one channel.
+    //
+    // Same shape as the email call sites: after classification, out of
+    // band so it never blocks the inbound path, idempotent per
+    // interaction id (`planningNotesExistForInteraction`) so a Quo
+    // back-sync or an Instagram replay does not re-bill or re-write, and
+    // inert without a wedding. `captureLooseDetails` also runs
+    // `extractVenueConversationNotes` (W50 item 3), so the venue-
+    // conversation planning notes reach SMS and DMs through this one
+    // call rather than needing a second one.
+    //
+    // Placed after the mint gate on purpose: `weddingId` is final here, so
+    // a message that just created its own wedding is captured against it
+    // rather than skipped as unattached. That is the same reason the email
+    // pipeline has two call sites.
+    if (interactionId) {
+      const captureChannel =
+        args.looseDetailChannel ??
+        (row.type === 'voicemail' ? 'voicemail' : row.type === 'call' ? 'call' : 'sms')
+      scheduleLooseDetailCapture({
+        venueId,
+        interactionId,
+        weddingId,
+        channel: captureChannel,
+        text: row.full_body,
+        correlationId: args.correlationId ?? null,
+      })
     }
   }
 
