@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { apiError } from '@/lib/api/api-error'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import {
@@ -72,7 +73,9 @@ export async function POST(req: Request) {
     return NextResponse.json(result)
   } catch (err) {
     if (err instanceof GhostCleanupError) {
-      return NextResponse.json({ error: err.message }, { status: 500 })
+      // The rule's own error text is developer-authored, but it still goes
+      // through the one helper so the body shape is the same everywhere.
+      return apiError(err)
     }
     throw err
   }
