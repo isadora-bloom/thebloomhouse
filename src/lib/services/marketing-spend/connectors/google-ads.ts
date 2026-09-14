@@ -14,6 +14,9 @@
  *   - Forward each row to recordSpend with ingestedBy='google_ads_connector'
  */
 
+/** W54 will replace this with 'connected' once the real connector ships. */
+export const CONNECTOR_STATUS = 'manual' as const
+
 export interface GoogleAdsSyncInput {
   venueId: string
   /** OAuth access token. Populated by the per-venue credential store

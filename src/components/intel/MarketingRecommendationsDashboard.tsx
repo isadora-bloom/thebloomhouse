@@ -33,8 +33,12 @@ import {
   DollarSign,
   Target,
   AlertCircle,
+  Info,
 } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
+import { CONNECTOR_STATUS as GOOGLE_ADS_STATUS } from '@/lib/services/marketing-spend/connectors/google-ads'
+import { CONNECTOR_STATUS as META_ADS_STATUS } from '@/lib/services/marketing-spend/connectors/meta-ads'
+import { CONNECTOR_STATUS as TIKTOK_ADS_STATUS } from '@/lib/services/marketing-spend/connectors/tiktok-ads'
 
 interface ReasoningChain {
   evidence_signals?: string[]
@@ -94,6 +98,13 @@ const STATUSES = [
 ] as const
 
 type StatusValue = (typeof STATUSES)[number]
+
+// Map source channels to their connector status
+const CONNECTOR_STATUS_MAP: Record<string, string> = {
+  google_ads: GOOGLE_ADS_STATUS,
+  meta_ads: META_ADS_STATUS,
+  tiktok_ads: TIKTOK_ADS_STATUS,
+}
 
 const STATUS_LABEL: Record<StatusValue, string> = {
   pending: 'Pending',
@@ -737,6 +748,20 @@ export function MarketingRecommendationsDashboard() {
             and external signals, then proposes specific reallocation moves
             you decide on. Never auto-spends.
           </p>
+          <div className="mt-3 rounded-md border border-blue-100 bg-blue-50 p-3">
+            <div className="flex gap-2 text-sm text-blue-900">
+              <Info className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium mb-1">Where the numbers come from</p>
+                <p>
+                  Google Ads, Meta Ads and TikTok Ads numbers are entered by
+                  hand from your screenshots and spend entries until connectors
+                  are ready in a future release. The Knot and WeddingWire fees
+                  are automated.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
