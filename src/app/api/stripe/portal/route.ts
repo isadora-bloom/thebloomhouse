@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
+import { appUrl } from '@/lib/app-url'
 
 // ---------------------------------------------------------------------------
 // POST /api/stripe/portal
@@ -64,15 +65,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const origin =
-      process.env.NEXT_PUBLIC_APP_URL ||
-      request.headers.get('origin') ||
-      `https://${request.headers.get('host') ?? 'localhost:3000'}`
-
     const stripe = getStripe()
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${origin}/settings/billing`,
+      return_url: appUrl('/settings/billing'),
     })
 
     return NextResponse.json({ url: session.url })

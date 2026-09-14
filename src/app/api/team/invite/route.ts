@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
+import { appUrl } from '@/lib/app-url'
 import { randomUUID } from 'crypto'
 
 export async function POST(request: NextRequest) {
@@ -105,8 +106,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Build the invite link
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-    const inviteLink = `${baseUrl}/join?token=${token}`
+    const inviteLink = appUrl(`/join?token=${token}`)
 
     // Resolve org name + inviter name for the email template
     const { data: org } = await supabase

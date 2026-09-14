@@ -103,20 +103,20 @@ export function readInstagramEnv():
  *  app URL so a preview deployment and production do not fight over one
  *  hardcoded string. */
 export function instagramRedirectUri(origin?: string | null): string {
-  const base =
-    origin ??
-    process.env.NEXT_PUBLIC_APP_URL ??
-    'http://localhost:3000'
-  return `${base.replace(/\/+$/, '')}/api/integrations/instagram/oauth/callback`
+  if (origin) {
+    return `${origin.replace(/\/+$/, '')}/api/integrations/instagram/oauth/callback`
+  }
+  const { appUrl } = require('@/lib/app-url')
+  return appUrl('/api/integrations/instagram/oauth/callback')
 }
 
 /** The webhook URL the operator pastes into the Meta app dashboard. */
 export function instagramWebhookUrl(origin?: string | null): string {
-  const base =
-    origin ??
-    process.env.NEXT_PUBLIC_APP_URL ??
-    'http://localhost:3000'
-  return `${base.replace(/\/+$/, '')}/api/webhooks/instagram`
+  if (origin) {
+    return `${origin.replace(/\/+$/, '')}/api/webhooks/instagram`
+  }
+  const { appUrl } = require('@/lib/app-url')
+  return appUrl('/api/webhooks/instagram')
 }
 
 // ---------------------------------------------------------------------------

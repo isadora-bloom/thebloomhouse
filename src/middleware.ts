@@ -40,6 +40,30 @@ export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request })
 
   // -----------------------------------------------------------------------
+  // 0. Canonical host redirect (when APP_CANONICAL_HOST is set)
+  //
+  // If APP_CANONICAL_HOST is configured, redirect any request whose host
+  // is not the canonical host and not localhost and not a Vercel preview
+  // (*.vercel.app) to the canonical host, preserving path and query.
+  // This ensures email links and OAuth callbacks land on the right domain
+  // after a custom domain is configured.
+  // -----------------------------------------------------------------------
+  const canonicalHost = process.env.APP_CANONICAL_HOST
+  if (canonicalHost) {
+    const hostname = request.headers.get('host') || ''
+    const isProduction = process.env.NODE_ENV === 'production'
+    const isLocal = hostname.startsWith('localhost:') || hostname === 'localhost'
+    const isVercelPreview =
+      isProduction === false && /\.vercel\.app$/.test(hostname)
+
+    if (!isLocal && !isVercelPreview && hostname !== canonicalHost) {
+      const canonicalUrl = request.nextUrl.clone()
+      canonicalUrl.hostname = canonicalHost
+      return NextResponse.redirect(canonicalUrl, { status: 308 })
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Demo routes: /demo/* → rewrite to the real route with demo cookies
   // e.g. /demo/agent/inbox → /agent/inbox (with bloom_demo=true cookie)
   // This makes every demo page crawlable without JS / manual cookie setup.
