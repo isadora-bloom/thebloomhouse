@@ -70,6 +70,9 @@ export async function POST(req: Request) {
 
   // Candidates: inbound emails in this venue with a person_id but no wedding_id.
   const { data: candidates, error: candidatesError } = await supabase
+    // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+    // mirror. It re-runs identity resolution over unattached interactions
+    // and patches what it finds. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id, person_id, from_email, from_name, subject, full_body, timestamp')
     .eq('venue_id', venueId)
@@ -108,6 +111,9 @@ export async function POST(req: Request) {
     // 1. If the person is already attached to a wedding, just stamp the
     //    interaction and move on. Avoids a classifier call.
     const { data: person } = await supabase
+      // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+      // mirror. It re-runs identity resolution over unattached interactions
+      // and patches what it finds. See REPAIR-ENDPOINTS.md.
       .from('people')
       .select('wedding_id, first_name, last_name, email')
       .eq('id', personId)
@@ -115,6 +121,9 @@ export async function POST(req: Request) {
 
     if (person?.wedding_id) {
       await supabase
+        // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+        // mirror. It re-runs identity resolution over unattached
+        // interactions and patches what it finds. See REPAIR-ENDPOINTS.md.
         .from('interactions')
         .update({ wedding_id: person.wedding_id })
         .eq('id', row.id)
@@ -205,6 +214,9 @@ export async function POST(req: Request) {
     if (parsedGuestCount != null) inquiryUpdate.guest_count_estimate = parsedGuestCount
     if (Object.keys(inquiryUpdate).length > 0) {
       await supabase
+        // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+        // mirror. It re-runs identity resolution over unattached
+        // interactions and patches what it finds. See REPAIR-ENDPOINTS.md.
         .from('weddings')
         .update(inquiryUpdate)
         .eq('id', weddingId)
@@ -231,12 +243,18 @@ export async function POST(req: Request) {
       }
     }
     await supabase
+      // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+      // mirror. It re-runs identity resolution over unattached interactions
+      // and patches what it finds. See REPAIR-ENDPOINTS.md.
       .from('people')
       .update(personUpdate)
       .eq('id', personId)
 
     // Stamp this interaction.
     await supabase
+      // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+      // mirror. It re-runs identity resolution over unattached interactions
+      // and patches what it finds. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .update({ wedding_id: weddingId })
       .eq('id', row.id)
@@ -244,6 +262,9 @@ export async function POST(req: Request) {
     // Also stamp any other interactions from the same person that are still
     // orphaned — they're part of the same lead.
     await supabase
+      // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+      // mirror. It re-runs identity resolution over unattached interactions
+      // and patches what it finds. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .update({ wedding_id: weddingId })
       .eq('venue_id', venueId)
@@ -255,6 +276,9 @@ export async function POST(req: Request) {
     // one already exists on this wedding.
     if (extracted.partnerName) {
       const { data: existingPartner2 } = await supabase
+        // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+        // mirror. It re-runs identity resolution over unattached
+        // interactions and patches what it finds. See REPAIR-ENDPOINTS.md.
         .from('people')
         .select('id')
         .eq('wedding_id', weddingId)
@@ -263,6 +287,9 @@ export async function POST(req: Request) {
       if (!existingPartner2) {
         const [p2First, ...p2Rest] = extracted.partnerName.trim().split(/\s+/)
         const p2Last = p2Rest.join(' ') || null
+        // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+        // mirror. It re-runs identity resolution over unattached
+        // interactions and patches what it finds. See REPAIR-ENDPOINTS.md.
         await writeOrLog(supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: weddingId,
@@ -296,6 +323,9 @@ export async function POST(req: Request) {
 
   // How many remain?
   const { count: remaining } = await supabase
+    // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+    // mirror. It re-runs identity resolution over unattached interactions
+    // and patches what it finds. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)

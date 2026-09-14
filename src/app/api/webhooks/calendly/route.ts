@@ -414,6 +414,9 @@ export async function POST(request: NextRequest) {
           if (q) flattened[q] = item?.answer ?? null
         }
         const { data: wRow } = await supabase
+          // legacy-read-ok: MIRROR-MAINTENANCE: the webhook fills legacy
+          // columns (calendly_qa, the assigned consultant) on the row
+          // mintWedding created. See REPAIR-ENDPOINTS.md.
           .from('weddings')
           .select('calendly_qa')
           .eq('id', weddingId)
@@ -421,6 +424,9 @@ export async function POST(request: NextRequest) {
         const existing =
           (wRow?.calendly_qa as Record<string, unknown> | null) ?? {}
         await supabase
+          // legacy-read-ok: MIRROR-MAINTENANCE: the webhook fills legacy
+          // columns (calendly_qa, the assigned consultant) on the row
+          // mintWedding created. See REPAIR-ENDPOINTS.md.
           .from('weddings')
           .update({
             calendly_qa: {
@@ -490,6 +496,9 @@ export async function POST(request: NextRequest) {
     // Track tour_booked in consultant_metrics
     // Try to find the coordinator who owns this wedding
     const { data: weddingRow } = await supabase
+      // legacy-read-ok: MIRROR-MAINTENANCE: the webhook fills legacy columns
+      // (calendly_qa, the assigned consultant) on the row mintWedding
+      // created. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('assigned_consultant_id')
       .eq('id', weddingId)

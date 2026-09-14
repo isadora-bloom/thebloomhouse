@@ -34,6 +34,9 @@ export async function POST() {
   const supabase = createServiceClient()
 
   const { data: rows, error } = await supabase
+    // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+    // message log; it reads and removes duplicate interactions rows. See
+    // REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id, from_email, subject, timestamp, gmail_message_id, gmail_thread_id, created_at')
     .eq('venue_id', venueId)
@@ -114,6 +117,9 @@ export async function POST() {
     for (let i = 0; i < toDelete.length; i += 500) {
       const slice = toDelete.slice(i, i + 500)
       const { data: deleted, error: delErr } = await supabase
+        // legacy-read-ok: LOAD-BEARING: named repair primitive on the legacy
+        // message log; it reads and removes duplicate interactions rows. See
+        // REPAIR-ENDPOINTS.md.
         .from('interactions')
         .delete()
         .in('id', slice)

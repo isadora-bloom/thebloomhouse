@@ -96,6 +96,8 @@ export async function POST(req: NextRequest) {
   let inboundBody = ''
   if (draftRow.interaction_id) {
     const { data: interaction } = await sb
+      // legacy-read-ok: LEGACY-ONLY: needs the inbound message text behind a
+      // draft. full_body has no spine equivalent. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       // interactions has no plain `body` column — full_body carries the
       // complete message text (body_preview is a truncated summary).

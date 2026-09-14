@@ -8,7 +8,7 @@ import { askIntel } from '@/lib/intel/canonical'
 import { getPlatformAuth, refuseDemo, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
-import { createServiceClient } from '@/lib/supabase/service'
+import { getVenueOverview } from '@/lib/intel/canonical'
 
 // ---------------------------------------------------------------------------
 // Minimum weddings required before NLQ will attempt to answer.
@@ -77,21 +77,17 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- "Need more data" guard (GAP-07) ------------------------------------
-    // Count weddings for the venue. If below NLQ_MIN_WEDDINGS, return a
-    // friendly empty-state (HTTP 200, not an error) so the UI can render a
-    // message instead of an AI answer.
-    const service = createServiceClient()
-    const { count: weddingCount } = await service
-      .from('weddings')
-      .select('id', { count: 'exact', head: true })
-      .eq('venue_id', auth.venueId)
-
-    const n = weddingCount ?? 0
+    // W66: the sufficiency gate counts couples on the spine, through the
+    // canonical venue overview, rather than rows in the legacy mirror.
+    // The brain answers questions about couples, so the number that
+    // decides whether it has enough to answer has to be the same one.
+    const overview = await getVenueOverview(auth.venueId)
+    const n = overview.couples.total
     if (n < NLQ_MIN_WEDDINGS) {
-      // Venues between 15-25 weddings get a more encouraging, specific message.
+      // Venues between 15-25 couples get a more encouraging, specific message.
       // Below 15 they get the generic "not enough data" block.
       const answer = n >= 15
-        ? `Your venue has ${n} weddings on record. Bloom needs at least ${NLQ_MIN_WEDDINGS} weddings to generate reliable pattern analysis. Keep building your history and check back soon.`
+        ? `Your venue has ${n} couples on record. Bloom needs at least ${NLQ_MIN_WEDDINGS} couples to generate reliable pattern analysis. Keep building your history and check back soon.`
         : null
       return NextResponse.json({
         answer,
@@ -99,7 +95,7 @@ export async function POST(request: NextRequest) {
         insufficient_data: true,
         confidence: null,
         wedding_count: n,
-        message: `We need at least ${NLQ_MIN_WEDDINGS} weddings to answer reliably. You have ${n}. Come back after logging a few more inquiries.`,
+        message: `We need at least ${NLQ_MIN_WEDDINGS} couples to answer reliably. You have ${n}. Come back after logging a few more inquiries.`,
       })
     }
 

@@ -49,6 +49,8 @@ const ALLOWED_ROLES = new Set([
 async function loadWeddingForVenue(weddingId: string, venueId: string) {
   const supabase = createServiceClient()
   const { data: wedding } = await supabase
+    // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+    // read. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id')
     .eq('id', weddingId)

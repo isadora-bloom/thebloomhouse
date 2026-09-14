@@ -78,6 +78,9 @@ export async function POST(req: Request) {
   // Load all weddings in this venue (all stages — we repair non-inquiry too
   // in case a lead got advanced before people was linked).
   const { data: weddings, error: wErr } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: named repair primitive. It rebuilds
+    // people rows for pre-resolver weddings and drains with that corpus. See
+    // REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, status')
     .eq('venue_id', venueId)
@@ -91,6 +94,9 @@ export async function POST(req: Request) {
 
   // One big pull of all interactions attached to these weddings.
   const { data: allInter } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: named repair primitive. It rebuilds
+    // people rows for pre-resolver weddings and drains with that corpus. See
+    // REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id, wedding_id, person_id, from_email, from_name, timestamp, direction')
     .in('wedding_id', weddingIds)
@@ -154,6 +160,9 @@ export async function POST(req: Request) {
 
     // Does the person exist and what's their name state?
     const { data: personRow } = await supabase
+      // legacy-read-ok: LEGACY-ONLY: named repair primitive. It rebuilds
+      // people rows for pre-resolver weddings and drains with that corpus.
+      // See REPAIR-ENDPOINTS.md.
       .from('people')
       .select('id, wedding_id, first_name, last_name')
       .eq('id', personId)
@@ -180,6 +189,9 @@ export async function POST(req: Request) {
     if (Object.keys(update).length === 0) continue
 
     const { error: updErr } = await supabase
+      // legacy-read-ok: LEGACY-ONLY: named repair primitive. It rebuilds
+      // people rows for pre-resolver weddings and drains with that corpus.
+      // See REPAIR-ENDPOINTS.md.
       .from('people')
       .update(update)
       .eq('id', personId)

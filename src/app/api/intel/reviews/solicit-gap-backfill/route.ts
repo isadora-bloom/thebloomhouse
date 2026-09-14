@@ -14,6 +14,7 @@ import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 import { enqueueReviewSolicit } from '@/lib/services/reviews/solicit'
+import { loadCouplesByWeddingDate } from '@/lib/intel/readers/couple-by-wedding'
 
 export async function POST(req: NextRequest) {
   const plan = await requirePlan(req, 'pre_opening')
@@ -36,17 +37,19 @@ export async function POST(req: NextRequest) {
       .toISOString()
       .slice(0, 10)
 
-    const { data: postEventWeddings, error: wErr } = await supabase
-      .from('weddings')
-      .select('id')
-      .eq('venue_id', auth.venueId)
-      .in('status', ['booked', 'completed'])
-      .gte('wedding_date', thirtyDaysAgo)
-      .lte('wedding_date', sevenDaysAgo)
-    if (wErr) return NextResponse.json({ error: wErr.message }, { status: 500 })
-
-    type WRow = { id: string }
-    const weddingIds = ((postEventWeddings ?? []) as WRow[]).map((w) => w.id)
+    // W66: "whose wedding has just happened" is asked of the spine.
+    // couples.lifecycle_state carries booked and completed (migration
+    // 365), so the window is the same one, read off the identity row
+    // rather than the legacy status column.
+    const postEventCouples = await loadCouplesByWeddingDate(
+      supabase,
+      auth.venueId,
+      thirtyDaysAgo,
+      sevenDaysAgo,
+    )
+    const weddingIds = postEventCouples
+      .map((c) => c.weddingId)
+      .filter((id): id is string => Boolean(id))
     if (weddingIds.length === 0) {
       return NextResponse.json({ ok: true, enqueued: 0, skipped: 0 })
     }

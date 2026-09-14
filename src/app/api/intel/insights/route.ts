@@ -6,9 +6,9 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createLogger, newCorrelationId } from '@/lib/observability/logger'
 import { redactError } from '@/lib/observability/redact'
 import {
-  buildCoupleFullNames,
-  pickCanonicalPeople,
-} from '@/lib/utils/couple-name'
+  loadCouplesByWeddings,
+  coupleDisplayName,
+} from '@/lib/intel/readers/couple-by-wedding'
 
 // ---------------------------------------------------------------------------
 // GET — Fetch intelligence insights for the current venue
@@ -113,26 +113,18 @@ export async function GET(req: NextRequest) {
   const coupleLabelByWeddingId = new Map<string, string>()
   const validWeddingIds = new Set<string>()
   if (candidateWeddingIds.length > 0) {
-    const { data: weddingRows } = await supabase
-      .from('weddings')
-      .select('id, venue_id, people ( first_name, last_name, role )')
-      .in('id', candidateWeddingIds)
-      .in('venue_id', venueIds)
-    type W = {
-      id: string
-      people: { first_name: string | null; last_name: string | null; role: string | null }[]
-    }
-    for (const row of (weddingRows ?? []) as W[]) {
-      validWeddingIds.add(row.id)
-      // Prefer partner roles for the headline; pickCanonicalPeople handles
-      // the abbreviated-vs-full-name preference so "Jen B" loses to
-      // "Jennifer Biaksangi" for the same human.
-      const partners = (row.people ?? []).filter(
-        (p) => p.role === 'partner1' || p.role === 'partner2',
-      )
-      const source = partners.length > 0 ? partners : row.people ?? []
-      const label = buildCoupleFullNames(pickCanonicalPeople(source))
-      if (label) coupleLabelByWeddingId.set(row.id, label)
+    // W66: the label comes off the spine. This used to join `weddings` to
+    // `people` and pick partner rows here, which is a third place that
+    // decided what a couple is called. `couples` already holds the pair.
+    // A context id with no mirrored couple is simply not a wedding as far
+    // as this surface is concerned, so it renders without a label rather
+    // than as a raw UUID.
+    const mirrors = await loadCouplesByWeddings(supabase, candidateWeddingIds)
+    for (const [weddingId, couple] of mirrors) {
+      if (!venueIds.includes(couple.venueId)) continue
+      validWeddingIds.add(weddingId)
+      const label = coupleDisplayName(couple)
+      if (label) coupleLabelByWeddingId.set(weddingId, label)
     }
   }
   const enriched = sorted.map((row) => {

@@ -57,6 +57,9 @@ export async function POST(
 
   // Scope check.
   const { data: wedding } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the override reads and writes
+    // weddings.lifecycle_stage, the per-wedding machine stage (migration
+    // 278). See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id, lifecycle_stage, lifecycle_transition_count')
     .eq('id', weddingId)
@@ -105,6 +108,9 @@ export async function POST(
     ((wedding as { lifecycle_transition_count?: number })
       .lifecycle_transition_count) ?? 0
   await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the override reads and writes
+    // weddings.lifecycle_stage, the per-wedding machine stage (migration
+    // 278). See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .update({
       lifecycle_stage: toStage,

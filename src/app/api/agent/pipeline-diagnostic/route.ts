@@ -105,6 +105,9 @@ export async function GET() {
 
   // ---- Recent inbound email sample (10) ----
   const { data: recentInbound } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: the endpoint diagnoses the legacy
+    // pipeline itself, so it must read what the pipeline wrote. See REPAIR-
+    // ENDPOINTS.md.
     .from('interactions')
     // interactions has no `classification` column — the intent
     // classifier writes to intent_class. Aliased to keep the response
@@ -118,6 +121,9 @@ export async function GET() {
 
   // ---- Orphan candidate sample (5) ----
   const { data: orphanSample } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: the endpoint diagnoses the legacy
+    // pipeline itself, so it must read what the pipeline wrote. See REPAIR-
+    // ENDPOINTS.md.
     .from('interactions')
     .select('id, timestamp, from_email, from_name, person_id, subject')
     .eq('venue_id', venueId)
@@ -133,6 +139,9 @@ export async function GET() {
   // Fetch in parallel then join for the diagnostic payload.
   const [weddingSampleRes, weddingSampleHeatRes] = await Promise.all([
     supabase
+      // legacy-read-ok: LEGACY-ONLY: the endpoint diagnoses the legacy
+      // pipeline itself, so it must read what the pipeline wrote. See
+      // REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('id, status, source, inquiry_date, wedding_date')
       .eq('venue_id', venueId)

@@ -57,6 +57,9 @@ export async function POST(
   const supabase = createServiceClient()
 
   const { data: person } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: sticky state is a people column,
+    // and this route reads the row only to patch it. See REPAIR-
+    // ENDPOINTS.md.
     .from('people')
     .select('id, venue_id')
     .eq('id', personId)
@@ -95,6 +98,9 @@ export async function POST(
   }
 
   const { error: updErr } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: sticky state is a people column,
+    // and this route reads the row only to patch it. See REPAIR-
+    // ENDPOINTS.md.
     .from('people')
     .update(patch)
     .eq('id', personId)

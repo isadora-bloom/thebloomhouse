@@ -78,6 +78,9 @@ export async function POST(request: NextRequest) {
     //   no inbound HTML to strip.
     const supabase = createServiceClient()
     const { data: insertedRow } = await supabase
+      // legacy-read-ok: MIRROR-MAINTENANCE: the outbound is logged to
+      // interactions, which is the message log the inbox thread view reads.
+      // See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .insert({
         venue_id: auth.venueId,

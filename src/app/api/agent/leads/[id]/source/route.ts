@@ -38,6 +38,9 @@ export async function GET(
   const sb = createServiceClient()
 
   const { data: wedding } = await sb
+    // legacy-read-ok: MIRROR-MAINTENANCE: weddings.source is the column this
+    // inline editor edits; applyBacktrace writes it back through the same
+    // path. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id, source')
     .eq('id', weddingId)
@@ -47,6 +50,9 @@ export async function GET(
   }
 
   const { data: tp } = await sb
+    // legacy-read-ok: MIRROR-MAINTENANCE: the re-attribution audit trail is
+    // written into wedding_touchpoints.metadata by applyBacktrace and exists
+    // nowhere else. See REPAIR-ENDPOINTS.md.
     .from('wedding_touchpoints')
     .select('metadata')
     .eq('venue_id', auth.venueId)

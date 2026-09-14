@@ -94,6 +94,9 @@ export async function POST(request: NextRequest) {
     // Cross-venue defence: ensure the wedding is also scoped to this venue
     // before we transition it. Catches payload spoofing.
     const { data: weddingRow, error: weddingErr } = await supabase
+      // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator confirmation
+      // transitions weddings.status, so it reads the row it transitions. See
+      // REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('id, venue_id, status')
       .eq('id', targetWeddingId)
@@ -115,6 +118,9 @@ export async function POST(request: NextRequest) {
     // value the trigger set on the first transition.
     if (weddingRow.status !== 'booked' && weddingRow.status !== 'completed') {
       const { error: updateErr } = await supabase
+        // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator confirmation
+        // transitions weddings.status, so it reads the row it transitions.
+        // See REPAIR-ENDPOINTS.md.
         .from('weddings')
         .update({ status: 'booked' })
         .eq('id', targetWeddingId)
@@ -141,6 +147,9 @@ export async function POST(request: NextRequest) {
       // sources counts this in funnel conversion. Best-effort.
       try {
         const { recordStatusChangeTouchpoint } = await import('@/lib/services/attribution/touchpoints')
+        // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator confirmation
+        // transitions weddings.status, so it reads the row it transitions.
+        // See REPAIR-ENDPOINTS.md.
         const { data: w } = await supabase.from('weddings').select('source').eq('id', targetWeddingId).maybeSingle()
         await recordStatusChangeTouchpoint(auth.venueId, targetWeddingId, 'booked', {
           source: (w?.source as string | null) ?? null,

@@ -51,6 +51,9 @@ export async function POST(req: Request) {
 
   // Fetch candidates: inbound emails missing sender attribution.
   const { data: candidates, error: candidatesError } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: repair primitive for pre-resolver rows.
+    // It fills interactions.from_email / person_id and drains as that corpus
+    // drains. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id, gmail_message_id, gmail_connection_id, from_email, from_name, person_id')
     .eq('venue_id', venueId)
@@ -158,6 +161,9 @@ export async function POST(req: Request) {
     }
 
     const { error: updateError } = await supabase
+      // legacy-read-ok: LEGACY-ONLY: repair primitive for pre-resolver rows.
+      // It fills interactions.from_email / person_id and drains as that
+      // corpus drains. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .update(patch)
       .eq('id', row.id)
@@ -172,6 +178,9 @@ export async function POST(req: Request) {
 
   // How many remain after this batch?
   const { count: remaining } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: repair primitive for pre-resolver rows.
+    // It fills interactions.from_email / person_id and drains as that corpus
+    // drains. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)

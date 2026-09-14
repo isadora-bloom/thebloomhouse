@@ -33,6 +33,8 @@ export async function GET(req: NextRequest) {
 
   // Verify wedding belongs to the caller's venue.
   const { data: wedding } = await supabase
+    // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+    // read. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('venue_id')
     .eq('id', weddingId)

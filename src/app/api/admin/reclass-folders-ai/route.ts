@@ -93,6 +93,9 @@ export async function POST(req: NextRequest) {
   const startedAt = Date.now()
 
   const { data: rows, error } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: the folder classifier judges message
+    // bodies, which live on interactions and nowhere on the spine. See
+    // REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select(
       'id, venue_id, from_email, from_name, subject, full_body, direction, lifecycle_folder, gmail_thread_id, type',

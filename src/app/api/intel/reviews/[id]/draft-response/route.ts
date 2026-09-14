@@ -3,6 +3,7 @@ import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/ap
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateReviewResponse } from '@/lib/services/brain/review-response'
+import { findCouplesByName } from '@/lib/intel/readers/couple-by-wedding'
 
 export const maxDuration = 60
 
@@ -62,20 +63,21 @@ export async function POST(
   const reviewerNameRaw =
     typeof review.reviewer_name === 'string' ? review.reviewer_name.trim() : ''
   if (reviewerNameRaw.length > 0) {
-    const tokens = reviewerNameRaw.split(/\s+/).filter((t) => t.length > 0)
-    const firstName = tokens[0] ?? ''
-    const lastName = tokens.length > 1 ? tokens[tokens.length - 1] : ''
-    if (firstName.length > 0 && lastName.length > 0) {
-      const { data: peopleMatches } = await supabase
-        .from('people')
-        .select('wedding_id')
-        .eq('venue_id', review.venue_id as string)
-        .ilike('first_name', firstName)
-        .ilike('last_name', lastName)
-        .limit(2)
-      if (peopleMatches && peopleMatches.length === 1) {
-        resolvedWeddingId = (peopleMatches[0].wedding_id as string | null) ?? null
-      }
+    // W66: the reviewer name is matched against the spine. `couples`
+    // holds both partners' names on one row, so a byline that names
+    // either half resolves the same couple, and the two-row ambiguity
+    // guard below is about two different couples rather than two people
+    // in one. Ambiguous matches are still skipped: folding the WRONG
+    // couple's planning notes into a public reply is worse than a
+    // generic one.
+    const nameMatches = await findCouplesByName(
+      supabase,
+      review.venue_id as string,
+      reviewerNameRaw,
+      2,
+    )
+    if (nameMatches.length === 1) {
+      resolvedWeddingId = nameMatches[0]!.weddingId
     }
   }
 

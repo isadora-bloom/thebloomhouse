@@ -63,6 +63,9 @@ async function resolveAuth(
     }
     const sb = createServiceClient()
     const { data: event } = await sb
+      // legacy-read-ok: MIRROR-MAINTENANCE: the role classifier reads and
+      // writes the same attribution_events row. Role / confidence / evidence
+      // exist on no spine table. See REPAIR-ENDPOINTS.md.
       .from('attribution_events')
       .select('venue_id, reverted_at')
       .eq('id', attributionEventId)
@@ -83,6 +86,9 @@ async function resolveAuth(
   if (attributionEventId) {
     const sb = createServiceClient()
     const { data: event } = await sb
+      // legacy-read-ok: MIRROR-MAINTENANCE: the role classifier reads and
+      // writes the same attribution_events row. Role / confidence / evidence
+      // exist on no spine table. See REPAIR-ENDPOINTS.md.
       .from('attribution_events')
       .select('venue_id, reverted_at')
       .eq('id', attributionEventId)
@@ -141,6 +147,9 @@ export async function POST(req: NextRequest) {
   // Cache-hit path.
   if (!force) {
     const { data: stored } = await sb
+      // legacy-read-ok: MIRROR-MAINTENANCE: the role classifier reads and
+      // writes the same attribution_events row. Role / confidence / evidence
+      // exist on no spine table. See REPAIR-ENDPOINTS.md.
       .from('attribution_events')
       .select(
         'id, venue_id, source_platform, role, role_confidence_0_100, role_classified_at, role_reasoning, role_evidence',
@@ -207,6 +216,9 @@ export async function GET(req: NextRequest) {
 
   const sb = createServiceClient()
   const { data: row } = await sb
+    // legacy-read-ok: MIRROR-MAINTENANCE: the role classifier reads and
+    // writes the same attribution_events row. Role / confidence / evidence
+    // exist on no spine table. See REPAIR-ENDPOINTS.md.
     .from('attribution_events')
     .select(
       'id, venue_id, source_platform, role, role_confidence_0_100, role_classified_at, role_reasoning, role_evidence',

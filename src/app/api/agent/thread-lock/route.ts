@@ -60,6 +60,8 @@ export async function POST(request: NextRequest) {
       { data: profile },
     ] = await Promise.all([
       supabase
+        // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+        // read. See REPAIR-ENDPOINTS.md.
         .from('interactions')
         .select('venue_id')
         .eq('id', interactionId)

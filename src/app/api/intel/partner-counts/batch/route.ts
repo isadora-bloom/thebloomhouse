@@ -23,6 +23,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { redact } from '@/lib/observability/redact'
+import { loadCouplesByWeddings, partnerCount } from '@/lib/intel/readers/couple-by-wedding'
 
 const MAX_BATCH = 200
 const UUID_RE = /^[0-9a-f-]{36}$/i
@@ -81,26 +82,14 @@ export async function POST(request: NextRequest) {
   for (const wid of weddingIds) counts[wid] = null
 
   try {
-    const res = await supabase
-      .from('weddings')
-      .select('id, partner_count')
-      .eq('venue_id', venueId)
-      .in('id', weddingIds)
-    if (res.error) {
-      const msg = (res.error as { message?: string }).message ?? ''
-      if (/column .* does not exist/i.test(msg)) {
-        // Pre-mig-255 — column not yet deployed. Return all-null;
-        // the UI never renders the Solo pill in that case.
-        return NextResponse.json({ counts })
-      }
-      console.error('[partner-counts/batch] query failed:', redact(msg))
-      return NextResponse.json({ error: 'query_failed' }, { status: 500 })
-    }
-    for (const row of res.data ?? []) {
-      const r = row as { id: string; partner_count: number | null }
-      // Only surface 1. NULL / 2 / anything else stays null so the UI
-      // doesn't show "Solo" for couples we just don't know about yet.
-      if (r.partner_count === 1) counts[r.id] = 1
+    // W66: "is this a solo contact?" is a spine question. `couples` holds
+    // the partner name, so a partner on file means two, and no partner
+    // name means one. Only 1 is surfaced: a wedding with no mirrored
+    // couple stays null so the UI hides the pill rather than calling
+    // someone solo on the strength of a missing row.
+    const mirrors = await loadCouplesByWeddings(supabase, weddingIds, venueId)
+    for (const [weddingId, couple] of mirrors) {
+      if (partnerCount(couple) === 1) counts[weddingId] = 1
     }
   } catch (err) {
     console.error('[partner-counts/batch] unexpected error:', err)

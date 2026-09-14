@@ -36,6 +36,9 @@ export async function GET(
   const supabase = createServiceClient()
 
   const { data: wedding, error: wErr } = await supabase
+    // legacy-read-ok: NO-SPINE-EQUIVALENT: the thirteen-stage machine is per
+    // wedding, not per couple (migration 278). canonical.ts reads the same
+    // column for the same reason. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select(
       'id, venue_id, status, lifecycle_stage, lifecycle_stage_set_at, ' +

@@ -82,6 +82,9 @@ export async function POST(req: NextRequest) {
       // Try interactions.from_name first (most reliable for the
       // historical rows that landed before identity resolution).
       const { data: byFromName } = await supabase
+        // legacy-read-ok: LEGACY-ONLY: the draft needs the inbound message
+        // text. touchpoints carry signals, not bodies, so full_body has no
+        // spine equivalent. See REPAIR-ENDPOINTS.md.
         .from('interactions')
         .select('id, wedding_id, from_email, from_name, subject, full_body, lifecycle_folder')
         .eq('venue_id', venueId)
@@ -97,6 +100,9 @@ export async function POST(req: NextRequest) {
       // latest inbound on that wedding.
       if (!match) {
         const { data: people } = await supabase
+          // legacy-read-ok: LEGACY-ONLY: the draft needs the inbound message
+          // text. touchpoints carry signals, not bodies, so full_body has no
+          // spine equivalent. See REPAIR-ENDPOINTS.md.
           .from('people')
           .select('id, wedding_id, first_name, last_name')
           .eq('venue_id', venueId)
@@ -115,6 +121,9 @@ export async function POST(req: NextRequest) {
 
         if (weddingIdsFound.length > 0) {
           const { data: byWedding } = await supabase
+            // legacy-read-ok: LEGACY-ONLY: the draft needs the inbound
+            // message text. touchpoints carry signals, not bodies, so
+            // full_body has no spine equivalent. See REPAIR-ENDPOINTS.md.
             .from('interactions')
             .select('id, wedding_id, from_email, from_name, subject, full_body, lifecycle_folder')
             .eq('venue_id', venueId)
@@ -150,6 +159,9 @@ export async function POST(req: NextRequest) {
     const result: TargetResult = { target: `wedding:${wid}`, matched: false, drafted: false }
     try {
       const { data: rows } = await supabase
+        // legacy-read-ok: LEGACY-ONLY: the draft needs the inbound message
+        // text. touchpoints carry signals, not bodies, so full_body has no
+        // spine equivalent. See REPAIR-ENDPOINTS.md.
         .from('interactions')
         .select('id, wedding_id, from_email, from_name, subject, full_body, lifecycle_folder')
         .eq('venue_id', venueId)
@@ -179,6 +191,9 @@ export async function POST(req: NextRequest) {
     const result: TargetResult = { target: `interaction:${iid}`, matched: false, drafted: false }
     try {
       const { data: row } = await supabase
+        // legacy-read-ok: LEGACY-ONLY: the draft needs the inbound message
+        // text. touchpoints carry signals, not bodies, so full_body has no
+        // spine equivalent. See REPAIR-ENDPOINTS.md.
         .from('interactions')
         .select('id, wedding_id, from_email, from_name, subject, full_body, lifecycle_folder')
         .eq('venue_id', venueId)

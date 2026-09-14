@@ -38,6 +38,8 @@ export async function POST() {
 
   // 1. Find nameless partner1 rows that are attached to a wedding.
   const { data: nameless, error: namelessErr } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: repair primitive for nameless pre-
+    // resolver people rows. See REPAIR-ENDPOINTS.md.
     .from('people')
     .select('id, wedding_id')
     .eq('venue_id', venueId)

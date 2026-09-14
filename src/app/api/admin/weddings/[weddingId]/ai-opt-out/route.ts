@@ -61,6 +61,8 @@ export async function POST(
   // Venue-scope check: the wedding must belong to a venue the operator
   // can access.
   const { data: wedding, error: weddingErr } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the opt-out flag is a weddings
+    // column, read here only to toggle it. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id, ai_opted_out')
     .eq('id', weddingId)
@@ -94,6 +96,8 @@ export async function POST(
   // for the next inbound). The pipeline picks up the cleared flag on
   // the next email it processes for this wedding.
   const { error: updErr } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the opt-out flag is a weddings
+    // column, read here only to toggle it. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .update({
       ai_opted_out: false,

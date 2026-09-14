@@ -29,6 +29,7 @@ import {
   type PartnerNamePair,
 } from '@/lib/services/identity/review-match'
 import { loadEvidenceOverrides } from '@/lib/services/identity/evidence-overrides'
+import { loadCoupleByWedding } from '@/lib/intel/readers/couple-by-wedding'
 
 interface EvidenceSourceRow {
   id: string
@@ -62,6 +63,9 @@ export async function GET(req: NextRequest) {
 
   // Verify wedding belongs to the caller's venue.
   const { data: wedding } = await supabase
+    // legacy-read-ok: NO-SPINE-EQUIVALENT: inquiry_date is a weddings
+    // column, and the venue check is an authorisation lookup. Partner names
+    // on this route come from couples now. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('venue_id, inquiry_date, wedding_date')
     .eq('id', weddingId)
@@ -76,21 +80,25 @@ export async function GET(req: NextRequest) {
     return forbidden('wedding does not belong to your venue')
   }
 
-  // Load partner names.
-  const { data: peopleRows } = await supabase
-    .from('people')
-    .select('role, first_name, last_name')
-    .eq('wedding_id', weddingId)
-    .is('merged_into_id', null)
-  const partners: PartnerNamePair[] = ((peopleRows as Array<{
-    role: string | null
-    first_name: string | null
-    last_name: string | null
-  }> | null) ?? []).map((p) => ({
-    role: p.role,
-    first_name: p.first_name,
-    last_name: p.last_name,
-  }))
+  // W66: partner names come off the spine. `couples` holds one row per
+  // couple with both names on it, so the alias rows that used to make
+  // this list longer than the couple is do not reach the evidence
+  // matcher any more. Split on the first space: `couples` stores whole
+  // names, the review matcher wants first / last.
+  const coupleOnSpine = await loadCoupleByWedding(supabase, weddingId, auth.venueId)
+  const partners: PartnerNamePair[] = [
+    { role: 'partner1', name: coupleOnSpine?.primaryName ?? null },
+    { role: 'partner2', name: coupleOnSpine?.partnerName ?? null },
+  ]
+    .filter((p) => Boolean((p.name ?? '').trim()))
+    .map((p) => {
+      const parts = (p.name ?? '').trim().split(/\s+/)
+      return {
+        role: p.role,
+        first_name: parts[0] ?? null,
+        last_name: parts.length > 1 ? parts[parts.length - 1]! : null,
+      }
+    })
 
   const sources: EvidenceSourceRow[] = []
 
@@ -188,6 +196,9 @@ export async function GET(req: NextRequest) {
   // Re-filter client side by people IDs since tangential_signals binds
   // to matched_person_id not wedding_id directly.
   const { data: peopleIdsRows } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: tangential_signals binds to
+    // matched_person_id, so the person ids have to come from people until
+    // that binding moves to the spine. See REPAIR-ENDPOINTS.md.
     .from('people')
     .select('id')
     .eq('wedding_id', weddingId)

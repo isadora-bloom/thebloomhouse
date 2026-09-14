@@ -31,6 +31,8 @@ async function authorise(weddingId: string, opts: { write?: boolean } = {}) {
 
   const supabase = createServiceClient()
   const { data: wedding } = await supabase
+    // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+    // read. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id')
     .eq('id', weddingId)

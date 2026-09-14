@@ -101,6 +101,9 @@ export async function GET(request: NextRequest) {
     // merged_into_id IS NULL: dedupe survivors only — stops double-counting
     // the HoneyBook rows that were merged into existing weddings.
     const { data: weddings, error } = await sb
+      // legacy-read-ok: NO-SPINE-EQUIVALENT: booking_value is a weddings
+      // column. The revenue rollup cannot be computed from couples /
+      // touchpoints today. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('venue_id, source, booking_value')
       .in('status', ['booked', 'completed'])

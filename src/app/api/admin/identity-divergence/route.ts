@@ -74,6 +74,9 @@ async function loadVenueDivergence(
 ): Promise<VenueDivergence> {
   const [weddings, mirrored, withEmail, placeholders] = await Promise.all([
     supabase
+      // legacy-read-ok: NO-SPINE-EQUIVALENT: the metric IS weddings-against-
+      // couples. Reading only the spine would measure nothing. See REPAIR-
+      // ENDPOINTS.md.
       .from('weddings')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId),

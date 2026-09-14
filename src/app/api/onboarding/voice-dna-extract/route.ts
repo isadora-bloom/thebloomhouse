@@ -207,6 +207,9 @@ export async function GET(request: NextRequest) {
     .eq('venue_id', targetVenueId)
     .eq('status', 'active')
   const { count: outboundCount } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: counts sent messages to decide whether
+    // voice extraction has material. The spine does not log the venue
+    // outbox. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', targetVenueId)

@@ -181,6 +181,9 @@ export async function POST(req: NextRequest) {
   // weddings — paginators should still walk the same range and let the
   // exclusion happen page-by-page.
   const { count: totalCount } = await supabase
+    // legacy-read-ok: LOAD-BEARING: reconstruct is keyed on wedding_id, so
+    // the page of work is a page of the legacy active set. See REPAIR-
+    // ENDPOINTS.md.
     .from('weddings')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)
@@ -194,6 +197,9 @@ export async function POST(req: NextRequest) {
     ? Math.min(limit * 4, MAX_LIMIT * 4)
     : limit
   const { data: weddings, error: pageErr } = await supabase
+    // legacy-read-ok: LOAD-BEARING: reconstruct is keyed on wedding_id, so
+    // the page of work is a page of the legacy active set. See REPAIR-
+    // ENDPOINTS.md.
     .from('weddings')
     .select('id')
     .eq('venue_id', venueId)

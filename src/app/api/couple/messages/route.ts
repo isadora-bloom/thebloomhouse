@@ -103,6 +103,9 @@ export async function POST(request: NextRequest) {
     // signal-class-justified: portal_chat message is a couple->coordinator touchpoint
     // html-stripped-justified: `trimmed` is plain text typed by the couple, not HTML
     void supabase
+      // legacy-read-ok: MIRROR-MAINTENANCE: the couple message is mirrored
+      // into the legacy inbox thread view; the messages row is the source of
+      // truth. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .insert({
         venue_id: auth.venueId,

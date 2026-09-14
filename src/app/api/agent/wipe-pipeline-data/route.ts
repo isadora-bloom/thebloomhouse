@@ -108,6 +108,9 @@ export async function POST(req: Request) {
   // Gather wedding IDs in scope so we can clean child tables that FK to
   // weddings but aren't directly venue-scoped in their schema.
   const { data: weddingRows } = await supabase
+    // legacy-read-ok: DESTRUCTIVE-GATED: the operator wipe targets the
+    // legacy mirror by definition. Gated, audited, and never part of a read
+    // path. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id')
     .eq('venue_id', venueId)
@@ -149,6 +152,9 @@ export async function POST(req: Request) {
   })
   await runDelete('interactions', async () => {
     const { count, error } = await supabase
+      // legacy-read-ok: DESTRUCTIVE-GATED: the operator wipe targets the
+      // legacy mirror by definition. Gated, audited, and never part of a
+      // read path. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .delete({ count: 'exact' })
       .eq('venue_id', venueId)
@@ -228,6 +234,9 @@ export async function POST(req: Request) {
   // -------------------------------------------------------------------
   await runDelete('people', async () => {
     const { count, error } = await supabase
+      // legacy-read-ok: DESTRUCTIVE-GATED: the operator wipe targets the
+      // legacy mirror by definition. Gated, audited, and never part of a
+      // read path. See REPAIR-ENDPOINTS.md.
       .from('people')
       .delete({ count: 'exact' })
       .eq('venue_id', venueId)
@@ -239,6 +248,9 @@ export async function POST(req: Request) {
   // -------------------------------------------------------------------
   await runDelete('weddings', async () => {
     const { count, error } = await supabase
+      // legacy-read-ok: DESTRUCTIVE-GATED: the operator wipe targets the
+      // legacy mirror by definition. Gated, audited, and never part of a
+      // read path. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .delete({ count: 'exact' })
       .eq('venue_id', venueId)

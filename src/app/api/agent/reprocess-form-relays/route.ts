@@ -52,6 +52,9 @@ export async function POST() {
   const ownEmails = await venueOwnEmails(venueId)
 
   const { data: rows, error } = await supabase
+    // legacy-read-ok: LOAD-BEARING: repair primitive on the legacy mirror.
+    // It re-parses relayed form inbounds and rewrites the wedding / people /
+    // interaction rows they made. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id, gmail_message_id, subject, full_body, from_email, from_name, timestamp, person_id, wedding_id')
     .eq('venue_id', venueId)
@@ -156,11 +159,19 @@ export async function POST() {
           if (parsedDate?.precision) inquiryUpdate.wedding_date_precision = parsedDate.precision
           if (parsedGuests != null) inquiryUpdate.guest_count_estimate = parsedGuests
           await supabase
+            // legacy-read-ok: LOAD-BEARING: repair primitive on the legacy
+            // mirror. It re-parses relayed form inbounds and rewrites the
+            // wedding / people / interaction rows they made. See REPAIR-
+            // ENDPOINTS.md.
             .from('weddings')
             .update(inquiryUpdate)
             .eq('id', weddingId)
         }
         await supabase
+          // legacy-read-ok: LOAD-BEARING: repair primitive on the legacy
+          // mirror. It re-parses relayed form inbounds and rewrites the
+          // wedding / people / interaction rows they made. See REPAIR-
+          // ENDPOINTS.md.
           .from('people')
           .update({ wedding_id: weddingId })
           .eq('id', contact.personId)
@@ -177,6 +188,9 @@ export async function POST() {
     }
     if (lead.leadName) update.from_name = lead.leadName
     if (weddingId) update.wedding_id = weddingId
+    // legacy-read-ok: LOAD-BEARING: repair primitive on the legacy mirror.
+    // It re-parses relayed form inbounds and rewrites the wedding / people /
+    // interaction rows they made. See REPAIR-ENDPOINTS.md.
     await supabase.from('interactions').update(update).eq('id', row.id)
     rewired++
 
