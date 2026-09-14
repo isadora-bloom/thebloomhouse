@@ -21,6 +21,12 @@
  * of supabase/migrations/*.sql — the same approach
  * scripts/check-on-conflict-constraints.mjs already uses.
  *
+ * The same scan also catches the third case: a migration on disk that adds
+ * a wedding_id column and has not been applied to this database yet. The
+ * live schema cannot show it, but the table is a commitment the moment the
+ * migration is written, so it goes in the file marked pending_migration and
+ * mergeWeddings skips it cleanly until it lands.
+ *
  * Usage
  * -----
  *   npx tsx scripts/gen-wedding-fk-tables.ts            # writes the file
@@ -79,6 +85,13 @@ export interface WeddingFkTable {
   unique_partial?: boolean
   /** false when the column has no declared FK (kept for completeness). */
   has_fk: boolean
+  /**
+   * Set when the column exists only in a migration on disk that has not
+   * been applied to the database this file was generated from. The table
+   * is in the cascade from the day the migration is written, and
+   * mergeWeddings skips it cleanly (PGRST205) until it is applied.
+   */
+  pending_migration?: string
 }
 
 // Migration 202: the attach trigger on weddings.merged_into_id re-points
@@ -239,6 +252,79 @@ function splitCols(raw: string): string[] {
     .filter(Boolean)
 }
 
+// ---------------------------------------------------------------------------
+// Source 4: migrations on disk that add a wedding_id column but have not
+// reached the database yet.
+//
+// Why this exists: the generator reads the live schema, so a migration
+// written today and applied next week is invisible to it — and the file
+// would then be silently short a table for as long as that gap lasts
+// (found 2026-09-14: W50's 406_commitment_reconciliation). A migration on
+// disk is a commitment, so it belongs in the cascade from the day it is
+// written, marked pending until it lands.
+//
+// The hard part is telling "not applied yet" from "created years ago and
+// long since dropped" — both are "on disk, missing live". Two signals,
+// and a table must pass both:
+//   - it is introduced by a migration numbered ABOVE the live watermark
+//     (the newest migration that introduces a wedding_id table which does
+//     exist live), so anything older that has gone missing is history
+//   - no migration on disk drops it
+// Anything that fails only the first test is reported as a note, never as
+// a silent omission.
+// ---------------------------------------------------------------------------
+interface IntroducedColumn {
+  table: string
+  file: string
+  n: number
+  hasFk: boolean
+  pk: string | null
+}
+
+function scanIntroducedWeddingIdColumns(): Map<string, IntroducedColumn> {
+  const out = new Map<string, IntroducedColumn>()
+  const files = readdirSync(MIGRATION_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+  for (const f of files) {
+    const n = Number((f.match(/^(\d+)_/) ?? [])[1] ?? NaN)
+    if (!Number.isFinite(n)) continue
+    const sql = readFileSync(join(MIGRATION_DIR, f), 'utf8')
+
+    const createTable = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([\s\S]*?)\n\)\s*;/gi
+    for (const m of sql.matchAll(createTable)) {
+      const table = m[1]!.toLowerCase()
+      const body = m[2]!
+      const line = body.split('\n').find((l) => /^\s*wedding_id\b/i.test(l))
+      if (!line) continue
+      if (out.has(table)) continue
+      const pkLine = body.split('\n').find((l) => /\bprimary\s+key\b/i.test(l) && /^\s*[a-z0-9_]+\s/i.test(l))
+      const pk = pkLine ? (pkLine.trim().split(/\s/)[0] ?? null) : null
+      out.set(table, { table, file: f, n, hasFk: /references/i.test(line), pk })
+    }
+
+    const addColumn =
+      /alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:public\.)?([a-z0-9_]+)([\s\S]{0,160}?)add\s+column\s+(?:if\s+not\s+exists\s+)?wedding_id\b([^;,\n]*)/gi
+    for (const m of sql.matchAll(addColumn)) {
+      const table = m[1]!.toLowerCase()
+      if (out.has(table)) continue
+      out.set(table, { table, file: f, n, hasFk: /references/i.test(m[3] ?? ''), pk: 'id' })
+    }
+  }
+  return out
+}
+
+function scanDroppedTables(): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const f of readdirSync(MIGRATION_DIR).filter((n) => n.endsWith('.sql')).sort()) {
+    const sql = readFileSync(join(MIGRATION_DIR, f), 'utf8')
+    for (const m of sql.matchAll(/drop\s+table\s+(?:if\s+exists\s+)?(?:public\.)?([a-z0-9_]+)/gi)) {
+      out.set(m[1]!.toLowerCase(), f)
+    }
+  }
+  return out
+}
+
 function migrationWatermark(): number {
   let max = 0
   for (const f of readdirSync(MIGRATION_DIR)) {
@@ -376,6 +462,59 @@ async function main() {
   for (const [name, rel] of relations) {
     if (rel.columns.includes('wedding_id')) push(name, 'wedding_id', false)
   }
+
+  // Pending: on disk, not in the database yet. See the section header above
+  // for how "not applied yet" is told apart from "dropped long ago".
+  const introduced = scanIntroducedWeddingIdColumns()
+  const dropped = scanDroppedTables()
+  const liveTables = new Set(rows.filter((r) => r.column === 'wedding_id').map((r) => r.table))
+  let liveWatermark = 0
+  for (const info of introduced.values()) {
+    if (liveTables.has(info.table)) liveWatermark = Math.max(liveWatermark, info.n)
+  }
+  const pending: WeddingFkTable[] = []
+  const notes: string[] = []
+  for (const info of [...introduced.values()].sort((a, b) => a.n - b.n)) {
+    if (liveTables.has(info.table)) continue
+    const dropFile = dropped.get(info.table)
+    if (dropFile) continue // dropped on disk; history, not a gap
+    if (info.n <= liveWatermark) {
+      notes.push(
+        `${info.table} (${info.file}) is gone from the live schema with no DROP on disk; ` +
+          'older than the live watermark, so treated as history, not as pending',
+      )
+      continue
+    }
+    const uniq = uniques.get(info.table)
+    const entry: WeddingFkTable = uniq
+      ? {
+          table: info.table,
+          column: 'wedding_id',
+          strategy: 'merge_one_per_wedding',
+          reason:
+            `not applied to this database yet (${info.file}); ` +
+            `${uniq.partial ? 'partial unique' : 'unique'} on (${uniq.cols.join(', ')}), ` +
+            "so the winner's row wins and a colliding loser row stays put and is audited",
+          pk: info.pk,
+          key_columns: uniq.cols.filter((c) => c !== 'wedding_id'),
+          unique_source: uniq.source,
+          unique_partial: uniq.partial,
+          has_fk: info.hasFk,
+          pending_migration: info.file,
+        }
+      : {
+          table: info.table,
+          column: 'wedding_id',
+          strategy: 'reassign',
+          reason: `not applied to this database yet (${info.file}); plain owner column, every row follows the wedding`,
+          pk: info.pk,
+          has_fk: info.hasFk,
+          pending_migration: info.file,
+        }
+    pending.push(entry)
+    rows.push(entry)
+  }
+
   rows.sort((a, b) => a.table.localeCompare(b.table) || a.column.localeCompare(b.column))
 
   const counts: Record<string, number> = {}
@@ -383,13 +522,19 @@ async function main() {
 
   const doc = {
     $comment:
-      'GENERATED by scripts/gen-wedding-fk-tables.ts from the live schema. Do not hand-edit. ' +
-      'mergeWeddings (src/lib/services/identity/resolver.ts) iterates this file; ' +
+      'GENERATED by scripts/gen-wedding-fk-tables.ts from the live schema, plus any migration on ' +
+      'disk that adds a wedding_id column and has not been applied yet (pending_migration). ' +
+      'Do not hand-edit. mergeWeddings (src/lib/services/identity/resolver.ts) iterates this file; ' +
       'scripts/check-merge-weddings-cascade.mjs diffs it against the database and ' +
       'scripts/check-wedding-fk-tables-fresh.mjs fails CI when a newer migration adds a wedding_id column.',
     generated_at: new Date().toISOString().slice(0, 10),
     generator: 'scripts/gen-wedding-fk-tables.ts',
+    /** Newest migration on disk when this ran. The freshness guard's line. */
     migration_watermark: migrationWatermark(),
+    /** Newest migration introducing a wedding_id table that the database has. */
+    live_watermark: liveWatermark,
+    pending_count: pending.length,
+    notes,
     counts,
     tables: rows,
   }
@@ -401,8 +546,16 @@ async function main() {
     writeFileSync(out, json)
     console.log(`wrote ${out}`)
   }
-  console.log(`${rows.length} wedding-keyed columns; watermark migration ${doc.migration_watermark}`)
+  console.log(
+    `${rows.length} wedding-keyed columns; watermark migration ${doc.migration_watermark}, ` +
+      `live watermark ${liveWatermark}`,
+  )
   for (const [s, n] of Object.entries(counts).sort()) console.log(`  ${s.padEnd(22)} ${n}`)
+  if (pending.length > 0) {
+    console.log(`\n${pending.length} pending (on disk, not in this database yet):`)
+    for (const p of pending) console.log(`  ${p.table.padEnd(34)} ${p.strategy.padEnd(22)} ${p.pending_migration}`)
+  }
+  for (const n of notes) console.log(`note: ${n}`)
 }
 
 main().catch((err) => {

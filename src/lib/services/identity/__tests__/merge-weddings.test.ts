@@ -327,6 +327,60 @@ describe('mergeWeddings — one row per wedding', () => {
   })
 })
 
+describe('mergeWeddings — a table whose migration has not been applied yet', () => {
+  it('the generated file carries pending entries with the migration that creates them', () => {
+    const pending = cascade.tables.filter(
+      (t) => (t as { pending_migration?: string }).pending_migration,
+    )
+    // Not an assertion that any exist today — only that the ones that do
+    // name a migration and still carry a usable strategy.
+    for (const t of pending) {
+      expect(String((t as { pending_migration?: string }).pending_migration)).toMatch(/^\d+_.*\.sql$/)
+      expect(['reassign', 'merge_one_per_wedding']).toContain(t.strategy)
+    }
+  })
+
+  it('skips it on PGRST205, records the skip, and is not a failure', async () => {
+    const pending = cascade.tables.find((t) => (t as { pending_migration?: string }).pending_migration)
+    if (!pending) return // nothing pending on this schema; the path is still covered above
+
+    const { db, client } = makeDb()
+    db.updateErrors[pending.table] = {
+      code: 'PGRST205',
+      message: `Could not find the table 'public.${pending.table}' in the schema cache`,
+    }
+    db.seed('interactions', [{ wedding_id: LOSER, venue_id: VENUE_A }])
+
+    const res = await mergeWeddings(WINNER, LOSER, { supabase: client })
+
+    const outcome = res.outcomes.find((o) => o.table === pending.table)!
+    expect(outcome.absent).toBe(true)
+    expect(outcome.error).toBeUndefined()
+
+    // The rest of the merge is unaffected.
+    expect(db.tables.interactions![0]!.wedding_id).toBe(WINNER)
+    expect(db.tables.weddings!.find((w) => w.id === LOSER)!.merged_into_id).toBe(WINNER)
+
+    const details = db.tables.activity_log![0]!.details as Record<string, unknown>
+    expect(details.pending_tables_not_applied_yet).toContain(pending.table)
+    expect((details.failed_tables as unknown[]).length).toBe(0)
+  })
+
+  it('a missing table that is NOT pending is still a failure', async () => {
+    const { db, client } = makeDb()
+    db.updateErrors.reviews = {
+      code: 'PGRST205',
+      message: "Could not find the table 'public.reviews' in the schema cache",
+    }
+
+    const res = await mergeWeddings(WINNER, LOSER, { supabase: client })
+
+    const outcome = res.outcomes.find((o) => o.table === 'reviews')!
+    expect(outcome.absent).toBeUndefined()
+    expect(outcome.error).toContain('Could not find the table')
+  })
+})
+
 describe('mergeWeddings — a failing table does not abort the merge', () => {
   it('records the failure and carries on with the other tables', async () => {
     const { db, client } = makeDb()

@@ -74,8 +74,9 @@ if (tables.length === 0) {
 // ---------------------------------------------------------------------------
 // 1. Freshness: migrations newer than the watermark
 // ---------------------------------------------------------------------------
-const newer = readdirSync(MIGRATION_DIR)
-  .filter((f) => f.endsWith('.sql'))
+const migrationFiles = new Set(readdirSync(MIGRATION_DIR).filter((f) => f.endsWith('.sql')))
+
+const newer = [...migrationFiles]
   .map((f) => ({ file: f, n: Number((f.match(/^(\d+)_/) ?? [])[1] ?? NaN) }))
   .filter((f) => Number.isFinite(f.n) && f.n > watermark)
   .sort((a, b) => a.n - b.n)
@@ -127,6 +128,9 @@ for (const t of tables) {
   }
   if (t.strategy === 'merge_one_per_wedding' && !t.pk) {
     problems.push(`${label} is one-per-wedding but has no primary key to move rows by`)
+  }
+  if (t.pending_migration && !migrationFiles.has(t.pending_migration)) {
+    problems.push(`${label} is pending on ${t.pending_migration}, which is not in ${MIGRATION_DIR}`)
   }
 }
 
