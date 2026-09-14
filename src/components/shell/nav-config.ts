@@ -560,6 +560,9 @@ export const MODE_SAGE: ModeConfig = {
       items: [
         { label: 'Wedding Details', href: '/portal/wedding-details-config', icon: Heart },
         { label: 'Checklist Templates', href: '/portal/checklist-config', icon: CheckSquare },
+        // W57. The wording on every contract this venue sends. The figures
+        // come from each couple's own booking, so nothing priced is typed here.
+        { label: 'Contract Template', href: '/settings/contract-template', icon: ScrollText },
       ],
     },
     {
