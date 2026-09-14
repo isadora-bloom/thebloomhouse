@@ -85,21 +85,33 @@ Shared rules for every agent:
 - End your report with WHERE TO LOOK (files, routes) and WHAT TO TEST (static now vs needs
   the database), per the standing handoff convention.
 
-## Operator items (Isadora)
+## Operator items (Isadora), current as of 2026-09-14 evening
 
 - [ ] **RECONNECT GMAIL FIRST.** `gmail_connections` for Rixey has been `status=error`
-  ("Token refresh failed") since **2026-07-24**. No email has been ingested for six weeks.
-  The backfill and the live poll both need it. Settings → Gmail → Connect. (Found 2026-09-08.)
-- [ ] Do NOT re-enable auto-send until the reimport is complete. All four `auto_send_rules`
-  are `enabled=false` today (verified 2026-09-08). After a wipe the new-contact, per-thread
-  and daily-limit gates all read empty tables and pass everything; `enabled` is the only gate.
-- [x] Run `node scripts/phase2-wipe-finish.mjs --apply --allow-prod` (interactions + people) — done 2026-09-08, all Rixey pipeline tables 0
-- [ ] Import the five HoneyBook CSVs through `/onboarding/crm-import`, oldest first — PAUSED by Isadora until wave-1 fixes land; parse verified offline (281 couples, 136 distinct emails)
-- [ ] Download a fresh HoneyBook "Booked clients" report (newest on disk ends Jun 2026)
-- [ ] Fast-forward `master` after each integration I hand you (wave 1 + wave 2 wiring ready on `consolidation` as of 2026-09-09)
-- [x] Migrations 391, 392, 393, 394 applied to prod 2026-09-09 (couple_invites, demo anon reads, accommodations columns verified live)
-- [ ] Decide: fix Hawthorne's `venue_config.business_name` by SQL (one line, I will give it)
-- [ ] Decide: delete the two May snapshot branches to save cost, keep `pre-phase2-2026-09-08`
+  ("Token refresh failed") since **2026-07-24**. Settings → Gmail → Connect. Nothing else replaces it.
+- [ ] Fast-forward `master` to `consolidation` (129+ commits: waves 1 to 7 gated and pushed).
+- [ ] Prod migrations, one run: `npm run migrate:pending` (dry) then
+  `npm run migrate:pending -- --apply --allow-prod` (395, 397, 398, 399, 400, 401, 402, 403, 404, 406;
+  wave 8 adds 407, 408, 409 when it lands). Then the older six with `--include-legacy`, 308 in the
+  SQL editor. Then `npx tsx scripts/gen-wedding-fk-tables.ts` (read-only, regenerates the cascade
+  list so 406 stops being "pending") and the types regeneration `check-types-fresh` asks for.
+- [x] Test branch (`.env.test`) brought to 395-403 on 2026-09-14; golden 16/16 wet. Re-run
+  `apply-pending-migrations.ts --env-file .env.test --apply` after each wave adds migrations.
+- [ ] Decide Rixey's Google Trends metro: `venues.google_trends_metro` is `US-VA-584` (Richmond),
+  copied onto three venues; Rixey's market is DC, `US-DC-511`. One UPDATE if you agree.
+- [ ] Apply `supabase/seed-marketing-spend-records.sql` to the demo project so Crestwood's ROI column
+  stops being blank (W52 finding: the legacy `marketing_spend` was seeded, the table attribution
+  reads never was).
+- [ ] Do NOT re-enable auto-send until the reimport is complete (all four rules `enabled=false`).
+- [ ] Download a fresh HoneyBook "Booked clients" report (newest on disk ends Jun 2026), then the
+  reimport sequence below.
+- [ ] Meta app credentials for Instagram DMs; ad-platform app credentials when W54 lands
+  (each connector documents its variables); Resend domain per venue when W55 lands.
+- [ ] Marketing-site repos: the "Your Instagram (optional)" field.
+- [ ] Decide: fix Hawthorne's `venue_config.business_name` by SQL (one line, I will give it).
+- [ ] Decide: delete the two May snapshot branches to save cost, keep `pre-phase2-2026-09-08`.
+- [x] Migrations 391-394 applied to prod 2026-09-09.
+- [x] `phase2-wipe-finish.mjs` run 2026-09-08.
 
 ## Reimport steps (I run, after the finisher)
 
@@ -536,6 +548,9 @@ parked: the code ships now, the activation condition is named, not open-ended.
 | W57 | Native contracts inside Bloom, MVP scope: generate a contract from a booked wedding's package data, send it to the couple through the existing disclosure-guarded send path, track signed/unsigned status on the wedding page. Not full e-signature legal infrastructure — status tracking and generation, matching what the coordinator-side contract work in wave 6 (W43) already reads | Opus | new `src/lib/services/contracts/**`, `src/app/api/portal/contracts/**`, a section on `portal/weddings/[id]/page.tsx` |
 | W58 | Marketing-site demo goes live: the Bloom-side hooks the live demo needs (a public-facing read-only snapshot route, rate-limited, no auth) — the marketing-site repo's own build is out of this repo, this workstream only ships what Bloom must expose | Sonnet | new `src/app/api/public/demo-snapshot/**`, rate-limit config |
 | W59 | Custom app domain: DNS + Vercel domain config, cert, redirect from the current domain | Haiku | `vercel.json`, DNS records (operator applies), redirect middleware |
+
+Launched 2026-09-14 evening from 761a01c2, seven agents, every worktree verified on the wave 7
+head after the wave 7 launch fault. Migration slots: 407 W54, 408 W55, 409 W57.
 
 Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. No database
 writes. W54's connectors are the only workstream here that needs real third-party credentials
