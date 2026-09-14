@@ -1350,6 +1350,136 @@ function ModelComparisonCard({ scope }: ModelComparisonProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Platform Shift — "is engagement moving from Instagram to TikTok"
+// (NOVEMBER-PLAN.md wave 7, W48). Renders the same PlatformShiftView the
+// get_platform_engagement_shift tool source computes, served by
+// /api/intel/platform-shift so this card and Ask-your-data never disagree.
+// ---------------------------------------------------------------------------
+
+interface PlatformShiftMonthApi {
+  month: string
+  monthLabel: string
+  volumeText: string
+  shareText: string
+  shareChangeText: string
+}
+
+interface PlatformShiftRowApi {
+  platform: string
+  label: string
+  hasData: boolean
+  metricsIncluded: string[]
+  months: PlatformShiftMonthApi[]
+}
+
+interface PlatformShiftViewApi {
+  monthLabels: string[]
+  rows: PlatformShiftRowApi[]
+  absentPlatforms: string[]
+  headline: string
+  enoughData: boolean
+  reason?: string
+}
+
+function PlatformShiftCard({ scope }: { scope: ReturnType<typeof useScope> }) {
+  const [view, setView] = useState<PlatformShiftViewApi | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (scope.loading) return
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      try {
+        const res = await fetch('/api/intel/platform-shift')
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json = (await res.json()) as { view?: PlatformShiftViewApi }
+        if (cancelled) return
+        setView(json.view ?? null)
+        setError(null)
+      } catch (err) {
+        if (cancelled) return
+        console.error('Failed to load platform shift:', err)
+        setError('Failed to load platform engagement shift')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading])
+
+  if (loading) return <TableSkeleton />
+
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-border">
+        <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
+          <Megaphone className="w-5 h-5 text-sage-600" />
+          Platform Shift
+        </h2>
+        <p className="text-xs text-sage-500 mt-1">
+          Engagement volume by platform, from screenshots dropped into the capture tool. A platform
+          with no upload in a month shows &quot;no data&quot;, never a zero.
+        </p>
+      </div>
+
+      {error ? (
+        <div className="px-6 py-4 bg-red-50 border-b border-red-200 text-sm text-red-700">{error}</div>
+      ) : !view ? null : (
+        <>
+          <div className="px-6 py-4 bg-sage-50/60 border-b border-border text-sm text-sage-800">
+            {view.headline}
+          </div>
+          {view.enoughData && (
+            <div className="overflow-x-auto">
+              <table className="min-w-[640px] w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-sage-50/50">
+                    <th className="px-4 py-3 text-left font-medium text-sage-600">Platform</th>
+                    {view.monthLabels.map((m) => (
+                      <th key={m} className="px-4 py-3 text-right font-medium text-sage-600 whitespace-nowrap">
+                        {m}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {view.rows.map((row) => (
+                    <tr key={row.platform} className={!row.hasData ? 'opacity-50' : ''}>
+                      <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
+                        {row.label}
+                        {!row.hasData && (
+                          <span className="block text-[11px] font-normal text-sage-400">no data</span>
+                        )}
+                      </td>
+                      {row.months.map((m) => (
+                        <td key={m.month} className="px-4 py-3 text-right text-sage-700 tabular-nums whitespace-nowrap">
+                          <div>{m.volumeText}</div>
+                          <div className="text-[11px] text-sage-400">
+                            {m.shareText}
+                            {m.shareChangeText !== '—' && ` (${m.shareChangeText})`}
+                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {view.absentPlatforms.length > 0 && (
+            <div className="px-6 py-3 text-xs text-sage-500 border-t border-border">
+              No data yet for: {view.absentPlatforms.join(', ')}.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -2068,6 +2198,9 @@ export default function SourceAttributionPage() {
 
       {/* ---- Compare Attribution Models (Phase 4 P4.4) ---- */}
       <ModelComparisonCard scope={scope} />
+
+      {/* ---- Platform Shift (NOVEMBER-PLAN.md wave 7, W48) ---- */}
+      <PlatformShiftCard scope={scope} />
 
       {/* ---- Source Comparison Table ---- */}
       {loading ? (

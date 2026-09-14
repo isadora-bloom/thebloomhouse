@@ -161,6 +161,11 @@ export const STREAM_TAGS = {
   // uuid `id` column (weather_climate_norms / weather_climate_annual
   // use composite PKs, no seedUuid needed for them).
   WEATHER_ALERT: 0xaaaa,
+  // W48 (NOVEMBER-PLAN.md wave 7): marketing_metric engagement_events,
+  // separate stream from ENGAGEMENT (0x5555) because these rows aren't
+  // keyed to a wedding slot: they're per-venue platform metrics.
+  // 0xbbbb because W49 took 0xaaaa in the same wave.
+  MARKETING_METRIC: 0xbbbb,
 } as const
 
 // ---------------------------------------------------------------------------

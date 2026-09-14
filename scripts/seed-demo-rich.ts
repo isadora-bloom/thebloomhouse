@@ -803,6 +803,81 @@ function buildEngagementEvents(b: SqlBuilder, weddings: SeedWedding[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Marketing-metric events (W48, NOVEMBER-PLAN.md wave 7) — Instagram and
+// TikTok engagement for Crestwood Farm across three months, so the
+// /intel/sources Platform Shift card (and the get_platform_engagement_shift
+// tool source it shares its computation with) has a real shift to show
+// rather than an empty state.
+//
+// Months are ISO 'YYYY-MM' (labelToDay resolves these absolutely, no
+// nearest-year heuristic needed) and deliberately close to when this seed
+// was authored (2026-09) rather than to SEED_NOW (2026-05, used elsewhere
+// in this file for wedding/inquiry dates) — the Platform Shift card's
+// default window is "the 6 calendar months ending today", so the rows
+// need to be recent by wall-clock time, not by the seed's historical
+// wedding-data anchor.
+//
+// Not wedding-scoped (wedding_id is NULL — these are platform-side
+// observations, matching src/lib/services/ingestion/storefront-
+// analytics.ts), so this doesn't reuse buildEngagementEvents' per-wedding
+// loop.
+// ---------------------------------------------------------------------------
+
+interface MarketingMetricPoint {
+  source: string
+  metric: string
+  label: string
+  value: number
+}
+
+function buildMarketingMetricEvents(b: SqlBuilder): void {
+  b.section('7b. ENGAGEMENT_EVENTS (marketing_metric) — Crestwood Farm platform shift, IG -> TikTok')
+
+  const CRESTWOOD_FARM = DEMO_VENUES.find((v) => v.slug === 'crestwood-farm')!
+
+  // Instagram declining, TikTok rising — the shape the whole card exists
+  // to surface. Same metric ('likes') on both platforms so the volume
+  // figures are directly comparable, not an artefact of mixed metrics.
+  const points: MarketingMetricPoint[] = [
+    { source: 'instagram', metric: 'likes', label: '2026-06', value: 900 },
+    { source: 'instagram', metric: 'likes', label: '2026-07', value: 700 },
+    { source: 'instagram', metric: 'likes', label: '2026-08', value: 480 },
+    { source: 'tiktok', metric: 'likes', label: '2026-06', value: 150 },
+    { source: 'tiktok', metric: 'likes', label: '2026-07', value: 420 },
+    { source: 'tiktok', metric: 'likes', label: '2026-08', value: 760 },
+  ]
+
+  const rows: string[] = []
+  points.forEach((p, i) => {
+    const id = seedUuid(STREAM_TAGS.MARKETING_METRIC, CRESTWOOD_FARM.index, i < 3 ? 1 : 2, i + 1)
+    const metadataJson = JSON.stringify({
+      source: p.source,
+      metric: p.metric,
+      label: p.label,
+      value: p.value,
+      imported_from: 'demo_seed',
+    })
+    const cols = [
+      sqlStr(id),
+      sqlStr(CRESTWOOD_FARM.id),
+      'NULL', // wedding_id — platform-side observation, not couple-scoped
+      sqlStr('marketing_metric'),
+      sqlNum(0), // points — platform-facing metric, not a heat signal
+      `${sqlStr(metadataJson)}::jsonb`,
+      sqlStr('inbound'),
+    ].join(', ')
+    rows.push(`  (${cols})`)
+  })
+
+  b.raw(
+    `INSERT INTO public.engagement_events\n` +
+      `  (id, venue_id, wedding_id, event_type, points, metadata, direction)\n` +
+      `VALUES\n${rows.join(',\n')}\nON CONFLICT (id) DO NOTHING;`
+  )
+  b.count('engagement_events (marketing_metric)', rows.length)
+}
+
+// ---------------------------------------------------------------------------
 // Lost deals — one per lost wedding so the lost-deal page has data.
 // ---------------------------------------------------------------------------
 
@@ -1092,6 +1167,7 @@ function buildSql(): { sql: string; counts: Record<string, number>; weddings: Se
   buildMarketingSpend(b)
   buildTours(b, weddings)
   buildEngagementEvents(b, weddings)
+  buildMarketingMetricEvents(b)
   buildLostDeals(b, weddings)
   buildSourceAttribution(b, weddings)
   buildWeatherSeed(b)

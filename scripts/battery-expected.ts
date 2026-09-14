@@ -520,14 +520,33 @@ export const EXPECTED_SHAPES: ExpectedShape[] = [
     operatorVerifies: true,
     note: 'Tier-7 reviews stack (multi-source + Google Places auto-pull) shipped 2026-05-14 with zero battery coverage until now.',
   },
+  // ----- Tier 13 — Platform mix (added 2026-09-14, wave 7 / W48)
+  // marketing_metric rows have landed per platform from brain-dump
+  // screenshots since Phase 8, but nothing rolled them up across months or
+  // compared platforms against each other — "is engagement moving from
+  // Instagram to TikTok" always got an honest refusal even with the data
+  // sitting in engagement_events. get_platform_engagement_shift closes
+  // that gap.
+  {
+    id: '42',
+    tier: 13,
+    question:
+      "Is our engagement moving from Instagram to TikTok? Show me the monthly volume and how each platform's share has changed.",
+    kind: 'ground-truth',
+    expectShape: /(instagram|tiktok)[\s\S]*(share|month|shift|moving|trend|no data)/i,
+    operatorVerifies: true,
+    note:
+      'Platform-shift tool source over marketing_metric rows. Honest "no data for platform X" beats a guess when a platform has no uploaded screenshots in the window.',
+  },
 ]
 
-// 43 = questions 1-37 in BLOOM-TEST-QUESTIONS.md (31/32 in the "**31.
+// 44 = questions 1-37 in BLOOM-TEST-QUESTIONS.md (31/32 in the "**31.
 // (NEW)...**" form, Q37 added to the runner 2026-07-07) + the 32a/32b
-// false-premise variants + Tier-12 Q38-41 (added 2026-07-07, R2).
-if (EXPECTED_SHAPES.length !== 43) {
+// false-premise variants + Tier-12 Q38-41 (added 2026-07-07, R2) +
+// Tier-13 Q42 (added 2026-09-14, wave 7 / W48).
+if (EXPECTED_SHAPES.length !== 44) {
   // Sanity guard — keeps this file honest if a question is added/removed.
   throw new Error(
-    `battery-expected.ts: expected 43 question shapes, found ${EXPECTED_SHAPES.length}`
+    `battery-expected.ts: expected 44 question shapes, found ${EXPECTED_SHAPES.length}`
   )
 }
