@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import Link from 'next/link'
 import {
   Calendar,
@@ -394,37 +393,38 @@ export default function CoupleDashboard() {
       const supabase = createClient()
 
       try {
-        // Fetch wedding with people
-        const { data: wedding } = await supabase
-          .from('weddings')
-          .select('*, people(*)')
-          .eq('id', wid)
-          .single()
+        // W65: the wedding record (date, names, guest count, package,
+        // photo) now comes from the canonical reader via a server route
+        // instead of a browser-side `weddings` read — see
+        // /api/couple/wedding-record and lib/intel/readers/wedding-record.
+        const recordRes = await fetch('/api/couple/wedding-record')
+        if (!recordRes.ok) {
+          setLoading(false)
+          return
+        }
+        const { record } = (await recordRes.json()) as {
+          record: {
+            found: boolean
+            weddingDate: string | null
+            coupleNames: string | null
+            guestCount: number | null
+            couplePhotoUrl: string | null
+            package: { name: string; description: string | null; seasonOrTier: string | null } | null
+          }
+        }
 
-        if (!wedding) {
+        if (!record?.found) {
           setLoading(false)
           return
         }
 
         // Fetch related data in parallel.
         // Round-6 audit fix: owner-presence (venue_ai_config + venue_config)
-        // and packages catalog reads are folded INTO this fan-out instead of
-        // running sequentially after it. Saves ~2 round-trips of latency
-        // per dashboard load. Each result is null-tolerant (fail-soft) so
+        // reads are folded INTO this fan-out instead of running
+        // sequentially after it. Saves a round-trip of latency per
+        // dashboard load. Each result is null-tolerant (fail-soft) so
         // a misconfigured RLS policy doesn't break the page; we log a
         // console.warn for debuggability per round-6 follow-up.
-        // package_name is what every import and the booking form write;
-        // weddings.package (migration 009) has no writer left, kept as the
-        // fallback for rows from before the rename (W57's report, 2026-09-14).
-        const weddingPackageLabel =
-          (wedding as { package_name?: string | null; package?: string | null }).package_name ??
-          (wedding as { package?: string | null }).package ??
-          null
-        // Same `%`/`_` escape applied here that's used downstream when
-        // resolving the package catalog row (round-6 #1a fix).
-        const escapedPackageLabel =
-          weddingPackageLabel ? weddingPackageLabel.replace(/[\\%_]/g, '\\$&') : null
-
         const [
           guests,
           budgetItemsRes,
@@ -437,7 +437,6 @@ export default function CoupleDashboard() {
           contractsRes,
           bookedVendorsRes,
           venueConfigRes,
-          packageRes,
         ] = await Promise.all([
           supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', wid),
           supabase
@@ -505,18 +504,6 @@ export default function CoupleDashboard() {
                 .eq('venue_id', vid)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
-          // Booked-package catalog row. Skipped when there's no
-          // wedding-side label; otherwise case-insensitive lookup
-          // with `%`/`_` escaped.
-          vid && escapedPackageLabel
-            ? supabase
-                .from('packages')
-                .select('name, description, season, tier')
-                .eq('venue_id', vid)
-                .eq('kind', 'package')
-                .ilike('name', escapedPackageLabel)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null }),
         ])
 
         // Owner presence + package synthesis from the parallel fetch above.
@@ -532,13 +519,6 @@ export default function CoupleDashboard() {
             venueConfigRes.error.message,
           )
           fetchErrors.push("Couldn't load venue branding or owner info.")
-        }
-        if (packageRes.error) {
-          console.warn(
-            '[couple-dashboard] packages catalog fetch failed:',
-            packageRes.error.message,
-          )
-          fetchErrors.push("Couldn't load your booked package.")
         }
 
         const ownerName =
@@ -565,41 +545,17 @@ export default function CoupleDashboard() {
           ? (rawPhotoUrl as string)
           : null
 
-        let packageInfo: DashboardData['packageInfo'] = null
-        const pkgRow = packageRes.data as
-          | {
-              name: string
-              description: string | null
-              season: string | null
-              tier: string | null
-            }
-          | null
-        if (pkgRow) {
-          packageInfo = {
-            name: pkgRow.name,
-            description: pkgRow.description ?? null,
-            seasonOrTier: pkgRow.season ?? pkgRow.tier ?? null,
-          }
-        } else if (weddingPackageLabel) {
-          // Catalog miss but the wedding row has a label — surface the
-          // bare label so couples still see what they booked.
-          packageInfo = {
-            name: weddingPackageLabel,
-            description: null,
-            seasonOrTier: null,
-          }
-        }
+        // Package summary now comes straight off the reader: catalog
+        // row when the packages table has a matching name, otherwise
+        // the bare wedding-side label. Same precedence as before
+        // (package_name, then package), just resolved server-side.
+        const packageInfo: DashboardData['packageInfo'] = record.package
 
-        const people = (wedding.people || []) as Array<{
-          first_name: string
-          role: string
-        }>
-        const principals = dedupePeopleByName(
-          people.filter((p) => p.role === 'partner1' || p.role === 'partner2')
-        )
-        const coupleNames = principals.length > 0
-          ? principals.map((p) => p.first_name).join(' & ')
-          : 'there'
+        // W65: partner names come from the spine (couples.
+        // primary_contact_name / partner_contact_name) via the reader,
+        // not a browser-side `people` read. 'there' is the same
+        // no-name-on-file fallback the dashboard has always shown.
+        const coupleNames = record.coupleNames ?? 'there'
 
         const guestList = guests.data || []
         const budgetItems = (budgetItemsRes.data || []) as Array<{
@@ -661,8 +617,8 @@ export default function CoupleDashboard() {
 
         setData({
           coupleNames,
-          weddingDate: wedding.wedding_date,
-          guestCount: wedding.guest_count_estimate,
+          weddingDate: record.weddingDate,
+          guestCount: record.guestCount,
           guestsAttending: guestList.filter((g) => g.rsvp_status === 'attending').length,
           guestsPending: guestList.filter((g) => g.rsvp_status === 'pending').length,
           guestsDeclined: guestList.filter((g) => g.rsvp_status === 'declined').length,
@@ -705,7 +661,7 @@ export default function CoupleDashboard() {
               .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
               .slice(0, 3) as DashboardData['recentMessages']
           })(),
-          couplePhotoUrl: (wedding as { couple_photo_url?: string | null }).couple_photo_url || null,
+          couplePhotoUrl: record.couplePhotoUrl || null,
           guestListCount: guestList.length,
           contractsCount: contractsRes.count ?? 0,
           bookedVendorsCount: bookedVendorsRes.count ?? 0,

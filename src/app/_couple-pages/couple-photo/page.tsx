@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
+import { setCouplePhotoUrl } from '@/lib/services/couple-portal/couple-photo'
 import { cn } from '@/lib/utils'
 import {
   Camera,
@@ -119,19 +120,23 @@ export default function CouplePhotoPage() {
   const supabase = createClient()
 
   // ---- Fetch current photo ----
+  // W65: routed through the wedding-record API (server-side, via
+  // getWeddingRecord) instead of a browser-side `weddings` read. The
+  // page is a client component, so a route is how it reaches the
+  // reader — see /api/couple/wedding-record.
   const fetchCurrentPhoto = useCallback(async () => {
     if (!weddingId) return
-    const { data, error } = await supabase
-      .from('weddings')
-      .select('couple_photo_url')
-      .eq('id', weddingId)
-      .single()
-
-    if (!error && data) {
-      setCurrentPhotoUrl(data.couple_photo_url || null)
+    try {
+      const res = await fetch('/api/couple/wedding-record')
+      if (res.ok) {
+        const { record } = await res.json()
+        setCurrentPhotoUrl(record?.couplePhotoUrl ?? null)
+      }
+    } catch {
+      // best-effort — page still renders the upload dropzone
     }
     setLoading(false)
-  }, [supabase, weddingId])
+  }, [weddingId])
 
   // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
@@ -229,13 +234,13 @@ export default function CouplePhotoPage() {
       const publicUrl = publicUrlData.publicUrl
 
       // Update weddings record
-      const { error: updateError } = await supabase
-        .from('weddings')
-        .update({ couple_photo_url: publicUrl })
-        .eq('id', weddingId)
+      if (!weddingId || !venueId) {
+        throw new Error('Missing wedding or venue context.')
+      }
+      const { error: updateError } = await setCouplePhotoUrl(supabase, weddingId, venueId, publicUrl)
 
       if (updateError) {
-        throw new Error(updateError.message)
+        throw new Error(updateError)
       }
 
       // Success
