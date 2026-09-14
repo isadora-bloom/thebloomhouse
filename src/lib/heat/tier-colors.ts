@@ -11,7 +11,14 @@
  * The HeatBadge component wraps this map in renderable variants.
  */
 
-export type HeatTier = 'hot' | 'warm' | 'cool' | 'cold' | 'frozen'
+/**
+ * `on_fire` is the spine's top bucket (heatBucket() in
+ * services/identity/heat-score.ts, score >= 150). The other five are the
+ * legacy `wedding_heat` view's tiers. Both vocabularies render through
+ * this one map so a surface reading canonical heat and a surface still
+ * reading the view cannot draw the same word in two colours.
+ */
+export type HeatTier = 'on_fire' | 'hot' | 'warm' | 'cool' | 'cold' | 'frozen'
 
 export interface TierStyle {
   /** Display label (capitalised). */
@@ -30,6 +37,14 @@ export interface TierStyle {
 
 /** Authoritative tier styles. Any new heat surface uses this map. */
 export const TIER_STYLES: Record<HeatTier, TierStyle> = {
+  on_fire: {
+    label: 'On fire',
+    color: '#DC2626',
+    bg: 'bg-red-100',
+    text: 'text-red-800',
+    dotBg: 'bg-red-600',
+    border: 'border-red-300',
+  },
   hot: {
     label: 'Hot',
     color: '#EF4444',

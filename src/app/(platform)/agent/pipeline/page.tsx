@@ -1,32 +1,50 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+/**
+ * Pipeline — where every couple stands, as a board.
+ *
+ * W62 (wave 9). The board used to be a `supabase.from('weddings')` query
+ * grouped by `weddings.status`, with its own seven column labels, its own
+ * heat fetch from `wedding_heat`, and a drag that wrote `status` straight
+ * from the browser. The `legacy-read-ok` tag on that query said the
+ * spine's six lifecycle states could not express the thirteen-stage
+ * pipeline and that W37 owned the mapping. W37 shipped it.
+ *
+ * So the columns are now the thirteen operator stages from
+ * `client-terms`, the same words the pill uses, and a card's column is
+ * derived by `deriveOperatorStage` from the couple's record and the
+ * thirteen-stage machine together. The rows come from
+ * /api/intel/canonical/lead-board; the triage counts and the lifecycle
+ * strip come from getDailyList + getVenueOverview, unchanged.
+ *
+ * Dragging a card asserts a stage. That write now goes through
+ * /api/agent/pipeline/stage, which records an audited transition and sets
+ * the machine stage as well as the legacy status, so a move sticks
+ * instead of springing back on the next load.
+ */
+
+import { useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
-import { createClient } from '@/lib/supabase/client'
-import { personFullName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 import { VenueChip } from '@/components/intel/venue-chip'
-// Stream HHH Bug 10: InlineInsightBanner removed from /agent/pipeline.
 import { HeatBadge } from '@/components/intel/heat-badge'
 import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
-// W2 canonical wiring. The triage counts and the lifecycle strip come
-// from getDailyList + getVenueOverview, the same call /agent/leads makes.
-// The board itself stays wedding-keyed: dragging a card writes
-// weddings.status, and the spine has no equivalent write path yet.
-// W37: one lifecycle vocabulary. The columns stay keyed on the board
-// stage, because dragging a card is what moves it. The pill on the card is
-// the shared one, so a card sitting in Tour Scheduled whose record says the
-// couple went quiet says so on its face instead of only in the audit.
 import { LifecyclePill } from '@/components/shared/lifecycle-pill'
-import {
-  deriveOperatorStage,
-  type OperatorStageResult,
-} from '@/lib/services/lifecycle/vocabulary'
-import type { LifecycleStage } from '@/lib/services/lifecycle/state-machine'
+import type { OperatorStage } from '@/lib/services/lifecycle/vocabulary'
 import { TriageRail, LifecycleStrip, useCanonicalDaily } from '../../intel/_canonical/triage-rail'
-import { withLastActivity } from '@/lib/intel/adapters/lead-list-view'
+import { useLeadBoard } from '../../intel/_canonical/lead-board-data'
+import {
+  BOARD_STAGES,
+  buildBoardColumns,
+  fillMissingActivity,
+  heatBucketTier,
+  isBoardStage,
+  isDroppableStage,
+  type BoardColumn,
+  type LeadCard,
+} from '@/lib/intel/adapters/lead-board-view'
 import {
   DndContext,
   DragOverlay,
@@ -45,7 +63,6 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { useDroppable } from '@dnd-kit/core'
 import {
-  Kanban,
   Users,
   Calendar,
   Clock,
@@ -55,74 +72,17 @@ import {
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface PipelineWedding {
-  id: string
-  venue_id: string
-  status: string
-  source: string | null
-  wedding_date: string | null
-  guest_count_estimate: number | null
-  heat_score: number
-  temperature_tier: string
-  inquiry_date: string
-  updated_at: string
-  /** The per-wedding machine stage (migration 278). Null when the machine
-   *  has not run on this wedding. Distinct from `status`, which is what the
-   *  board columns are keyed on and what a drag writes. */
-  lifecycle_stage: LifecycleStage | null
-  booked_at: string | null
-  // Joined
-  partner1_name: string | null
-  partner2_name: string | null
-  client_code: string | null
-  code_extension: string | null
-  venue_name: string | null
-  // W37: the one operator stage for this couple, derived from the record's
-  // own state and this wedding's machine stage together. Undefined while
-  // the page is still loading the couples it needs.
-  operator_stage?: OperatorStageResult
-  // W40: newest touchpoint on the couple's spine ribbon, resolved back to
-  // this wedding through couples.source_wedding_id. Overlaid after the
-  // fetch by withLastActivity — the same merge /agent/leads uses. Null
-  // when the spine has no touchpoint recorded for this couple yet.
-  last_activity_at: string | null
-}
-
-interface PipelineColumn {
-  key: string
-  label: string
-  weddings: PipelineWedding[]
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const PIPELINE_STAGES: { key: string; label: string }[] = [
-  { key: 'inquiry', label: 'Inquiry' },
-  { key: 'tour_scheduled', label: 'Tour Scheduled' },
-  { key: 'tour_completed', label: 'Tour Completed' },
-  { key: 'proposal_sent', label: 'Proposal Sent' },
-  { key: 'contracted', label: 'Contracted' },
-  { key: 'booked', label: 'Booked' },
-  { key: 'lost', label: 'Lost' },
-]
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-// T5-Rixey-UU Bug E: pull labels from formatSourceLabel() so we never
-// leak raw snake_case values ('venue_calculator', 'calendly', 'other',
-// 'direct') into the pipeline cards. Pill colours stay per-source for
-// visual scanability.
+// T5-Rixey-UU Bug E: labels always come from formatSourceLabel() so a raw
+// channel name never reaches a card. The value is the channel the couple
+// first arrived on, from the touchpoint ribbon.
 function sourceBadge(source: string | null): { bg: string; text: string; label: string } {
   const label = formatSourceLabel(source)
   switch (source) {
     case 'the_knot':
+    case 'knot':
       return { bg: 'bg-rose-50', text: 'text-rose-700', label }
     case 'wedding_wire':
     case 'weddingwire':
@@ -142,6 +102,7 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
       return { bg: 'bg-emerald-50', text: 'text-emerald-700', label }
     case 'website':
     case 'web_form':
+    case 'web':
       return { bg: 'bg-teal-50', text: 'text-teal-700', label }
     case 'venue_calculator':
       return { bg: 'bg-amber-50', text: 'text-amber-700', label }
@@ -151,6 +112,7 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
       return { bg: 'bg-amber-50', text: 'text-amber-700', label }
     case 'direct':
       return { bg: 'bg-slate-50', text: 'text-slate-700', label }
+    case 'gmail':
     case 'calendly':
     case 'acuity':
     case 'honeybook':
@@ -161,32 +123,16 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
   }
 }
 
-// Heat tier → color now lives in src/lib/heat/tier-colors via the
-// HeatBadge primitive (ARCH-20.2.1). Pre-fix this switch was a fork
-// of the same logic in /agent/leads + /intel/clients/[id], with
-// drifted shades (cold=bg-blue-800 here, cold=text-blue-800 there).
-
-function daysInStage(updatedAt: string): number {
-  const diff = Date.now() - new Date(updatedAt).getTime()
-  return Math.floor(diff / (1000 * 60 * 60 * 24))
-}
-
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '---'
   // timeZone: 'UTC' — wedding_date is a date column without timezone;
-  // local-tz rendering shifts the displayed day back in ET. Same fix as
-  // intel/clients/[id]/page.tsx fmtDate.
+  // local-tz rendering shifts the displayed day back in ET.
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
     timeZone: 'UTC',
   })
-}
-
-function coupleName(p1: string | null, p2: string | null): string {
-  if (p1 && p2) return `${p1} & ${p2}`
-  return p1 || p2 || 'Unknown'
 }
 
 // ---------------------------------------------------------------------------
@@ -226,50 +172,63 @@ function ColumnSkeleton() {
 // Pipeline Card (static — used for both sortable wrapper and overlay)
 // ---------------------------------------------------------------------------
 
-function PipelineCardContent({ wedding, onNameClick, showVenueChip, risk }: { wedding: PipelineWedding; onNameClick?: () => void; showVenueChip?: boolean; risk?: RiskSummary | null }) {
-  const source = sourceBadge(wedding.source)
-  // updated-at-ok: "Days in Stage" is computed off weddings.updated_at
-  // because the kanban drag-drop writes status + updated_at together.
-  // Known limitation: bulk imports also bump updated_at, so freshly
-  // imported tour_scheduled rows show "0 days in stage". Tracked
-  // separately from T5-Rixey-UU; pipeline-page fix needs a
-  // status_change_history audit trail, out of scope here.
-  const days = daysInStage(wedding.updated_at)
+function PipelineCardContent({
+  card,
+  onNameClick,
+  showVenueChip,
+  risk,
+}: {
+  card: LeadCard
+  onNameClick?: () => void
+  showVenueChip?: boolean
+  risk?: RiskSummary | null
+}) {
+  const source = sourceBadge(card.sourceChannel)
+  const tier = card.heatBucket ? heatBucketTier(card.heatBucket) : null
 
   return (
     <>
-      {/* Venue chip (multi-venue scope) */}
-      {showVenueChip && wedding.venue_name && (
+      {showVenueChip && card.venueName && (
         <div className="mb-1.5">
-          <VenueChip venueName={wedding.venue_name} />
+          <VenueChip venueName={card.venueName} />
         </div>
       )}
 
-      {/* Couple name + heat dot + risk chip (T5-ζ.2) */}
+      {/* Couple name + heat dot + risk chip */}
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <GripVertical className="w-3.5 h-3.5 text-sage-300 shrink-0" />
           <h4
             className="text-sm font-medium text-sage-900 truncate hover:text-teal-600 hover:underline cursor-pointer transition-colors"
-            onClick={(e) => { e.stopPropagation(); onNameClick?.() }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onNameClick?.()
+            }}
           >
-            {coupleName(wedding.partner1_name, wedding.partner2_name)}
+            {card.names}
           </h4>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <RiskFlagChip summary={risk} />
-          <HeatBadge tier={wedding.temperature_tier} score={wedding.heat_score} variant="dot" />
+          {card.heatScore === null ? (
+            <span className="text-[10px] text-amber-700 italic">?</span>
+          ) : (
+            <HeatBadge
+              tier={tier}
+              score={card.heatScore}
+              variant="dot"
+              title={card.heatWhy ?? undefined}
+            />
+          )}
         </div>
       </div>
 
       {/* Where the couple stands, in the one vocabulary (W37). The column
-          already says where the board has them, so this pill earns its
-          place when the two disagree. */}
-      {wedding.operator_stage && (
-        <div className="mb-2">
-          <LifecyclePill stage={wedding.operator_stage} size="sm" showDisagreement />
-        </div>
-      )}
+          already says it, so this pill earns its place when the record and
+          the pipeline disagree — the dot marks exactly that. */}
+      <div className="mb-2">
+        <LifecyclePill stage={card.stage} size="sm" showDisagreement />
+      </div>
 
       {/* Source badge + client code */}
       <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -278,36 +237,41 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip, risk }: { we
         >
           {source.label}
         </span>
-        {wedding.client_code && (
-          <span className="text-xs font-mono text-sage-500">{formatBloomNumber(wedding.client_code, wedding.code_extension)}</span>
+        {card.clientCode && (
+          <span className="text-xs font-mono text-sage-500">
+            {formatBloomNumber(card.clientCode, card.codeExtension)}
+          </span>
         )}
-        {wedding.guest_count_estimate && (
+        {card.guestCountEstimate && (
           <span className="inline-flex items-center gap-1 text-[10px] text-sage-500">
             <Users className="w-3 h-3" />
-            {wedding.guest_count_estimate}
+            {card.guestCountEstimate}
           </span>
         )}
       </div>
 
-      {/* Date + days in stage */}
+      {/* Date + days in stage. "Days in stage" is the time since the stage
+          itself last moved, not since the row was last written — a bulk
+          import used to reset every card to "0 days in stage". */}
       <div className="flex items-center justify-between text-[11px] text-sage-400">
         <span className="flex items-center gap-1">
           <Calendar className="w-3 h-3" />
-          {formatDate(wedding.wedding_date)}
+          {formatDate(card.weddingDate)}
         </span>
-        <span className="flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          {days}d in stage
-        </span>
+        {card.daysInStage !== null && (
+          <span className="flex items-center gap-1">
+            <Clock className="w-3 h-3" />
+            {card.daysInStage}d in stage
+          </span>
+        )}
       </div>
 
-      {/* W40: last real activity, from the spine (couples + touchpoints,
-          resolved via source_wedding_id). Hidden rather than shown as
-          '---' when the spine has no touchpoint for this couple yet —
-          that is a data-maturity fact, not a card-layout one. */}
-      {wedding.last_activity_at && (
+      {/* Last real activity, from the couple's touchpoint ribbon. Hidden
+          rather than shown as '---' when nothing is recorded yet — that is
+          a data-maturity fact, not a card-layout one. */}
+      {card.lastActivityAt && (
         <div className="mt-1 text-[10px] text-sage-400">
-          Active {formatDate(wedding.last_activity_at)}
+          Active {formatDate(card.lastActivityAt)}
         </div>
       )}
     </>
@@ -318,8 +282,23 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip, risk }: { we
 // Sortable Card (draggable)
 // ---------------------------------------------------------------------------
 
-function SortableCard({ wedding, showVenueChip, risk }: { wedding: PipelineWedding; showVenueChip: boolean; risk?: RiskSummary | null }) {
+function SortableCard({
+  card,
+  showVenueChip,
+  risk,
+}: {
+  card: LeadCard
+  showVenueChip: boolean
+  risk?: RiskSummary | null
+}) {
   const cardRouter = useRouter()
+  const href = card.weddingId
+    ? `/intel/clients/${card.weddingId}`
+    : `/intel/couples/${card.coupleId}`
+  // A couple with no mirrored wedding has nothing for the stage write to
+  // address, so it is not draggable. Better an immovable card than one
+  // that appears to move and does not.
+  const movable = Boolean(card.weddingId)
   const {
     attributes,
     listeners,
@@ -327,7 +306,7 @@ function SortableCard({ wedding, showVenueChip, risk }: { wedding: PipelineWeddi
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: wedding.id, data: { type: 'card', wedding } })
+  } = useSortable({ id: card.coupleId, data: { type: 'card', card }, disabled: !movable })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -341,9 +320,17 @@ function SortableCard({ wedding, showVenueChip, risk }: { wedding: PipelineWeddi
       style={style}
       {...attributes}
       {...listeners}
-      className="bg-surface border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing"
+      title={movable ? undefined : 'This couple has no wedding record yet, so its stage cannot be set by hand.'}
+      className={`bg-surface border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow ${
+        movable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+      }`}
     >
-      <PipelineCardContent wedding={wedding} onNameClick={() => cardRouter.push(`/intel/clients/${wedding.id}`)} showVenueChip={showVenueChip} risk={risk} />
+      <PipelineCardContent
+        card={card}
+        onNameClick={() => cardRouter.push(href)}
+        showVenueChip={showVenueChip}
+        risk={risk}
+      />
     </div>
   )
 }
@@ -352,21 +339,30 @@ function SortableCard({ wedding, showVenueChip, risk }: { wedding: PipelineWeddi
 // Droppable Column
 // ---------------------------------------------------------------------------
 
-function DroppableColumn({ column, showVenueChip, riskFlags }: { column: PipelineColumn; showVenueChip: boolean; riskFlags: Record<string, RiskSummary | null> }) {
-  const isLost = column.key === 'lost'
-  const isContracted = column.key === 'contracted'
-  const { setNodeRef, isOver } = useDroppable({ id: column.key })
+function DroppableColumn({
+  column,
+  showVenueChip,
+  riskFlags,
+}: {
+  column: BoardColumn
+  showVenueChip: boolean
+  riskFlags: Record<string, RiskSummary | null>
+}) {
+  const isQuiet = column.key === 'gone_quiet' || column.key === 'cancelled'
+  const isWon =
+    column.key === 'booked' || column.key === 'planning' || column.key === 'this_week'
+  const { setNodeRef, isOver } = useDroppable({ id: column.key, disabled: !column.droppable })
 
   return (
     <div className="min-w-[280px] flex-shrink-0">
       <div
         ref={setNodeRef}
         className={`rounded-xl p-3 h-full transition-colors ${
-          isOver
+          isOver && column.droppable
             ? 'bg-sage-100 ring-2 ring-sage-300'
-            : isLost
+            : isQuiet
               ? 'bg-red-50/50'
-              : isContracted
+              : isWon
                 ? 'bg-emerald-50 ring-1 ring-emerald-200'
                 : 'bg-sage-50'
         }`}
@@ -375,43 +371,48 @@ function DroppableColumn({ column, showVenueChip, riskFlags }: { column: Pipelin
         <div className="flex items-center justify-between mb-3 px-1">
           <h3
             className={`text-sm font-semibold ${
-              isLost
-                ? 'text-red-700'
-                : isContracted
-                  ? 'text-emerald-800'
-                  : 'text-sage-800'
+              isQuiet ? 'text-red-700' : isWon ? 'text-emerald-800' : 'text-sage-800'
             }`}
           >
             {column.label}
           </h3>
           <span
             className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-              isLost
+              isQuiet
                 ? 'bg-red-100 text-red-600'
-                : isContracted
+                : isWon
                   ? 'bg-emerald-100 text-emerald-700'
                   : 'bg-sage-100 text-sage-600'
             }`}
           >
-            {column.weddings.length}
+            {column.cards.length}
           </span>
         </div>
 
         {/* Cards */}
         <SortableContext
-          items={column.weddings.map((w) => w.id)}
+          items={column.cards.map((c) => c.coupleId)}
           strategy={verticalListSortingStrategy}
         >
           <div className="space-y-2 min-h-[60px]">
-            {column.weddings.length === 0 ? (
+            {column.cards.length === 0 ? (
               <div className="text-center py-6">
                 <p className="text-xs text-sage-400">
-                  {isOver ? 'Drop here' : 'No leads'}
+                  {!column.droppable
+                    ? 'Set by the record'
+                    : isOver
+                      ? 'Drop here'
+                      : 'Nobody here'}
                 </p>
               </div>
             ) : (
-              column.weddings.map((wedding) => (
-                <SortableCard key={wedding.id} wedding={wedding} showVenueChip={showVenueChip} risk={riskFlags[wedding.id]} />
+              column.cards.map((card) => (
+                <SortableCard
+                  key={card.coupleId}
+                  card={card}
+                  showVenueChip={showVenueChip}
+                  risk={card.weddingId ? riskFlags[card.weddingId] : null}
+                />
               ))
             )}
           </div>
@@ -426,24 +427,25 @@ function DroppableColumn({ column, showVenueChip, riskFlags }: { column: Pipelin
 // ---------------------------------------------------------------------------
 
 export default function PipelinePage() {
-  const router = useRouter()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
-  const [columns, setColumns] = useState<PipelineColumn[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  // wedding_heat failed to load: heat is unknown, not zero (W17 finding).
-  const [heatUnavailable, setHeatUnavailable] = useState(false)
-  const [totalLeads, setTotalLeads] = useState(0)
-  const [activeWedding, setActiveWedding] = useState<PipelineWedding | null>(null)
+  const [activeCard, setActiveCard] = useState<LeadCard | null>(null)
+  const [moveError, setMoveError] = useState<string | null>(null)
+  /** Stage the operator has just asserted, before the board reloads. Keyed
+   *  by couple id. Cleared by the reload that follows the write. */
+  const [pendingMoves, setPendingMoves] = useState<Record<string, OperatorStage>>({})
 
-  // Canonical spine read — the same call /agent/leads makes for its "Last
-  // Activity" column, so a couple cannot show two different last-activity
-  // values depending on which page it is viewed from.
+  const {
+    cards,
+    loading,
+    error,
+    heatAvailable,
+    unattachedFragments,
+    truncated,
+    warnings,
+    reload,
+  } = useLeadBoard()
   const { lastActivityByWedding } = useCanonicalDaily()
-
-  const supabase = createClient()
-  const navigateToClient = (id: string) => router.push(`/intel/clients/${id}`)
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -451,328 +453,111 @@ export default function PipelinePage() {
     })
   )
 
-  // ---- Fetch pipeline data ----
-  const fetchPipeline = useCallback(async () => {
-    if (scope.loading) return
-    try {
-      // Build venue filter from scope
-      let venueIds: string[] | null = null
-      if (scope.level === 'venue' && scope.venueId) {
-        venueIds = [scope.venueId]
-      } else if (scope.level === 'group' && scope.groupId) {
-        const { data: members } = await supabase
-          .from('venue_group_members')
-          .select('venue_id')
-          .eq('group_id', scope.groupId)
-        venueIds = (members ?? []).map((r) => r.venue_id as string)
-      } else if (scope.orgId) {
-        const { data: orgVenues } = await supabase
-          .from('venues')
-          .select('id')
-          .eq('org_id', scope.orgId)
-        venueIds = (orgVenues ?? []).map((v) => v.id as string)
+  const boardCards = useMemo(() => {
+    const filled = fillMissingActivity(cards, lastActivityByWedding)
+    if (Object.keys(pendingMoves).length === 0) return filled
+    // An optimistic move shows the asserted stage while the write is in
+    // flight. `because` says out loud that this is the operator's word,
+    // not the record's, so the card never claims evidence it lacks.
+    return filled.map((c) => {
+      const pending = pendingMoves[c.coupleId]
+      if (!pending) return c
+      return {
+        ...c,
+        stage: {
+          ...c.stage,
+          stage: pending,
+          label: c.stage.label,
+          because: 'You just moved this card. Saving, then re-reading the record.',
+        },
       }
+    })
+  }, [cards, lastActivityByWedding, pendingMoves])
 
-      // Fetch all non-completed/cancelled weddings with people.
-      // Migration 316: heat_score / temperature_tier moved to wedding_heat
-      // view. Fetch weddings + heat in parallel, join + sort in memory.
-      //
-      // The kanban columns are `status`
-      // (inquiry..booked/lost/contracted), a 7-stage pipeline vocabulary
-      // with no spine equivalent — `couples.lifecycle_state` is the
-      // coarser 6-value concept LifecycleStrip renders separately, on
-      // purpose, rather than pretending the two counts are one question.
-      // W37 (this wave) owns building that mapping; until it lands there
-      // is no spine read that can answer "which weddings are in
-      // tour_scheduled". last_activity_at below is overlaid from the
-      // spine after this fetch, not read from this row.
-      let query = supabase
-        // legacy-read-ok: status-based pipeline-stage filter has no spine
-        // equivalent yet — see the comment above.
-        .from('weddings')
-        .select(`
-          id,
-          venue_id,
-          status,
-          source,
-          wedding_date,
-          guest_count_estimate,
-          inquiry_date,
-          updated_at,
-          code_extension,
-          lifecycle_stage,
-          booked_at,
-          venues:venue_id ( name ),
-          people!people_wedding_id_fkey ( role, first_name, last_name ),
-          client_codes!client_codes_wedding_id_fkey ( code )
-        `)
-        .in('status', [
-          'inquiry',
-          'tour_scheduled',
-          'tour_completed',
-          'proposal_sent',
-          'contracted',
-          'booked',
-          'lost',
-        ])
-      if (venueIds && venueIds.length > 0) {
-        query = query.in('venue_id', venueIds)
-      }
-      let heatQuery = supabase.from('wedding_heat').select('wedding_id, heat_score, temperature_tier')
-      if (venueIds && venueIds.length > 0) {
-        heatQuery = heatQuery.in('venue_id', venueIds)
-      }
-      const [{ data: rawWeddingsData, error: fetchError }, { data: heatRows, error: heatError }] = await Promise.all([
-        query,
-        heatQuery,
-      ])
+  const columns = useMemo(() => buildBoardColumns(boardCards), [boardCards])
+  const totalLeads = boardCards.length
 
-      if (fetchError) throw fetchError
-      // A failed heat read must not render every lead as cold. Keep the
-      // pipeline, mark heat unknown, and say so.
-      setHeatUnavailable(Boolean(heatError))
-
-      const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
-      for (const h of heatRows ?? []) {
-        heatByWedding.set(h.wedding_id as string, {
-          heat_score: (h.heat_score as number) ?? 0,
-          temperature_tier: (h.temperature_tier as string) ?? 'cool',
-        })
-      }
-      const weddingsData = (rawWeddingsData ?? [])
-        .map((row: any) => {
-          const heat = heatByWedding.get(row.id as string)
-          return {
-            ...row,
-            heat_score: heat?.heat_score ?? (heatError ? null : 0),
-            temperature_tier: heat?.temperature_tier ?? (heatError ? null : 'cool'),
-          }
-        })
-        .sort((a: any, b: any) => (b.heat_score ?? 0) - (a.heat_score ?? 0))
-
-      // Map weddings with partner names
-      const weddings: PipelineWedding[] = (weddingsData ?? []).map(
-        (row: any) => {
-          const people = row.people ?? []
-          // 2026-05-09: collapse Knot-relay nickname rows into the
-          // calculator-submission legal-name row before picking a
-          // partner1/partner2 representative for the pipeline card.
-          const p1 = pickCanonicalPeople(
-            people.filter((p: any) => p.role === 'partner1'),
-          )[0]
-          const p2 = pickCanonicalPeople(
-            people.filter((p: any) => p.role === 'partner2'),
-          )[0]
-          const codes = row.client_codes ?? []
-          const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
-          const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
-          const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
-
-          return {
-            id: row.id,
-            venue_id: row.venue_id,
-            status: row.status,
-            source: row.source,
-            wedding_date: row.wedding_date,
-            guest_count_estimate: row.guest_count_estimate,
-            heat_score: row.heat_score ?? 0,
-            temperature_tier: row.temperature_tier ?? 'cool',
-            inquiry_date: row.inquiry_date,
-            // updated-at-ok: feeds "Days in Stage" computation only;
-            // see PipelineCardContent for the rationale + known limit.
-            updated_at: row.updated_at,
-            lifecycle_stage: (row.lifecycle_stage as LifecycleStage | null) ?? null,
-            booked_at: (row.booked_at as string | null) ?? null,
-            partner1_name: p1 ? personFullName(p1) : null,
-            partner2_name: p2 ? personFullName(p2) : null,
-            client_code: clientCode,
-            code_extension: (row.code_extension as string | null | undefined) ?? null,
-            venue_name: venueName,
-            // Overlaid from the spine below via withLastActivity, once the
-            // canonical daily-list call returns.
-            last_activity_at: null,
-          }
-        }
-      )
-
-      // W37: the record's own state, so the card can show where the couple
-      // stands and not only where the board has them. One read of the
-      // spine, keyed on the wedding each couple mirrors. A wedding with no
-      // couple simply has no spine state, and the pill says so honestly
-      // rather than inventing one.
-      const spineByWedding = new Map<
-        string,
-        { lifecycle_state: string | null; merged_into_id: string | null; last_progression_at: string | null }
-      >()
-      const weddingIds = weddings.map((w) => w.id)
-      const SPINE_CHUNK = 500
-      for (let i = 0; i < weddingIds.length; i += SPINE_CHUNK) {
-        const slice = weddingIds.slice(i, i + SPINE_CHUNK)
-        let spineQuery = supabase
-          .from('couples')
-          .select('source_wedding_id, lifecycle_state, merged_into_id, last_progression_at')
-          .in('source_wedding_id', slice)
-        // Belt and braces: the wedding ids are already scope-filtered, and
-        // the couples table is venue-scoped anyway, but the filter is free.
-        if (venueIds && venueIds.length > 0) {
-          spineQuery = spineQuery.in('venue_id', venueIds)
-        }
-        const { data: spineRows } = await spineQuery
-        for (const row of spineRows ?? []) {
-          const key = row.source_wedding_id as string | null
-          if (!key) continue
-          spineByWedding.set(key, {
-            lifecycle_state: (row.lifecycle_state as string | null) ?? null,
-            merged_into_id: (row.merged_into_id as string | null) ?? null,
-            last_progression_at: (row.last_progression_at as string | null) ?? null,
-          })
-        }
-      }
-      // One clock for the whole load, so two cards cannot be derived
-      // against two different "nows".
-      const today = Date.now()
-      for (const w of weddings) {
-        const spine = spineByWedding.get(w.id)
-        w.operator_stage = deriveOperatorStage({
-          spineState: spine?.merged_into_id ? 'merged' : spine?.lifecycle_state ?? null,
-          machineStage: w.lifecycle_stage,
-          hasBooking: Boolean(w.booked_at) || w.status === 'booked',
-          weddingDate: w.wedding_date,
-          lastInboundAt: spine?.last_progression_at ?? null,
-          today,
-        })
-      }
-
-      // Group by status into columns
-      const grouped = PIPELINE_STAGES.map((stage) => ({
-        key: stage.key,
-        label: stage.label,
-        weddings: weddings.filter((w) => w.status === stage.key),
-      }))
-
-      setColumns(grouped)
-      setTotalLeads(weddings.length)
-      setError(null)
-    } catch (err) {
-      console.error('Failed to fetch pipeline:', err)
-      setError('Failed to load pipeline')
-    } finally {
-      setLoading(false)
-    }
-  }, [scope.loading, scope.level, scope.venueId, scope.groupId, supabase])
-
-  useEffect(() => {
-    fetchPipeline()
-  }, [fetchPipeline])
+  // ---- Risk flags batch fetch (T5-ζ.2) ----
+  const allWeddingIds = useMemo(
+    () => boardCards.map((c) => c.weddingId).filter((id): id is string => Boolean(id)),
+    [boardCards],
+  )
+  const riskFlags = useBatchRiskFlags(allWeddingIds, { venueId: scope.venueId ?? null })
 
   // ---- DnD handlers ----
 
   function handleDragStart(event: DragStartEvent) {
     const { active } = event
-    const wedding = active.data?.current?.wedding as PipelineWedding | undefined
-    if (wedding) setActiveWedding(wedding)
+    const card = active.data?.current?.card as LeadCard | undefined
+    if (card) setActiveCard(card)
   }
 
-  async function handleDragEnd(event: DragEndEvent) {
-    setActiveWedding(null)
-    const { active, over } = event
-    if (!over) return
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      setActiveCard(null)
+      const { active, over } = event
+      if (!over) return
 
-    const weddingId = active.id as string
+      const coupleId = active.id as string
+      const card = boardCards.find((c) => c.coupleId === coupleId)
+      if (!card || !card.weddingId) return
 
-    // Determine which column was dropped onto
-    // over.id could be a column key or another card's id
-    let targetColumnKey: string | null = null
-
-    // Check if dropped directly on a column
-    if (PIPELINE_STAGES.some((s) => s.key === over.id)) {
-      targetColumnKey = over.id as string
-    } else {
-      // Dropped on a card — find which column that card belongs to
-      for (const col of columns) {
-        if (col.weddings.some((w) => w.id === over.id)) {
-          targetColumnKey = col.key
-          break
-        }
+      // over.id is either a column key or another card's id.
+      let target: OperatorStage | null = null
+      if (typeof over.id === 'string' && isBoardStage(over.id)) {
+        target = over.id
+      } else {
+        const host = columns.find((col) => col.cards.some((c) => c.coupleId === over.id))
+        target = host?.key ?? null
       }
-    }
+      if (!target || target === card.stage.stage) return
+      if (!isDroppableStage(target)) {
+        setMoveError(
+          'That column is decided by the record, not by hand. Merge or reclassify the couple instead.',
+        )
+        return
+      }
 
-    if (!targetColumnKey) return
+      setMoveError(null)
+      setPendingMoves((prev) => ({ ...prev, [coupleId]: target }))
 
-    // Find the source column
-    const sourceColumn = columns.find((col) =>
-      col.weddings.some((w) => w.id === weddingId)
-    )
-    if (!sourceColumn || sourceColumn.key === targetColumnKey) return
-
-    // Optimistic update: move card between columns
-    setColumns((prev) =>
-      prev.map((col) => {
-        if (col.key === sourceColumn.key) {
-          return { ...col, weddings: col.weddings.filter((w) => w.id !== weddingId) }
-        }
-        if (col.key === targetColumnKey) {
-          const movedWedding = sourceColumn.weddings.find((w) => w.id === weddingId)
-          if (!movedWedding) return col
-          return {
-            ...col,
-            weddings: [...col.weddings, { ...movedWedding, status: targetColumnKey }],
-          }
-        }
-        return col
-      })
-    )
-
-    // Persist to database
-    try {
-      const movedWedding = sourceColumn.weddings.find((w) => w.id === weddingId)
-      const { error: updateError } = await supabase
-        .from('weddings')
-        .update({ status: targetColumnKey, updated_at: new Date().toISOString() })
-        .eq('id', weddingId)
-        .eq('venue_id', movedWedding?.venue_id ?? '')
-
-      if (updateError) throw updateError
-
-      // Track booking_closed when a wedding moves to 'booked'
-      if (targetColumnKey === 'booked') {
-        fetch('/api/tracking', {
+      try {
+        const res = await fetch('/api/agent/pipeline/stage', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'booking_closed' }),
-        }).catch((trackErr) => console.warn('Booking tracking failed:', trackErr))
+          body: JSON.stringify({
+            weddingId: card.weddingId,
+            venueId: card.venueId,
+            stage: target,
+          }),
+        })
+        const body = (await res.json()) as { ok?: boolean; error?: string }
+        if (!res.ok || !body.ok) {
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
+        if (target === 'booked') {
+          fetch('/api/tracking', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'booking_closed' }),
+          }).catch((trackErr) => console.warn('Booking tracking failed:', trackErr))
+        }
+      } catch (err) {
+        setMoveError(
+          `We could not save that move: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      } finally {
+        // Either way the board re-reads. A failed write must not leave the
+        // card sitting somewhere nothing on file agrees with.
+        setPendingMoves((prev) => {
+          const next = { ...prev }
+          delete next[coupleId]
+          return next
+        })
+        reload()
       }
-    } catch (err) {
-      console.error('Failed to update wedding status:', err)
-      // Revert on failure
-      fetchPipeline()
-    }
-  }
-
-  // ---- Risk flags batch fetch (T5-ζ.2) ----
-  // One POST per page load, keyed on the underlying column-flattened
-  // wedding ID set. The hook dedupes + sorts the input, so it only
-  // fires when the actual ID set changes (not on drag-reorder).
-  const allWeddingIds = useMemo(
-    () => columns.flatMap((c) => c.weddings.map((w) => w.id)),
-    [columns],
-  )
-  const riskFlags = useBatchRiskFlags(allWeddingIds, {
-    venueId: scope.venueId ?? null,
-  })
-
-  // ---- Last activity, from the spine ----
-  // Overlaid at render time rather than inside fetchPipeline, same
-  // reasoning as /agent/leads: the board renders as soon as the wedding
-  // rows land, and last-activity fills in when the spine map arrives.
-  // withLastActivity is the identical merge /agent/leads uses.
-  const columnsWithActivity = useMemo(
-    () =>
-      columns.map((col) => ({
-        ...col,
-        weddings: withLastActivity(col.weddings, lastActivityByWedding),
-      })),
-    [columns, lastActivityByWedding],
+    },
+    [boardCards, columns, reload],
   )
 
   return (
@@ -784,14 +569,13 @@ export default function PipelinePage() {
             Pipeline
           </h1>
           <p className="text-sage-600">
-            Your sales pipeline as a kanban board — drag cards between stages as leads progress from inquiry to booked. Click any couple&apos;s name to open their full profile.
+            Where every couple stands, in one set of words. A card sits in the column
+            its record and your pipeline together put it in. Drag one to say otherwise,
+            and click a name for the full history.
           </p>
         </div>
         <button
-          onClick={() => {
-            setLoading(true)
-            fetchPipeline()
-          }}
+          onClick={reload}
           className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors shrink-0"
         >
           <RefreshCw className="w-4 h-4" />
@@ -799,31 +583,50 @@ export default function PipelinePage() {
         </button>
       </div>
 
-      {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity
-          risk insights now route to /pulse + /intel/dashboard only. */}
-
-      {/* ---- Today's list (canonical) ----
-           The board tells you where every deal sits. This tells you which
-           ones need you today, from getDailyList — the same reader and the
-           same component /agent/leads renders. */}
+      {/* ---- Today's list (canonical) ---- */}
       <TriageRail activeBucket="needsReply" />
       <LifecycleStrip />
 
-      {/* ---- Heat unavailable ---- */}
-      {heatUnavailable && !error && (
+      {/* ---- Heat unavailable (W17 banner) ---- */}
+      {!heatAvailable && !loading && !error && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-800">
-            Heat scores could not be loaded, so leads are shown without a temperature rather than as cold.
+            We could not read the signal history, so cards are shown without an interest
+            level rather than as cold.
           </p>
           <button
-            onClick={() => {
-              setLoading(true)
-              fetchPipeline()
-            }}
+            onClick={reload}
             className="ml-auto text-sm font-medium text-amber-700 hover:text-amber-900 transition-colors"
           >
             Retry
+          </button>
+        </div>
+      )}
+
+      {/* ---- Partial reads ---- */}
+      {!loading && !error && (truncated || warnings.length > 0) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+          <p className="font-medium">This board is partial.</p>
+          <ul className="mt-1 list-disc pl-5 space-y-0.5">
+            {truncated && <li>More couples exist than one board can hold.</li>}
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ---- A move failed ---- */}
+      {moveError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800">{moveError}</p>
+          <button
+            onClick={() => setMoveError(null)}
+            className="ml-auto text-sm font-medium text-amber-700 hover:text-amber-900 transition-colors"
+          >
+            Dismiss
           </button>
         </div>
       )}
@@ -832,13 +635,12 @@ export default function PipelinePage() {
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-red-700">
+            We could not load the board. The empty columns below are a failed read, not
+            an empty pipeline. <span className="text-red-600">{error}</span>
+          </p>
           <button
-            onClick={() => {
-              setError(null)
-              setLoading(true)
-              fetchPipeline()
-            }}
+            onClick={reload}
             className="ml-auto text-sm font-medium text-red-600 hover:text-red-800 transition-colors"
           >
             Retry
@@ -849,8 +651,8 @@ export default function PipelinePage() {
       {/* ---- Kanban Board ---- */}
       {loading ? (
         <div className="flex gap-4 overflow-x-auto pb-4">
-          {PIPELINE_STAGES.map((stage) => (
-            <ColumnSkeleton key={stage.key} />
+          {BOARD_STAGES.map((stage) => (
+            <ColumnSkeleton key={stage} />
           ))}
         </div>
       ) : (
@@ -861,16 +663,25 @@ export default function PipelinePage() {
           onDragEnd={handleDragEnd}
         >
           <div className="flex gap-4 overflow-x-auto pb-4 -mx-6 lg:-mx-8 px-6 lg:px-8">
-            {columnsWithActivity.map((column) => (
-              <DroppableColumn key={column.key} column={column} showVenueChip={showVenueChip} riskFlags={riskFlags} />
+            {columns.map((column) => (
+              <DroppableColumn
+                key={column.key}
+                column={column}
+                showVenueChip={showVenueChip}
+                riskFlags={riskFlags}
+              />
             ))}
           </div>
 
-          {/* Drag overlay — renders a floating copy of the card */}
+          {/* Drag overlay — a floating copy of the card */}
           <DragOverlay>
-            {activeWedding ? (
+            {activeCard ? (
               <div className="bg-surface border-2 border-sage-400 rounded-lg p-3 shadow-lg w-[280px] rotate-2">
-                <PipelineCardContent wedding={activeWedding} showVenueChip={showVenueChip} risk={riskFlags[activeWedding.id]} />
+                <PipelineCardContent
+                  card={activeCard}
+                  showVenueChip={showVenueChip}
+                  risk={activeCard.weddingId ? riskFlags[activeCard.weddingId] : null}
+                />
               </div>
             ) : null}
           </DragOverlay>
@@ -879,19 +690,27 @@ export default function PipelinePage() {
 
       {/* ---- Summary row ---- */}
       {!loading && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
-          {columns.map((col) => (
-            <div
-              key={col.key}
-              className="bg-surface border border-border rounded-xl p-4 shadow-sm text-center"
-            >
-              <p className="text-2xl font-bold text-sage-900">
-                {col.weddings.length}
-              </p>
-              <p className="text-xs text-sage-500 mt-0.5">{col.label}</p>
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            {columns
+              .filter((col) => col.cards.length > 0)
+              .map((col) => (
+                <div
+                  key={col.key}
+                  className="bg-surface border border-border rounded-xl p-4 shadow-sm text-center"
+                >
+                  <p className="text-2xl font-bold text-sage-900">{col.cards.length}</p>
+                  <p className="text-xs text-sage-500 mt-0.5">{col.label}</p>
+                </div>
+              ))}
+          </div>
+          <p className="text-xs text-sage-500">
+            {totalLeads} couple{totalLeads === 1 ? '' : 's'} on the board.
+            {unattachedFragments !== null && unattachedFragments > 0
+              ? ` ${unattachedFragments} signal${unattachedFragments === 1 ? '' : 's'} could not be matched to anyone and are not on it.`
+              : ''}
+          </p>
+        </>
       )}
     </div>
   )
