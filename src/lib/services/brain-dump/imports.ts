@@ -32,6 +32,7 @@ import { htmlToText } from '@/lib/utils/html-text'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { writeOrLog } from '@/lib/db/write-or-log'
+import { scheduleReviewScoring } from '@/lib/services/reviews/score'
 
 export interface ImportSummary {
   inserted: number
@@ -328,22 +329,35 @@ export async function importReviews(args: {
       summary.skipped++
       continue
     }
-    const { error } = await supabase.from('reviews').insert({
-      venue_id: venueId,
-      source: r.source,
-      reviewer_name: r.reviewer_name,
-      rating: Math.max(1, Math.min(5, Math.round(r.rating))),
-      body: r.body,
-      title: r.title ?? null,
-      review_date: r.review_date ?? null,
-      raw_import_row: r.raw_row ?? null,
-    })
+    const rating = Math.max(1, Math.min(5, Math.round(r.rating)))
+    const { data: insertedRow, error } = await supabase
+      .from('reviews')
+      .insert({
+        venue_id: venueId,
+        source: r.source,
+        reviewer_name: r.reviewer_name,
+        rating,
+        body: r.body,
+        title: r.title ?? null,
+        review_date: r.review_date ?? null,
+        raw_import_row: r.raw_row ?? null,
+      })
+      .select('id')
+      .single()
     if (error) {
       summary.errors.push(`review by ${r.reviewer_name}: ${error.message}`)
       continue
     }
     existingSet.add(existingKey(r.reviewer_name, r.review_date ?? null))
     summary.inserted++
+
+    // Sentiment scoring (W46). Fire-and-forget per review — this path
+    // covers both the CSV/paste import and the reviews_from_screenshot
+    // vision import, and neither should wait on an LLM call to finish
+    // confirming to the coordinator.
+    if (insertedRow?.id) {
+      scheduleReviewScoring({ reviewId: insertedRow.id as string, venueId, body: r.body, rating })
+    }
   }
 
   return summary

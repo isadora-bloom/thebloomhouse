@@ -24,6 +24,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { replayReviewRows, type ReviewRow } from '@/lib/services/identity/replay/reviews'
+import { scheduleReviewScoring } from '@/lib/services/reviews/score'
 
 const PLACES_V1_ENDPOINT = 'https://places.googleapis.com/v1/places'
 
@@ -245,6 +246,13 @@ export async function pollGooglePlacesForVenue(
         `[google-places] reviews replay failed for venue ${venueId}:`,
         err instanceof Error ? err.message : err,
       )
+    }
+
+    // Sentiment scoring (W46). Fire-and-forget per row: the LLM call
+    // must never slow down or fail the poll, the reviews are already
+    // safely in the DB either way.
+    for (const row of insertedRows as unknown as Array<{ id: string; body: string; rating: number }>) {
+      scheduleReviewScoring({ reviewId: row.id, venueId, body: row.body, rating: row.rating })
     }
   }
 
