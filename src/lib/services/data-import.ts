@@ -10,6 +10,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { writeOrLog } from '@/lib/db/write-or-log'
+import { scheduleReviewScoring } from '@/lib/services/reviews/score'
 import type { DataType, ColumnMapping } from './data-detection'
 import { normalizeSource } from './normalize-source'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
@@ -1274,21 +1275,32 @@ export async function importReviews(
         }
       }
 
-      const { error } = await supabase.from('reviews').insert({
-        venue_id: venueId,
-        source,
-        reviewer_name: reviewerName || null,
-        rating,
-        title: row.title || null,
-        body,
-        review_date: reviewDate,
-        response_text: row.response_text || null,
-      })
+      const { data: insertedRow, error } = await supabase
+        .from('reviews')
+        .insert({
+          venue_id: venueId,
+          source,
+          reviewer_name: reviewerName || null,
+          rating,
+          title: row.title || null,
+          body,
+          review_date: reviewDate,
+          response_text: row.response_text || null,
+        })
+        .select('id')
+        .single()
 
       if (error) {
         errors.push(`Row ${i + 1}: ${error.message}`)
         skipped++
         continue
+      }
+
+      // Sentiment scoring (W46). Fire-and-forget: the AI call must
+      // never slow down or fail a CSV import, the review is already
+      // safely in the DB either way.
+      if (insertedRow?.id) {
+        scheduleReviewScoring({ reviewId: insertedRow.id as string, venueId, body, rating })
       }
 
       imported++
