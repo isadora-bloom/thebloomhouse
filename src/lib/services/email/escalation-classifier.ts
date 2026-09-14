@@ -49,32 +49,53 @@ function stripFences(s: string): string {
     .trim()
 }
 
+/**
+ * The deterministic escalation layer (2026-09-14 ingestion audit item 5).
+ *
+ * Two patterns, both owned by the pipeline module:
+ *   - HUMAN_REQUESTED_SUBJECT_PATTERN: the legacy magic-words form, still
+ *     honoured on any thread whose footer asked for it.
+ *   - HUMAN_ESCALATION_PATTERN: the broadened natural-language form.
+ *
+ * Exported so the property test can assert it directly: for any input
+ * where this returns a hit, classifyEscalation returns
+ * escalation_requested = true regardless of what the model says.
+ */
+export function detectEscalationDeterministic(
+  subject: string,
+  body: string,
+): { hit: boolean; confidence: number } {
+  if (HUMAN_REQUESTED_SUBJECT_PATTERN.test(subject)) {
+    return { hit: true, confidence: 100 }
+  }
+  if (HUMAN_ESCALATION_PATTERN.test(`${subject}\n${body}`)) {
+    return { hit: true, confidence: 95 }
+  }
+  return { hit: false, confidence: 0 }
+}
+
 export async function classifyEscalation(
   input: ClassifyEscalationInput,
 ): Promise<ClassifyEscalationResult> {
   const { venueId, aiName, subject, body, correlationId } = input
   const subj = subject ?? ''
-  const haystack = `${subj}\n${body ?? ''}`
 
-  // Fast path 1: legacy magic-words form. Still works on any thread
-  // where the older footer asked for them.
-  if (HUMAN_REQUESTED_SUBJECT_PATTERN.test(subj)) {
+  // 2026-09-14 ingestion audit item 5. The deterministic layer runs
+  // FIRST and its verdict is monotone: the model may add an escalation,
+  // it can never take one away.
+  //
+  // This was already true by accident — the regexes returned early, so
+  // the model never saw a regex-positive message. Accidental properties
+  // do not survive refactors, so it is now explicit: `deterministic` is
+  // computed once and OR-ed into every return path below. Reorder the
+  // function however you like; the property holds.
+  const deterministic = detectEscalationDeterministic(subj, body ?? '')
+
+  if (deterministic.hit) {
     return {
       escalation_requested: true,
       reason: 'magic_words',
-      confidence_0_100: 100,
-      prompt_version: null,
-    }
-  }
-
-  // Fast path 2: broadened regex. Same reason ('magic_words') so the
-  // pipeline routes both identically; the LLM is reserved for ambiguous
-  // cases that don't match either regex.
-  if (HUMAN_ESCALATION_PATTERN.test(haystack)) {
-    return {
-      escalation_requested: true,
-      reason: 'magic_words',
-      confidence_0_100: 95,
+      confidence_0_100: deterministic.confidence,
       prompt_version: null,
     }
   }
@@ -111,9 +132,9 @@ export async function classifyEscalation(
       data: { error: err instanceof Error ? err.message : String(err) },
     })
     return {
-      escalation_requested: false,
-      reason: null,
-      confidence_0_100: 0,
+      escalation_requested: deterministic.hit,
+      reason: deterministic.hit ? 'magic_words' : null,
+      confidence_0_100: deterministic.confidence,
       prompt_version: null,
     }
   }
@@ -123,9 +144,9 @@ export async function classifyEscalation(
     parsed = JSON.parse(stripFences(aiResult.text))
   } catch {
     return {
-      escalation_requested: false,
-      reason: null,
-      confidence_0_100: 0,
+      escalation_requested: deterministic.hit,
+      reason: deterministic.hit ? 'magic_words' : null,
+      confidence_0_100: deterministic.confidence,
       prompt_version: ESCALATION_DETECTOR_PROMPT_VERSION,
     }
   }
@@ -133,17 +154,25 @@ export async function classifyEscalation(
   const validation = validateEscalationDetectorOutput(parsed)
   if (!validation.ok) {
     return {
-      escalation_requested: false,
-      reason: null,
-      confidence_0_100: 0,
+      escalation_requested: deterministic.hit,
+      reason: deterministic.hit ? 'magic_words' : null,
+      confidence_0_100: deterministic.confidence,
       prompt_version: ESCALATION_DETECTOR_PROMPT_VERSION,
     }
   }
 
+  // Monotone union. The model adds; it never subtracts. A model that
+  // returned false on a deterministic hit is overruled here rather than
+  // relied on to have never seen the message.
+  const escalated = deterministic.hit || validation.output.escalation_requested
   return {
-    escalation_requested: validation.output.escalation_requested,
-    reason: validation.output.escalation_requested ? 'haiku_detected' : null,
-    confidence_0_100: validation.output.confidence_0_100,
+    escalation_requested: escalated,
+    reason: escalated
+      ? (deterministic.hit ? 'magic_words' : 'haiku_detected')
+      : null,
+    confidence_0_100: deterministic.hit
+      ? Math.max(deterministic.confidence, validation.output.confidence_0_100)
+      : validation.output.confidence_0_100,
     prompt_version: ESCALATION_DETECTOR_PROMPT_VERSION,
   }
 }

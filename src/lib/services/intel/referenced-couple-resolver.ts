@@ -26,9 +26,36 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/observability/logger'
+import { insertCandidateMatch } from '@/lib/services/identity/tracer'
 
 const RECENT_WINDOW_MS = 18 * 30 * 86_400_000 // ~18 months
-const MATCH_THRESHOLD = 0.55
+
+/**
+ * 2026-09-14 ingestion audit item 4.
+ *
+ * `referenced_couple_name` is a field an LLM pulled out of an inbound
+ * body, i.e. a string an outsider chose. At the old single threshold of
+ * 0.55 bigram-Jaccard, that string could re-point an interaction's
+ * `wedding_id` at another couple's wedding with no venue predicate on
+ * the UPDATE and no human in the loop. "Kaj" scores 0.55 against
+ * "Kajlie"; so does a fair amount of noise.
+ *
+ * Two thresholds now:
+ *
+ *   PROPOSE_THRESHOLD (0.70) — below this, nothing happens at all. The
+ *     old 0.55 floor was producing the matches nobody wanted.
+ *   AUTO_ATTACH_THRESHOLD (0.92) — at or above this the interaction is
+ *     still re-pointed automatically, because a near-exact first-name
+ *     match on a recent non-terminal wedding is the case this resolver
+ *     was built for and a queue entry for it is noise.
+ *
+ * Between the two, the resolver writes a `candidate_matches` row and
+ * stops. `/intel/identity-review` is the surface that adjudicates it —
+ * the same queue `linkSignal` already feeds, so no new surface and no
+ * second place for a coordinator to look.
+ */
+const PROPOSE_THRESHOLD = 0.7
+const AUTO_ATTACH_THRESHOLD = 0.92
 
 interface CandidateWedding {
   id: string
@@ -129,7 +156,7 @@ export async function resolveReferencedCouple(args: ResolveArgs): Promise<void> 
     const s1 = c.partner1_first ? similarity(primaryToken, c.partner1_first) : 0
     const s2 = c.partner2_first ? similarity(primaryToken, c.partner2_first) : 0
     const best = Math.max(s1, s2)
-    if (best >= MATCH_THRESHOLD) {
+    if (best >= PROPOSE_THRESHOLD) {
       scored.push({ weddingId: c.id, score: best })
     }
   }
@@ -151,7 +178,7 @@ export async function resolveReferencedCouple(args: ResolveArgs): Promise<void> 
   // Multiple matches → ambiguous. Coordinator must decide. Don't auto-
   // merge in that case; surface the ambiguity in the audit log.
   scored.sort((a, b) => b.score - a.score)
-  if (scored.length > 1 && scored[1].score >= MATCH_THRESHOLD * 0.95) {
+  if (scored.length > 1 && scored[1].score >= PROPOSE_THRESHOLD * 0.95) {
     logEvent({
       level: 'warn',
       msg: 'referenced_couple ambiguous',
@@ -184,9 +211,28 @@ export async function resolveReferencedCouple(args: ResolveArgs): Promise<void> 
     .from('interactions')
     .select('wedding_id, person_id')
     .eq('id', interactionId)
+    .eq('venue_id', venueId)
     .maybeSingle()
   if (!currentRow) return
   if ((currentRow.wedding_id as string | null) === targetWeddingId) {
+    return
+  }
+
+  // Audit item 4: between the propose floor and the auto-attach bar this
+  // is a question, not an answer. Write it into the queue the coordinator
+  // already reads and stop. Nothing is re-pointed.
+  if (scored[0].score < AUTO_ATTACH_THRESHOLD) {
+    await proposeReferencedCoupleMatch({
+      supabase,
+      venueId,
+      interactionId,
+      referencedName,
+      intentClass,
+      correlationId: correlationId ?? null,
+      sourceWeddingId: (currentRow.wedding_id as string | null) ?? null,
+      targetWeddingId,
+      score: scored[0].score,
+    })
     return
   }
 
@@ -195,10 +241,16 @@ export async function resolveReferencedCouple(args: ResolveArgs): Promise<void> 
   // table is the right home for her if/when the schema gets her there.
   // For now, just re-point the interaction so it surfaces on the right
   // wedding.
+  //
+  // The venue predicate is not decoration: without it a resolver running
+  // on a stale or cross-tenant interaction id would re-point a row that
+  // belongs to somebody else's venue. Service-role writes bypass RLS, so
+  // the predicate IS the tenancy boundary here.
   const { error: updErr } = await supabase
     .from('interactions')
     .update({ wedding_id: targetWeddingId })
     .eq('id', interactionId)
+    .eq('venue_id', venueId)
 
   if (updErr) {
     logEvent({
@@ -228,6 +280,114 @@ export async function resolveReferencedCouple(args: ResolveArgs): Promise<void> 
       target_wedding_id: targetWeddingId,
       score: scored[0].score,
       intent_class: intentClass,
+    },
+  })
+}
+
+/**
+ * Write a mid-confidence referenced-couple match into `candidate_matches`
+ * so `/intel/identity-review` can adjudicate it.
+ *
+ * The queue's record types are couple / fragment / channel_scoped /
+ * touchpoint (migrations 346 + 347) — there is no 'interaction' type, and
+ * this workstream does not own migrations. So the proposal is expressed
+ * in the vocabulary the queue already speaks: couple ↔ couple, resolved
+ * through `couples.source_wedding_id`. The interaction id and the score
+ * ride along in `matcher_reason`, which is the field the review surface
+ * renders.
+ *
+ * When either side has no couple mirror there is nothing to enqueue. We
+ * log and stop rather than inventing a row shape the surface cannot show;
+ * a silent no-op that a coordinator never sees would be the worse outcome
+ * of the two, so the log line is deliberately a warning.
+ */
+async function proposeReferencedCoupleMatch(args: {
+  supabase: SupabaseClient
+  venueId: string
+  interactionId: string
+  referencedName: string
+  intentClass: string
+  correlationId: string | null
+  sourceWeddingId: string | null
+  targetWeddingId: string
+  score: number
+}): Promise<void> {
+  const {
+    supabase, venueId, interactionId, referencedName, intentClass,
+    correlationId, sourceWeddingId, targetWeddingId, score,
+  } = args
+
+  const coupleIdFor = async (weddingId: string | null): Promise<string | null> => {
+    if (!weddingId) return null
+    const { data } = await supabase
+      .from('couples')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('source_wedding_id', weddingId)
+      .is('merged_into_id', null)
+      .maybeSingle()
+    return (data?.id as string | null) ?? null
+  }
+
+  const [targetCoupleId, sourceCoupleId] = await Promise.all([
+    coupleIdFor(targetWeddingId),
+    coupleIdFor(sourceWeddingId),
+  ])
+
+  if (!targetCoupleId || !sourceCoupleId) {
+    logEvent({
+      level: 'warn',
+      msg: 'referenced_couple proposal not queueable (missing couple mirror)',
+      venueId,
+      correlationId,
+      actor: 'system',
+      event_type: 'inbound_intent.resolve_referenced',
+      outcome: 'skip',
+      data: {
+        interactionId,
+        referenced: referencedName,
+        target_wedding_id: targetWeddingId,
+        source_wedding_id: sourceWeddingId,
+        score,
+        reason: 'no couples mirror for one or both weddings',
+      },
+    })
+    return
+  }
+
+  if (targetCoupleId === sourceCoupleId) return
+
+  await insertCandidateMatch(
+    supabase,
+    venueId,
+    targetCoupleId,
+    'couple',
+    sourceCoupleId,
+    'couple',
+    // Mid-confidence by construction: anything at or above
+    // AUTO_ATTACH_THRESHOLD never reaches this function.
+    'medium',
+    `referenced-couple resolver: inbound ${intentClass} named "${referencedName}" ` +
+      `(bigram score ${score.toFixed(2)}). Interaction ${interactionId} currently sits on ` +
+      `wedding ${sourceWeddingId ?? 'none'}; the named couple looks like wedding ${targetWeddingId}. ` +
+      `Confirm to move the conversation.`,
+  )
+
+  logEvent({
+    level: 'info',
+    msg: 'referenced_couple proposed for review',
+    venueId,
+    correlationId,
+    actor: 'system',
+    event_type: 'inbound_intent.resolve_referenced',
+    outcome: 'ok',
+    data: {
+      interactionId,
+      referenced: referencedName,
+      target_wedding_id: targetWeddingId,
+      score,
+      intent_class: intentClass,
+      proposed: true,
     },
   })
 }

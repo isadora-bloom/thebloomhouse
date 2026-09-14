@@ -11,6 +11,29 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-14 (Ingestion security audit, workstream S4a — untrusted-content wrapping)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| escalation-detector (`src/config/prompts/escalation-detector.ts`) | `escalation-detector.prompt.v1` | `escalation-detector.prompt.v2` | The inbound body was concatenated raw into the user prompt. It is now wrapped in the untrusted-content envelope from `lib/security/prompt-sanitize` and the subject is sanitised. The interesting attack on this detector runs the other way from the usual one: an inbound that talks the model OUT of escalating means a couple asking for a real person never reaches one. The decision contract and the output schema are unchanged, and the deterministic keyword layer in `escalation-classifier.ts` now unions with the model verdict rather than relying on early-return ordering, so the model can only add an escalation, never remove one. |
+
+Not version-bumped, because the decision contract and the schema of each
+is unchanged and only the untrusted-data boundary moved. Recorded here so
+the prompt diffs are not a surprise:
+
+- inquiry-brain and client-brain now build their inbound block through one
+  shared `buildInboundEmailContext` (`src/lib/security/inbound-context.ts`).
+  Inquiry-brain's text is equivalent to what it already emitted;
+  client-brain previously had no envelope at all.
+- the lifecycle signal detector wraps the email body and sanitises the
+  From / Subject lines.
+- the review-response brain wraps and caps `review.body`, wraps an
+  existing draft being revised, and sanitises the reviewer name and title.
+- planning extraction wraps the message it reads.
+- brain-dump attached-file content moves from a fixed `--- ATTACHED FILE
+  CONTENT ---` fence to the untrusted envelope with a per-call random
+  nonce in the tag, so the file content cannot name its own terminator.
+
 ## 2026-09-14 (The groom's cake — stated plans, v1.1 → v1.2)
 
 | brain | from | to | change |

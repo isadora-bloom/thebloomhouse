@@ -415,6 +415,10 @@ export async function generateFollowUps(venueId: string): Promise<number> {
           direction: 'inbound',
           weddingId: followUp.weddingId,
           injectionSuspected,
+          // No fresh inbound: this fires on a timer, not on a message
+          // somebody sent. The sticky auto_send_blocked_at read above is
+          // what carries an earlier inbound's injection flag forward.
+          inbound: { kind: 'scheduled', sequence: 'inquiry_follow_up' },
         })
 
         if (eligibility.eligible) {
@@ -990,6 +994,9 @@ async function emitExtendedDraft(
       direction: 'inbound',
       weddingId,
       injectionSuspected,
+      // Timer-driven, no fresh inbound. See the note on the inquiry
+      // follow-up call site above.
+      inbound: { kind: 'scheduled', sequence: 'client_follow_up' },
     })
 
     if (eligibility.eligible) {

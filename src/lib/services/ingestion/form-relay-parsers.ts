@@ -61,6 +61,105 @@ export interface FormRelayLead {
   /** The raw From header we matched on, kept for audit + for logging the
    *  original relay that introduced the lead. */
   matchedRelayFrom: string
+  /**
+   * Where `replyToEmail` came from. 2026-09-14 ingestion audit item 1.
+   *
+   *   'relay'    — a platform relay address derived from the From header
+   *                or a platform-specific reply token. Routable, and the
+   *                platform owns it.
+   *   'envelope' — the envelope sender itself.
+   *   'header'   — an address off the To/Cc headers (transport metadata,
+   *                not message text).
+   *   'body'     — scraped out of the message body. Attacker-writable by
+   *                anyone who can compose an email, so the pipeline
+   *                refuses to route a reply here unless the envelope was
+   *                itself trusted (see `envelopeTrusted`).
+   */
+  replyToSource: 'relay' | 'envelope' | 'header' | 'body'
+  /**
+   * True when the From address was venue-owned or a known relay domain,
+   * i.e. the parser fired on an envelope we have a reason to believe.
+   * A body-derived reply target is only honoured when this is true.
+   */
+  envelopeTrusted: boolean
+  /**
+   * True when the parser matched on a domain-verified envelope and the
+   * pipeline may skip the LLM classifier. A parser hit that was NOT
+   * domain-verified (the shape heuristic) must be classified like any
+   * other inbound: it may bypass the noise guards or skip the
+   * classifier, never both.
+   */
+  classifierSkipAllowed: boolean
+}
+
+/**
+ * Domains whose mail is, by construction, a form relay rather than a
+ * person. Used to gate the shape heuristic the same way
+ * `parseVenueCalculator` gates on `venueOwnEmails`.
+ *
+ * Kept as a suffix list rather than a regex so an operator addition
+ * reads as data. White-label rule holds: these are industry platforms,
+ * not any one venue's domains.
+ */
+const KNOWN_RELAY_DOMAIN_SUFFIXES: readonly string[] = [
+  'theknot.com',
+  'member.theknot.com',
+  'theknotww.com',
+  'weddingwire.com',
+  'herecomestheguide.com',
+  'zola.com',
+  'wedding-spot.com',
+  'weddingspot.com',
+  'eventective.com',
+  'wedsites.com',
+  'squarespace.com',
+  'wixanswers.com',
+  'formspree.io',
+  'jotform.com',
+  'typeform.com',
+  'wufoo.com',
+  'gravityforms.com',
+  'hsforms.com',
+  'interactivecalculator.com',
+]
+
+/** True when `address` sits on a known form-relay / form-provider domain. */
+export function isKnownRelayDomain(address: string | null | undefined): boolean {
+  if (!address) return false
+  const at = address.lastIndexOf('@')
+  if (at < 0) return false
+  const domain = address.slice(at + 1).toLowerCase().replace(/[>\s]+$/, '')
+  if (!domain) return false
+  return KNOWN_RELAY_DOMAIN_SUFFIXES.some(
+    (suffix) => domain === suffix || domain.endsWith('.' + suffix),
+  )
+}
+
+/**
+ * Operator allow-list of extra relay domains, read from the environment
+ * so a venue whose bespoke form provider is not in the list above can be
+ * added without a deploy of this file. Comma-separated bare domains.
+ *
+ * Deliberately env-driven rather than body-driven: the whole point of
+ * item 1 is that nothing inside an attacker-controlled message may widen
+ * the set of senders the heuristic trusts.
+ */
+function operatorAllowedRelayDomains(): string[] {
+  const raw = process.env.FORM_RELAY_ALLOWED_DOMAINS
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean)
+}
+
+function isOperatorAllowedRelay(address: string): boolean {
+  const allowed = operatorAllowedRelayDomains()
+  if (allowed.length === 0) return false
+  const at = address.lastIndexOf('@')
+  if (at < 0) return false
+  const domain = address.slice(at + 1).toLowerCase()
+  return allowed.some((d) => domain === d || domain.endsWith('.' + d))
 }
 
 // ---------------------------------------------------------------------------
@@ -241,8 +340,9 @@ function parseTheKnot(from: string, body: string): FormRelayLead | null {
   // Primary reply target: prefer personal email (direct → most reliable);
   // fall back to the relay only when personal is missing. CC carries the
   // platform relay when both are known.
-  const primaryReplyTo = (personalEmail && personalEmail.includes('@'))
-    ? personalEmail.toLowerCase()
+  const usedBodyPersonalEmail = Boolean(personalEmail && personalEmail.includes('@'))
+  const primaryReplyTo = usedBodyPersonalEmail
+    ? personalEmail!.toLowerCase()
     : fromAddr
 
   return {
@@ -253,6 +353,15 @@ function parseTheKnot(from: string, body: string): FormRelayLead | null {
     guestCount,
     budget,
     replyToEmail: primaryReplyTo,
+    // 2026-09-14 audit item 1. "Personal email:" is a body field. It is
+    // the right reply target when the envelope really is The Knot; it is
+    // an attacker-chosen mailbox when someone merely pasted "The Knot Pro
+    // Network" into a body from an arbitrary address. The pipeline pairs
+    // these two flags: body-derived + untrusted envelope = fall back to
+    // the envelope sender.
+    replyToSource: usedBodyPersonalEmail ? 'body' : 'envelope',
+    envelopeTrusted: isKnotByDomain,
+    classifierSkipAllowed: isKnotByDomain,
     ccEmails,
     matchedRelayFrom: fromAddr,
   }
@@ -380,6 +489,11 @@ function parseWeddingWire(from: string, body: string, subject: string): FormRela
     guestCount,
     budget,
     replyToEmail: fromAddr,
+    // Domain-verified envelope (the `isWW` gate above) and the reply goes
+    // back to that same envelope, never to a body field.
+    replyToSource: 'envelope',
+    envelopeTrusted: true,
+    classifierSkipAllowed: true,
     matchedRelayFrom: fromAddr,
   }
 }
@@ -436,6 +550,10 @@ function parseHereComesTheGuide(from: string, body: string): FormRelayLead | nul
     guestCount,
     budget,
     replyToEmail: fromAddr,
+    // Domain-verified envelope (`isHCTG`), reply routes back to it.
+    replyToSource: 'envelope',
+    envelopeTrusted: true,
+    classifierSkipAllowed: true,
     matchedRelayFrom: fromAddr,
   }
 }
@@ -559,6 +677,13 @@ function parseZola(from: string, body: string): FormRelayLead | null {
     budget,
     note,
     replyToEmail: replyTo,
+    // The connect-{uuid} address is read out of the body, but the regex
+    // that finds it only accepts a zola.com subdomain, so it can never be
+    // an arbitrary attacker mailbox — it is a platform relay, not free
+    // body text. The envelope is domain-verified either way.
+    replyToSource: connectMatch ? 'relay' : 'envelope',
+    envelopeTrusted: true,
+    classifierSkipAllowed: true,
     matchedRelayFrom: fromAddr,
   }
 }
@@ -653,12 +778,14 @@ function parseVenueCalculator(
   const toParts = (to || '').split(',').map((s) => s.trim()).filter(Boolean)
   let leadEmail: string | null = null
   let leadName: string | null = null
+  let leadEmailFromHeader = false
   for (const part of toParts) {
     const addr = extractEmailAddress(part)
     if (!addr.includes('@')) continue
     if (venueOwn.has(addr)) continue
     leadEmail = addr
     leadName = extractDisplayName(part)
+    leadEmailFromHeader = true
     break
   }
   // Fallback: scan body for any email that isn't venue-owned. Calculators
@@ -668,6 +795,13 @@ function parseVenueCalculator(
     if (candidates.length > 0) leadEmail = candidates[0]
   }
   if (!leadEmail) return null
+
+  // Strong-marker detection deliberately bypasses the venue-own check on
+  // the From header (see the comment above), which means a strong-marker
+  // hit from an unknown sender is NOT a trusted envelope. Only a
+  // venue-owned or known-relay From earns that.
+  const envelopeTrusted =
+    venueOwn.has(fromAddr) || isKnownRelayDomain(fromAddr) || isOperatorAllowedRelay(fromAddr)
 
   // Common calculator fields.
   const season = fieldAfter(body, 'Season')
@@ -696,6 +830,15 @@ function parseVenueCalculator(
     guestCount: guests,
     // Calculator reply goes direct to the prospect's real email.
     replyToEmail: leadEmail,
+    // The To header is transport metadata the sending MTA wrote; the body
+    // scan is free text. Tell the pipeline which one we used so it can
+    // apply the body-derived rule.
+    replyToSource: leadEmailFromHeader ? 'header' : 'body',
+    envelopeTrusted,
+    // Only a venue-owned / relay envelope is trusted enough to skip the
+    // classifier. A strong-marker body from an unknown sender still gets
+    // classified.
+    classifierSkipAllowed: envelopeTrusted,
     matchedRelayFrom: fromAddr,
   }
 }
@@ -740,6 +883,34 @@ function parseShapeHeuristic(
   venueOwn: Set<string>
 ): FormRelayLead | null {
   if (!body) return null
+
+  // 2026-09-14 ingestion audit item 1 — THE GATE.
+  //
+  // Before this check the heuristic fired on ANY sender whose body had
+  // two labelled lines. Anyone could send
+  //
+  //     Wedding date: 6/6/2027
+  //     Personal email: attacker@example.com
+  //
+  // from any address and the pipeline would (a) treat it as a confirmed
+  // new inquiry at confidence 95, (b) bypass the noise guards, (c) skip
+  // the classifier entirely, and (d) stamp the body-supplied address as
+  // the draft's `to_email` — i.e. an unauthenticated stranger could aim
+  // Sage's auto-reply at an arbitrary mailbox.
+  //
+  // The heuristic now needs a reason to believe the envelope, exactly as
+  // parseVenueCalculator does: venue-owned From (the bespoke-form
+  // notification case), a known relay/form-provider domain, or an
+  // operator allow-list entry. The prospect's own address in the body
+  // still becomes `leadEmail` for identity purposes, but never the reply
+  // target — see replyToSource below.
+  const fromAddr = extractEmailAddress(from)
+  const envelopeTrusted =
+    venueOwn.has(fromAddr) ||
+    isKnownRelayDomain(fromAddr) ||
+    isOperatorAllowedRelay(fromAddr)
+  if (!envelopeTrusted) return null
+
   const lower = body.toLowerCase()
 
   // Count labelled fields actually present in the body.
@@ -763,7 +934,6 @@ function parseShapeHeuristic(
   const bodyEmails = findAllEmails(body)
   const relayDomains = /@(member\.)?theknot\.com|@weddingwire\.com|@herecomestheguide\.com|@zola\.com/i
 
-  const fromAddr = extractEmailAddress(from)
   const candidate =
     (personalEmail && /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(personalEmail)
       ? personalEmail.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0].toLowerCase()
@@ -792,7 +962,20 @@ function parseShapeHeuristic(
       fieldAfter(body, 'number of guests'),
     budget: fieldAfter(body, 'budget'),
     note: fieldAfter(body, 'note') || fieldAfter(body, 'message') || null,
-    replyToEmail: candidate,
+    // NOT `candidate`. The candidate came out of the message body, which
+    // is the one field a sender fully controls. Route the reply back at
+    // the envelope sender — the relay or the venue's own form notifier —
+    // which is what actually routes to the prospect for every real relay
+    // and is at worst a harmless bounce for a forged one.
+    replyToEmail: fromAddr,
+    replyToSource: 'envelope',
+    envelopeTrusted: true,
+    // The heuristic is a shape guess, not a domain-verified platform
+    // parser. It may bypass the noise guards (relay mail is machine mail
+    // by construction) but the classifier still runs. See the
+    // `bypassNoiseGuards` / `classifierSkipAllowed` pairing in
+    // email/pipeline.ts.
+    classifierSkipAllowed: false,
     matchedRelayFrom: fromAddr,
   }
 }

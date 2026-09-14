@@ -87,12 +87,16 @@ beforeEach(() => {
   setScript([])
 })
 
+// venueId is required on CallAIOptions since the 2026-09-14 audit
+// (item 7) — every model call is attributed to a venue.
+const VENUE = 'venue-test-call-ai-tools'
+
 describe('callAITools', () => {
   it('runs the loop, records every call, and returns the final text', async () => {
     setScript([{ kind: 'tool', names: ['alpha'] }, { kind: 'text', text: 'the answer' }])
 
     const r = await callAITools(
-      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS },
+      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE },
       async (name) => `result for ${name}`,
     )
 
@@ -110,7 +114,7 @@ describe('callAITools', () => {
     setScript([{ kind: 'tool', names: ['alpha', 'beta'] }, { kind: 'text', text: 'both read' }])
 
     const r = await callAITools(
-      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS },
+      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE },
       async (name) => `ok ${name}`,
     )
 
@@ -124,7 +128,7 @@ describe('callAITools', () => {
   it('turns a dispatcher throw into an is_error result instead of dying', async () => {
     setScript([{ kind: 'tool', names: ['alpha'] }, { kind: 'text', text: 'carried on' }])
 
-    const r = await callAITools({ systemPrompt: 's', userPrompt: 'q', tools: TOOLS }, async () => {
+    const r = await callAITools({ systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE }, async () => {
       throw new Error('reader unavailable')
     })
 
@@ -139,7 +143,7 @@ describe('callAITools', () => {
     setScript(Array.from({ length: 20 }, () => ({ kind: 'tool' as const, names: ['alpha'] })))
 
     const r = await callAITools(
-      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS },
+      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE },
       async () => 'more',
     )
 
@@ -153,7 +157,7 @@ describe('callAITools', () => {
     forced = true
 
     const r = await callAITools(
-      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS },
+      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE },
       async () => 'never reached',
     )
 
@@ -167,7 +171,7 @@ describe('callAITools', () => {
     breakerOpen = true
 
     const r = await callAITools(
-      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS },
+      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE },
       async () => 'never reached',
     )
 
@@ -181,7 +185,7 @@ describe('callAITools', () => {
     throwOnTurn = 2
 
     const r = await callAITools(
-      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS },
+      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE },
       async () => 'partial data',
     )
 
@@ -198,7 +202,7 @@ describe('callAITools', () => {
     disabled = true
 
     const r = await callAITools(
-      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS },
+      { systemPrompt: 's', userPrompt: 'q', tools: TOOLS, venueId: VENUE },
       async () => 'never reached',
     )
 

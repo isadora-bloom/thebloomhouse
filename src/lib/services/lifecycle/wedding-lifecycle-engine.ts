@@ -81,6 +81,60 @@ export interface LifecycleTransition {
 export interface LifecycleDecision {
   to: WeddingStatus
   reason: string
+  /**
+   * True when this decision is a PROPOSAL, not a transition (2026-09-14
+   * ingestion audit item 3).
+   *
+   * `contract_signed` and `deposit_paid` were reachable from email text
+   * alone: an LLM reading an inbound body decided a contract existed and
+   * the writer flipped `weddings.status` to 'booked', stamped
+   * `booked_at`, and changed everything downstream that keys off booked
+   * state. Any sender could produce "Contract signed — DocuSign
+   * Completed" in a body.
+   *
+   * Money and signatures leave rows behind. A transition INTO booked now
+   * requires one of those rows (or a coordinator's own click) to
+   * corroborate the text. Without corroboration the caller records a
+   * proposal for review and leaves the status alone. Every other
+   * transition is unchanged: the loss signals, the tour signals and the
+   * post-booking signals all still apply directly, because none of them
+   * fabricates a commercial fact.
+   */
+  requiresCorroboration?: boolean
+}
+
+/**
+ * Non-text evidence that a booking really happened. Assembled by the
+ * caller (the writer has the Supabase client; the engine stays pure).
+ */
+export interface BookingCorroboration {
+  /** A `contracts` row for this wedding with status 'signed' (W57). */
+  signedContract: boolean
+  /** A payment row against this wedding. */
+  paymentRow: boolean
+  /** A coordinator performed this action themselves. */
+  coordinatorAction: boolean
+}
+
+/** True when any non-text evidence backs a booking transition. */
+export function hasBookingCorroboration(
+  corroboration: BookingCorroboration | null | undefined,
+): boolean {
+  if (!corroboration) return false
+  return (
+    corroboration.signedContract === true ||
+    corroboration.paymentRow === true ||
+    corroboration.coordinatorAction === true
+  )
+}
+
+export interface NextStatusOptions {
+  /**
+   * Non-text evidence for a booking signal. Omit (or pass nothing
+   * corroborating) and a contract_signed / deposit_paid decision comes
+   * back flagged `requiresCorroboration`.
+   */
+  corroboration?: BookingCorroboration | null
 }
 
 // Terminal states the engine refuses to leave on its own. A coordinator
@@ -135,6 +189,7 @@ const FORWARD_RANK: Record<WeddingStatus, number> = {
 export function nextStatus(
   current: WeddingStatus,
   signal: LifecycleSignal,
+  options?: NextStatusOptions,
 ): LifecycleDecision | null {
   // ---------------------------------------------------------------------
   // Loss signals (lead_declined / going_with_other / silent_close).
@@ -162,15 +217,19 @@ export function nextStatus(
   // came back), but we refuse to silently flip it because the dashboard
   // counts and intel narratives have been built on the lost state. Force
   // the coordinator-action path.
+  //
+  // 2026-09-14 ingestion audit item 3: text alone no longer moves a
+  // wedding into 'booked'. The decision still comes back — the caller
+  // needs it to record what was claimed — but it is flagged as a
+  // proposal unless a payment row, a signed contract row, or a
+  // coordinator's own click backs it up.
   if (signal === 'contract_signed' || signal === 'deposit_paid') {
     if (PRE_BOOKING_STATES.has(current)) {
-      return {
-        to: 'booked',
-        reason:
-          signal === 'contract_signed'
-            ? 'contract signed'
-            : 'deposit paid',
-      }
+      const reason = signal === 'contract_signed' ? 'contract signed' : 'deposit paid'
+      const corroborated = hasBookingCorroboration(options?.corroboration)
+      return corroborated
+        ? { to: 'booked', reason }
+        : { to: 'booked', reason, requiresCorroboration: true }
     }
     return null
   }

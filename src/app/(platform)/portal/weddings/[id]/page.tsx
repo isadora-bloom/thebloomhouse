@@ -9,6 +9,7 @@ import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { countSeatedParties } from '@/lib/services/couple-portal/seating-view'
 import { type Cents, formatCents } from '@/lib/types/monetary'
 import { useAiName } from '@/lib/hooks/use-ai-name'
+import { UNCONFIRMED_PLANNING_NOTE_STATUSES } from '@/lib/services/intel/planning-note-status'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -605,6 +606,17 @@ function PlanningNotesTab({ notes }: { notes: PlanningNoteRow[] }) {
             {catNotes.map((note) => (
               <div key={note.id} className="bg-warm-white rounded-lg p-3 border border-sage-100">
                 <p className="text-sm text-sage-900">{note.content}</p>
+                {/* 2026-09-14 ingestion audit item 7. These notes are
+                    produced by a model reading a message somebody else
+                    wrote. Nothing has confirmed them, so the surface says
+                    so rather than presenting them as venue fact. */}
+                {note.status && UNCONFIRMED_PLANNING_NOTE_STATUSES.has(note.status) && (
+                  <span className="inline-block mt-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-gold-50 text-gold-700 border border-gold-200">
+                    {note.status === 'ai_extracted'
+                      ? `Unconfirmed — extracted by ${aiName}`
+                      : 'Unconfirmed'}
+                  </span>
+                )}
                 {note.source_message && (
                   <p className="text-xs text-sage-400 mt-2 italic line-clamp-2">
                     Source: &quot;{note.source_message}&quot;

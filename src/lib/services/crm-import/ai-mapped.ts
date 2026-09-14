@@ -229,7 +229,9 @@ interface RawAiMappingResponse {
 export async function proposeColumnMapping(args: {
   headers: string[]
   sampleRows: string[][]
-  venueId?: string
+  /** Required since the 2026-09-14 audit (item 7) — api_costs
+   *  attribution for the mapping call. */
+  venueId: string
 }): Promise<ProposedColumnMapping> {
   const { headers, sampleRows, venueId } = args
 
@@ -546,6 +548,25 @@ async function parseAiMapped(config: AdapterConfig): Promise<AiMappedParseResult
   // No mapping yet - propose one with the LLM and return proposalOnly.
   // The UI renders the confirm/correct step; nothing commits until the
   // coordinator re-submits with a confirmedMapping.
+  // 2026-09-14 ingestion audit item 7. `venueId` is required on
+  // CallAIOptions now, and `AdapterConfig` cannot promise one (it is the
+  // shared shape for a dozen adapters, most of which make no model call).
+  // Refuse rather than bill the call to nobody: an unattributed model
+  // call is invisible to the venue's own cost ceiling, so a large upload
+  // through a path that forgot the id would spend without any brake.
+  // The coordinator gets a message and the manual-mapping escape hatch.
+  if (!cfg.venueId) {
+    return {
+      ok: false,
+      rows: [],
+      errors: [
+        'AI column mapping needs a venue id and this import did not carry one.',
+        'Switch to the Generic CSV adapter and supply a column mapping by hand, or re-run the import from a surface that passes the venue.',
+      ],
+      warnings,
+    }
+  }
+
   let proposal: ProposedColumnMapping
   try {
     proposal = await proposeColumnMapping({

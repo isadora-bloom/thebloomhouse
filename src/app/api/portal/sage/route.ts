@@ -620,6 +620,18 @@ export async function POST(request: NextRequest) {
       }
 
       // Layer 2: AI extraction (richer, fire-and-forget — don't block the response)
+      //
+      // ---- S4a, 2026-09-14 ingestion audit item 7 (only change in this file) ----
+      // `message` is couple-typed text and the extraction writes rows the
+      // coordinator reads, so it used to be a path where a chat message
+      // could author its own planning notes. The untrusted-content
+      // wrapping and the venueId attribution both now live inside
+      // extractPlanningNotesAI (services/intel/planning-extraction.ts), so
+      // this call site needs no argument change — the note is here so the
+      // next reader does not re-add wrapping at the wrong layer. Notes
+      // produced this way carry status 'ai_extracted' and the coordinator
+      // surface shows them as unconfirmed.
+      // --------------------------------------------------------------------
       extractAndSaveAINotes(venueId, weddingId, message).catch((err) =>
         console.warn('[api/portal/sage] AI planning extraction failed (non-blocking):', err)
       )

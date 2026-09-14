@@ -292,7 +292,10 @@ interface AIDetectionResponse {
 
 export async function detectDataType(
   content: string,
-  venueId?: string
+  // Required since the 2026-09-14 audit (item 7): the model call below
+  // is billed and rate-limited per venue. Pass 'system' only for
+  // genuinely venue-less work.
+  venueId: string
 ): Promise<DetectionResult> {
   // Parse rows first
   const rows = parseDelimited(content)
@@ -464,7 +467,8 @@ const TARGET_COLUMNS: Record<DataType, string[]> = {
 export async function mapColumns(
   headers: string[],
   targetType: DataType,
-  venueId?: string
+  // Required since the 2026-09-14 audit (item 7). See detectDataType.
+  venueId: string
 ): Promise<ColumnMapping> {
   const targetCols = TARGET_COLUMNS[targetType]
   if (!targetCols || targetCols.length === 0) return {}

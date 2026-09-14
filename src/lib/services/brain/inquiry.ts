@@ -823,16 +823,20 @@ export async function generateInquiryDraft(
   // hostile actor. Wrap the body in explicit untrusted markers so the
   // model treats it as data, not instructions. Subject is also
   // attacker-controlled but capped, so we sanitize it too.
+  //
+  // 2026-09-14 ingestion audit, item 2: the wrapping that used to live
+  // inline here now lives in lib/security/inbound-context.ts, shared
+  // with brain/client.ts. Same envelope, same cap, one place to change.
   const season = getSeasonFromDate(extractedData.eventDate)
-  const { sanitizeUserContent, wrapUntrustedContent, containsInjectionAttempt } =
-    await import('@/lib/security/prompt-sanitize')
+  const { buildInboundEmailContext } = await import('@/lib/security/inbound-context')
 
-  const subjectSanitized = sanitizeUserContent(inquiry.subject)
-  const bodySanitized = sanitizeUserContent(inquiry.body.slice(0, 3000))
-  const wrappedBody = wrapUntrustedContent(
-    inquiry.body.slice(0, 3000),
-    'inquiry_body',
-  ).wrapped
+  const inbound = buildInboundEmailContext({
+    from: inquiry.from,
+    subject: inquiry.subject,
+    body: inquiry.body,
+    heading: 'INCOMING EMAIL',
+    label: 'inquiry_body',
+  })
 
   // 2026-05-27 (v1.6): explicit "today" anchor. Without it the brain
   // resolves any "Friday" / "next week" token in the inbound body to
@@ -852,19 +856,16 @@ export async function generateInquiryDraft(
   })
   let contextBlock = `\n\n## TODAY:\nToday is ${todayLine}. Whenever you reference a future date in the draft, anchor to this. Do not use "this {weekday}" for any date more than 6 days away or in a later calendar week; prefer "next {weekday}" or the absolute date (e.g. "Friday, June 5") for those. Match the date phrasing to what the couple actually told you — never invent dates that aren't in the source.`
 
-  contextBlock += `\n\n## INCOMING EMAIL:\n\nFrom: ${inquiry.from}\nSubject: ${subjectSanitized.content}\n\n${wrappedBody}`
+  contextBlock += inbound.block
 
   // Telemetry — both injection signals and the lower-severity
   // strip events. Round-3+4 audits flagged the strip flags as ghost
   // data; consumed here so a single log line surfaces what the
   // sanitizer actually did. Auto-send block (mig 219 + persistence)
   // already gates on the injection signal; this is for ops trail.
-  const injectionDetected =
-    containsInjectionAttempt(inquiry.body) || containsInjectionAttempt(inquiry.subject)
-  const rolePrefixStripped =
-    subjectSanitized.rolePrefixStripped || bodySanitized.rolePrefixStripped
-  const systemTagStripped =
-    subjectSanitized.systemTagStripped || bodySanitized.systemTagStripped
+  const injectionDetected = inbound.injectionDetected
+  const rolePrefixStripped = inbound.rolePrefixStripped
+  const systemTagStripped = inbound.systemTagStripped
   if (injectionDetected || rolePrefixStripped || systemTagStripped) {
     console.warn('[inquiry-brain] prompt-sanitize signals on inbound email', {
       from: inquiry.from,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { detectCsvShape, parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
-import { runCsvImport } from '@/app/api/brain-dump/route'
+import { runCsvImport, isPathInsideVenue } from '@/app/api/brain-dump/route'
 import { importReviews } from '@/lib/services/brain-dump/imports'
 import { importStorefrontAnalytics } from '@/lib/services/ingestion/storefront-analytics'
 import { upsertSpendRows, type SpendRow } from '@/lib/services/intel/marketing-spend'
@@ -99,6 +99,24 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (isCsvPreview(pr) || isLegacyCsv) {
     const shape = (pr as { shape: string }).shape
     const storagePath = (pr as { storagePath: string }).storagePath
+
+    // 2026-09-14 ingestion audit item 9. Same confinement rule as the
+    // POST route. This path came off a `parse_result` row rather than
+    // straight off the request, but that row's storagePath was itself
+    // derived from user text on an earlier request, and legacy rows
+    // predate the POST-side check entirely. The download runs on the
+    // service client, so RLS is not standing behind it.
+    if (!isPathInsideVenue(storagePath, auth.venueId)) {
+      console.warn('[brain-dump/resolve] refused storage path outside venue prefix', {
+        venueId: auth.venueId,
+        pathPrefix: String(storagePath).split('/')[0],
+      })
+      return NextResponse.json(
+        { error: 'Stored file path is not inside this venue’s storage prefix' },
+        { status: 400 },
+      )
+    }
+
     const { data: file } = await supabase.storage.from('brain-dump').download(storagePath)
     if (!file) {
       return NextResponse.json({ error: 'Stored CSV could not be read' }, { status: 500 })
