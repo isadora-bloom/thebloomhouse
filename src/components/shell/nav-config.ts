@@ -243,7 +243,7 @@ export const MODE_WEDDINGS: ModeConfig = {
 // from any kept page; see src/lib/scaffold-gate.ts + PLATFORM-PAGES-AUDIT.md):
 //   /intel/discoveries, /intel/matches, /intel/alumni, /intel/referrals,
 //   /intel/forecasts, /intel/marketing-roi/digest,
-//   /intel/marketing-roi/flags, /intel/marketing-roi/recommendations
+//   /intel/marketing-roi/flags (recommendations un-gated 2026-09-14)
 //
 // Org-level intel pages (/intel/portfolio, /intel/company, /intel/team,
 // /intel/regions, /intel/benchmark) move to ORG_ADMIN gear menu — they
@@ -325,6 +325,10 @@ export const MODE_INTEL: ModeConfig = {
         // a coordinator could type "Add spend at /intel/marketing-spend"
         // in an error message but never click there.
         { label: 'Marketing Spend', href: '/intel/marketing-spend', icon: DollarSign },
+        // Wave 6 (2026-09-14): the reallocation recommendations are a real,
+        // working analyst that had no door in; the CEO scenario audit asked
+        // for exactly this page. Un-gated and given an entry.
+        { label: 'Reallocate Spend', href: '/intel/marketing-roi/recommendations', icon: DollarSign },
         // Wave 5 W39: same story as Marketing Spend above — the pixel
         // that closes the cross-session attribution gap the TBH Report
         // calls its biggest coverage hole had no nav entry and no link
