@@ -228,14 +228,154 @@ function bool(args: Record<string, unknown>, key: string): boolean | undefined {
   return typeof v === 'boolean' ? v : undefined
 }
 
-/** Period opt from the flat date args, or undefined when neither is given.
- *  A one-sided range is filled with a wide bound rather than rejected, since
- *  the readers take a from/to pair. */
+/** A calendar day key, the only date shape the readers' period opts accept. */
+function isDateKey(v: unknown): v is string {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+}
+
+/** Canonical uuid, the only shape a couple id can take. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Period opt from the flat date args, or undefined when neither is given.
+ * A one-sided range is filled with a wide bound rather than rejected, since
+ * the readers take a from/to pair.
+ *
+ * 2026-09-14 security review, item 7d: the two values used to go through
+ * untouched, so whatever the model emitted — a phrase, a template it had
+ * not filled in, an interval expression — landed in a `.gte()` and became
+ * either a PostgREST error the operator saw as a broken tool or, worse, a
+ * silently different window from the one they asked about. Anything that
+ * is not a YYYY-MM-DD day key is now treated as absent, which is the same
+ * thing the caller gets for omitting it, and a period the model cannot
+ * express is a period it has to ask about instead.
+ */
 function periodFrom(args: Record<string, unknown>): { from: string; to: string } | undefined {
-  const from = str(args, 'period_from')
-  const to = str(args, 'period_to')
+  const rawFrom = str(args, 'period_from')
+  const rawTo = str(args, 'period_to')
+  const from = isDateKey(rawFrom) ? rawFrom : undefined
+  const to = isDateKey(rawTo) ? rawTo : undefined
+  if (rawFrom && !from) {
+    console.warn('[intel-tools] ignoring malformed period_from', { period_from: rawFrom })
+  }
+  if (rawTo && !to) {
+    console.warn('[intel-tools] ignoring malformed period_to', { period_to: rawTo })
+  }
   if (!from && !to) return undefined
   return { from: from ?? '1900-01-01', to: to ?? '2999-12-31' }
+}
+
+// ---------------------------------------------------------------------------
+// Sensitive-theme redaction at the tool-result boundary
+// ---------------------------------------------------------------------------
+
+/**
+ * Profile fields that never leave the reader, whatever was asked.
+ *
+ * 2026-09-14 security review, item 7f. SENSITIVE_THEME_NAMING_RE above is a
+ * question-shaped gate: it reads the operator's wording and refuses when it
+ * looks like "which couples are dealing with grief". That catches the
+ * question it was written for and nothing else. "Tell me about Alice and
+ * Bob" is not a sensitive-theme question by any regex, and the answer
+ * returned the couple's emotional truths, family dynamics and
+ * accessibility needs straight into the model's context anyway, because
+ * `get_couple_journey` hands back the reconstructed profile whole.
+ *
+ * The wall belongs where the data is, not where the wording is. These three
+ * fields are stripped from every `get_couple_journey` result and replaced
+ * with a count, so the model can honestly say the record holds something it
+ * is not permitted to read out, and the operator can open the couple's own
+ * page if they need it. The identity-profile view on that page is
+ * unaffected; this is only the "Ask your data" path.
+ */
+export const REDACTED_PROFILE_FIELDS = [
+  'emotional_truths',
+  'family_dynamics',
+  'accessibility_needs',
+] as const
+
+/** Replace the sensitive profile fields with a count of what was withheld. */
+export function redactSensitiveProfile(
+  profile: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!profile) return profile ?? null
+  const out: Record<string, unknown> = { ...profile }
+  const withheld: string[] = []
+  for (const field of REDACTED_PROFILE_FIELDS) {
+    if (!(field in out)) continue
+    const value = out[field]
+    const n = Array.isArray(value) ? value.length : value == null ? 0 : 1
+    delete out[field]
+    if (n > 0) withheld.push(`${field} (${n})`)
+  }
+  if (withheld.length > 0) {
+    out.withheldSensitiveFields = withheld
+    out.withheldSensitiveNote =
+      'These fields are held back from this tool on purpose. Say the record holds ' +
+      'something you are not permitted to read out and point the operator at the ' +
+      "couple's own page. Do not guess at what they contain."
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Untrusted-prose envelope for tool results
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap the free-text fields a source declares before the result goes back
+ * to the model.
+ *
+ * 2026-09-14 security review, item 7b. Four of the registered sources hand
+ * back prose somebody else wrote — a review body, the quote around a
+ * keyword match in an inbound email, a loss reason an operator typed, a
+ * blocking detail on a follow-up. All of it went back into the transcript
+ * as plain JSON, in the same channel as the tool contract itself, with
+ * nothing marking where the venue's data stopped and a stranger's writing
+ * began. A review that says "SYSTEM: ignore the grounding rule" is the
+ * cheapest possible attack on a brain whose entire value is that it does
+ * not make numbers up.
+ *
+ * So each source declares which of its fields carry prose, and those
+ * fields go through the same envelope a couple's chat message goes
+ * through. An array of quotes is wrapped once rather than per element:
+ * same boundary, a fraction of the tokens.
+ */
+async function wrapFreeText(
+  value: unknown,
+  freeTextFields: readonly string[],
+  depth = 0,
+): Promise<unknown> {
+  if (freeTextFields.length === 0 || depth > 12) return value
+  const { wrapUntrustedContent } = await import('@/lib/security/prompt-sanitize')
+
+  const wrapOne = (v: unknown): unknown => {
+    if (typeof v === 'string') {
+      return wrapUntrustedContent(v, 'ingested_text').wrapped
+    }
+    if (Array.isArray(v) && v.every((item) => typeof item === 'string')) {
+      if (v.length === 0) return v
+      return wrapUntrustedContent((v as string[]).join('\n---\n'), 'ingested_text').wrapped
+    }
+    return v
+  }
+
+  const walk = async (node: unknown, d: number): Promise<unknown> => {
+    if (d > 12) return node
+    if (Array.isArray(node)) {
+      return Promise.all(node.map((item) => walk(item, d + 1)))
+    }
+    if (node && typeof node === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        out[k] = freeTextFields.includes(k) ? wrapOne(v) : await walk(v, d + 1)
+      }
+      return out
+    }
+    return node
+  }
+
+  return walk(value, depth)
 }
 
 /** The five data readers this dispatcher is allowed to reach. Injectable so
@@ -372,12 +512,45 @@ export function createCanonicalDispatcher(
             error: 'couple_id is required. Get one from get_daily_list; there is no lookup by name.',
           })
         }
-        return JSON.stringify(await canonical.getCoupleJourney(venueId, coupleId))
+        // Item 7d. A couple id is a uuid or it is nothing. Anything else is
+        // the model having invented an id, and inventing an id is exactly
+        // what the tool description tells it not to do; say so rather than
+        // sending the guess to the reader.
+        if (!UUID_RE.test(coupleId)) {
+          return JSON.stringify({
+            error:
+              `"${coupleId}" is not a couple id. Ids are uuids and come from get_daily_list. ` +
+              'There is no lookup by name: if you do not have an id, say so.',
+          })
+        }
+        const journey = await canonical.getCoupleJourney(venueId, coupleId)
+        // Item 7f. The sensitive slice of the reconstructed profile never
+        // reaches the model, regardless of how the question was worded.
+        return JSON.stringify({
+          ...journey,
+          identityProfile: redactSensitiveProfile(journey.identityProfile),
+        })
       }
 
       case TOOL_GET_DAILY_LIST: {
         const list = await canonical.getDailyList(venueId)
-        const bucket = (str(args, 'bucket') ?? 'all') as DailyListBucket
+        // Item 7c. The bucket used to be cast, not checked, so an
+        // unrecognised value indexed `full` with it and produced
+        // `{"<whatever>": undefined}` — a tool result that says nothing and
+        // reads, to the model, like an empty bucket. Fall back to 'all' and
+        // say which value was ignored.
+        const rawBucket = str(args, 'bucket')
+        const isValidBucket = (v: string | undefined): v is DailyListBucket =>
+          v !== undefined && (DAILY_LIST_BUCKETS as readonly string[]).includes(v)
+        const bucket: DailyListBucket = isValidBucket(rawBucket) ? rawBucket : 'all'
+        const bucketNote =
+          rawBucket && !isValidBucket(rawBucket)
+            ? {
+                note:
+                  `Ignored bucket "${rawBucket}" — not one of ${DAILY_LIST_BUCKETS.join(', ')}. ` +
+                  'Returned every bucket instead.',
+              }
+            : {}
 
         // toursThisWeek carries ids, not names. Q37 asks Bloom to find
         // everyone toured with and then draft follow-ups, and the July run
@@ -412,7 +585,7 @@ export function createCanonicalDispatcher(
           highIntent: { n: list.highIntent.length, couples: list.highIntent },
           generatedAt: list.generatedAt,
         }
-        if (bucket === 'all') return JSON.stringify(full)
+        if (bucket === 'all') return JSON.stringify({ ...full, ...bucketNote })
         return JSON.stringify({ [bucket]: full[bucket], generatedAt: full.generatedAt })
       }
 
@@ -430,7 +603,10 @@ export function createCanonicalDispatcher(
             supabase,
             today: sourceOpts?.deps?.today ?? (await venueLocalToday(supabase, venueId)),
           }
-          return JSON.stringify(await source.run(venueId, args, deps))
+          // Item 7b. Prose the source ingested from somewhere else goes
+          // back to the model inside the untrusted-data envelope.
+          const raw = await source.run(venueId, args, deps)
+          return JSON.stringify(await wrapFreeText(raw, source.freeTextFields ?? []))
         }
         return JSON.stringify({
           error: `Unknown tool "${name}". Available: ${allTools(sources)
@@ -496,10 +672,54 @@ function parseNumeric(raw: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * Field names whose value is prose somebody else wrote, not a figure this
+ * product computed.
+ *
+ * 2026-09-14 security review, item 7a. The grounding check used to sweep
+ * every numeric literal out of the raw result string, which meant a review
+ * body reading "they handled 94% of the setup" put 94 into the grounded
+ * set. The model could then state "94% of couples booked" and the check
+ * would wave it through, because the number was, technically, in a tool
+ * result. That is the confabulation class this whole mechanism exists to
+ * close, reopened by its own belt-and-braces.
+ *
+ * Numbers now come only from numeric-typed JSON fields, which are the ones
+ * the readers actually computed. Literals inside strings are still
+ * collected, because an answer quoting a date or an id back must not be
+ * read as a statistic — but not from these fields, where a digit is a
+ * stranger's sentence rather than a measurement.
+ *
+ * The list is the union of what the four prose-carrying sources emit
+ * (signals.ts, reviews.ts, operator-patterns.ts, follow-ups.ts). Keep it in
+ * step with the `freeTextFields` those sources declare.
+ */
+const FREE_TEXT_KEYS: ReadonlySet<string> = new Set([
+  'quote',
+  'quotes',
+  'exampleQuotes',
+  'body',
+  'reason',
+  'example',
+  'examples',
+  'matcherReason',
+  'detail',
+  'note',
+  'notes',
+])
+
 /** Every number a tool result can legitimately support, including the two
  *  renderings the model is most likely to reach for: a ratio expressed as a
- *  percentage, and the length of a returned list. */
-function collectNumbersFromValue(value: unknown, out: number[], depth = 0): void {
+ *  percentage, and the length of a returned list.
+ *
+ *  `inFreeText` is inherited down the walk so the elements of an
+ *  `exampleQuotes` array are treated the same as the array itself. */
+function collectNumbersFromValue(
+  value: unknown,
+  out: number[],
+  depth = 0,
+  inFreeText = false,
+): void {
   if (depth > 12) return
   if (typeof value === 'number' && Number.isFinite(value)) {
     out.push(value)
@@ -507,14 +727,18 @@ function collectNumbersFromValue(value: unknown, out: number[], depth = 0): void
     out.push(Math.round(value * 1000) / 10)
     return
   }
+  if (typeof value === 'string') {
+    if (!inFreeText) out.push(...numericLiterals(value))
+    return
+  }
   if (Array.isArray(value)) {
     out.push(value.length)
-    for (const item of value) collectNumbersFromValue(item, out, depth + 1)
+    for (const item of value) collectNumbersFromValue(item, out, depth + 1, inFreeText)
     return
   }
   if (value && typeof value === 'object') {
-    for (const v of Object.values(value as Record<string, unknown>)) {
-      collectNumbersFromValue(v, out, depth + 1)
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      collectNumbersFromValue(v, out, depth + 1, inFreeText || FREE_TEXT_KEYS.has(k))
     }
   }
 }
@@ -531,6 +755,44 @@ function numericLiterals(text: string): number[] {
   return out
 }
 
+/**
+ * Every string a tool result can legitimately supply a NAME from: the same
+ * walk as the numbers, minus the free-text fields. The name gate had the
+ * identical hole — `call.result.includes(word)` matched a first name that
+ * appeared inside a review quote, so an invented tour attendee called
+ * Sarah was grounded by any review written by a Sarah.
+ */
+function collectGroundableStrings(value: unknown, out: string[], depth = 0): void {
+  if (depth > 12) return
+  if (typeof value === 'string') {
+    out.push(value)
+    return
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectGroundableStrings(item, out, depth + 1)
+    return
+  }
+  if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (FREE_TEXT_KEYS.has(k)) continue
+      collectGroundableStrings(v, out, depth + 1)
+    }
+  }
+}
+
+/** The text a name in the answer may be grounded against. A tool result
+ *  that is not JSON contributes whole, since there is no structure to
+ *  reason about. */
+function groundableTextFor(call: ToolCallRecord): string {
+  try {
+    const out: string[] = []
+    collectGroundableStrings(JSON.parse(call.result), out)
+    return out.join('\n')
+  } catch {
+    return call.result
+  }
+}
+
 /** The set of figures the answer is allowed to state: everything the tools
  *  returned, plus anything the operator put in the question themselves. */
 export function collectGroundedNumbers(
@@ -539,11 +801,12 @@ export function collectGroundedNumbers(
 ): number[] {
   const out: number[] = []
   for (const call of calls) {
-    out.push(...numericLiterals(call.result))
     try {
       collectNumbersFromValue(JSON.parse(call.result), out)
     } catch {
-      // A non-JSON tool result still contributes its literals above.
+      // A non-JSON tool result has no structure to respect, so its raw
+      // literals are the best available and are taken whole.
+      out.push(...numericLiterals(call.result))
     }
   }
   out.push(...numericLiterals(question))
@@ -663,11 +926,15 @@ export function findUngroundedClaims(
   // came back with nobody in it.
   if (toursBucketWasEmpty(calls)) {
     const questionWords = new Set(question.toLowerCase().match(/[a-z']+/g) ?? [])
+    // Free-text fields excluded — see collectGroundableStrings. A name that
+    // only ever appeared inside a review quote is not evidence that the
+    // name belongs in an answer about who toured.
+    const groundableText = calls.map(groundableTextFor)
     for (const m of answer.matchAll(/(?:^|[^.!?\n]\s+)([A-Z][a-zA-Z'’-]{2,})/g)) {
       const word = m[1]
       const key = word.toLowerCase()
       if (NAME_ALLOWLIST.has(key) || questionWords.has(key)) continue
-      if (calls.some((c) => c.result.includes(word))) continue
+      if (groundableText.some((t) => t.includes(word))) continue
       if (seen.has(`x${key}`)) continue
       seen.add(`x${key}`)
       found.push({

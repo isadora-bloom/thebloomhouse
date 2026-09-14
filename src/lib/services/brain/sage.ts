@@ -105,6 +105,81 @@ export function buildChatSignoff(opts: {
   return `\n\n—\nI'm ${opts.aiName}, ${opts.venueName}'s ${role}. Type "I'd like a human" any time and I'll have ${stepIn}.`
 }
 
+/** The phrase that marks a reply as already signed off. Kept next to the
+ *  builder so the two can never drift; both the generator and the route
+ *  boundary test against it. */
+const CHAT_SIGNOFF_MARKER = 'Type "I\'d like a human"'
+
+/** True when a reply already carries the chat sign-off. */
+export function hasChatSignoff(text: string): boolean {
+  return text.includes(CHAT_SIGNOFF_MARKER)
+}
+
+/** Attach a prepared sign-off to a reply. Idempotent, and the one place
+ *  the concatenation happens, so every surface trims and joins the same
+ *  way. Use this when you already hold the sign-off (the public preview
+ *  builds its own, having no personality row to load); use
+ *  appendChatSignoff when you only have a venue id. */
+export function withChatSignoff(text: string, signoff: string): string {
+  if (hasChatSignoff(text)) return text
+  return `${text.trimEnd()}${signoff}`
+}
+
+/**
+ * Append the chat sign-off to a reply, loading the venue's configured
+ * name, role and coordinator. Idempotent.
+ *
+ * THE chokepoint for couple-portal chat. 2026-09-14 security review, item
+ * 4: the sign-off used to be appended inside generateSageResponse, which
+ * covered exactly one of the five ways a reply leaves the route. The
+ * low-confidence branch REPLACED the signed text with an unsigned warm
+ * non-answer, the medium-confidence branch appended a caveat AFTER the
+ * sign-off, and the human-requested, forbidden-topic and provider-outage
+ * branches never went through the generator at all. Four of five replies
+ * therefore reached couples with no AI disclosure and no escalation
+ * affordance — the same failure the email pipeline fixed by moving
+ * appendAIDisclosure to the send boundary rather than the draft.
+ *
+ * So this goes at the boundary too: the route calls it once per branch,
+ * immediately before the reply is stored and returned. A new branch that
+ * forgets is caught by scripts/check-sage-disclosure-enforced.mjs.
+ *
+ * Never throws. A venue with no ai_name configured is a real state for a
+ * half-onboarded venue, and a missing sign-off is better than a 500 in
+ * front of a couple — but it is logged, because it means a reply went out
+ * undisclosed.
+ */
+export async function appendChatSignoff(
+  text: string,
+  venueId: string,
+): Promise<string> {
+  if (hasChatSignoff(text)) return text
+  try {
+    const personalityData = await loadPersonalityData(venueId)
+    const config = personalityData.config as { ai_name?: string | null; ai_role?: string | null }
+    const aiName = config.ai_name?.trim()
+    if (!aiName) {
+      console.warn('[sage-brain] chat sign-off skipped: venue has no ai_name', { venueId })
+      return text
+    }
+    const venueName =
+      (personalityData.venue as { name?: string | null }).name?.trim() || 'the venue'
+    const coordinatorName =
+      (personalityData.venue_config as { coordinator_name?: string | null })
+        .coordinator_name ?? null
+    const signoff = buildChatSignoff({
+      aiName,
+      venueName,
+      aiRole: config.ai_role ?? null,
+      coordinatorName,
+    })
+    return withChatSignoff(text, signoff)
+  } catch (err) {
+    console.warn('[sage-brain] chat sign-off lookup failed:', err)
+    return text
+  }
+}
+
 /** Route a chat human-request to the coordinator. Mirrors the email
  *  pipeline's humanRequested fast-path: writes an engagement_events row
  *  + an admin_notifications row, both best-effort. The sage-conversation
@@ -722,10 +797,24 @@ export async function generateSageResponse(
     console.warn('[sage] reviews context lookup failed:', err)
   }
 
-  // Build file context block (for uploaded files or contract text)
+  // Build file context block (for uploaded files or contract text).
+  //
+  // The route derives this text server-side from a contract row the couple
+  // owns or from the file they just uploaded; it is no longer accepted off
+  // the request body. It is still the couple's own document, so it goes in
+  // wrapped, with the same untrusted-data boundary a chat message gets.
+  // 2026-09-14 review, item 1.
+  const { wrapUntrustedContent: wrapFileContext } = await import(
+    '@/lib/security/prompt-sanitize'
+  )
   let fileContextBlock = ''
   if (fileContext) {
-    fileContextBlock = `\n--- ATTACHED FILE CONTEXT ---\nThe user has attached a file or is asking about a specific contract. Here is the content:\n\n${fileContext}\n\nAnswer questions about this file in the context of their wedding planning. Be specific about dates, amounts, and terms you find in the document.\n--- END FILE CONTEXT ---\n`
+    fileContextBlock =
+      `\n--- ATTACHED FILE CONTEXT ---\n` +
+      `The user has attached a file or is asking about a specific contract. Here is the content:\n\n` +
+      `${wrapFileContext(fileContext, 'attached_document').wrapped}\n\n` +
+      `Answer questions about this file in the context of their wedding planning. Be specific about dates, amounts, and terms you find in the document.\n` +
+      `--- END FILE CONTEXT ---\n`
   }
 
   // Portal sections directory — gives Sage omniscient knowledge of every
@@ -862,29 +951,19 @@ export async function generateSageResponse(
 
   const confidence = assessConfidence(result.text, kbMatch)
 
-  // Stream EEEE: chat-surface parity with the email footer. Every
-  // response Sage gives in the couple portal ends with the same
-  // sign-off + escalation reminder as the email disclosure. Idempotent
-  // — if the model accidentally added the marker phrase already
-  // (extremely rare but cheap to guard), don't double-append.
-  const cfg = personalityData.config as {
-    ai_role?: string | null
-  }
-  const venueName = (personalityData.venue as { name?: string | null }).name?.trim() || 'the venue'
-  const coordinatorName =
-    (personalityData.venue_config as { coordinator_name?: string | null }).coordinator_name ?? null
-  const signoff = buildChatSignoff({
-    aiName: aiNameForTask,
-    venueName,
-    aiRole: cfg.ai_role ?? null,
-    coordinatorName,
-  })
-  const responseWithSignoff = result.text.includes('Type "I\'d like a human"')
-    ? result.text
-    : `${result.text.trimEnd()}${signoff}`
-
+  // Stream EEEE: chat-surface parity with the email footer. The sign-off
+  // itself is NOT appended here any more.
+  //
+  // 2026-09-14 review, item 4: appending inside the generator signed one
+  // branch out of five. The route then replaced this text wholesale on low
+  // confidence, appended a caveat after the sign-off on medium confidence,
+  // and never called the generator at all for the human-requested,
+  // forbidden-topic and provider-outage replies. The sign-off now goes on
+  // at the route boundary via appendChatSignoff, once per branch, the same
+  // way appendAIDisclosure sits at the email send boundary rather than in
+  // the draft.
   return {
-    response: responseWithSignoff,
+    response: result.text,
     confidence,
     tokensUsed: result.inputTokens + result.outputTokens,
     cost: result.cost,

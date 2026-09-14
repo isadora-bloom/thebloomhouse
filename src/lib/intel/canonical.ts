@@ -1493,7 +1493,42 @@ export async function askIntel(
 
   // A/B escape hatch. Legacy brain, unchanged behaviour, so the battery can
   // score both paths against the same ground truth.
+  //
+  // 2026-09-14 security review, item 7e. This is an env var that turns off
+  // the grounding check, the tool manifest and the venue binding that comes
+  // with it, and routes the question back to the prompt-dump brain that
+  // reported a channel converting at 86% when the reader said 40%. It is a
+  // development tool. In production it is a switch that makes the product
+  // lie, one misconfigured environment variable away, and nothing said so.
+  //
+  // Now: refused outright in production, and loud everywhere else. The
+  // battery runs with NODE_ENV unset or 'test', so the A/B it exists for is
+  // untouched.
   if (process.env.NLQ_LEGACY === '1') {
+    if (process.env.NODE_ENV === 'production') {
+      console.error(
+        JSON.stringify({
+          event: 'nlq_legacy_refused_in_production',
+          msg: 'NLQ_LEGACY=1 is set in production. The legacy brain has no grounding check; refusing rather than answering through it.',
+        }),
+      )
+      return {
+        answer:
+          'I am configured to answer through a path that cannot check its own figures, so I am not going ' +
+          'to answer at all. Tell whoever runs this install that NLQ_LEGACY is set in production.',
+        evidence: [],
+        confidence: 'refused',
+        generatedAt: new Date().toISOString(),
+        path: 'tools',
+      }
+    }
+    console.warn(
+      JSON.stringify({
+        event: 'nlq_legacy_enabled',
+        msg: 'NLQ_LEGACY=1 — answering through the legacy prompt-dump brain. No grounding check runs on this answer.',
+        nodeEnv: process.env.NODE_ENV ?? null,
+      }),
+    )
     const { answerNaturalLanguageQuery } = await import('@/lib/services/brain/intel-brain')
     const nlq = await answerNaturalLanguageQuery(venueId, userId, trimmed)
     return {

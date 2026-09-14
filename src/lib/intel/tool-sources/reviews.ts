@@ -206,5 +206,8 @@ export const reviewsToolSource: IntelToolSource = {
   },
   subjects: ['reviews', 'review ratings', 'review themes', 'reputation trend', 'what couples say about us'],
   batteryQuestions: ['41'],
+  // Review bodies, written by strangers on a public listing platform and
+  // ingested verbatim. See IntelToolSource.freeTextFields.
+  freeTextFields: ['exampleQuotes'],
   run,
 }

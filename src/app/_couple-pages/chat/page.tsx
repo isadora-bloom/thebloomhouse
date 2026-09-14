@@ -515,11 +515,12 @@ export default function SageChatPage() {
           }
         }
 
-        // Build file context from contract context (if active and not dismissed)
-        let fileContext: string | undefined
-        if (contractContext && !contractBannerDismissed) {
-          fileContext = `Contract: "${contractContext.filename}"\n\n${contractContext.extractedText.slice(0, 6000)}`
-        }
+        // Point the server at the contract; do not send its text. The route
+        // reads the row itself, scoped to this venue and this wedding.
+        // Posting the extracted text let the client write straight into
+        // Sage's system prompt (2026-09-14 review, item 1).
+        const contractId =
+          contractContext && !contractBannerDismissed ? contractContext.id : undefined
 
         const res = await fetch('/api/portal/sage', {
           method: 'POST',
@@ -529,7 +530,7 @@ export default function SageChatPage() {
             weddingId: weddingId,
             message: text.trim(),
             fileUrl,
-            fileContext,
+            contractId,
             // R1#1: tells Sage which portal section the couple was on
             // when they opened chat, so she can anticipate intent.
             currentSection: currentSection || undefined,

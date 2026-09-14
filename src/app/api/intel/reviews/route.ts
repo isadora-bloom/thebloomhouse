@@ -135,10 +135,12 @@ export async function PATCH(request: NextRequest) {
       )
     }
 
+    // The venue comes from the session, never the body. 2026-09-14 review,
+    // item 8: pre-fix the phrase id was the only thing scoping the write.
     if (context === 'sage') {
-      await approvePhraseForSage(phraseId)
+      await approvePhraseForSage(auth.venueId, phraseId)
     } else {
-      await approvePhraseForMarketing(phraseId)
+      await approvePhraseForMarketing(auth.venueId, phraseId)
     }
 
     return NextResponse.json({ success: true })

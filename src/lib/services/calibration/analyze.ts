@@ -275,6 +275,7 @@ async function loadJoinedRows(
       'id, wedding_id, venue_id, prediction_kind, predicted_value, snapshotted_at',
     )
     .in('id', snapIds)
+    .eq('venue_id', venueId)
     .eq('prediction_kind', kind)
   if (sErr) throw new Error(`snapshots fetch failed: ${sErr.message}`)
   if (!snapshots) return []
@@ -308,12 +309,19 @@ async function loadJoinedRows(
 
 async function loadPersonaMap(
   supabase: SupabaseClient,
+  venueId: string,
   weddingIds: string[],
 ): Promise<Map<string, string>> {
   if (weddingIds.length === 0) return new Map()
+  // The wedding ids arrive already venue-scoped, but the predicate is not
+  // there for them: it is there so this query cannot become a cross-venue
+  // read the day somebody hands it a list from somewhere else. Tenancy
+  // belongs on the query, not in the argument's history. 2026-09-14
+  // review, item 8.
   const { data, error } = await supabase
     .from('couple_intel')
     .select('wedding_id, persona_label')
+    .eq('venue_id', venueId)
     .in('wedding_id', weddingIds)
   if (error || !data) return new Map()
   const m = new Map<string, string>()
@@ -377,7 +385,7 @@ export async function analyzeCalibration(
 
   // Per-persona breakdown.
   const weddingIds = Array.from(new Set(rows.map((r) => r.wedding_id)))
-  const personaMap = await loadPersonaMap(supabase, weddingIds)
+  const personaMap = await loadPersonaMap(supabase, args.venueId, weddingIds)
   const byPersona = new Map<string, JoinedRow[]>()
   for (const r of rows) {
     const p = personaMap.get(r.wedding_id) ?? '__untagged__'

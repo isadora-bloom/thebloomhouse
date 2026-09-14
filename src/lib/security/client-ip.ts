@@ -9,12 +9,28 @@ import { randomUUID } from 'node:crypto'
  * caller then bucketed into a single shared rate-limit key, so anyone
  * could DOS legitimate anon traffic by hitting the limit themselves.
  *
- * On Vercel x-forwarded-for is reliable, but defense-in-depth is
- * cheap: try multiple headers, fall back to the request's remote
- * address if exposed, and finally to a per-request UUID (each
- * unidentified call gets its own bucket — fail open on rate-limit
- * but never collapse).
+ * 2026-09-14 security review, item 6. The round-2 fix cured the
+ * bucket-collapse but kept reading the LEFTMOST entry of
+ * `x-forwarded-for`, and that value is written by the caller. A script
+ * sending `X-Forwarded-For: <random>` on every request gets a fresh
+ * rate-limit bucket every time, which is not a partial bypass of the
+ * public sage-preview limit — it is a complete one, because the limit is
+ * keyed on nothing else.
+ *
+ * The rule an X-Forwarded-For chain actually supports is that only the
+ * hops your own infrastructure appended can be trusted, and those are at
+ * the RIGHT-hand end. Vercel additionally publishes the client address in
+ * `x-vercel-forwarded-for`, which it sets itself and which a caller
+ * cannot forge, so that is checked first. The ordering below is therefore:
+ * platform-set single-value headers, then the rightmost hop of the chain,
+ * then the runtime's own view of the socket, then a per-request UUID.
+ *
+ * The UUID fallback is deliberate and unchanged: an unattributable caller
+ * gets its own bucket rather than sharing one with everybody else. It
+ * fails open on rate-limiting, but it cannot be used to lock other people
+ * out, and on Vercel it is unreachable in practice.
  */
+
 /**
  * Normalize a header-derived IP value so two proxy chains that
  * preserve vs strip port end up in the same rate-limit bucket. Per
@@ -38,16 +54,49 @@ function normalizeIp(raw: string): string {
   return trimmed
 }
 
+/**
+ * Headers the platform sets itself and a caller cannot influence. A
+ * client-sent copy of any of these is overwritten at the edge before the
+ * function sees it, which is the whole reason to prefer them over the
+ * forwarded-for chain.
+ */
+const PLATFORM_CLIENT_IP_HEADERS = [
+  'x-vercel-forwarded-for',
+  'cf-connecting-ip',
+  'x-real-ip',
+] as const
+
+/**
+ * The rightmost entry of an X-Forwarded-For chain: the hop appended by
+ * the proxy closest to us, and the only entry in the list that our own
+ * infrastructure wrote. Everything to its left was supplied by whoever
+ * was talking to that proxy and is not evidence of anything.
+ */
+function rightmostForwardedHop(chain: string): string {
+  const parts = chain.split(',')
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const candidate = normalizeIp(parts[i] ?? '')
+    if (candidate) return candidate
+  }
+  return ''
+}
+
 export function clientIpForRateLimit(request: NextRequest): string {
+  for (const header of PLATFORM_CLIENT_IP_HEADERS) {
+    // x-vercel-forwarded-for is normally a single address, but treat it
+    // as a chain anyway: if a future edge config makes it one, the
+    // rightmost hop is still the trusted end.
+    const value = request.headers.get(header)
+    if (value) {
+      const ip = rightmostForwardedHop(value)
+      if (ip) return ip
+    }
+  }
   const xff = request.headers.get('x-forwarded-for')
   if (xff) {
-    const first = normalizeIp(xff.split(',')[0] ?? '')
-    if (first) return first
+    const trusted = rightmostForwardedHop(xff)
+    if (trusted) return trusted
   }
-  const real = normalizeIp(request.headers.get('x-real-ip') ?? '')
-  if (real) return real
-  const cf = normalizeIp(request.headers.get('cf-connecting-ip') ?? '')
-  if (cf) return cf
   // NextRequest.ip is deprecated in Next 16 but may still be present
   // depending on runtime. Try it via duck-typing without TS complaint.
   const maybeIp = (request as unknown as { ip?: string }).ip

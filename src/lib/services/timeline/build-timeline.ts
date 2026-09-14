@@ -59,6 +59,10 @@ import {
   isEvidenceDismissed,
   type EvidenceOverridesIndex,
 } from '../identity/evidence-overrides'
+// Was a private helper in this file until the 2026-09-14 review found
+// searchKnowledgeBase building the same kind of .or() string from a
+// couple's raw chat message with no escaping at all. One copy now.
+import { escapeIlike } from '@/lib/db/escape-ilike'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -1190,12 +1194,6 @@ function attachLifecycleStageAtTime(
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s
   return s.slice(0, n - 3) + '...'
-}
-
-function escapeIlike(s: string): string {
-  // Escape % and _ which are wildcards in PG ilike. Also escape commas
-  // because the .or() postgrest dialect uses comma as the separator.
-  return s.replace(/[%_]/g, '\\$&').replace(/,/g, ' ')
 }
 
 function summarizeIntelMatchPayload(

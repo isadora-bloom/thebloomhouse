@@ -9,6 +9,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { escapeIlike, stripFilterGrammar } from '@/lib/db/escape-ilike'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +50,26 @@ export type UpdateKBEntryInput = Partial<{
 // ---------------------------------------------------------------------------
 
 /**
+ * The value half of a `keywords.cs.{...}` clause. Same grammar strip as the
+ * ilike clauses, but WITHOUT the wildcard escapes: `%` is an ordinary
+ * character inside an array literal, and a backslash in front of it would
+ * be searched for literally. Returns null when nothing usable survives, in
+ * which case the caller drops the array clause and keeps the two ilike
+ * clauses for that word.
+ */
+function arrayLiteralToken(word: string): string | null {
+  const cleaned = stripFilterGrammar(word).trim()
+  return cleaned.length > 1 ? cleaned : null
+}
+
+/** Cap on how many words from one message become filter clauses. Each
+ *  word contributes up to three, so an essay-length message would
+ *  otherwise build a filter string long enough to be refused by the
+ *  server rather than answered. The first twenty are plenty for a
+ *  keyword search and the scorer below ranks on the same set. */
+const MAX_SEARCH_WORDS = 20
+
+/**
  * Keyword-based search across the knowledge base.
  *
  * Splits the query into individual words and searches against:
@@ -58,6 +79,15 @@ export type UpdateKBEntryInput = Partial<{
  *
  * Returns active entries ordered by priority desc, with best keyword
  * matches first.
+ *
+ * The query here is the couple's raw chat message, straight off the
+ * request body (sage-brain calls this before anything else touches the
+ * text). Every word therefore goes through `escapeIlike` before it is
+ * interpolated: pre-fix a message containing `%` widened
+ * `question.ilike.%word%` to match every row in the table, and one
+ * containing a comma or a bracket ended the clause early and came back
+ * as a PostgREST 400 that surfaced to the couple as a failed chat.
+ * 2026-09-14 review, item 5.
  */
 export async function searchKnowledgeBase(
   venueId: string,
@@ -69,6 +99,7 @@ export async function searchKnowledgeBase(
     .toLowerCase()
     .split(/\s+/)
     .filter((w) => w.length > 1)
+    .slice(0, MAX_SEARCH_WORDS)
 
   if (words.length === 0) {
     return getKnowledgeBase(venueId)
@@ -76,11 +107,16 @@ export async function searchKnowledgeBase(
 
   // Build OR conditions for each word against keywords, question, and answer
   const orConditions = words
-    .flatMap((word) => [
-      `keywords.cs.{${word}}`,
-      `question.ilike.%${word}%`,
-      `answer.ilike.%${word}%`,
-    ])
+    .flatMap((word) => {
+      const like = escapeIlike(word)
+      const arrayToken = arrayLiteralToken(word)
+      const clauses = [
+        `question.ilike.%${like}%`,
+        `answer.ilike.%${like}%`,
+      ]
+      if (arrayToken) clauses.unshift(`keywords.cs.{${arrayToken}}`)
+      return clauses
+    })
     .join(',')
 
   const { data, error } = await supabase

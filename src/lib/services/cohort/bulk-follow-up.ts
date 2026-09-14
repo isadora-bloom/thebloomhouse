@@ -190,6 +190,7 @@ export async function loadFollowUpState(
   const { data: sequences } = await supabase
     .from('post_tour_sequence')
     .select('wedding_id, paused_at, sequence_completed_at, email_1_sent_at, email_2_sent_at, email_3_sent_at')
+    .eq('venue_id', venueId)
     .in('wedding_id', ids)
   const inFlightSeqByWedding = new Map<string, { nextStep: string }>()
   for (const row of sequences ?? []) {
@@ -246,6 +247,7 @@ export async function loadFollowUpState(
   const { data: peopleRows } = await supabase
     .from('people')
     .select('wedding_id, email, first_name, last_name')
+    .eq('venue_id', venueId)
     .in('wedding_id', ids)
   const personByWedding = new Map<string, PersonContact>()
   for (const p of (peopleRows ?? []) as PersonContact[]) {

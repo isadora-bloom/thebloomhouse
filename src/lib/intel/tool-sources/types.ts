@@ -44,6 +44,26 @@ export interface IntelToolSource {
   /** Battery question ids this source is meant to make answerable (for the
    *  integrator to wire ground-truth probes). */
   batteryQuestions: readonly string[]
+  /**
+   * Result field names whose value is prose this product INGESTED rather
+   * than computed: a review body, the quote around a keyword match in an
+   * inbound email, a loss reason an operator typed, a blocking detail on a
+   * follow-up.
+   *
+   * 2026-09-14 security review, item 7b. Those fields used to go back to
+   * the model as plain JSON, in the same channel as the tool contract
+   * itself, with nothing marking where the venue's data stopped and a
+   * stranger's writing began. The dispatcher now wraps every field named
+   * here in the untrusted-data envelope from lib/security/prompt-sanitize
+   * before the result reaches the model, and the grounding check refuses
+   * to take a figure or a name from one.
+   *
+   * Declare a field here whenever the value can contain text somebody
+   * outside this venue wrote. A source that computes every field it
+   * returns leaves this empty. The names are matched at any depth, so a
+   * field nested inside a row of results is covered by naming it once.
+   */
+  freeTextFields?: readonly string[]
   run(venueId: string, args: Record<string, unknown>, deps: ToolSourceDeps): Promise<unknown>
 }
 

@@ -541,6 +541,8 @@ export const followUpStateSource: IntelToolSource = {
     'what blocks a fresh follow-up (AI opt-out, written-off lead, no contact address)',
   ],
   batteryQuestions: ['Q34', 'Q37'],
+  // `detail` is a sentence built round the couple's own name.
+  freeTextFields: ['detail'],
   run: runState,
 }
 
@@ -551,6 +553,9 @@ export const proposeFollowUpsSource: IntelToolSource = {
     'bulk follow-up drafting after the operator confirms a list',
   ],
   batteryQuestions: ['Q34', 'Q37'],
+  // The proposed draft is composed by the follow-up brain from the
+  // couple's own inbound text, so it carries whatever they wrote.
+  freeTextFields: ['subject', 'body', 'detail'],
   run: runPropose,
 }
 

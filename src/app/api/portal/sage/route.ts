@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { cookies } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateSageResponse, detectChatHumanRequest, routeChatToHuman } from '@/lib/services/brain/sage'
+import {
+  generateSageResponse,
+  detectChatHumanRequest,
+  routeChatToHuman,
+  appendChatSignoff,
+} from '@/lib/services/brain/sage'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/intel/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/email/escalation-detector'
@@ -28,9 +33,39 @@ const SAGE_RATE_LIMIT = 20 // max requests per window
 const SAGE_RATE_WINDOW_SEC = 15 * 60 // 15 minutes
 
 // ---------------------------------------------------------------------------
+// Input caps (2026-09-14 security review, item 1)
+// ---------------------------------------------------------------------------
+//
+// MAX_MESSAGE_CHARS — the couple's message went into the prompt uncapped.
+// A single request could therefore carry a book, which is a token-cost
+// incident and also the cheapest way to push the venue's own rules out of
+// the model's attention. The public preview caps at 500 because it is
+// unauthenticated and answers in two sentences; the portal chat is
+// authenticated, rate-limited to 20 messages per 15 minutes, and couples
+// legitimately paste a paragraph of a policy they are asking about. 4,000
+// characters is roughly a page of prose, about 1k tokens, and leaves the
+// prompt floor in comfortable proportion. Over the cap is a 400 that says
+// the number, not a silent truncation: a couple whose question was cut in
+// half would get an answer to a question they did not ask.
+const MAX_MESSAGE_CHARS = 4000
+
+// MAX_FILE_CONTEXT_CHARS — cap on the SERVER-DERIVED document text before
+// it reaches the prompt. Matches the cap buildFileContextBlock already
+// applies in couple-prompt.ts, so both couple-facing file surfaces stop at
+// the same place.
+const MAX_FILE_CONTEXT_CHARS = 12000
+
+// ---------------------------------------------------------------------------
 // POST — Sage portal chat
-// Body: { venueId, weddingId, message, fileUrl?, fileContext? }
+// Body: { venueId, weddingId, message, fileUrl?, contractId?, currentSection? }
 // Returns: { response, confidence, conversationId }
+//
+// `fileContext` is NOT accepted. It used to be: the client posted document
+// text and the route interpolated it into the system prompt raw and
+// uncapped, which meant anyone who could reach this endpoint could write
+// directly into Sage's instructions for their own wedding. Document text
+// is now derived server-side, either from a contract row the couple owns
+// (contractId) or by extracting the file they just uploaded (fileUrl).
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
@@ -48,12 +83,30 @@ export async function POST(request: NextRequest) {
     // venueId is resolved below — body value is only trusted for authenticated
     // (non-demo) callers. Demo callers have their venueId bound to the signed
     // token payload so a starter-tier coordinator cannot pass their real venue.
-    const { weddingId, message, fileUrl, fileContext, currentSection } = body
+    const { weddingId, message, fileUrl, contractId, currentSection } = body
 
-    if (!message) {
+    if (!message || typeof message !== 'string') {
       return NextResponse.json(
         { error: 'venueId and message are required' },
         { status: 400 }
+      )
+    }
+
+    if (message.length > MAX_MESSAGE_CHARS) {
+      return NextResponse.json(
+        {
+          error: `Message too long (max ${MAX_MESSAGE_CHARS} characters). Send the part you want help with, or upload the document instead.`,
+        },
+        { status: 400 }
+      )
+    }
+
+    // Loud about the removal rather than quietly ignoring it: an old
+    // client still posting fileContext would otherwise look like it was
+    // working while Sage saw nothing of the document.
+    if (body.fileContext !== undefined) {
+      console.warn(
+        '[api/portal/sage] ignoring client-supplied fileContext — document text is derived server-side from contractId or fileUrl',
       )
     }
 
@@ -197,7 +250,34 @@ export async function POST(request: NextRequest) {
     // 3. Build file context if a file URL or pre-extracted text was provided
     // -----------------------------------------------------------------------
 
-    let resolvedFileContext = fileContext || ''
+    // Everything in this variable is read out of the database or extracted
+    // from a file by this server. Nothing the caller wrote reaches it.
+    let resolvedFileContext = ''
+
+    // -----------------------------------------------------------------------
+    // 3a. contractId — the couple is asking about a contract already stored
+    // against their wedding. Pre-fix the client posted the extracted text
+    // itself and the route trusted it. Now the client sends only the id and
+    // the text comes from the row, scoped by BOTH venue and wedding, so a
+    // couple cannot name another couple's contract and cannot name one at
+    // another venue even if they somehow learned its id.
+    // -----------------------------------------------------------------------
+    if (typeof contractId === 'string' && contractId.trim() && weddingId) {
+      const { data: contractRow } = await supabase
+        .from('contracts')
+        .select('filename, extracted_text')
+        .eq('id', contractId.trim())
+        .eq('venue_id', venueId)
+        .eq('wedding_id', weddingId)
+        .maybeSingle()
+
+      const extracted = (contractRow?.extracted_text as string | null) ?? ''
+      if (extracted.trim()) {
+        resolvedFileContext =
+          `CONTRACT: "${contractRow?.filename ?? 'uploaded document'}"\n\n` +
+          `EXTRACTED TEXT:\n${extracted}`
+      }
+    }
 
     // SSRF defense for couple-supplied fileUrl. Scope the allowlist to
     // the Supabase Storage CDN of this project (derived from the env
@@ -211,10 +291,33 @@ export async function POST(request: NextRequest) {
     // would still be fetched. Fixed by routing through safeFetch (which
     // validates EVERY hop). The Storage allowlist is preserved across
     // hops, so any 3xx leaving the allowlisted host is rejected.
-    if (fileUrl && !resolvedFileContext) {
+    //
+    // 2026-09-14 review, item 1: the host allowlist proved the URL pointed
+    // at our own Storage, but not at a file belonging to THIS couple. The
+    // couple chat uploader writes to `contracts/<weddingId>/chat/...`, so
+    // requiring that prefix in the path is a straight ownership check, and
+    // it costs one string comparison. Without a weddingId there is no
+    // prefix to check against and no file to be owned, so the extraction
+    // is skipped entirely.
+    const fileUrlOwnedByCouple = (() => {
+      if (typeof fileUrl !== 'string' || !fileUrl) return false
+      if (!weddingId) return false
+      try {
+        return new URL(fileUrl).pathname.includes(`/contracts/${weddingId}/`)
+      } catch {
+        return false
+      }
+    })()
+
+    if (fileUrl && !fileUrlOwnedByCouple) {
+      console.warn(
+        '[api/portal/sage] rejected fileUrl that does not sit under this wedding’s storage prefix',
+      )
+    }
+
+    if (fileUrlOwnedByCouple && !resolvedFileContext) {
       // Attempt to extract text from the uploaded file
       try {
-        const supabase = createServiceClient()
         const { safeFetch, UnsafeUrlError } = await import('@/lib/security/safe-fetch')
         const supabaseHost = (() => {
           try {
@@ -292,6 +395,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // A scanned contract can run to tens of thousands of characters. Cap
+    // here rather than downstream so the size of what reaches the prompt is
+    // decided at the trust boundary, where the text stops being a file and
+    // starts being context.
+    if (resolvedFileContext.length > MAX_FILE_CONTEXT_CHARS) {
+      resolvedFileContext =
+        `${resolvedFileContext.slice(0, MAX_FILE_CONTEXT_CHARS)}\n\n` +
+        '[Truncated for length. The full document is still stored.]'
+    }
+
     // -----------------------------------------------------------------------
     // 3-pre. Stream EEEE: human-escalation request. Mirrors the email
     // pipeline's "HUMAN REQUESTED in subject" fast-path. If the couple
@@ -312,11 +425,17 @@ export async function POST(request: NextRequest) {
         flagged_uncertain: true,
       }), { op: 'sage_conversations.insert', venueId })
 
-      const cannedResponse = await routeChatToHuman({
+      // Sign-off chokepoint (item 4). Every branch that returns a reply
+      // signs it here, before the row is written, so what is stored is
+      // what the couple saw.
+      const cannedResponse = await appendChatSignoff(
+        await routeChatToHuman({
+          venueId,
+          weddingId: weddingId || null,
+          message,
+        }),
         venueId,
-        weddingId: weddingId || null,
-        message,
-      })
+      )
 
       const { data: cannedSageMsg } = await supabase
         .from('sage_conversations')
@@ -370,9 +489,12 @@ export async function POST(request: NextRequest) {
         flagged_uncertain: true,
       }), { op: 'sage_conversations.insert', venueId })
 
-      const cannedResponse =
+      // Sign-off chokepoint (item 4).
+      const cannedResponse = await appendChatSignoff(
         `That's an important question, and I want to make sure you get the right answer. ` +
-        `I've flagged this for your coordinator to handle directly — they'll be in touch shortly.`
+          `I've flagged this for your coordinator to handle directly — they'll be in touch shortly.`,
+        venueId,
+      )
 
       const { data: cannedSageMsg } = await supabase
         .from('sage_conversations')
@@ -490,6 +612,14 @@ export async function POST(request: NextRequest) {
       if (!(err instanceof AIUnavailableError)) throw err
       console.error('[api/portal/sage] AI unavailable:', err.stage, err.message)
 
+      // Sign-off chokepoint (item 4). The outage reply is the branch that
+      // most needs the escalation line: the couple is being told nothing
+      // useful and has to be told how to reach a person.
+      const outageResponse = await appendChatSignoff(
+        COUPLE_AI_UNAVAILABLE_MESSAGE,
+        venueId,
+      )
+
       await writeOrLog(supabase.from('sage_conversations').insert({
         venue_id: venueId,
         wedding_id: weddingId || null,
@@ -505,7 +635,7 @@ export async function POST(request: NextRequest) {
           venue_id: venueId,
           wedding_id: weddingId || null,
           role: 'assistant',
-          content: COUPLE_AI_UNAVAILABLE_MESSAGE,
+          content: outageResponse,
           model_used: null,
           tokens_used: 0,
           cost: 0,
@@ -520,7 +650,7 @@ export async function POST(request: NextRequest) {
         wedding_id: weddingId || null,
         conversation_id: downMsg?.id ?? null,
         question: message,
-        sage_answer: COUPLE_AI_UNAVAILABLE_MESSAGE,
+        sage_answer: outageResponse,
         confidence_score: 0,
         reason: 'ai_unavailable',
       }), { op: 'sage_uncertain_queue.insert', venueId })
@@ -543,7 +673,7 @@ export async function POST(request: NextRequest) {
       }
 
       return NextResponse.json({
-        response: COUPLE_AI_UNAVAILABLE_MESSAGE,
+        response: outageResponse,
         confidence: 0,
         conversationId: downMsg?.id || null,
         aiUnavailable: true,
@@ -572,6 +702,12 @@ export async function POST(request: NextRequest) {
         finalResponse += '\n\nI want to make sure this is exactly right, so I\'ve flagged this for your coordinator to confirm. They\'ll follow up if anything needs updating!'
       }
     }
+
+    // Sign-off chokepoint (item 4). AFTER the confidence rewrites, not
+    // before: the low-confidence branch above throws the generated text
+    // away entirely, and the medium-confidence branch appends to it. Both
+    // used to leave the sign-off either gone or stranded mid-message.
+    finalResponse = await appendChatSignoff(finalResponse, venueId)
 
     // -----------------------------------------------------------------------
     // 6. Save messages to database
