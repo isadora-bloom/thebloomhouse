@@ -9,7 +9,7 @@
  * Usage:
  *   npx tsx scripts/apply-pending-migrations.ts                    dry run
  *   npx tsx scripts/apply-pending-migrations.ts --apply --allow-prod
- *   npx tsx scripts/apply-pending-migrations.ts --env-file .env.test --apply   # golden-case branch
+ *   npx tsx scripts/apply-pending-migrations.ts --env .env.test --apply   # golden-case branch
  *   npx tsx scripts/apply-pending-migrations.ts --include-legacy ...  also the older six
  *   npx tsx scripts/apply-pending-migrations.ts --from 399 ...        resume after a failure
  *
@@ -168,10 +168,11 @@ async function main() {
   const fromIdx = argv.indexOf('--from')
   const from = fromIdx >= 0 ? argv[fromIdx + 1] ?? '' : ''
 
-  // --env-file <path> points both this runner and the spawned run-migration.ts
+  // --env <path> (not --env-file: Node owns that flag and would swallow a bad
+  // path before this script's guards ran) points both this runner and the spawned run-migration.ts
   // at another env file, e.g. .env.test for the golden-case branch. The
   // production guard below is by URL, so it still applies whichever file is used.
-  const envIdx = argv.indexOf('--env-file')
+  const envIdx = argv.indexOf('--env')
   if (envIdx >= 0 && argv[envIdx + 1]) process.env.MIGRATION_ENV_FILE = argv[envIdx + 1]
 
   const env = loadEnv()

@@ -10,9 +10,9 @@ export default [
   ...nextConfig,
   {
     rules: {
-      // 2026-09-09: Downgraded 4 instances to warn (unescaped quotes in JSX strings)
+      // 2026-09-09: downgraded to warn (unescaped quotes in JSX strings). 69 sites on 2026-09-14; still owed.
       'react/no-unescaped-entities': 'warn',
-      // 2026-09-09: Downgraded 1 instance to warn (setState in effect)
+      // 2026-09-09: downgraded to warn (setState in effect, a React Compiler rule). 58 sites on 2026-09-14; the one compiler rule not yet back at error.
       'react-hooks/set-state-in-effect': 'warn',
     },
   },

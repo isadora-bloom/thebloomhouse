@@ -96,7 +96,7 @@ Shared rules for every agent:
   SQL editor. Then `npx tsx scripts/gen-wedding-fk-tables.ts` (read-only, regenerates the cascade
   list so 406 stops being "pending") and the types regeneration `check-types-fresh` asks for.
 - [x] Test branch (`.env.test`) brought to 395-403 on 2026-09-14; golden 16/16 wet. Re-run
-  `apply-pending-migrations.ts --env-file .env.test --apply` after each wave adds migrations.
+  `apply-pending-migrations.ts --env .env.test --apply` after each wave adds migrations.
 - [ ] Decide Rixey's Google Trends metro: `venues.google_trends_metro` is `US-VA-584` (Richmond),
   copied onto three venues; Rixey's market is DC, `US-DC-511`. One UPDATE if you agree.
 - [ ] Apply `supabase/seed-marketing-spend-records.sql` to the demo project so Crestwood's ROI column
@@ -432,8 +432,8 @@ Two gate steps need Isadora because the auto-mode classifier refuses any Supabas
 this session, test branch included:
 - [ ] The golden-case branch (`.env.test`, project ciwqxwohczzthvzqqgjx) has none of migrations
   395-403, so the wet golden run fails on every case (linkSignal writes columns that are not
-  there). Run once: `npx tsx scripts/apply-pending-migrations.ts --env-file .env.test --apply`
-  (the runner gained `--env-file` today; production is refused by URL). Then `npm run test:golden`.
+  there). Run once: `npx tsx scripts/apply-pending-migrations.ts --env .env.test --apply`
+  (the runner gained `--env` today; production is refused by URL). Then `npm run test:golden`.
 - [ ] Main checkout `node_modules` lacks `jsdom` (declared in package.json), so two test files
   (`seating-board.test.ts`, `use-now.test.ts`) could not start here; both pass in the worktrees.
   `npm ci` in the main checkout fixes it, once no lint or test run is using node_modules.
@@ -482,7 +482,7 @@ then W60's follow-up. Gate on the integrated head: tsc 0, vitest 1843 across 112
 build` clean, governance green including the new `check:wedding-fk-fresh`, every CI guard green,
 `check:wedding-cascade` green against production (118 in the file, 117 live, the one difference
 named as pending 406), links OK (315 URLs), lint 0 errors, golden **16/16 wet** on the test branch
-(Isadora applied 395-403 there with `--env-file .env.test`).
+(Isadora applied 395-403 there with `--env .env.test`).
 
 Launch fault, recorded in memory `feedback-worktree-agent-base-branch`: five of the nine worktrees
 were created from `master`, not `consolidation`. Caught after W46 and W49 had finished on the stale
