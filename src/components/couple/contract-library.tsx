@@ -29,6 +29,7 @@ import {
   type ContractCapabilities,
   type CoupleSurfaceRole,
 } from './surface-role'
+import { asContractStatus, statusLabel } from '@/lib/services/contracts/status'
 import {
   FileText,
   Upload,
@@ -73,6 +74,14 @@ export interface Contract {
   status: string | null
   created_at: string
   updated_at: string | null
+  /** W57, migration 409. 'uploaded' for everything that came from a file
+   *  picker, 'generated' for a contract the venue built and sent. Optional
+   *  so a row selected before the column existed still types. */
+  kind?: string | null
+  sent_at?: string | null
+  viewed_at?: string | null
+  signed_at?: string | null
+  signed_name?: string | null
 }
 
 interface BookedVendor {
@@ -212,6 +221,10 @@ export function ContractCard({
   const config = fileTypeConfig(contract.file_type)
   const TypeIcon = config.icon
   const isAnalyzed = !!contract.analyzed_at
+  // W57. Additive: a row with no `kind` is an upload, which is every row
+  // that existed before migration 409.
+  const isGenerated = contract.kind === 'generated'
+  const generatedStatus = isGenerated ? asContractStatus(contract.status) : null
 
   async function handleAsk() {
     const trimmed = question.trim()
@@ -295,7 +308,31 @@ export function ContractCard({
                 </span>
               )}
               <span>{timeAgo(contract.created_at)}</span>
-              {isAnalyzed ? (
+              {/* W57. A contract the venue generated carries its own
+                  lifecycle in the same status column, so it gets the
+                  signing pill instead of the analysis pill. There is
+                  nothing to analyse in a document we wrote ourselves,
+                  and "Pending" against it read as a warning. Uploads are
+                  untouched. */}
+              {isGenerated ? (
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-0.5 font-medium',
+                    generatedStatus === 'signed'
+                      ? 'text-emerald-600'
+                      : generatedStatus === 'void'
+                        ? 'text-gray-400'
+                        : 'text-amber-600',
+                  )}
+                >
+                  {generatedStatus === 'signed' ? (
+                    <CheckCircle className="w-3 h-3" />
+                  ) : (
+                    <FileSignature className="w-3 h-3" />
+                  )}
+                  {statusLabel(generatedStatus)}
+                </span>
+              ) : isAnalyzed ? (
                 <span className="inline-flex items-center gap-0.5 text-emerald-600 font-medium">
                   <CheckCircle className="w-3 h-3" />
                   Analyzed
