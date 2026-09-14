@@ -41,7 +41,7 @@ import {
   insertCandidateMatch,
   insertFragment,
   insertTouchpoint,
-} from './tracer'
+} from './spine-writers'
 import { recordProgressionIfEligible } from './progression'
 import { maybeResurrectGhost } from './resurrection'
 import { hasSufficientIdentity, lockAndMintCouple } from './mint-couple'

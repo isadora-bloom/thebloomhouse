@@ -48,7 +48,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { readFileSync, existsSync } from 'node:fs'
-import type { CoupleForMatch } from '../src/lib/services/identity/tracer'
+import type { CoupleForMatch } from '../src/lib/services/identity/spine-writers'
 
 // --- env (mirror .env.local onto process.env; BRANCH_URL/KEY override) ------
 if (existsSync('.env.local')) {
@@ -133,7 +133,7 @@ async function main() {
   const { emailToNormalizedSignal } = await import('../src/lib/services/identity/email-to-signal')
   const { linkSignal } = await import('../src/lib/services/identity/forwards-linker')
   const { signalToMatchableRecord, coupleToMatchableRecord, loadRecentCouples } = await import(
-    '../src/lib/services/identity/tracer'
+    '../src/lib/services/identity/spine-writers'
   )
   const { scoreCandidate } = await import('../src/lib/services/identity/matcher')
   const { hardContradiction } = await import('../src/lib/services/identity/identity-cascade')

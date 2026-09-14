@@ -53,7 +53,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { lockAndMintCouple } from './mint-couple'
-import { findCoupleForLegacyWedding, insertFragment } from './tracer'
+import { findCoupleForLegacyWedding, insertFragment } from './spine-writers'
 import type { NormalizedSignal } from './sources/types'
 import type { LinkResult } from './forwards-linker'
 

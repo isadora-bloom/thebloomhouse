@@ -158,10 +158,10 @@ const CHOKEPOINT_FILES = new Set([
   // writers (couples / touchpoints / fragments / couple_merge_events
   // for the fragment_promoted audit) moved to fragment-sweep.ts
   // below. This file is now ONLY the shared matcher/insert
-  // primitives; kept at this filename so forwards-linker.ts,
-  // route-by-tier.ts, agent-link.ts and knot-visitor-match.ts didn't
-  // need an import-path change.
-  'src/lib/services/identity/tracer.ts',
+  // primitives. W68 (wave 9) renamed it from tracer.ts to
+  // spine-writers.ts and updated the six importers; same file, same
+  // writes, a name that matches what it does.
+  'src/lib/services/identity/spine-writers.ts',
 
   // Wave 3 W22 (2026-09): handle-based fragment promotion, split from
   // fragment-sweep.ts at integration. Same audit-row write. W26's nightly sweep
@@ -400,7 +400,7 @@ const GRANDFATHERED = new Map([
   // identity-poor path. The file is now scan-clean.
   [
     'src/lib/services/identity/tracer-rebind.ts',
-    'touchpoints.upsert in the one-shot mirror-backfilled-couples rebind sweep (admin endpoint /api/admin/identity/tracer-rebind). Not a live-path writer; not a chokepoint. Doctrinally cascade-internal — same Tracer family as tracer.ts. Could be promoted to CHOKEPOINT_FILES if a second admin sweep needs the same write pattern; for now grandfathered as a narrow operator-driven helper. Newly visible after Pbatch2-9 restructure.',
+    'touchpoints.upsert in the one-shot mirror-backfilled-couples rebind sweep (admin endpoint /api/admin/identity/tracer-rebind). Not a live-path writer; not a chokepoint. Doctrinally cascade-internal — same Tracer family as spine-writers.ts (named tracer.ts until W68). Could be promoted to CHOKEPOINT_FILES if a second admin sweep needs the same write pattern; for now grandfathered as a narrow operator-driven helper. Newly visible after Pbatch2-9 restructure.',
   ],
 ])
 

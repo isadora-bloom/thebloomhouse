@@ -52,7 +52,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { insertCandidateMatch } from './tracer'
+import { insertCandidateMatch } from './spine-writers'
 import type { HandlePlatform } from './sources/types'
 
 // ---------------------------------------------------------------------------

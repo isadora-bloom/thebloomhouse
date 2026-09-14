@@ -55,7 +55,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { linkSignal } from '@/lib/spine/cascade'
-import { insertCandidateMatch } from './tracer'
+import { insertCandidateMatch } from './spine-writers'
 import { logEvent } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------

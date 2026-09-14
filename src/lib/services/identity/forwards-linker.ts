@@ -79,7 +79,7 @@ import {
   loadRecentCouples,
   signalToMatchableRecord,
   type CoupleForMatch,
-} from './tracer'
+} from './spine-writers'
 import {
   applyTierRouting,
   stampHandlesAndFirstSeen,

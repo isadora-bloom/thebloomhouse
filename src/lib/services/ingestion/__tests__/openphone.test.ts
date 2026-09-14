@@ -32,6 +32,16 @@ vi.mock('@/lib/services/heat-mapping', () => ({
   recordEngagementEvent: (...args: unknown[]) => recordEngagementEventMock(...args),
 }))
 
+// W68: the chokepoint schedules the W50 loose-detail capture after
+// classification. Mocked here for the same reason the classifier is —
+// the real one spends a model call and reaches Supabase for its replay
+// guard. What the tests care about is that it is called, once, with the
+// FINAL wedding id and a truthful channel label.
+const scheduleLooseDetailCaptureMock = vi.fn()
+vi.mock('@/lib/services/commitments/capture', () => ({
+  scheduleLooseDetailCapture: (...args: unknown[]) => scheduleLooseDetailCaptureMock(...args),
+}))
+
 interface RecordedCall {
   table: string
   op: 'insert' | 'update' | 'select'
@@ -120,6 +130,7 @@ beforeEach(() => {
   recordEngagementEventMock.mockImplementation(() =>
     Promise.resolve({ heatScore: 0, tier: 'cold' }),
   )
+  scheduleLooseDetailCaptureMock.mockReset()
 })
 
 // ---------------------------------------------------------------------------
@@ -295,5 +306,126 @@ describe('writeInboundInteractionAndClassify — mint gate', () => {
     })
     expect(mintWeddingMock).not.toHaveBeenCalled()
     expect(result.weddingId).toBe('wedding-existing')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4. Loose-detail capture (W68)
+//
+// W50 taught Bloom to lift stated plans and special requests out of an
+// inbound message and land them as planning notes the day-of reconciler
+// checks. It wired the call into the email pipeline and nowhere else, so a
+// couple who texted "my uncle is bringing the groom's cake on the Friday"
+// still had that sentence read once and recorded nowhere. These assert it
+// now fires on the SMS / voicemail / Instagram-DM chokepoint too.
+// ---------------------------------------------------------------------------
+
+describe('writeInboundInteractionAndClassify — loose-detail capture', () => {
+  it('captures on an inbound SMS attached to a wedding', async () => {
+    const supabase = makeFakeSupabase()
+    await writeInboundInteractionAndClassify({
+      supabase,
+      venueId: 'venue-1',
+      row: smsRow({ full_body: "my uncle is bringing the groom's cake on the Friday" }),
+      logPrefix: 'openphone',
+      externalMessageId: 'msg-10',
+      allowMint: false,
+      correlationId: 'corr-1',
+    })
+    expect(scheduleLooseDetailCaptureMock).toHaveBeenCalledTimes(1)
+    expect(scheduleLooseDetailCaptureMock).toHaveBeenCalledWith({
+      venueId: 'venue-1',
+      interactionId: 'interaction-1',
+      weddingId: 'wedding-1',
+      channel: 'sms',
+      text: "my uncle is bringing the groom's cake on the Friday",
+      correlationId: 'corr-1',
+    })
+  })
+
+  it('labels the channel voicemail when the row is a voicemail', async () => {
+    const supabase = makeFakeSupabase()
+    await writeInboundInteractionAndClassify({
+      supabase,
+      venueId: 'venue-1',
+      row: smsRow({ type: 'voicemail' }),
+      logPrefix: 'openphone',
+      externalMessageId: 'msg-11',
+      allowMint: false,
+    })
+    expect(scheduleLooseDetailCaptureMock.mock.calls[0]?.[0]).toMatchObject({
+      channel: 'voicemail',
+    })
+  })
+
+  it('honours looseDetailChannel so an Instagram DM says instagram, not sms', async () => {
+    const supabase = makeFakeSupabase()
+    await writeInboundInteractionAndClassify({
+      supabase,
+      venueId: 'venue-1',
+      // A DM reaches this chokepoint as type 'sms' (W30 mirrors it here),
+      // so the type alone would misreport the channel on the note.
+      row: smsRow({ type: 'sms' }),
+      logPrefix: 'instagram-dm',
+      externalMessageId: 'instagram:dm:mid.7',
+      allowMint: false,
+      looseDetailChannel: 'instagram',
+    })
+    expect(scheduleLooseDetailCaptureMock.mock.calls[0]?.[0]).toMatchObject({
+      channel: 'instagram',
+    })
+  })
+
+  it('passes the wedding the mint gate just created, not the null it started with', async () => {
+    classifyInboundIntentMock.mockResolvedValue({
+      ...FALLBACK_VERDICT,
+      intent_class: 'new_inquiry',
+    })
+    mintWeddingMock.mockResolvedValue({
+      weddingId: 'wedding-new',
+      personId: 'person-new',
+      isNew: true,
+      resolvedVia: 'created_new',
+    })
+    const supabase = makeFakeSupabase()
+    await writeInboundInteractionAndClassify({
+      supabase,
+      venueId: 'venue-1',
+      row: smsRow({ wedding_id: null }),
+      logPrefix: 'openphone',
+      externalMessageId: 'msg-12',
+      allowMint: true,
+      mintSource: 'sms_inbound',
+      mintSignals: { email: null, phone: '5551234567' },
+    })
+    expect(scheduleLooseDetailCaptureMock.mock.calls[0]?.[0]).toMatchObject({
+      weddingId: 'wedding-new',
+    })
+  })
+
+  it('does not capture on an outbound message', async () => {
+    const supabase = makeFakeSupabase()
+    await writeInboundInteractionAndClassify({
+      supabase,
+      venueId: 'venue-1',
+      row: smsRow({ direction: 'outbound' }),
+      logPrefix: 'openphone',
+      externalMessageId: 'msg-13',
+      allowMint: false,
+    })
+    expect(scheduleLooseDetailCaptureMock).not.toHaveBeenCalled()
+  })
+
+  it('does not capture when the interactions insert failed', async () => {
+    const supabase = makeFakeSupabase({ insertError: { message: 'boom' } })
+    await writeInboundInteractionAndClassify({
+      supabase,
+      venueId: 'venue-1',
+      row: smsRow(),
+      logPrefix: 'openphone',
+      externalMessageId: 'msg-14',
+      allowMint: false,
+    })
+    expect(scheduleLooseDetailCaptureMock).not.toHaveBeenCalled()
   })
 })

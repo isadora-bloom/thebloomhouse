@@ -59,7 +59,7 @@
  *   robust common join key is therefore `raw_payload.interaction_id`;
  *   `external_id` only joins when it happens to equal the message id.
  *   The audit tests BOTH and reports which works.
- * - `linkSignal`'s legacy-wedding fast path (`tracer.ts:findCoupleForLegacyWedding`)
+ * - `linkSignal`'s legacy-wedding fast path (`spine-writers.ts:findCoupleForLegacyWedding`)
  *   resolves the couple via `couples.source_wedding_id = signal.legacy_wedding_id`
  *   where `legacy_wedding_id` is the pipeline's `weddingId`. So when an
  *   inbound interaction has a `wedding_id` AND a `couples` row exists
@@ -76,7 +76,7 @@
  * email that produced NO touchpoint is NOT a drop if it produced a
  * fragment instead — both are valid cascade outcomes.
  *
- * VERIFIED `fragments` schema (mig 346 §4) + `insertFragment` (tracer.ts):
+ * VERIFIED `fragments` schema (mig 346 §4) + `insertFragment` (spine-writers.ts):
  *   fragments(id, venue_id, channel, identity_hint, external_id,
  *             occurred_at, raw_payload, promoted_to_couple_id, promoted_at)
  *   `insertFragment` writes channel/identity_hint/external_id/occurred_at/

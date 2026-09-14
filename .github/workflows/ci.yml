@@ -255,6 +255,9 @@ jobs:
       - name: Demo-refusal guard — every mutating platform-auth route accounts for the demo identity (S1 2026-09-14)
         run: node scripts/check-demo-refused-on-writes.mjs
 
+      - name: Tangential-pool guard — nothing under src/ inserts into the deprecated tangential_signals (wave 9 W68)
+        run: node scripts/check-no-tangential-writes.mjs
+
       # --- Consolidation governance (FIX-PLAN Layer B/C/D) ------------------
       # ENFORCING since 2026-06-11 (Phase 0 §0.9 flip executed — was left
       # `continue-on-error: true` at the 2026-05-29 ratification "until

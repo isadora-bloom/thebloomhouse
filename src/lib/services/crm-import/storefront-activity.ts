@@ -23,27 +23,31 @@
  * Identity problem:
  *   "Visitor Name" is partial - "Jayden P." (first name + last initial).
  *   That is NOT enough to identify a couple. So every row is ingested as
- *   a LOW-CONFIDENCE touchpoint into tangential_signals, never a
- *   wedding. The identity resolver / cross-source matcher promotes a
- *   tangential signal to a couple later, when a fuller identity (email,
- *   full name) for "Jayden P." arrives via the leads export or Gmail.
+ *   a LOW-CONFIDENCE signal, never a wedding. A fuller identity for
+ *   "Jayden P." arriving later via the leads export or Gmail is what
+ *   binds the browsing history to a real couple.
  *
- * What this adapter does:
- *   - Every row -> one tangential_signals row (source_platform, action
- *     class, partial extracted_identity, signal_date). The aggregate is
- *     the discovery funnel: views -> saves -> messages.
- *   - 'Message' rows are the highest-value: they are real inquiries.
- *     They get action_class='message' + signal_class='source' so the
- *     funnel and the cross-source matcher weight them heavily. We still
- *     do NOT mint a wedding from a partial name - the knot.ts leads
- *     adapter is the path that mints weddings (it has email).
- *   - 'Storefront View' / 'Storefront Save' are aggregate-only.
+ * What this adapter does (W68):
+ *   - Every row -> one `NormalizedSignal` through `linkSignal`, the one
+ *     spine writer. Below threshold - which a first name and a last
+ *     initial always is - the row lands as a fragment, and fragments are
+ *     promoted onto a couple by the fragment sweep. The aggregate is
+ *     still the discovery funnel: views -> saves -> messages.
+ *   - 'Message' and 'Call' rows are the highest-value: they are real
+ *     reach-outs, so they ride at signal_tier 'medium' and views / saves
+ *     / clicks at 'low'. We still do NOT mint a wedding from a partial
+ *     name - the knot.ts leads adapter is the path that mints weddings
+ *     (it has email), and the cascade's own mint gate refuses a name
+ *     with no reachable identifier behind it.
  *
- * Because rows do not carry a couple identity, this adapter does not
- * use commitNormalisedRows at all - it writes tangential_signals
- * directly (the same table web-form.ts writes its form_submission
- * signals to). NormalisedLeadRow[] is returned EMPTY from parse(); the
- * real payload rides in an out-of-band field the commit() reads.
+ * Before W68 this file wrote `tangential_signals` directly, and so the
+ * promotion the paragraph above describes never actually happened: the
+ * pool had no promoter. Migration 412 corrects the table comment.
+ *
+ * Because rows do not carry a couple identity, this adapter does not use
+ * commitNormalisedRows at all. NormalisedLeadRow[] is returned EMPTY
+ * from parse(); the real payload rides in an out-of-band field the
+ * commit() reads.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -56,12 +60,13 @@ import type {
   CommitResult,
 } from './index'
 import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
+import type { NormalizedSignal } from '@/lib/services/identity/sources/types'
 
 // ---------------------------------------------------------------------------
 // Action-Taken classification.
 //
 // Maps the storefront's free-text "Action Taken" value to:
-//   - action_class : the tangential_signals.action_class value
+//   - action_class : the coarse verb, carried on the signal's payload
 //   - signal_class : source / touchpoint per the class-of-signal model
 //   - funnel_stage : where in the discovery funnel this action sits
 //
@@ -343,16 +348,18 @@ export function summariseStorefrontFunnel(signals: StorefrontSignalRow[]): {
 }
 
 // ---------------------------------------------------------------------------
-// commit() - write tangential_signals directly. No weddings.
+// commit() - route every row through linkSignal. No weddings.
 // ---------------------------------------------------------------------------
 
 /**
- * Map a storefront funnel stage to the tangential_signals.signal_type
- * CHECK enum. Migration 356 widens that enum to include the storefront
- * funnel values; until applied, these inserts fail with a constraint
- * error the route surfaces as a schema hint.
+ * Map a storefront funnel stage to the touchpoint verb the spine stores
+ * as `touchpoints.action_type`. W68: these used to be
+ * `tangential_signals.signal_type` values constrained by a CHECK enum;
+ * on the spine the column is free text, so the vocabulary is now just
+ * a vocabulary. 'review_left' matches the verb the vision-identity path
+ * already uses for the same act.
  */
-function signalTypeForStage(stage: string): string {
+function actionTypeForStage(stage: string): string {
   switch (stage) {
     case 'view':
       return 'storefront_view'
@@ -363,7 +370,7 @@ function signalTypeForStage(stage: string): string {
     case 'click':
       return 'storefront_click'
     case 'review':
-      return 'review'
+      return 'review_left'
     case 'call':
       return 'storefront_call'
     default:
@@ -382,7 +389,7 @@ async function commitStorefrontActivity(args: {
    *  to mint), so the per-row preview decisions are minimal — every
    *  row is `new` since storefront signals carry no external_id
    *  fingerprint at this layer. The honest preview answer is still
-   *  "no writes performed; would write N tangential_signals". */
+   *  "no writes performed; would write N spine signals". */
   preview?: boolean
 }): Promise<CommitResult> {
   const { supabase, venueId } = args
@@ -402,13 +409,13 @@ async function commitStorefrontActivity(args: {
   if (isDryRun) {
     result.preview = true
     // Storefront rows do not run through commitNormalisedRows. The
-    // per-row dedup picture for tangential_signals is not available
-    // at this layer (no external_id partition), so the operator
-    // sees the count delta but no per-row breakdown.
+    // per-row dedup picture is not available at this layer without
+    // asking the spine row by row, so the operator sees the count delta
+    // but no per-row breakdown.
     result.previewDecisions = signals.map((_, idx) => ({
       rowIndex: idx,
       willInsert: 'new' as const,
-      reason: 'storefront tangential_signal — commit would write a low-confidence funnel row',
+      reason: 'storefront funnel row — commit would route a low-confidence signal through linkSignal',
     }))
     result.interactionsInserted = 0
     return result
@@ -416,52 +423,44 @@ async function commitStorefrontActivity(args: {
 
   if (signals.length === 0) return result
 
-  const tangentialRows = signals.map((s) => ({
-    venue_id: venueId,
-    signal_type: signalTypeForStage(s.funnel_stage),
-    source_platform: provider,
-    action_class: s.action_class,
-    extracted_identity: {
-      // Partial identity only - first name + last INITIAL. The
-      // cross-source matcher treats this as a low-confidence fragment;
-      // it cannot mint a couple on its own.
-      first_name: s.visitor_first_name,
-      last_initial: s.visitor_last_initial,
-      name_raw: s.visitor_name_raw,
-      city: s.city,
-      state: s.state,
-      storefront_action: s.action_raw,
-    },
-    source_context: `${provider} storefront: ${s.action_raw ?? 'activity'}`,
-    signal_date: s.signal_date ?? new Date().toISOString(),
-    // Partial-name storefront rows never auto-match a person. They sit
-    // in the unmatched pool until a fuller identity for the visitor
-    // arrives. Same posture web-form.ts uses for form submissions.
-    match_status: 'unmatched' as const,
-    matched_person_id: null,
-    confidence_score: null,
-    // Class-of-signal: a storefront message is the acquisition channel
-    // (source); views / saves / clicks are earlier touchpoints. Per the
-    // mig 192 class-of-signal model.
-    signal_class: s.signal_class,
-  }))
+  // W68: every storefront row goes through `linkSignal`, the one spine
+  // writer, rather than the retired tangential pool. Nothing about the
+  // posture changes - "Jayden P." carries no reachable identifier and
+  // rides as `identity_hint`, not `primary_name`, so the cascade's mint
+  // gate refuses it and the row lands as a fragment. What DOES change is
+  // that a fragment is promoted onto a couple the moment a fuller
+  // identity for the same visitor turns up, which is the promotion the
+  // header has always promised and the tangential pool never delivered.
+  const normalised = signals.map((s) => storefrontSignalToSignal(s, provider))
 
-  // Insert in chunks so a large export does not blow a single statement.
-  const CHUNK = 500
   let inserted = 0
-  for (let i = 0; i < tangentialRows.length; i += CHUNK) {
-    const chunk = tangentialRows.slice(i, i + CHUNK)
-    // signal-class-justified: every row in tangentialRows carries an
-    //   explicit signal_class from classifyAction (source for storefront
-    //   messages and calls, touchpoint for views/saves/clicks, crm for unmark).
-    const { error } = await supabase.from('tangential_signals').insert(chunk)
-    if (error) {
-      result.ok = false
-      result.errors.push(`storefront tangential_signals insert: ${error.message}`)
-      // Keep going - a later chunk may succeed and partial is fine here.
-      continue
-    }
-    inserted += chunk.length
+  try {
+    const { linkSignalBatch } = await import('@/lib/services/identity/forwards-linker')
+    const { summary } = await linkSignalBatch({
+      supabase,
+      venueId,
+      signals: normalised,
+      // adapter-source-justified: this is linkSignalBatch's telemetry
+      //   label (tracer_run_events.source), not weddings.source. The
+      //   adapter writes no attribution decision anywhere.
+      source: `storefront_import:${provider}`,
+      // A funnel export is mostly anonymous views. Spending the LLM
+      // judge on a first name and a last initial buys nothing the
+      // matcher has not already decided.
+      judgeBudget: 0,
+    })
+    inserted =
+      summary.attached +
+      summary.candidate_medium +
+      summary.candidate_low +
+      summary.minted +
+      summary.fragment +
+      summary.cold_start
+  } catch (err) {
+    result.ok = false
+    result.errors.push(
+      `storefront spine write: ${err instanceof Error ? err.message : String(err)}`,
+    )
   }
 
   // interactionsInserted is the closest CommitResult counter for "signals
@@ -469,6 +468,78 @@ async function commitStorefrontActivity(args: {
   // The route's funnel summary is the real operator-facing number.
   result.interactionsInserted = inserted
   return result
+}
+
+// ---------------------------------------------------------------------------
+// StorefrontSignalRow -> NormalizedSignal (W68).
+//
+// Exported for the unit tests: the whole contract of this adapter now
+// lives in this function, and it is worth asserting without a database.
+//
+// Three deliberate choices:
+//
+//   1. `primary_name` stays null. "Jayden P." splits into two tokens, and
+//      `hasSufficientIdentity` mints a couple for any two-token
+//      primary_name - which would fill the couples list with half-names
+//      off a views export. The name rides as `identity_hint`, which
+//      `signalToMatchableRecord` still reads for scoring and which a
+//      fragment row stores verbatim.
+//   2. `channel` is the marketplace, so a storefront touch sits on the
+//      same channel as that marketplace's inquiries and handles.
+//   3. `external_id` is derived from the row's own content. Knot and
+//      WeddingWire exports are rolling windows re-uploaded weekly with
+//      heavy overlap (memory: recurring-CSV import doctrine), so the
+//      UNIQUE(venue_id, channel, external_id) constraint is what makes a
+//      re-upload a no-op.
+// ---------------------------------------------------------------------------
+
+const PROVIDER_TO_CHANNEL: Record<StorefrontProvider, string> = {
+  the_knot: 'knot',
+  wedding_wire: 'weddingwire',
+}
+
+/** Lower-case, punctuation-free slug for a derived external_id part. */
+function idSlug(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80)
+}
+
+export function storefrontSignalToSignal(
+  s: StorefrontSignalRow,
+  provider: StorefrontProvider,
+): NormalizedSignal {
+  const occurredAt = s.signal_date ?? new Date().toISOString()
+  const channel = PROVIDER_TO_CHANNEL[provider]
+  const actionType = actionTypeForStage(s.funnel_stage)
+  const rowKey = idSlug(
+    [s.visitor_name_raw ?? 'anon', s.action_class, occurredAt.slice(0, 10), s.city ?? ''].join('|'),
+  )
+  return {
+    external_id: `storefront:${channel}:${actionType}:${rowKey}`,
+    channel,
+    action_type: actionType,
+    occurred_at: occurredAt,
+    // A storefront message is someone typing to the venue; a view is
+    // someone's scroll. Both are below the attach threshold on their own,
+    // and the tier is what separates them once the matcher has a couple
+    // to corroborate against.
+    signal_tier: s.funnel_stage === 'message' || s.funnel_stage === 'call' ? 'medium' : 'low',
+    identity_hint: s.visitor_name_raw ?? s.visitor_first_name,
+    primary_name: null,
+    raw_payload: {
+      kind: 'storefront_activity',
+      provider,
+      first_name: s.visitor_first_name,
+      last_initial: s.visitor_last_initial,
+      name_raw: s.visitor_name_raw,
+      city: s.city,
+      state: s.state,
+      storefront_action: s.action_raw,
+      funnel_stage: s.funnel_stage,
+      signal_class: s.signal_class,
+      source_context: `${provider} storefront: ${s.action_raw ?? 'activity'}`,
+      raw_row: s.raw_row,
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
