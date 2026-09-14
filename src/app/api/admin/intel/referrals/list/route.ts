@@ -58,6 +58,9 @@ export async function GET(req: NextRequest) {
 
   const supabase = createServiceClient()
   const { data, error } = await supabase
+    // legacy-read-ok: NO-SPINE-EQUIVALENT: the referrer_* columns are
+    // attribution_events columns; the spine carries no referral evidence
+    // yet. See REPAIR-ENDPOINTS.md.
     .from('attribution_events')
     .select(
       'id, venue_id, wedding_id, referrer_wedding_id, referrer_name_text, referrer_relationship_text, referrer_evidence_quote, referrer_confidence_0_100, referral_resolved_at, confidence, tier, decided_by, reasoning, decided_at, reverted_at',

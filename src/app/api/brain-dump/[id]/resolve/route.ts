@@ -315,6 +315,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Re-fetch existing notes inside the confirm to avoid stomping on
     // a parallel note that landed between propose and confirm.
     const { data: wRow } = await supabase
+      // legacy-read-ok: NO-SPINE-EQUIVALENT: sage_context_notes is a
+      // weddings column. The confirm reads it only to append without
+      // stomping a parallel note. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('sage_context_notes, venue_id')
       .eq('id', proposedNote.weddingId)
@@ -336,6 +339,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       },
     ]
     const { error: writeErr } = await supabase
+      // legacy-read-ok: NO-SPINE-EQUIVALENT: sage_context_notes is a
+      // weddings column. The confirm reads it only to append without
+      // stomping a parallel note. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .update({ sage_context_notes: nextNotes })
       .eq('id', proposedNote.weddingId)

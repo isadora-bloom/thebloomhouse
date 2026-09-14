@@ -39,6 +39,9 @@ export async function POST(request: NextRequest) {
     // address when people.email is a synthetic placeholder), plus any
     // existing thread-level disclosure_version so we don't re-append.
     const { data: interaction, error: fetchErr } = await supabase
+      // legacy-read-ok: LEGACY-ONLY: email transport. gmail_thread_id,
+      // from_email and disclosure_version live on interactions; the spine
+      // logs signals, not messages. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .select('id, subject, gmail_thread_id, person_id, venue_id, from_email, people!interactions_person_id_fkey(email)')
       .eq('id', interactionId)
@@ -87,6 +90,9 @@ export async function POST(request: NextRequest) {
     let previousDisclosureVersion: string | null = null
     if (interaction.gmail_thread_id) {
       const { data: prior } = await supabase
+        // legacy-read-ok: LEGACY-ONLY: email transport. gmail_thread_id,
+        // from_email and disclosure_version live on interactions; the spine
+        // logs signals, not messages. See REPAIR-ENDPOINTS.md.
         .from('interactions')
         .select('disclosure_version')
         .eq('venue_id', auth.venueId)
@@ -128,6 +134,9 @@ export async function POST(request: NextRequest) {
     // html-stripped-justified: outbound coordinator/AI replies are
     //   plain-text composed in the coordinator UI + appended disclosure;
     //   no inbound HTML to strip.
+    // legacy-read-ok: LEGACY-ONLY: email transport. gmail_thread_id,
+    // from_email and disclosure_version live on interactions; the spine logs
+    // signals, not messages. See REPAIR-ENDPOINTS.md.
     await writeOrLog(supabase.from('interactions').insert({
       venue_id: auth.venueId,
       wedding_id: null,

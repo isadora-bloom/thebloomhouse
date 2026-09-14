@@ -107,6 +107,8 @@ export async function POST(req: NextRequest) {
 
   // Verify wedding belongs to the caller's venue (defense in depth).
   const { data: wedding } = await supabase
+    // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+    // read. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('venue_id, merged_into_id')
     .eq('id', weddingId)

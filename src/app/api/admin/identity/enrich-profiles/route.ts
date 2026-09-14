@@ -116,6 +116,9 @@ export async function POST(req: NextRequest) {
   // Pull every active (non-tombstoned) wedding for this venue. Same
   // active-set definition as the name-upgrade backfill.
   const { data: weddingRows, error: weddingErr } = await supabase
+    // legacy-read-ok: LOAD-BEARING: the intel file (couple_identity_profile)
+    // is keyed on wedding_id, so the corpus it walks is the legacy active
+    // set. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id')
     .eq('venue_id', venueId)

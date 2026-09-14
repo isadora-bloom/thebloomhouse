@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { loadCoupleByWedding, coupleDisplayName } from '@/lib/intel/readers/couple-by-wedding'
 
 // ---------------------------------------------------------------------------
 // /api/vendor-portal/[token] — Token-based booked-vendor self-service
@@ -21,7 +22,6 @@ import { clientIpForRateLimit } from '@/lib/security/client-ip'
 const TEXT_FIELD_MAX = 5000           // notes
 const URL_FIELD_MAX = 1000            // website, instagram
 const SHORT_FIELD_MAX = 500           // contact_name, contact_email, contact_phone, arrival/departure
-const COUPLE_PREVIEW_MAX = 2          // people rows to fetch for couple-name display
 
 async function rateLimit(request: NextRequest, prefix: 'get' | 'put') {
   const ip = clientIpForRateLimit(request)
@@ -85,28 +85,15 @@ export async function GET(
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
 
-    // Fetch wedding date + couple display name in parallel.
-    // Pre-fix the people query targeted a non-existent table called
-    // 'wedding_people' (silently returned no rows on every request, so
-    // every vendor saw no couple name). The canonical table is `people`.
-    const [{ data: wedding }, { data: people }] = await Promise.all([
-      supabase
-        .from('weddings')
-        .select('wedding_date')
-        .eq('id', vendor.wedding_id as string)
-        .maybeSingle(),
-      supabase
-        .from('people')
-        .select('first_name, role')
-        .eq('wedding_id', vendor.wedding_id as string)
-        .in('role', ['partner1', 'partner2', 'bride', 'groom', 'partner'])
-        .limit(COUPLE_PREVIEW_MAX),
-    ])
-
-    const coupleNames = (people ?? [])
-      .map((p) => p.first_name as string | null)
-      .filter(Boolean)
-      .join(' & ') || null
+    // W66: wedding date + couple display name come off the spine now.
+    // Both used to be assembled here from `weddings` + `people`, with
+    // this route's own idea of which roles count as a partner and its
+    // own join rule. One reader, one rule — and a couple the spine has
+    // not mirrored shows no name rather than a half-made-up one.
+    // No venue scope to pass: the portal token is the auth here, and the
+    // wedding id came off the token's own row, so it is already scoped.
+    const couple = await loadCoupleByWedding(supabase, vendor.wedding_id as string)
+    const coupleNames = coupleDisplayName(couple)
 
     // Strip internal fields from response.
     const {
@@ -118,7 +105,7 @@ export async function GET(
 
     return NextResponse.json({
       ...publicVendor,
-      wedding_date: wedding?.wedding_date ?? null,
+      wedding_date: couple?.weddingDate ?? null,
       couple_names: coupleNames,
     })
   } catch (error) {

@@ -25,6 +25,9 @@ export async function GET(request: NextRequest) {
 
   const supabase = createServiceClient()
   const { data: weddings, error } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: the reconciliation screen exists to show
+    // the operator the pre-resolver corpus. It must read the rows it is
+    // asking about. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select(`
       id, venue_id, inquiry_date, wedding_date, source, lead_source,

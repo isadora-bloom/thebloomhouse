@@ -255,6 +255,8 @@ export async function GET(req: NextRequest) {
       .select('phrase_text')
       .eq('venue_id', venueId),
     service
+      // legacy-read-ok: LEGACY-ONLY: counts sent messages. The spine logs
+      // lead-side signals, not the venue outbox. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)

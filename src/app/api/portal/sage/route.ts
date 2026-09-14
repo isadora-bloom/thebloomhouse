@@ -176,6 +176,8 @@ export async function POST(request: NextRequest) {
           // coordinator read its history.
           const svc = createServiceClient()
           const { data: w } = await svc
+            // legacy-read-ok: AUTH: an authorisation lookup, not an
+            // intelligence read. See REPAIR-ENDPOINTS.md.
             .from('weddings')
             .select('venue_id')
             .eq('id', weddingId)

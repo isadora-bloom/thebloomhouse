@@ -43,6 +43,8 @@ export async function POST(request: NextRequest) {
 
   // Scope guard: both people must belong to the caller's venue.
   const { data: checks } = await supabase
+    // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+    // read. See REPAIR-ENDPOINTS.md.
     .from('people')
     .select('id, venue_id')
     .in('id', [body.keepPersonId, body.mergePersonId])

@@ -86,6 +86,9 @@ export async function POST(request: NextRequest) {
     // an event code and a wedding_details shell on a wedding belonging to
     // another venue. The 403 came too late to prevent either.
     const { data: wedding } = await supabase
+      // legacy-read-ok: MIRROR-MAINTENANCE: portal credentials are keyed to
+      // the legacy wedding and its people rows, and couple_invited_at is a
+      // weddings column. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('venue_id')
       .eq('id', weddingId)
@@ -189,6 +192,9 @@ export async function POST(request: NextRequest) {
     // no longer chooses who gets a credential; it can only ask for the
     // wedding, and the wedding says who its partners are.
     const { data: partnerRows } = await supabase
+      // legacy-read-ok: MIRROR-MAINTENANCE: portal credentials are keyed to
+      // the legacy wedding and its people rows, and couple_invited_at is a
+      // weddings column. See REPAIR-ENDPOINTS.md.
       .from('people')
       .select('email, role')
       .eq('wedding_id', weddingId)
@@ -373,6 +379,9 @@ export async function POST(request: NextRequest) {
     }
 
     await supabase
+      // legacy-read-ok: MIRROR-MAINTENANCE: portal credentials are keyed to
+      // the legacy wedding and its people rows, and couple_invited_at is a
+      // weddings column. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .update({ couple_invited_at: new Date().toISOString() })
       .eq('id', weddingId)

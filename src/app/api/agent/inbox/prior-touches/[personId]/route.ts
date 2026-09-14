@@ -29,6 +29,8 @@ export async function GET(
 
   // Pull the person's venue_id and verify it's in scope.
   const { data: person, error: personErr } = await supabase
+    // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+    // read. See REPAIR-ENDPOINTS.md.
     .from('people')
     .select('id, venue_id')
     .eq('id', personId)

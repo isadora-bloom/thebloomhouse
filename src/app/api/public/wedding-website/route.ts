@@ -313,6 +313,9 @@ async function handleWebsiteRead(request: NextRequest, providedPw: string) {
         .eq('venue_id', venueId)
         .order('name'),
       supabase
+        // legacy-read-ok: NO-SPINE-EQUIVALENT: guest_count_estimate is a
+        // weddings column; the headcount has no home on the spine. See
+        // REPAIR-ENDPOINTS.md.
         .from('weddings')
         .select('id, wedding_date, guest_count_estimate')
         .eq('id', weddingId)

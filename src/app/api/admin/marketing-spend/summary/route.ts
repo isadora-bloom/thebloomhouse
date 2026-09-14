@@ -150,6 +150,9 @@ export async function GET(req: NextRequest) {
   // (smoke test). Wave 6B replaces this with the full rollup table
   // that joins spend_date windows to wedding inquiry dates.
   const { data: attrRows, error: attrErr } = await supabase
+    // legacy-read-ok: NO-SPINE-EQUIVALENT: persona_overlay is an
+    // attribution_events column. Retires with the Wave 6B spend rollup. See
+    // REPAIR-ENDPOINTS.md.
     .from('attribution_events')
     .select('source_platform, persona_overlay, decided_at')
     .eq('venue_id', venueId)

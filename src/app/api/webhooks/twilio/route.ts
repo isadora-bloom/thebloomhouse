@@ -254,6 +254,9 @@ export async function POST(request: NextRequest) {
     // (rare; would mint a fresh wedding through the gate below).
     if (personId) {
       const { data: personRow } = await supabase
+        // legacy-read-ok: MIRROR-MAINTENANCE: the SMS webhook records to the
+        // legacy message log and mints through mintWedding; the reads scope
+        // those writes. See REPAIR-ENDPOINTS.md.
         .from('people')
         .select('wedding_id')
         .eq('id', personId)
@@ -261,6 +264,9 @@ export async function POST(request: NextRequest) {
       const candidateWeddingId = (personRow?.wedding_id as string | null) ?? null
       if (candidateWeddingId) {
         const { data: candidate } = await supabase
+          // legacy-read-ok: MIRROR-MAINTENANCE: the SMS webhook records to
+          // the legacy message log and mints through mintWedding; the reads
+          // scope those writes. See REPAIR-ENDPOINTS.md.
           .from('weddings')
           .select('id')
           .eq('id', candidateWeddingId)
@@ -285,6 +291,9 @@ export async function POST(request: NextRequest) {
   const timestampIso = new Date().toISOString()
   // html-stripped-justified: Twilio SMS body is plain text, not HTML
   const { data: interaction, error: interactionErr } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the SMS webhook records to the
+    // legacy message log and mints through mintWedding; the reads scope
+    // those writes. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .insert({
       venue_id: venueId,
@@ -404,6 +413,9 @@ export async function POST(request: NextRequest) {
         weddingId = minted.weddingId
         // Backfill interaction.wedding_id now that mint succeeded.
         await supabase
+          // legacy-read-ok: MIRROR-MAINTENANCE: the SMS webhook records to
+          // the legacy message log and mints through mintWedding; the reads
+          // scope those writes. See REPAIR-ENDPOINTS.md.
           .from('interactions')
           .update({ wedding_id: weddingId })
           .eq('id', interaction.id as string)

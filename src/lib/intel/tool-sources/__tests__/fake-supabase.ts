@@ -38,6 +38,7 @@ const CHAIN_METHODS = [
   'in',
   'not',
   'is',
+  'or',
   'contains',
   'order',
   'limit',

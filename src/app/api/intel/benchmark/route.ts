@@ -195,6 +195,9 @@ export async function GET(req: NextRequest) {
     // response time mean. Matches the window used by venue-health-compute
     // so numbers line up between this page and /intel/health.
     service
+      // legacy-read-ok: NO-SPINE-EQUIVALENT: booking_value and
+      // first_response_at are weddings columns. Revenue and response time
+      // have not landed on the spine. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select(
         'id, venue_id, status, booking_value, inquiry_date, first_response_at'

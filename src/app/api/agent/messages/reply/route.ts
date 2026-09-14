@@ -42,6 +42,9 @@ export async function POST(request: NextRequest) {
 
   // Resolve the wedding's venue + verify access.
   const { data: wedding } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the venue reply is mirrored into
+    // the legacy inbox thread view; the wedding read scopes that write. See
+    // REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('venue_id')
     .eq('id', body.weddingId)
@@ -74,6 +77,9 @@ export async function POST(request: NextRequest) {
   // signal-class-justified: portal_chat reply is a coordinator->couple touchpoint
   // html-stripped-justified: `trimmed` is plain text typed by the coordinator, not HTML
   void supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the venue reply is mirrored into
+    // the legacy inbox thread view; the wedding read scopes that write. See
+    // REPAIR-ENDPOINTS.md.
     .from('interactions')
     .insert({
       venue_id: wedding.venue_id,

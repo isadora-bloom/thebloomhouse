@@ -81,6 +81,9 @@ export async function POST(req: NextRequest) {
   }
 
   const { data: wed, error: wedErr } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: the candidate resolver links a candidate
+    // to a legacy wedding, so it reads the row it is about to link to. See
+    // REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id, source, inquiry_date')
     .eq('id', body.wedding_id)

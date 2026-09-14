@@ -90,6 +90,9 @@ export async function POST(req: NextRequest) {
   // even a 'lost' wedding deserves a clean name on the people row so
   // historic exports / re-engagement campaigns address them properly.
   const { data: weddingRows, error: weddingErr } = await supabase
+    // legacy-read-ok: LOAD-BEARING: the name upgrade writes people rows
+    // keyed on wedding_id; the active set it walks is the legacy one. See
+    // REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id')
     .eq('venue_id', venueId)

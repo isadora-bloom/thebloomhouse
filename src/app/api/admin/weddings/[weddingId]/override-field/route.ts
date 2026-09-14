@@ -92,6 +92,9 @@ export async function POST(
   const supabase = createServiceClient()
 
   const { data: wedding } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator override writes
+    // legacy columns, so it reads the row it is about to patch. See REPAIR-
+    // ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id')
     .eq('id', weddingId)
@@ -165,6 +168,9 @@ export async function POST(
       // touching anything; otherwise we'd demote all rows and then fail
       // to promote, leaving the wedding with no first-touch row.
       const { data: target } = await supabase
+        // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator override
+        // writes legacy columns, so it reads the row it is about to patch.
+        // See REPAIR-ENDPOINTS.md.
         .from('attribution_events')
         .select('id, wedding_id')
         .eq('id', targetId)
@@ -180,6 +186,9 @@ export async function POST(
       // (no boolean swap) so a future first-touch column rename is a
       // mechanical refactor.
       const { error: demoteErr } = await supabase
+        // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator override
+        // writes legacy columns, so it reads the row it is about to patch.
+        // See REPAIR-ENDPOINTS.md.
         .from('attribution_events')
         .update({ is_first_touch: false })
         .eq('wedding_id', weddingId)
@@ -191,6 +200,9 @@ export async function POST(
         )
       }
       const { error: promoteErr } = await supabase
+        // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator override
+        // writes legacy columns, so it reads the row it is about to patch.
+        // See REPAIR-ENDPOINTS.md.
         .from('attribution_events')
         .update({ is_first_touch: true })
         .eq('id', targetId)
@@ -213,6 +225,9 @@ export async function POST(
   }
 
   const { error: updErr } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: the coordinator override writes
+    // legacy columns, so it reads the row it is about to patch. See REPAIR-
+    // ENDPOINTS.md.
     .from('weddings')
     .update(patch)
     .eq('id', weddingId)

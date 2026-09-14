@@ -140,12 +140,16 @@ export async function POST(req: NextRequest) {
 
   // Enqueue mode.
   const { count: totalCount } = await sb
+    // legacy-read-ok: MIRROR-MAINTENANCE: the enqueue pass counts and pages
+    // the very rows it then reclassifies in place. See REPAIR-ENDPOINTS.md.
     .from('attribution_events')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)
     .is('reverted_at', null)
 
   const { data: rows, error: pageErr } = await sb
+    // legacy-read-ok: MIRROR-MAINTENANCE: the enqueue pass counts and pages
+    // the very rows it then reclassifies in place. See REPAIR-ENDPOINTS.md.
     .from('attribution_events')
     .select('id')
     .eq('venue_id', venueId)

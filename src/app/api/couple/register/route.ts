@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { loadCoupleByWedding, coupleEmails } from '@/lib/intel/readers/couple-by-wedding'
 import {
   hashInviteToken,
   validateCoupleInvite,
@@ -146,6 +147,9 @@ export async function POST(request: NextRequest) {
     // 2. Load the wedding the invite points at, and check the venue slug
     // in the URL is the one that sent it.
     const { data: wedding, error: lookupErr } = await supabase
+      // legacy-read-ok: AUTH + MIRROR-MAINTENANCE: the invite check is an
+      // authorisation lookup, and couple_registered_at is a weddings column
+      // stamped on first registration. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('id, venue_id, status, couple_registered_at, venues(name, slug)')
       .eq('id', validInvite.wedding_id)
@@ -297,31 +301,30 @@ export async function POST(request: NextRequest) {
     // "when did the couple first start using the portal" for analytics.
     if (!wedding.couple_registered_at) {
       await supabase
+        // legacy-read-ok: AUTH + MIRROR-MAINTENANCE: the invite check is an
+        // authorisation lookup, and couple_registered_at is a weddings
+        // column stamped on first registration. See REPAIR-ENDPOINTS.md.
         .from('weddings')
         .update({ couple_registered_at: new Date().toISOString() })
         .eq('id', wedding.id)
     }
 
-    // 8. Link the auth user to an existing people row by email, when one
-    // is already there. Nothing is written if there is no match: the old
-    // code stamped this address onto the first partner row that had none,
-    // which meant partner 2 registering could put their email on
+    // 8. Is the address registering already one the venue holds for this
+    // couple? W66: asked of the spine, which carries both partners'
+    // addresses on the couple row. Nothing is written either way - the
+    // old code stamped this address onto the first partner row that had
+    // none, which meant partner 2 registering could put their email on
     // partner 1's record and quietly corrupt who is who.
-    const { data: existingPerson } = await supabase
-      .from('people')
-      .select('id')
-      .eq('wedding_id', wedding.id)
-      // Escaped before it goes into ilike: % and _ are legal in an email
-      // local part and are wildcards in LIKE, so an unescaped address
-      // would match rows it has nothing to do with.
-      .ilike('email', String(email).replace(/[\\%_]/g, (ch) => `\\${ch}`))
-      .maybeSingle()
+    const coupleOnSpine = await loadCoupleByWedding(supabase, wedding.id, wedding.venue_id)
+    const existingPerson = coupleEmails(coupleOnSpine).includes(
+      String(email).trim().toLowerCase(),
+    )
 
     return NextResponse.json({
       success: true,
       weddingId: wedding.id,
       venueSlug,
-      personLinked: Boolean(existingPerson),
+      personLinked: existingPerson,
       // Surface to the client whether this was the first or second partner
       // so the post-register screen can welcome them appropriately.
       partnerNumber: eligibility.partnerNumber,

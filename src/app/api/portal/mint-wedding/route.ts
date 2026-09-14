@@ -142,6 +142,10 @@ export async function POST(request: Request) {
     if (body.eventCode) portalUpdate.event_code = body.eventCode
 
     let { error: updateErr } = await supabase
+      // legacy-read-ok: MIRROR-MINT: this is the endpoint that mints the
+      // legacy mirror row through mintWedding, then fills its portal
+      // columns. linkSignal stays the only spine writer. See REPAIR-
+      // ENDPOINTS.md.
       .from('weddings')
       .update(portalUpdate)
       .eq('id', minted.weddingId)
@@ -155,6 +159,10 @@ export async function POST(request: Request) {
       // provisioning pick a free one rather than failing the booking.
       delete portalUpdate.event_code
       const retryRes = await supabase
+        // legacy-read-ok: MIRROR-MINT: this is the endpoint that mints the
+        // legacy mirror row through mintWedding, then fills its portal
+        // columns. linkSignal stays the only spine writer. See REPAIR-
+        // ENDPOINTS.md.
         .from('weddings')
         .update(portalUpdate)
         .eq('id', minted.weddingId)
@@ -183,6 +191,10 @@ export async function POST(request: Request) {
     // already had a partner2 from a prior intake).
     if (body.partner2 && body.partner2.firstName) {
       const { data: existingP2 } = await supabase
+        // legacy-read-ok: MIRROR-MINT: this is the endpoint that mints the
+        // legacy mirror row through mintWedding, then fills its portal
+        // columns. linkSignal stays the only spine writer. See REPAIR-
+        // ENDPOINTS.md.
         .from('people')
         .select('id')
         .eq('wedding_id', minted.weddingId)
@@ -190,6 +202,10 @@ export async function POST(request: Request) {
         .is('merged_into_id', null)
         .maybeSingle()
       if (!existingP2) {
+        // legacy-read-ok: MIRROR-MINT: this is the endpoint that mints the
+        // legacy mirror row through mintWedding, then fills its portal
+        // columns. linkSignal stays the only spine writer. See REPAIR-
+        // ENDPOINTS.md.
         await writeOrLog(supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: minted.weddingId,

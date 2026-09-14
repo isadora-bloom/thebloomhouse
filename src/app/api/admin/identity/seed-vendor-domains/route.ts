@@ -65,6 +65,9 @@ export async function POST() {
   // enough to keep the scan bounded on a venue with tens of
   // thousands of historical rows.
   const { data: rows, error } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: seeds vendor domains from historical
+    // sender addresses. from_email lives on the message log and nowhere on
+    // the spine. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('from_email')
     .eq('venue_id', venueId)

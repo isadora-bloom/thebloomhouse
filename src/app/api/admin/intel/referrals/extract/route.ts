@@ -51,6 +51,8 @@ async function resolveAuth(
     }
     const supabase = createServiceClient()
     const { data: wedding } = await supabase
+      // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+      // read. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('venue_id, merged_into_id')
       .eq('id', weddingId)
@@ -71,6 +73,8 @@ async function resolveAuth(
   if (weddingId) {
     const supabase = createServiceClient()
     const { data: wedding } = await supabase
+      // legacy-read-ok: AUTH: an authorisation lookup, not an intelligence
+      // read. See REPAIR-ENDPOINTS.md.
       .from('weddings')
       .select('venue_id, merged_into_id')
       .eq('id', weddingId)

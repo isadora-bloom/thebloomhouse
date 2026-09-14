@@ -116,6 +116,8 @@ export async function POST(
   }
 
   const { data: interaction, error: interErr } = await supabase
+    // legacy-read-ok: LEGACY-ONLY: regeneration needs the inbound message
+    // text. full_body has no spine equivalent. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id, from_email, from_name, subject, full_body, body_preview, wedding_id')
     .eq('id', interactionId)

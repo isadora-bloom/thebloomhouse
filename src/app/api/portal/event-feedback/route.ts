@@ -8,6 +8,7 @@ import {
   unauthorized,
   forbidden,
 } from '@/lib/api/auth-helpers'
+import { loadCoupleByWedding, coupleDisplayName } from '@/lib/intel/readers/couple-by-wedding'
 
 // ---------------------------------------------------------------------------
 // POST — Generate proactive review response draft
@@ -82,28 +83,26 @@ export async function POST(request: NextRequest) {
       .select('vendor_name, vendor_type, rating, notes, would_recommend')
       .eq('event_feedback_id', eventFeedbackId)
 
-    // Fetch wedding + couple info
+    // W66: names + date off the spine. The role filter and the
+    // dedupe-by-name dance this route used to do are the reader's job
+    // now, so the draft addresses the couple by the same name every
+    // other surface uses.
+    const couple = await loadCoupleByWedding(
+      supabase,
+      feedback.wedding_id as string | null,
+      venueId,
+    )
+    const coupleNames = coupleDisplayName(couple) ?? ''
+
     const { data: wedding } = await supabase
+      // legacy-read-ok: NO-SPINE-EQUIVALENT: guest_count_estimate has no
+      // spine column, the headcount lives on the legacy wedding row and
+      // nowhere else. Names and date above come from `couples`.
+      // See REPAIR-ENDPOINTS.md.
       .from('weddings')
-      .select('id, wedding_date, guest_count_estimate')
+      .select('id, guest_count_estimate')
       .eq('id', feedback.wedding_id)
       .single()
-
-    const { data: people } = await supabase
-      .from('people')
-      .select('first_name, last_name, role')
-      .eq('wedding_id', feedback.wedding_id)
-
-    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name so the
-    // notification doesn't list the same human twice.
-    const { dedupePeopleByName } = await import('@/lib/utils/couple-name')
-    const coupleNames = dedupePeopleByName(
-      (people ?? []).filter((p: { role: string }) =>
-        ['partner1', 'partner2', 'bride', 'groom', 'partner'].includes(p.role)
-      )
-    )
-      .map((p) => `${p.first_name} ${p.last_name}`)
-      .join(' & ')
 
     // Fetch venue name
     const { data: venue } = await supabase
@@ -135,7 +134,7 @@ export async function POST(request: NextRequest) {
 
 **Venue:** ${venue?.name ?? 'Unknown Venue'}
 **Couple:** ${coupleNames || 'Unknown'}
-**Date:** ${wedding?.wedding_date ?? 'Unknown'}
+**Date:** ${couple?.weddingDate ?? 'Unknown'}
 **Guest Count:** ${wedding?.guest_count_estimate ?? 'Unknown'}
 
 **Coordinator's Feedback:**

@@ -78,6 +78,9 @@ export async function POST(
   const supabase = createServiceClient()
 
   const { data: interaction } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: author_class is an interactions
+    // column, and this route reads the row only to override it. See REPAIR-
+    // ENDPOINTS.md.
     .from('interactions')
     .select('id, venue_id, wedding_id')
     .eq('id', interactionId)
@@ -98,6 +101,9 @@ export async function POST(
   }
 
   const { error: updErr } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: author_class is an interactions
+    // column, and this route reads the row only to override it. See REPAIR-
+    // ENDPOINTS.md.
     .from('interactions')
     .update(patch)
     .eq('id', interactionId)

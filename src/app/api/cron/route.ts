@@ -2178,6 +2178,9 @@ async function runRecomputePendingTemporal(): Promise<{
   const supabase = createServiceClient()
 
   const { data: pending } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: a cron sweep over the legacy
+    // mirror. It clears heat_recompute_pending on the rows it just
+    // recomputed. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id, venue_id')
     .eq('heat_recompute_pending', true)
@@ -2195,6 +2198,9 @@ async function runRecomputePendingTemporal(): Promise<{
     try {
       await recalculateHeatScore(w.venue_id, w.id)
       const { error } = await supabase
+        // legacy-read-ok: MIRROR-MAINTENANCE: a cron sweep over the legacy
+        // mirror. It clears heat_recompute_pending on the rows it just
+        // recomputed. See REPAIR-ENDPOINTS.md.
         .from('weddings')
         .update({ heat_recompute_pending: false })
         .eq('id', w.id)
@@ -2214,6 +2220,9 @@ async function runRecomputePendingTemporal(): Promise<{
   // Cheap remaining-estimate so the cron telemetry shows pressure.
   // head:true skips the row payload — count-only.
   const { count: remaining } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: a cron sweep over the legacy
+    // mirror. It clears heat_recompute_pending on the rows it just
+    // recomputed. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select('id', { count: 'exact', head: true })
     .eq('heat_recompute_pending', true)
@@ -2790,6 +2799,9 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
       // Pull `month` from marketing_spend so we can year-bucket the
       // spend side (matches the wedding-side year extraction below).
       const { data: weddings } = await supabase
+        // legacy-read-ok: NO-SPINE-EQUIVALENT: the source roll-up is revenue
+        // per source, and booking_value is a weddings column. Retires when
+        // revenue lands on the spine. See REPAIR-ENDPOINTS.md.
         .from('weddings')
         .select('source, status, booking_value, created_at, inquiry_date')
         .eq('venue_id', id)
@@ -3109,6 +3121,9 @@ async function checkPostEventFeedback(): Promise<{ notified: number }> {
   const dateStr = threeDaysAgo.toISOString().split('T')[0]
 
   const { data: weddings, error } = await supabase
+    // legacy-read-ok: MIRROR-MAINTENANCE: a cron sweep selecting which
+    // weddings are three days past. The couple name on the notification now
+    // comes off the spine. See REPAIR-ENDPOINTS.md.
     .from('weddings')
     .select(`
       id,
@@ -3148,25 +3163,16 @@ async function checkPostEventFeedback(): Promise<{ notified: number }> {
     const weddingId = w.id as string
     const venueId = w.venue_id as string
 
-    // Get couple names for the notification.
-    // T5-Rixey-EEE Bug 1 (defense-in-depth): pull last_name too so
-    // dedupePeopleByName can collapse alias-row duplicates by full
-    // name signature.
-    const { data: people } = await supabase
-      .from('people')
-      .select('first_name, last_name, role')
-      .eq('wedding_id', weddingId)
-
-    const { dedupePeopleByName } = await import('@/lib/utils/couple-name')
-    const coupleNames = dedupePeopleByName(
-      (people ?? []).filter((p) =>
-        ['partner1', 'partner2', 'bride', 'groom', 'partner'].includes(p.role)
-      )
+    // W66: the name on the notification comes off the spine, through the
+    // one reader, so the coordinator sees the couple called what every
+    // other surface calls them. The alias-dedupe this used to do here
+    // was working around `people` holding several rows per human;
+    // `couples` holds one row per couple.
+    const { loadCoupleByWedding, coupleDisplayName } = await import(
+      '@/lib/intel/readers/couple-by-wedding'
     )
-      .map((p) => p.first_name)
-      .join(' & ')
-
-    const label = coupleNames || 'the couple'
+    const couple = await loadCoupleByWedding(supabase, weddingId, venueId)
+    const label = coupleDisplayName(couple) || 'the couple'
 
     try {
       await createNotification({

@@ -55,6 +55,9 @@ export async function POST(req: NextRequest) {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString()
 
   const { data: rows, error } = await supabase
+    // legacy-read-ok: LOAD-BEARING: named repair primitive. It re-matches
+    // unattached SMS rows by reading and rewriting interactions.person_id /
+    // wedding_id. See REPAIR-ENDPOINTS.md.
     .from('interactions')
     .select('id, full_body, body_preview, from_email, wedding_id, person_id')
     .eq('venue_id', venueId)
@@ -108,6 +111,9 @@ export async function POST(req: NextRequest) {
     if (dryRun) continue
 
     const { error: updErr } = await supabase
+      // legacy-read-ok: LOAD-BEARING: named repair primitive. It re-matches
+      // unattached SMS rows by reading and rewriting interactions.person_id
+      // / wedding_id. See REPAIR-ENDPOINTS.md.
       .from('interactions')
       .update({
         person_id: match.personId,
