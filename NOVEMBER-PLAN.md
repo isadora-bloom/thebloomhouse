@@ -463,6 +463,63 @@ anything new so Crestwood shows it working, not only Rixey; add battery ground-t
 for W46-W48's new answerable questions; add W47's new channel and W50's new writer to the
 wave 5 isolation battery's coverage. Shared rules as wave 3.
 
+## Wave 7 status (integrated 2026-09-14, evening)
+
+All nine merged on `consolidation` in this order: W51, W61, W47, W49, W48, W52, W50, W60, W46,
+then W60's follow-up. Gate on the integrated head: tsc 0, vitest 1843 across 112 files, `next
+build` clean, governance green including the new `check:wedding-fk-fresh`, every CI guard green,
+`check:wedding-cascade` green against production (118 in the file, 117 live, the one difference
+named as pending 406), links OK (315 URLs), lint 0 errors, golden **16/16 wet** on the test branch
+(Isadora applied 395-403 there with `--env-file .env.test`).
+
+Launch fault, recorded in memory `feedback-worktree-agent-base-branch`: five of the nine worktrees
+were created from `master`, not `consolidation`. Caught after W46 and W49 had finished on the stale
+base; all five committed WIP, rebased and re-gated. Every future prompt starts with
+`git reset --hard consolidation`.
+
+What is true now:
+- Reviews get `sentiment_score` and `themes` on every insert path (Google Places poll, CSV/paste,
+  screenshot), out of band through one helper; `scripts/backfill-review-sentiment.ts` for old rows.
+- The correlation engine has a `tours` channel from spine touchpoints, so weather, FRED, calendar,
+  cultural moments, shutdown, census, Trends and social volume all pair against tours. Two engine
+  bugs fixed on the way: social-versus-venue pairs were never getting their 1.3x rank, and the
+  shutdown channel was classed as venue-internal. Narration reads the same tours series.
+- "Is engagement moving from Instagram to TikTok" is a tool (`platform-shift`) and a card on the
+  sources page, from the same function; battery Q42.
+- Weather in three modes: NWS alerts (free, keyless) replace the dead keyword branch and persist in
+  `weather_alerts` (migration 404); per-year normals in `weather_climate_annual`; a least-squares
+  year-over-year slope beside the two-point decade comparison. `scripts/check-climate-norms.ts`.
+- The groom's cake: loose details extracted out of band after classification; `intentions` in the
+  fixed schema (prompt v1.2); planning notes from coordinator-venue conversations; nightly
+  reconciliation inside `data_integrity_sweep` into `commitment_reconciliation` (migration 406);
+  a fourth collapsed section on the wedding page with add-to-running-order and dismiss.
+- Reallocation page says which spend numbers are typed in, driven by a `CONNECTOR_STATUS` export
+  per stub connector, so W54 flips it by shipping code.
+- `/intel/monthly-story` (CEO view, one number per question through the canonical layer, nav entry);
+  `/today` blocks link into the deeper answer; `profile-reflection-scope.ts` whitelists what the
+  couple assistant may reflect back (tests prove ghost risk, heat, lifecycle, coordinator notes and
+  third-party facts never reach a couple); a wedding-day outlook card and one conversion-informed
+  nudge on the couple portal home.
+- `mergeWeddings` is generated from the schema: 118 wedding-keyed columns, 82 reassign, 20
+  one-per-wedding with audit, the rest skipped with a reason; the 35-entry hand-list is gone;
+  pending migrations are representable; a merge writes one `activity_log` row with per-table counts.
+- The coordinator's table-map page reads the same rows as the couple's seating page; the print
+  page's seating chart, blank since it read a column nothing writes, now renders.
+
+Findings for Isadora (operator decisions, not code):
+- Rixey's `venues.google_trends_metro` is `US-VA-584` (Richmond), shared with Hawthorne and
+  Crestwood, which reads like a copied default. Rixey is in the DC market (`US-DC-511`, what Rose
+  Hill has). Trends is running; it may be measuring the wrong city.
+- `supabase/seed.sql` seeds the legacy `marketing_spend` table, but attribution reads
+  `marketing_spend_records`; nothing ever seeded that, so every demo venue showed a blank ROI
+  column. W52 added `supabase/seed-marketing-spend-records.sql`; it needs applying to the demo.
+- After a merge, the first real remerge is worth reading in `activity_log` (`wedding_merged`).
+- A merge now costs about 104 UPDATE round trips instead of 36; the reimport's remerge will be slower.
+
+Migrations owed to prod, all at once: 395-403 plus 404 and 406, via `npm run migrate:pending`
+then `-- --apply --allow-prod`. Then regenerate the cascade file (`scripts/gen-wedding-fk-tables.ts`)
+so 406 stops being "pending".
+
 ## Wave 8 (launch after wave 7 lands): the rest, built or triggered, not parked
 
 Everything that used to sit under "Parked until after November" gets a real workstream. Two
