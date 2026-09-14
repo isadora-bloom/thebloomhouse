@@ -4,7 +4,7 @@ import {
   runAnomalyDetection,
   acknowledgeAlert,
 } from '@/lib/services/intel/anomaly-detection'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 
@@ -138,6 +138,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
+
   try {
     const alerts = await runAnomalyDetection(auth.venueId)
     return NextResponse.json({ alerts })
@@ -160,6 +164,10 @@ export async function PATCH(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     const body = await request.json()

@@ -12,7 +12,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { ESSENTIALS_LEVELS, type EssentialsLevel } from '@/lib/hooks/use-essentials-level'
 
 interface OrgPrefsRow {
@@ -52,6 +52,10 @@ export async function GET() {
 export async function PUT(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   if (!auth.orgId) {
     return NextResponse.json({ error: 'no_org' }, { status: 400 })
   }
@@ -93,6 +97,10 @@ export async function PUT(request: NextRequest) {
 export async function DELETE() {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   if (!auth.orgId) {
     return NextResponse.json({ error: 'no_org' }, { status: 400 })
   }

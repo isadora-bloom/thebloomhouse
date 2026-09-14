@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, assertCanAccessVenue, forbidden } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { computeWeeklyLearned } from '@/lib/services/intel/weekly-learned'
 
@@ -31,6 +31,12 @@ export async function GET(request: NextRequest) {
   if (!venueId) {
     return NextResponse.json({ error: 'No venue in scope' }, { status: 400 })
   }
+
+  // ?venue_id is caller-supplied and computeWeeklyLearned reads as service
+  // role, so without this any signed-in coordinator could read any venue's
+  // weekly learning summary by changing one query param.
+  const decision = await assertCanAccessVenue(auth, venueId)
+  if (!decision.ok) return forbidden(decision.reason)
 
   try {
     const data = await computeWeeklyLearned(venueId)

@@ -14,6 +14,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import {
+  refuseDemo,
   getPlatformAuth,
   unauthorized,
   badRequest,
@@ -30,6 +31,10 @@ interface AskBody {
 export async function POST(req: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: AskBody
   try {

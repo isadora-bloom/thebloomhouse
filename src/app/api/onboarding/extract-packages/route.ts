@@ -27,7 +27,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import {
   extractPackagesFromFormSchema,
   type ProposedPackage,
@@ -53,6 +53,10 @@ type RequestBody = ExtractBody | ConfirmBody | { mode?: undefined }
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const contentLength = request.headers.get('content-length')
   if (contentLength) {

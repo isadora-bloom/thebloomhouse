@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  refuseDemo,
+  forbidden,
+} from '@/lib/api/auth-helpers'
 import { trackCoordinatorAction } from '@/lib/services/intel/consultant-tracking'
 
 /**
@@ -15,6 +20,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // The demo identity is an anonymous visitor. It may look; it may not
+  // write coordinator activity onto a venue's record.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
+
   try {
     const body = await request.json()
     const action = body.action as string
@@ -24,6 +34,12 @@ export async function POST(request: NextRequest) {
     if (!validActions.includes(action)) {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
     }
+
+    // body.venueId is whatever the client sent. trackCoordinatorAction
+    // writes as service role, so unchecked it let any coordinator stamp
+    // activity onto another venue's consultant-tracking numbers.
+    const decision = await assertCanAccessVenue(auth, venueId)
+    if (!decision.ok) return forbidden(decision.reason)
 
     await trackCoordinatorAction(
       venueId,

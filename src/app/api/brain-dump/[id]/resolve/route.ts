@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { detectCsvShape, parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 import { runCsvImport } from '@/app/api/brain-dump/route'
 import { importReviews } from '@/lib/services/brain-dump/imports'
@@ -41,6 +41,10 @@ import { generateBrainDumpSummaryBounded } from '@/lib/services/brain-dump/summa
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const { id } = await params
   if (!id) return NextResponse.json({ error: 'Missing entry id' }, { status: 400 })

@@ -30,7 +30,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, refuseDemo } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
 import { routeAndProcessUpload } from '@/lib/services/import-router/route-and-process'
 
@@ -54,6 +54,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'unauthorized' }, { status: cron.status ?? 401 })
     }
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not
+  // reprocess an import. A cron caller has no auth object and passes.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: RequestBody
   try {

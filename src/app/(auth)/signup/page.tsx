@@ -79,7 +79,15 @@ export default function SignupPage() {
       })
 
       if (signInError) {
-        setError(signInError.message)
+        // The account is created; the address just is not confirmed yet.
+        // Signup no longer marks addresses confirmed on the server (S1
+        // remediation, 2026-09-14), so this is the ordinary path when the
+        // project has email confirmations switched on — not a failure.
+        setError(
+          data.confirmationRequired
+            ? `Account created. Check ${email} for the confirmation link, then sign in.`
+            : signInError.message
+        )
         setLoading(false)
         return
       }

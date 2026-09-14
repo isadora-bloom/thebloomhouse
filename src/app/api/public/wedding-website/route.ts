@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { createHash, timingSafeEqual } from 'crypto'
 
 // ---------------------------------------------------------------------------
 // Public wedding website API
@@ -38,6 +39,49 @@ async function rateLimit(request: NextRequest, action: 'search_guest' | 'rsvp' |
     limit: limits[action],
     windowSec: 3600,
   })
+}
+
+// ---------------------------------------------------------------------------
+// Site password
+//
+// 2026-09-14 (S1, item 11). The gate used to be `providedPw !==
+// sitePassword`: the couple's password compared in plaintext, with ===,
+// against a value read straight out of the column, and supplied as ?pw=.
+// Three separate problems.
+//
+//   - The query string is the wrong place for a secret. It reaches access
+//     logs, proxy logs, browser history and the Referer header on every
+//     outbound link from the page.
+//   - === on strings short-circuits at the first differing byte, so the
+//     comparison leaks the password a character at a time to anyone
+//     willing to time it.
+//   - The column holds the password itself, so a read of the table is a
+//     read of every couple's password.
+//
+// Now: the comparison is a constant-time compare of sha256 digests, and
+// the password can be sent in a POST body. The query form still works and
+// logs a deprecation warning — one release, then it goes.
+//
+// The column is still plaintext for existing rows; a stored value that
+// already looks like a sha256 digest is used as-is, so a migration that
+// rewrites site_password to its digest needs no change here. Until that
+// migration lands, storage is unchanged and only the comparison and the
+// transport are fixed.
+// ---------------------------------------------------------------------------
+
+const SHA256_HEX = /^[0-9a-f]{64}$/i
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function sitePasswordMatches(stored: string, provided: string): boolean {
+  if (!stored || !provided) return false
+  const storedHash = SHA256_HEX.test(stored) ? stored.toLowerCase() : sha256Hex(stored)
+  const providedHash = sha256Hex(provided)
+  // Equal-length buffers by construction — both are 32-byte digests — so
+  // timingSafeEqual cannot throw and cannot leak a length.
+  return timingSafeEqual(Buffer.from(storedHash, 'hex'), Buffer.from(providedHash, 'hex'))
 }
 
 function rateLimited(rl: { resetAt: Date }) {
@@ -97,6 +141,16 @@ async function getPublishedWebsiteWithToken(
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
+  const providedPw = (new URL(request.url).searchParams.get('pw') ?? '').trim()
+  if (providedPw) {
+    console.warn(
+      '[public/wedding-website] DEPRECATED: site password supplied as ?pw=. POST it as { pw } to action=site_password instead — query strings are logged.',
+    )
+  }
+  return handleWebsiteRead(request, providedPw)
+}
+
+async function handleWebsiteRead(request: NextRequest, providedPw: string) {
   try {
     const { searchParams } = new URL(request.url)
     const slug = searchParams.get('slug')
@@ -213,14 +267,11 @@ export async function GET(request: NextRequest) {
     if (!website) return err('Wedding website not found or not published', 404)
 
     // Password gate. If the couple set a shared site password, withhold all
-    // content until the correct password is supplied via ?pw=. Return a 200
-    // flag (not 404) so the client can render a prompt, but leak nothing else.
+    // content until the right one is supplied. Return a 200 flag (not 404)
+    // so the client can render a prompt, but leak nothing else.
     const sitePassword = (website.site_password ?? '').trim()
-    if (sitePassword) {
-      const providedPw = (searchParams.get('pw') ?? '').trim()
-      if (providedPw !== sitePassword) {
-        return json({ password_required: true, couple_names: website.couple_names ?? null })
-      }
+    if (sitePassword && !sitePasswordMatches(sitePassword, providedPw)) {
+      return json({ password_required: true, couple_names: website.couple_names ?? null })
     }
 
     const weddingId = website.wedding_id
@@ -373,7 +424,16 @@ export async function POST(request: NextRequest) {
     const token = searchParams.get('t')
 
     if (!slug) return err('slug is required')
-    if (action !== 'rsvp') return err('Invalid action. Use action=rsvp')
+
+    // Password in the body, where a secret belongs. Same response shape as
+    // the GET read, so the client swaps one call for the other.
+    if (action === 'site_password') {
+      const body = (await request.json().catch(() => ({}))) as { pw?: unknown }
+      const pw = typeof body.pw === 'string' ? body.pw.trim() : ''
+      return handleWebsiteRead(request, pw)
+    }
+
+    if (action !== 'rsvp') return err('Invalid action. Use action=rsvp or action=site_password')
     if (!token) {
       // RSVP submit without a share-token is closed entirely. Pre-fix
       // any caller could submit a fake RSVP for any guest_id by

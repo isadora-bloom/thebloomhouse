@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
@@ -52,6 +52,10 @@ export async function PATCH(request: NextRequest) {
 
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     const body = await request.json()

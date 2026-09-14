@@ -43,12 +43,18 @@ const BAD_LINK = 'This link is not valid. Ask the venue to send it again.'
  * unknown caller records nothing rather than something made up.
  */
 function recordableIp(req: NextRequest): string | null {
-  const xff = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-  if (xff) return xff
-  const real = req.headers.get('x-real-ip')?.trim()
-  if (real) return real
-  const cf = req.headers.get('cf-connecting-ip')?.trim()
-  return cf || null
+  // Same source of truth as the rate-limit key, so the address written
+  // onto a signature and the address a limit was counted against cannot
+  // disagree. The private header walk this replaced read whichever header
+  // came first rather than the one the platform trusts, and it kept the
+  // port, so two requests from one signer could record two addresses.
+  //
+  // The helper invents a per-request `anon:<uuid>` when it cannot
+  // identify the caller. That is right for a bucket and wrong for a
+  // record of agreement: an unknown signer records nothing rather than
+  // something made up.
+  const ip = clientIpForRateLimit(req)
+  return ip.startsWith('anon:') ? null : ip
 }
 
 async function guard(req: NextRequest, token: string, limit: number) {

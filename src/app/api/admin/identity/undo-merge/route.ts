@@ -49,7 +49,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { undoMerge } from '@/lib/services/identity/merge-people'
 import { invalidateCouplesCache } from '@/lib/services/identity/forwards-linker'
@@ -65,6 +65,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!auth) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const body = (await req.json().catch(() => ({}))) as UndoBody
   if (!body.source || !body.audit_id) {

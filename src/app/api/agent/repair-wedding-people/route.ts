@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 
 // ---------------------------------------------------------------------------
@@ -35,6 +35,10 @@ import { createServiceClient } from '@/lib/supabase/service'
 export async function POST(req: Request) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   const venueId = auth.venueId
   if (!venueId) return NextResponse.json({ error: 'No venue in scope' }, { status: 400 })
 

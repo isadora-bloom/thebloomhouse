@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // /api/portal/wedding-detail-config
@@ -33,6 +33,10 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     const supabase = createServiceClient()

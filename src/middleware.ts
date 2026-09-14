@@ -72,6 +72,18 @@ export async function middleware(request: NextRequest) {
   // -----------------------------------------------------------------------
   if (pathname.startsWith('/demo/')) {
     const realPath = pathname.replace(/^\/demo/, '') || '/'
+
+    // /demo/api/... must never rewrite onto an API route. The rewrite
+    // mints a valid signed demo token and attaches it to the request, so
+    // /demo/api/<anything> was a way to call any endpoint as the demo
+    // coordinator without visiting /demo or holding a cookie — a
+    // credential-granting prefix on the whole API surface. The demo
+    // rewrite exists to make demo PAGES crawlable; it has no business
+    // reaching the API. 404 rather than redirect: there is nothing here.
+    if (realPath === '/api' || realPath.startsWith('/api/')) {
+      return new NextResponse(null, { status: 404 })
+    }
+
     const rewriteUrl = request.nextUrl.clone()
     rewriteUrl.pathname = realPath
 
@@ -290,9 +302,17 @@ export async function middleware(request: NextRequest) {
   // 4. Couple routes (path-based, dev mode): /couple/*
   // -----------------------------------------------------------------------
   if (pathname.startsWith(COUPLE_PREFIX)) {
-    // The couple login and registration pages are always public
-    // Matches /couple/login, /couple/[slug]/login, and /couple/[slug]/register
-    if (pathname === '/couple/login' || /^\/couple\/[^/]+\/(login|register)\/?$/.test(pathname)) {
+    // The couple login, registration and password-recovery pages are
+    // always public. forgot-password / reset-password were missing from
+    // this list, so a couple who could not sign in was bounced straight
+    // back to the login page they could not get past — the recovery pages
+    // existed and were unreachable.
+    // Matches /couple/login and /couple/[slug]/{login,register,
+    // forgot-password,reset-password}.
+    if (
+      pathname === '/couple/login' ||
+      /^\/couple\/[^/]+\/(login|register|forgot-password|reset-password)\/?$/.test(pathname)
+    ) {
       return response
     }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
+  refuseDemo,
   getPlatformAuth,
   unauthorized,
   serverError,
@@ -40,6 +41,10 @@ export async function POST(request: NextRequest) {
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   try {
     const newKey = await rotatePixelIngestKey(auth.venueId)
     return NextResponse.json({ pixelIngestKey: newKey })

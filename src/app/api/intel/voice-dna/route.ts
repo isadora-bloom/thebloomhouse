@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
@@ -157,21 +157,35 @@ export async function GET(req: NextRequest) {
   if (requestedVenueId && requestedVenueId !== auth.venueId) {
     // Only honour cross-venue reads when the venue belongs to the caller's
     // org. Prevents a crafted query param from reaching across tenants.
-    if (!auth.orgId && !auth.isDemo) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    //
+    // The demo path used to skip the org check twice over (`!auth.orgId &&
+    // !auth.isDemo`, then `!auth.isDemo && ...`), so a demo cookie plus a
+    // ?venueId was a read of any real venue's voice DNA — its approved
+    // review language, its banned phrases, its coordinator's edit history.
+    // A demo session now goes through the same Crestwood allowlist as
+    // everywhere else.
+    if (auth.isDemo) {
+      if (!isDemoVenueAllowed(requestedVenueId)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+      venueId = requestedVenueId
+    } else {
+      if (!auth.orgId) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+      const { data: targetVenue } = await service
+        .from('venues')
+        .select('id, org_id')
+        .eq('id', requestedVenueId)
+        .maybeSingle()
+      if (!targetVenue) {
+        return NextResponse.json({ error: 'Venue not found' }, { status: 404 })
+      }
+      if (targetVenue.org_id !== auth.orgId) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+      venueId = requestedVenueId
     }
-    const { data: targetVenue } = await service
-      .from('venues')
-      .select('id, org_id')
-      .eq('id', requestedVenueId)
-      .maybeSingle()
-    if (!targetVenue) {
-      return NextResponse.json({ error: 'Venue not found' }, { status: 404 })
-    }
-    if (!auth.isDemo && auth.orgId && targetVenue.org_id !== auth.orgId) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-    venueId = requestedVenueId
   }
 
   // Connective II / fix #6 (2026-04-30): lightweight "what is Sage

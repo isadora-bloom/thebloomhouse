@@ -11,7 +11,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { discoverPhoneNumbers } from '@/lib/services/ingestion/openphone'
 
 export async function POST() {
@@ -19,6 +19,10 @@ export async function POST() {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     const phoneNumbers = await discoverPhoneNumbers(auth.venueId)

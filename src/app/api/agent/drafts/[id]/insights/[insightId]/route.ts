@@ -18,7 +18,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  refuseDemo,
+} from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 
 export async function PATCH(
@@ -29,6 +33,11 @@ export async function PATCH(
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may not unwind a
+  // learning, which deletes the voice-preference row behind it.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const { id: draftId, insightId } = await params
   if (!draftId || !insightId) {
@@ -69,14 +78,14 @@ export async function PATCH(
     return NextResponse.json({ error: 'Insight not found' }, { status: 404 })
   }
 
-  // Scope guard.
-  if (auth.venueId && (insight.venue_id as string) !== auth.venueId) {
-    if (auth.role !== 'admin' && auth.role !== 'manager') {
-      return NextResponse.json(
-        { error: 'Cannot correct insights outside your scope' },
-        { status: 403 },
-      )
-    }
+  // Scope guard. Was a test for the roles 'admin' and 'manager', neither
+  // of which is what org-level admins actually carry.
+  const decision = await assertCanAccessVenue(auth, insight.venue_id as string)
+  if (!decision.ok) {
+    return NextResponse.json(
+      { error: 'Cannot correct insights outside your scope' },
+      { status: 403 },
+    )
   }
 
   // Unwind persistence. We deactivate rather than hard-delete so the

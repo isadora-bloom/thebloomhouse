@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, unauthorized, forbidden } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  requireRole,
+  unauthorized,
+  forbidden,
+  ADMIN_ROLES,
+} from '@/lib/api/auth-helpers'
 
 /**
  * GET /api/venue-groups/tree
@@ -47,6 +53,13 @@ export async function GET() {
   if (auth.isDemo) {
     return NextResponse.json({ orgId: null, roots: [], unassignedVenues: [], demo: true })
   }
+
+  // The route header has said "Authority: org_admin or super_admin" since
+  // it was written, and nothing enforced it. The tree names every venue in
+  // the org and how the portfolio is structured — a coordinator at one
+  // venue had no business reading it.
+  const roleRefusal = requireRole(auth, ADMIN_ROLES)
+  if (roleRefusal) return roleRefusal
 
   const supabase = createServiceClient()
 

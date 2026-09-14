@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, refuseDemo } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
 import { runLifecycleSweep } from '@/lib/services/lifecycle/sweep'
 
@@ -29,6 +29,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       )
     }
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not
+  // sweep a venue's lifecycle. A cron caller has no auth object and passes.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: { venueId?: string } = {}
   try {

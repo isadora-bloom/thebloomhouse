@@ -73,6 +73,33 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
+    // Scope check FIRST, before anything reads or writes on this wedding.
+    // It used to sit below, after the people read had already returned a
+    // stranger's email address and after provisionCouplePortal had minted
+    // an event code and a wedding_details shell on a wedding belonging to
+    // another venue. The 403 came too late to prevent either.
+    const { data: wedding } = await supabase
+      .from('weddings')
+      .select('venue_id')
+      .eq('id', weddingId)
+      .maybeSingle()
+
+    if (!wedding) {
+      return NextResponse.json({ error: 'Wedding not found' }, { status: 404 })
+    }
+
+    const venueId = wedding.venue_id as string
+    const decision = await assertCanAccessVenue(auth, venueId)
+    if (!decision.ok) return forbidden(`wedding ${decision.reason}`)
+    // If the caller supplied venueId, it MUST match the wedding's
+    // venue_id (catches client-side bugs without breaking the contract).
+    if (requestedVenueId && requestedVenueId !== venueId) {
+      return NextResponse.json(
+        { error: 'venueId does not match wedding owner' },
+        { status: 400 }
+      )
+    }
+
     // Resolve the couple's email from the wedding's partner1 when the
     // caller didn't supply one — lets the operator invite straight from
     // a wedding card without re-typing the address.
@@ -109,30 +136,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Could not resolve an event code for this wedding' },
         { status: 500 }
-      )
-    }
-
-    // Derive venueId from the wedding row, not from the request body.
-    // Then verify auth ownership.
-    const { data: wedding } = await supabase
-      .from('weddings')
-      .select('venue_id')
-      .eq('id', weddingId)
-      .maybeSingle()
-
-    if (!wedding) {
-      return NextResponse.json({ error: 'Wedding not found' }, { status: 404 })
-    }
-
-    const venueId = wedding.venue_id as string
-    const decision = await assertCanAccessVenue(auth, venueId)
-    if (!decision.ok) return forbidden(`wedding ${decision.reason}`)
-    // If the caller supplied venueId, it MUST match the wedding's
-    // venue_id (catches client-side bugs without breaking the contract).
-    if (requestedVenueId && requestedVenueId !== venueId) {
-      return NextResponse.json(
-        { error: 'venueId does not match wedding owner' },
-        { status: 400 }
       )
     }
 

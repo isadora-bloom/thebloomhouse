@@ -27,7 +27,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { webFormAdapter, FORM_HINTS, type FormHint } from '@/lib/services/crm-import/web-form'
 import type { NormalisedLeadRow } from '@/lib/services/crm-import'
 
@@ -82,6 +82,10 @@ function validateAllRows(rows: NormalisedLeadRow[]): string[] {
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const contentLength = request.headers.get('content-length')
   if (contentLength) {

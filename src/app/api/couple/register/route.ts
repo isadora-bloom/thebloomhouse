@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
 import {
   hashInviteToken,
   validateCoupleInvite,
@@ -57,11 +58,13 @@ const IP_LIMIT = 10
 const VENUE_LIMIT = 60
 const RATE_WINDOW_SEC = 3600
 
-function clientIp(request: NextRequest): string {
-  const forwarded = request.headers.get('x-forwarded-for')
-  if (forwarded) return forwarded.split(',')[0].trim()
-  return request.headers.get('x-real-ip')?.trim() || 'unknown'
-}
+// The private copy that used to live here fell back to the literal
+// string 'unknown', so every caller behind a proxy that strips
+// x-forwarded-for shared one rate-limit bucket — meaning anyone could
+// exhaust it and lock real couples out of registering. The shared helper
+// (src/lib/security/client-ip.ts) normalises ports, tries more headers,
+// and gives an unattributable caller its own bucket instead of a shared
+// one.
 
 export async function POST(request: NextRequest) {
   try {
@@ -91,7 +94,7 @@ export async function POST(request: NextRequest) {
     // grinding through tokens, the venue key stops a botnet grinding
     // through one venue's. Both are cheap and neither can be the
     // forbidden ':shared' namespace.
-    const ip = clientIp(request)
+    const ip = clientIpForRateLimit(request)
     for (const check of [
       { key: `couple-register-ip:${ip}`, limit: IP_LIMIT },
       { key: `couple-register-venue:${String(slug)}`, limit: VENUE_LIMIT },

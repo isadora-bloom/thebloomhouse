@@ -21,7 +21,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 
 interface ReplayResult {
@@ -88,6 +88,10 @@ async function executeWorkType(workType: string, venueId: string): Promise<{ ok:
 export async function POST(): Promise<NextResponse> {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   if (!auth.venueId) return NextResponse.json({ error: 'No venue in scope' }, { status: 400 })
 
   const supabase = createServiceClient()

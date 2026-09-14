@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  refuseDemo,
+  requireRole,
+  MANAGER_ROLES,
+} from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 
 // ---------------------------------------------------------------------------
@@ -41,6 +46,15 @@ interface FkRow {
 export async function POST(req: Request) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor with a coordinator's shape.
+  // This endpoint deletes a venue's entire pipeline. It is not for visitors.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
+
+  const roleRefusal = requireRole(auth, MANAGER_ROLES)
+  if (roleRefusal) return roleRefusal
+
   const venueId = auth.venueId
   if (!venueId) return NextResponse.json({ error: 'No venue in scope' }, { status: 400 })
 
@@ -53,6 +67,43 @@ export async function POST(req: Request) {
   }
 
   const supabase = createServiceClient()
+
+  // Second factor. ?confirm=YES is a constant, so it travels in bookmarks,
+  // shell history and anything that replays a URL — it proves the caller
+  // read a doc once, not that they meant THIS venue right now. The typed
+  // venue name has to be produced from what is on screen, and it names the
+  // thing being destroyed, so a wipe aimed at the wrong tab fails closed.
+  const { data: venueRow } = await supabase
+    .from('venues')
+    .select('name')
+    .eq('id', venueId)
+    .maybeSingle()
+  const venueName = ((venueRow?.name as string | null) ?? '').trim()
+
+  let body: { confirmVenueName?: unknown } = {}
+  try {
+    body = (await req.json()) as { confirmVenueName?: unknown }
+  } catch {
+    body = {}
+  }
+  const typed =
+    typeof body.confirmVenueName === 'string' ? body.confirmVenueName.trim() : ''
+
+  if (!venueName) {
+    return NextResponse.json(
+      { error: 'This venue has no name on file, so the wipe cannot be confirmed. Add one first.' },
+      { status: 409 }
+    )
+  }
+  if (typed.toLowerCase() !== venueName.toLowerCase()) {
+    return NextResponse.json(
+      {
+        error: `Type the venue's name to confirm. Send { "confirmVenueName": "${venueName}" } in the body.`,
+        expectedVenueName: venueName,
+      },
+      { status: 400 }
+    )
+  }
 
   // Gather wedding IDs in scope so we can clean child tables that FK to
   // weddings but aren't directly venue-scoped in their schema.

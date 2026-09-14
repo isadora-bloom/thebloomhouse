@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
+  refuseDemo,
   getPlatformAuth,
+  assertCanAccessVenue,
   unauthorized,
+  forbidden,
   badRequest,
   serverError,
 } from '@/lib/api/auth-helpers'
@@ -34,6 +37,12 @@ export async function GET(request: NextRequest) {
   const venueId = sp.get('venue_id') ?? auth.venueId
   if (!venueId) return badRequest('venue_id required')
 
+  // ?venue_id is caller-supplied and listAgenciesForVenue reads as service
+  // role. Without this, any coordinator could list another venue's agency
+  // relationships, retainers included, by editing one query param.
+  const decision = await assertCanAccessVenue(auth, venueId)
+  if (!decision.ok) return forbidden(decision.reason)
+
   try {
     const agencies = await listAgenciesForVenue(venueId)
     return NextResponse.json({ agencies })
@@ -61,6 +70,10 @@ export async function POST(request: NextRequest) {
 
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: Record<string, unknown>
   try {

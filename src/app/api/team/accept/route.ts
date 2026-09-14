@@ -1,7 +1,87 @@
+/**
+ * /api/team/accept — validate and redeem a team invitation.
+ *
+ * 2026-09-14 security remediation (S1, item 1). What this route was:
+ *
+ *   - POST looked the invitation up, found an auth user with the matching
+ *     email, and bound that user's profile to the invitation's org, venue
+ *     and role WITHOUT the user ever authenticating. Anyone holding a
+ *     token could rewrite a real account's tenancy and role. Paired with
+ *     the unauthenticated invite endpoint, that was a two-call takeover.
+ *   - The existing-user lookup was a bare listUsers(), which reads the
+ *     first page only, so past 50 accounts it silently took the
+ *     create-a-new-user branch instead.
+ *   - No rate limit on either verb, so the token space was brute-forceable.
+ *
+ * Now: tokens are looked up by sha256 (migration 411; plaintext fallback
+ * while that rolls out), an existing account must be the signed-in caller
+ * before anything is bound to it, the lookup pages, and both verbs are
+ * rate limited on the token and on the caller's IP.
+ */
+
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { createServerSupabaseClient } from '@/lib/supabase/server'
+import { findAuthUserByEmail } from '@/lib/api/auth-helpers'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { createHash } from 'crypto'
+
+/** sha256 of the invitation token, hex. Matches migration 411's column. */
+function hashInviteToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+/**
+ * Two keys, neither shared: the token so hammering one invitation cannot
+ * spend anybody else's budget, and the caller so somebody walking the uuid
+ * space runs out of attempts long before they run out of guesses. The
+ * token key is the hash — rate-limit keys land in logs and metrics
+ * dimensions, and the token is a credential.
+ */
+async function guard(request: NextRequest, token: string, max: number) {
+  for (const [key, limit] of [
+    [`team-accept:${hashInviteToken(token)}`, max],
+    [`team-accept-ip:${clientIpForRateLimit(request)}`, max * 2],
+  ] as const) {
+    const rl = await checkRateLimit({ key, limit, windowSec: 900 })
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Too many attempts. Give it a few minutes and try again.' },
+        { status: 429, headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) } },
+      )
+    }
+  }
+  return null
+}
+
+/**
+ * Look an invitation up by token. Reads by sha256 first; falls back to the
+ * plaintext column so invitations minted before migration 411 (and rows on
+ * a deployment where 411 has not run) still resolve. Delete the fallback
+ * when 411 is applied everywhere and the backfill has run.
+ */
+async function findInvitation(
+  supabase: ReturnType<typeof createServiceClient>,
+  token: string,
+  columns: string,
+) {
+  const hash = hashInviteToken(token)
+  const byHash = await supabase
+    .from('team_invitations')
+    .select(columns)
+    .eq('token_hash', hash)
+    .maybeSingle()
+  if (!byHash.error && byHash.data) return byHash.data
+
+  const byToken = await supabase
+    .from('team_invitations')
+    .select(columns)
+    .eq('token', token)
+    .maybeSingle()
+  if (byToken.error) return null
+  return byToken.data
+}
 
 // ---------------------------------------------------------------------------
 // GET: Validate an invitation token (public — used by the join page)
@@ -16,15 +96,26 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Token is required.' }, { status: 400 })
     }
 
+    const limited = await guard(request, token, 20)
+    if (limited) return limited
+
     const supabase = createServiceClient()
 
-    const { data: invitation, error } = await supabase
-      .from('team_invitations')
-      .select('id, org_id, venue_id, email, role, status, expires_at, organisations(name), venues(name)')
-      .eq('token', token)
-      .maybeSingle()
+    const invitation = (await findInvitation(
+      supabase,
+      token,
+      'id, org_id, venue_id, email, role, status, expires_at, organisations(name), venues(name)',
+    )) as {
+      id: string
+      org_id: string
+      venue_id: string | null
+      email: string
+      role: string
+      status: string
+      expires_at: string
+    } | null
 
-    if (error || !invitation) {
+    if (!invitation) {
       return NextResponse.json({ error: 'Invitation not found.' }, { status: 404 })
     }
 
@@ -70,16 +161,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Token is required.' }, { status: 400 })
     }
 
+    const limited = await guard(request, token, 10)
+    if (limited) return limited
+
     const supabase = createServiceClient()
 
     // 1. Fetch and validate the invitation
-    const { data: invitation, error: fetchError } = await supabase
-      .from('team_invitations')
-      .select('id, org_id, venue_id, email, role, status, expires_at')
-      .eq('token', token)
-      .maybeSingle()
+    const invitation = (await findInvitation(
+      supabase,
+      token,
+      'id, org_id, venue_id, email, role, status, expires_at',
+    )) as {
+      id: string
+      org_id: string
+      venue_id: string | null
+      email: string
+      role: string
+      status: string
+      expires_at: string
+    } | null
 
-    if (fetchError || !invitation) {
+    if (!invitation) {
       return NextResponse.json({ error: 'Invitation not found.' }, { status: 404 })
     }
 
@@ -95,16 +197,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'This invitation has expired.' }, { status: 410 })
     }
 
-    // 2. Determine if user exists
+    // 2. Determine if user exists. Paged lookup — a bare listUsers() only
+    // sees the first 50 accounts, so on a real directory this took the
+    // create-a-new-user branch for people who already had an account.
     let userId: string | null = null
-
-    // Check if there's an existing auth user with this email
-    const { data: authUsers } = await supabase.auth.admin.listUsers()
-    const existingAuthUser = authUsers?.users?.find(
-      (u) => u.email?.toLowerCase() === (invitation.email as string).toLowerCase()
-    )
+    const inviteEmail = (invitation.email as string).toLowerCase()
+    const existingAuthUser = await findAuthUserByEmail(supabase, inviteEmail)
 
     if (existingAuthUser) {
+      // The account already exists, so accepting means changing an
+      // EXISTING person's org, venue and role. Holding the token is not
+      // enough for that: the person themselves has to be signed in.
+      // Without this check, anyone with a token could rewrite a real
+      // account's tenancy and hand themselves whatever role the
+      // invitation carried.
+      const server = await createServerSupabaseClient()
+      const {
+        data: { user: sessionUser },
+      } = await server.auth.getUser()
+
+      if (!sessionUser || sessionUser.email?.toLowerCase() !== inviteEmail) {
+        return NextResponse.json(
+          {
+            error: `This invitation is for ${inviteEmail}, and that account already exists. Sign in as ${inviteEmail} first, then open the invitation link again.`,
+            signInRequired: true,
+            email: inviteEmail,
+          },
+          { status: 401 }
+        )
+      }
+      if (sessionUser.id !== existingAuthUser.id) {
+        // Same address, different account id. Nothing good explains this;
+        // refuse rather than guess which one the invitation meant.
+        return NextResponse.json({ error: 'Invitation could not be verified.' }, { status: 409 })
+      }
+
       userId = existingAuthUser.id
     } else {
       // New user — must have firstName, lastName, password

@@ -33,7 +33,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import {
   findAdapter,
   type NormalisedLeadRow,
@@ -268,6 +268,10 @@ function buildImportMessage(args: {
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   // #88 (T5-followup-CC): cap body size before we let Next.js parse
   // it. content-length is a hint not a guarantee but it's the cheapest

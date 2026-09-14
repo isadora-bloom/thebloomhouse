@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callAI } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // POST — Generate a test draft using the venue's personality settings + KB
@@ -18,6 +18,10 @@ export async function POST(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   // Tier-C #128 — per-user rate limit. test-draft fires callAI on every
   // tweak of the personality sliders; tighter than steady-state APIs
