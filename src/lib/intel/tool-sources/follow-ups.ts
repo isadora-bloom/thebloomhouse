@@ -29,15 +29,16 @@
  * in a way a wrong number is not.
  *
  * Not entirely side-effect free, said out loud: composing still runs the
- * inquiry brain, which records its own cost row in `api_costs`. That is
- * fine to keep: it is an audit of spend, not product state, and every
- * brain call anywhere in the app writes one. It used to also record an
- * anti-repetition `phrase_usage` row, but a read tool must not write a
- * ledger (types.ts, the plug-in contract), so NOVEMBER-PLAN.md wave 4
- * (W34) gave `selectPhrase` a `record: false` option and this file passes
- * it. No `drafts` row is created, no email leaves, no `phrase_usage` row
- * is written, and nothing the operator would recognise as an action has
- * happened.
+ * inquiry brain, which records its own cost row in `api_costs`. That write
+ * is an audit of spend, not product state, and stays — every brain call
+ * anywhere in the app writes one, and this tool's proposal capability needs
+ * its cost recorded like any other call (matching W45 / NOVEMBER-PLAN wave
+ * 6 decision). It used to also record an anti-repetition `phrase_usage`
+ * row, but a read tool must not write a ledger (types.ts, the plug-in
+ * contract), so NOVEMBER-PLAN.md wave 4 (W34) gave `selectPhrase` a
+ * `record: false` option and this file passes it. No `drafts` row is
+ * created, no email leaves, no `phrase_usage` row is written, and nothing
+ * the operator would recognise as an action has happened.
  *
  * Spine first: identity, contact address and last inbound come from
  * `couples` and `touchpoints`. The suppression signals live in `drafts`,
