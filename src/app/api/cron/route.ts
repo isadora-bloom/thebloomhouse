@@ -1212,11 +1212,26 @@ async function runJob(
     }
 
     case 'spend_sync_sweep': {
-      // Wave 6A. Iterates venues with spend_auto_sync_enabled, dispatches
-      // to configured connector. Stubs for Google Ads / Meta / TikTok;
-      // manual + Knot fee paths live. Returns connector status per venue.
+      // Wave 6A, extended by W54. Iterates venues with
+      // spend_auto_sync_enabled OR a connected ad account, and pulls
+      // daily spend, impressions, clicks and conversions per campaign
+      // from Google Ads, Meta Ads and TikTok Ads into
+      // marketing_spend_records. A venue with no live token costs one
+      // cheap read and reports not-connected.
+      //
+      // No new cron entry on purpose: cron_count is at the cleanup-budget
+      // ratchet of 49, and this job already rides the daily loops_daily
+      // chain. The two params below are for an operator running a manual
+      // backfill after connecting an account:
+      //   curl '/api/cron?job=spend_sync_sweep&lookbackDays=30'
+      //   curl '/api/cron?job=spend_sync_sweep&venueId=<uuid>'
       const { runSpendSyncSweep } = await import('@/lib/services/marketing-spend/spend-sync-sweep')
-      return runSpendSyncSweep()
+      const lookbackRaw = Number(params?.get('lookbackDays'))
+      const venueParam = params?.get('venueId') ?? undefined
+      return runSpendSyncSweep({
+        lookbackDays: Number.isFinite(lookbackRaw) && lookbackRaw > 0 ? lookbackRaw : undefined,
+        venueId: venueParam && venueParam.trim() !== '' ? venueParam.trim() : undefined,
+      })
     }
 
     case 'attribution_role_sweep': {

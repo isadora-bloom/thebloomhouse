@@ -36,9 +36,6 @@ import {
   Info,
 } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
-import { CONNECTOR_STATUS as GOOGLE_ADS_STATUS } from '@/lib/services/marketing-spend/connectors/google-ads'
-import { CONNECTOR_STATUS as META_ADS_STATUS } from '@/lib/services/marketing-spend/connectors/meta-ads'
-import { CONNECTOR_STATUS as TIKTOK_ADS_STATUS } from '@/lib/services/marketing-spend/connectors/tiktok-ads'
 
 interface ReasoningChain {
   evidence_signals?: string[]
@@ -99,11 +96,46 @@ const STATUSES = [
 
 type StatusValue = (typeof STATUSES)[number]
 
-// Map source channels to their connector status
-const CONNECTOR_STATUS_MAP: Record<string, string> = {
-  google_ads: GOOGLE_ADS_STATUS,
-  meta_ads: META_ADS_STATUS,
-  tiktok_ads: TIKTOK_ADS_STATUS,
+/**
+ * Where the ad numbers on this page came from, per venue.
+ *
+ * Until W54 these were three module constants, all reading 'manual',
+ * which meant the honesty copy was a property of the release rather than
+ * of the venue looking at it. It is now a property of whether THIS venue
+ * has connected each account, so a venue that connects Meta stops being
+ * told its Meta figures were typed in, without anyone editing a
+ * sentence.
+ *
+ * Each status route resolves the venue from the signed-in session, so
+ * the venue is never passed from the browser and cannot be swapped.
+ */
+const AD_PROVIDER_ENDPOINTS: Array<{
+  key: 'google_ads' | 'meta_ads' | 'tiktok_ads'
+  url: string
+}> = [
+  { key: 'google_ads', url: '/api/integrations/google-ads/status' },
+  { key: 'meta_ads', url: '/api/integrations/meta-ads/status' },
+  { key: 'tiktok_ads', url: '/api/integrations/tiktok-ads/status' },
+]
+
+type ConnectorStatusValue = 'connected' | 'manual'
+
+type ConnectorStatusMap = Record<
+  'google_ads' | 'meta_ads' | 'tiktok_ads',
+  ConnectorStatusValue
+>
+
+const ALL_MANUAL: ConnectorStatusMap = {
+  google_ads: 'manual',
+  meta_ads: 'manual',
+  tiktok_ads: 'manual',
+}
+
+/** Joins names the way a person would: "Meta Ads and TikTok Ads". */
+function listNames(names: string[]): string {
+  if (names.length === 0) return ''
+  if (names.length === 1) return names[0]
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
 const STATUS_LABEL: Record<StatusValue, string> = {
@@ -596,6 +628,37 @@ export function MarketingRecommendationsDashboard() {
   const [refusals, setRefusals] = useState<
     Array<{ field: string; reason: string }>
   >([])
+  const [connectorStatuses, setConnectorStatuses] =
+    useState<ConnectorStatusMap>(ALL_MANUAL)
+
+  // Ask each provider's status route what this venue has connected. A
+  // route that fails leaves that provider on 'manual', which is the safe
+  // direction to be wrong in: it claims less than is true rather than
+  // presenting typed-in numbers as measured.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const next: ConnectorStatusMap = { ...ALL_MANUAL }
+      await Promise.all(
+        AD_PROVIDER_ENDPOINTS.map(async ({ key, url }) => {
+          try {
+            const resp = await fetch(url)
+            if (!resp.ok) return
+            const j = (await resp.json()) as {
+              connectorStatus?: ConnectorStatusValue
+            }
+            if (j.connectorStatus === 'connected') next[key] = 'connected'
+          } catch {
+            // Leave it as 'manual'.
+          }
+        }),
+      )
+      if (!cancelled) setConnectorStatuses(next)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -736,6 +799,17 @@ export function MarketingRecommendationsDashboard() {
     }, 0)
   }, [recommendations])
 
+  const { connectedNames, typedNames } = useMemo(() => {
+    const connected: string[] = []
+    const typed: string[] = []
+    for (const { key } of AD_PROVIDER_ENDPOINTS) {
+      const label = formatChannelLabel(key)
+      if (connectorStatuses[key] === 'connected') connected.push(label)
+      else typed.push(label)
+    }
+    return { connectedNames: connected, typedNames: typed }
+  }, [connectorStatuses])
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -753,11 +827,26 @@ export function MarketingRecommendationsDashboard() {
               <Info className="h-4 w-4 shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium mb-1">Where the numbers come from</p>
-                <p>
-                  Google Ads, Meta Ads and TikTok Ads numbers are entered by
-                  hand from your screenshots and spend entries until connectors
-                  are ready in a future release. The Knot and WeddingWire fees
-                  are automated.
+                {connectedNames.length > 0 ? (
+                  <p>
+                    {listNames(connectedNames)}{' '}
+                    {connectedNames.length === 1 ? 'reads' : 'read'} straight
+                    from the account, updated daily.
+                    {typedNames.length > 0
+                      ? ` ${listNames(typedNames)} ${typedNames.length === 1 ? 'is' : 'are'} still entered by hand from your own screenshots, so treat ${typedNames.length === 1 ? 'that figure' : 'those figures'} as your own record rather than a measurement. You can connect ${typedNames.length === 1 ? 'it' : 'them'} in Settings, Integrations.`
+                      : ''}
+                  </p>
+                ) : (
+                  <p>
+                    Google Ads, Meta Ads and TikTok Ads numbers are entered by
+                    hand from your own screenshots and spend entries. Connect
+                    an account in Settings, Integrations and its spend arrives
+                    on its own instead.
+                  </p>
+                )}
+                <p className="mt-1">
+                  The Knot and WeddingWire fees are monthly amounts you set
+                  once.
                 </p>
               </div>
             </div>

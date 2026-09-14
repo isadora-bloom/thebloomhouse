@@ -33,6 +33,10 @@
  *   8. Asks mergeWeddings to merge a wedding from the other venue and
  *      asserts it refuses before writing anything (W60). That is the one
  *      identity write that could move one venue's rows to another.
+ *   9. Covers the three ad-spend writers (W54): the rows they land, the
+ *      per-venue connection row each one reads its credential from, and
+ *      the status reader that decides whether a venue is told its ad
+ *      figures were measured or typed in. See checkAdSpendWriters.
  *
  * WRITES
  * ------
@@ -814,6 +818,215 @@ async function checkCommitmentWriters(
   return out
 }
 
+/**
+ * W54's writers: the three ad-spend connectors.
+ *
+ * Wave 8 turned Google Ads, Meta Ads and TikTok Ads from manual entry
+ * into real reads against a per-venue credential. Three connectors, three
+ * connection tables, one destination table. All of them run under the
+ * service key and are venue-scoped by argument rather than by policy,
+ * which is the class this battery exists for.
+ *
+ * The particular worry with an ad connector is not a cross-tenant read
+ * that errors. It is one that succeeds: venue B's token pointed at venue
+ * B's ad account, with the rows filed against venue A. Nothing would
+ * fail, and every cost-per-booking number on venue A's page would move.
+ *
+ * Four checks, all read-only:
+ *
+ *   1. Every connector-written spend row for venue A carries venue A.
+ *
+ *   2. Each connection table holds at most one row per venue, and venue
+ *      A's row carries venue A. The unique index is what makes the
+ *      per-venue status meaningful in the first place.
+ *
+ *   3. `connectorStatus(venueA)` does not go 'connected' on the strength
+ *      of venue B's token. This is the check that proves the venue filter
+ *      bites rather than merely being present in the source.
+ *
+ *   4. The sync itself is REFUSED rather than called. Every connector
+ *      writes spend rows and stamps its connection row, so running one
+ *      here would be a write this script must never make.
+ */
+async function checkAdSpendWriters(
+  venueA: string,
+  venueB: string,
+  supabase: SupabaseClient,
+): Promise<SurfaceResult[]> {
+  const out: SurfaceResult[] = []
+
+  const CONNECTOR_WRITERS = ['google_ads_connector', 'meta_ads_connector', 'tiktok_ads_connector']
+
+  // 1. Connector-written spend rows carry the venue that owns them.
+  for (const p of [
+    { venue: 'A' as const, venueId: venueA, other: venueB },
+    { venue: 'B' as const, venueId: venueB, other: venueA },
+  ]) {
+    const { data, error } = await supabase
+      .from('marketing_spend_records')
+      .select('id, venue_id, channel, campaign_id, spend_date, ingested_by')
+      .eq('venue_id', p.venueId)
+      .in('ingested_by', CONNECTOR_WRITERS)
+      .limit(500)
+
+    if (error) {
+      out.push(
+        skipResult(
+          'marketing_spend_records (connector rows)',
+          p.venue,
+          p.venueId,
+          `could not read the table — ${error.message}. Migration 263 may not have run here.`,
+        ),
+      )
+      continue
+    }
+
+    out.push(
+      await checkSurface({
+        surface: 'marketing_spend_records (connector rows)',
+        venue: p.venue,
+        venueId: p.venueId,
+        otherVenueId: p.other,
+        supabase,
+        result: data ?? [],
+      }),
+    )
+  }
+
+  // 2 + 3. Per platform: the connection rows, then the status reader.
+  const platforms: Array<{ table: string; label: string; status: (venueId: string, client: SupabaseClient) => Promise<string> }> = []
+  {
+    const [google, meta, tiktok] = await Promise.all([
+      import('@/lib/services/marketing-spend/connectors/google-ads'),
+      import('@/lib/services/marketing-spend/connectors/meta-ads'),
+      import('@/lib/services/marketing-spend/connectors/tiktok-ads'),
+    ])
+    platforms.push(
+      { table: 'google_ads_connections', label: 'Google Ads', status: google.connectorStatus },
+      { table: 'meta_ads_connections', label: 'Meta Ads', status: meta.connectorStatus },
+      { table: 'tiktok_ads_connections', label: 'TikTok Ads', status: tiktok.connectorStatus },
+    )
+  }
+
+  for (const platform of platforms) {
+    for (const p of [
+      { venue: 'A' as const, venueId: venueA, other: venueB },
+      { venue: 'B' as const, venueId: venueB, other: venueA },
+    ]) {
+      // Columns named on purpose: these tables carry a credential and the
+      // token columns are not granted to anything but the service role.
+      const { data, error } = await supabase
+        .from(platform.table)
+        .select('id, venue_id, status')
+        .eq('venue_id', p.venueId)
+        .limit(50)
+
+      if (error) {
+        out.push(
+          skipResult(
+            `${platform.table} (rows)`,
+            p.venue,
+            p.venueId,
+            `could not read the table — ${error.message}. Migration 310 or 407 may not have run here.`,
+          ),
+        )
+        continue
+      }
+
+      const rows = (data ?? []) as Array<{ venue_id: string }>
+      if (rows.length > 1) {
+        out.push(
+          failResult(
+            `${platform.table} (rows)`,
+            p.venue,
+            p.venueId,
+            `${rows.length} connection rows for one venue; the per-venue unique index is missing or broken`,
+          ),
+        )
+        continue
+      }
+
+      out.push(
+        await checkSurface({
+          surface: `${platform.table} (rows)`,
+          venue: p.venue,
+          venueId: p.venueId,
+          otherVenueId: p.other,
+          supabase,
+          result: rows,
+        }),
+      )
+    }
+
+    // The status reader must answer for the venue it was asked about.
+    // If venue B is connected and venue A is not, venue A must still read
+    // as manual; a reader that dropped its venue filter would say
+    // connected and the page would present typed-in figures as measured.
+    try {
+      const [statusA, statusB] = await Promise.all([
+        platform.status(venueA, supabase),
+        platform.status(venueB, supabase),
+      ])
+      const { data: connectedRows } = await supabase
+        .from(platform.table)
+        .select('venue_id, status')
+        .eq('status', 'connected')
+        .limit(50)
+      const connectedVenues = new Set(
+        ((connectedRows ?? []) as Array<{ venue_id: string }>).map((r) => r.venue_id),
+      )
+
+      const wrong: string[] = []
+      if (statusA === 'connected' && !connectedVenues.has(venueA)) {
+        wrong.push('venue A reads as connected with no connected row of its own')
+      }
+      if (statusB === 'connected' && !connectedVenues.has(venueB)) {
+        wrong.push('venue B reads as connected with no connected row of its own')
+      }
+
+      out.push(
+        wrong.length === 0
+          ? passResult(
+              `connectorStatus ${platform.label}`,
+              'A',
+              venueA,
+              `venue A reads ${statusA}, venue B reads ${statusB}, and each matches its own row`,
+            )
+          : failResult(
+              `connectorStatus ${platform.label}`,
+              'A',
+              venueA,
+              wrong.join('; '),
+            ),
+      )
+    } catch (err) {
+      out.push(
+        failResult(
+          `connectorStatus ${platform.label}`,
+          'A',
+          venueA,
+          `the status reader threw — ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      )
+    }
+
+    // 4. The sync is a writer. Report it, never run it.
+    out.push(
+      refusedResult(
+        `sync ${platform.label}`,
+        'A',
+        venueA,
+        'the sync writes marketing_spend_records rows and stamps its connection row, so this ' +
+          'script reports it rather than calling it. Its venue isolation is covered by the unit ' +
+          'tests in marketing-spend/connectors/__tests__/ad-connector-sync.test.ts, which assert ' +
+          "venue B's token and ad account never appear in a venue A request.",
+      ),
+    )
+  }
+
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
@@ -962,6 +1175,7 @@ async function main(): Promise<void> {
 
   results.push(...(await checkScopeHelper(venueA, venueB, supabase)))
   results.push(...(await checkCommitmentWriters(venueA, venueB, supabase)))
+  results.push(...(await checkAdSpendWriters(venueA, venueB, supabase)))
 
   printResults(venueA, venueB, results, json)
 

@@ -103,6 +103,11 @@ const WAVE_MIGRATIONS: Pending[] = [
     why: 'W50: what a couple told the venue that has no event on their running order; planning_notes.source_interaction_id; timeline.config_json declared',
     probe: tableExists('commitment_reconciliation'),
   },
+  {
+    file: '407_ad_connections.sql',
+    why: 'W54: meta_ads_connections + tiktok_ads_connections (per-venue ad account tokens), and last_synced_at on google_ads_connections. NOTE 310 must land first, it creates google_ads_connections and is in the legacy list below',
+    probe: tableExists('meta_ads_connections'),
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */
