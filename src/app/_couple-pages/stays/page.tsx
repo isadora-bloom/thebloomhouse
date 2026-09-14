@@ -14,6 +14,7 @@ import {
   Trees,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { safeHref } from '@/lib/utils/safe-url'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -260,7 +261,7 @@ export default function NearbyStaysPage() {
 
                   {stay.website_url && (
                     <a
-                      href={stay.website_url}
+                      href={safeHref(stay.website_url)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors hover:shadow-sm shrink-0"

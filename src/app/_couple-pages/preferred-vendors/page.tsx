@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
+import { safeHref } from '@/lib/utils/safe-url'
 import {
   Store,
   Star,
@@ -185,7 +186,7 @@ function VendorCard({ vendor }: { vendor: VendorRecommendation }) {
         {/* Website link */}
         {vendor.website_url && (
           <a
-            href={vendor.website_url}
+            href={safeHref(vendor.website_url)}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-xs font-medium mb-2 transition-colors"
@@ -217,7 +218,7 @@ function VendorCard({ vendor }: { vendor: VendorRecommendation }) {
               <div className="flex items-center gap-3">
                 {vendor.instagram_url && (
                   <a
-                    href={vendor.instagram_url}
+                    href={safeHref(vendor.instagram_url)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-pink-600 hover:text-pink-700 transition-colors"
@@ -228,7 +229,7 @@ function VendorCard({ vendor }: { vendor: VendorRecommendation }) {
                 )}
                 {vendor.facebook_url && (
                   <a
-                    href={vendor.facebook_url}
+                    href={safeHref(vendor.facebook_url)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 transition-colors"

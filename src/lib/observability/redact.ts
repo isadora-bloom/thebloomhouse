@@ -66,6 +66,37 @@ const CREDIT_CARD_PATTERN = /\b\d{4}[\s-]\d{4}[\s-]\d{4}[\s-]\d{4}\b/g
 // bodies) reliably exceeds 80 chars.
 const LONG_QUOTED_PATTERN = /"([^"]{80,})"/g
 
+// ---------------------------------------------------------------------------
+// Credentials (S5, 2026-09-14 security audit, item 9)
+// ---------------------------------------------------------------------------
+//
+// PII was the whole brief when this module was written. It is not the
+// only thing that leaks into a log line. An OAuth error body, a failed
+// token refresh, a 401 echoed back from a provider — all of them carry
+// live credentials, and a leaked access token is worse than a leaked
+// phone number because it acts on its own.
+//
+// Three shapes, all case-insensitive:
+//   Authorization: Bearer <token>   — the header, as printed by fetch
+//                                     debuggers and provider errors
+//   "access_token": "<token>"       — the JSON field, in any of the
+//                                     forms a serialiser emits
+//   eyJ...                          — a bare JWT, which is what most of
+//                                     the above actually contain
+
+const BEARER_PATTERN = /\b(bearer)\s+[A-Za-z0-9\-._~+/=]{8,}/gi
+
+// The key may be quoted (`"access_token": "..."`) or bare
+// (`access_token=...`), and so may the value. Everything up to the value
+// is captured verbatim so the replacement puts the line back the way it
+// found it, minus the secret.
+const TOKEN_FIELD_PATTERN =
+  /\b(access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|api[_-]?key|authorization)\b("?\s*[:=]\s*\\?"?)[A-Za-z0-9\-._~+/=]{8,}/gi
+
+// A JWT is three base64url segments separated by dots, and the header
+// segment of a JSON header almost always starts "eyJ".
+const JWT_PATTERN = /\beyJ[A-Za-z0-9\-_]{8,}\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_.+/=]*/g
+
 /**
  * Strip common PII shapes from a string. Use on any text that may
  * have come from an LLM error message, a Stripe webhook payload, or a
@@ -74,6 +105,13 @@ const LONG_QUOTED_PATTERN = /"([^"]{80,})"/g
 export function redact(text: string): string {
   if (!text) return text
   return text
+    // Credentials first. A bearer token or a JWT can be long enough to
+    // trip LONG_QUOTED_PATTERN, and "[REDACTED_QUOTE_80CHAR+]" would be
+    // a true statement that told the reader the wrong thing about what
+    // was nearly logged.
+    .replace(JWT_PATTERN, '[REDACTED_TOKEN]')
+    .replace(BEARER_PATTERN, '$1 [REDACTED_TOKEN]')
+    .replace(TOKEN_FIELD_PATTERN, '$1$2[REDACTED_TOKEN]')
     // Order matters: CC before phone (CC matches subset of phone shape
     // when stripped of separators). Email before quoted (email inside
     // a quoted string still gets caught).

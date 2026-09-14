@@ -61,6 +61,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
+import { safeRegexTest, MAX_PATTERN_LENGTH } from '@/lib/security/regex-safety'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -326,17 +327,22 @@ function matchExactPhrase(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.toLowerCase())
 }
 
+/**
+ * S5 (2026-09-14 security audit, item 4). These sources are coordinator
+ * paste, stored in `listing_platform_patterns`, and they used to be
+ * compiled and run straight at the raw haystack. `^(a+)+$` is a valid
+ * pattern and a stalled ingestion worker. safeRegexTest refuses the
+ * backtracking shapes and caps what the pattern sees, at match time as
+ * well as at add time, so rows stored before the add-endpoint check are
+ * covered too.
+ */
 function matchRegex(haystack: string, regexSource: string): boolean {
-  try {
-    const re = new RegExp(regexSource, 'im')
-    return re.test(haystack)
-  } catch (err) {
-    console.warn('[listing-platform-detector] bad regex pattern; skipping', {
-      regexSource,
-      err: err instanceof Error ? err.message : String(err),
+  return safeRegexTest(regexSource, haystack, (reason) => {
+    console.warn('[listing-platform-detector] refused stored pattern; skipping', {
+      regexSource: regexSource.slice(0, MAX_PATTERN_LENGTH),
+      reason,
     })
-    return false
-  }
+  })
 }
 
 // ---------------------------------------------------------------------------

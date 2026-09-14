@@ -4,8 +4,10 @@ import {
   unauthorized,
   badRequest,
   serverError,
+  refuseDemo,
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { requireAgencyScope } from '@/lib/services/intel/agency-access'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createDocument } from '@/lib/services/intel/marketing-agency-profile'
 
@@ -79,14 +81,22 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
-  if (auth.isDemo) {
-    return NextResponse.json(
-      { error: 'demo cannot upload documents' },
-      { status: 403 },
-    )
-  }
   const { id: agencyId } = await ctx.params
   if (!agencyId) return badRequest('agency id required')
+  // S5 (2026-09-14 audit item 5). Two jobs, and both have to happen
+  // before `storagePath` is built further down: prove the agency belongs
+  // to the caller's venue, and prove the id is a uuid. The id is
+  // interpolated into the object key as `${agencyId}/...`, so without the
+  // shape check a caller-supplied segment carrying `..` or a slash writes
+  // outside its own folder in the bucket. requireAgencyScope does both
+  // and returns 400 on a malformed id.
+  const denied = await requireAgencyScope(agencyId, auth)
+  if (denied) return denied
+  // S5 (2026-09-14 audit item 5): the demo identity is an anonymous
+  // visitor sharing one seeded venue. It may read an agency; it may not
+  // change one.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let form: FormData
   try {

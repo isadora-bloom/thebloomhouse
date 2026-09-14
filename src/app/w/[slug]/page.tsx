@@ -21,6 +21,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useParams, useSearchParams } from 'next/navigation'
+import { safeHref } from '@/lib/utils/safe-url'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1577,7 +1578,7 @@ function RegistrySection({ data, website, theme, accent, accentRgb }: {
         {filtered.map((link, i) => (
           <a
             key={i}
-            href={link.url}
+            href={safeHref(link.url)}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-lg border-2 text-sm font-medium transition-all hover:shadow-md"
@@ -1836,7 +1837,7 @@ function AccommodationsSection({ data, accommodations, theme, accent, accentRgb 
               )}
               {acc.website_url && (
                 <a
-                  href={acc.website_url}
+                  href={safeHref(acc.website_url)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-xs mt-2 transition-opacity hover:opacity-70"
@@ -1858,7 +1859,7 @@ function AccommodationsSection({ data, accommodations, theme, accent, accentRgb 
               <span className="text-sm" style={{ color: theme.textColor }}>{stay.name}</span>
               {stay.url && (
                 <a
-                  href={stay.url}
+                  href={safeHref(stay.url)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs flex items-center gap-1 transition-opacity hover:opacity-70"

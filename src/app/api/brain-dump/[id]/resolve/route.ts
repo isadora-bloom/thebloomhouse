@@ -19,6 +19,7 @@ import {
   readParseResultKind,
 } from '@/lib/services/brain-dump/parse-result-schema'
 import { generateBrainDumpSummaryBounded } from '@/lib/services/brain-dump/summary'
+import { pgLikeValue } from '@/lib/supabase/filter-escape'
 
 /**
  * Resolve a pending brain-dump clarification.
@@ -505,7 +506,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .from('user_profiles')
       .select('id, first_name, last_name')
       .eq('venue_id', auth.venueId)
-      .or(`first_name.ilike.%${trimmed}%,last_name.ilike.%${trimmed}%`)
+      // S5 (2026-09-14 audit item 12): `.or()` takes the filter grammar
+      // as one string, so an unescaped value can add conditions of its
+      // own. pgLikeValue quotes it and escapes the ilike wildcards.
+      .or(
+        `first_name.ilike.${pgLikeValue(trimmed)},last_name.ilike.${pgLikeValue(trimmed)}`,
+      )
       .limit(1)
       .maybeSingle()
     await createNotification({

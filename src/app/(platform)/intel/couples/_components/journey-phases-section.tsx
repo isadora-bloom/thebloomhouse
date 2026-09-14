@@ -18,6 +18,7 @@ import {
   type PhaseTouchpoint,
 } from '@/lib/intel/adapters/journey-phases'
 import { humanActionLabel } from '@/lib/services/identity/action-labels'
+import { safeHref } from '@/lib/utils/safe-url'
 
 const DAY_MS = 86_400_000
 
@@ -119,7 +120,7 @@ export function JourneyPhasesSection({ journey }: { journey: JourneyForPhases | 
               chip.url ? (
                 <a
                   key={chip.platform}
-                  href={chip.url}
+                  href={safeHref(chip.url)}
                   target="_blank"
                   rel="noreferrer"
                   className="flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-0.5 text-xs text-violet-800 hover:border-violet-300 hover:bg-violet-100"

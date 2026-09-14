@@ -30,6 +30,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { assessRegexSafety } from '@/lib/security/regex-safety'
 import {
   getPlatformAuth,
   unauthorized,
@@ -141,20 +142,19 @@ export async function POST(req: NextRequest) {
   }
   // Defensive: cap pattern length so a coordinator pasting a whole
   // email body doesn't poison the detector with a 5kb substring
-  // search.
+  // search. Regexes get the tighter cap below.
   if (body.patternValue.length > 500) {
     return badRequest('patternValue too long; cap is 500 chars')
   }
 
-  // Regex sanity check at edge — compile to surface bad patterns
-  // before they hit the detector loop.
+  // S5 (2026-09-14 security audit, item 4). Compiling was never enough:
+  // `^(a+)+$` compiles and then stalls the ingestion worker on any long
+  // body. assessRegexSafety refuses nested quantifiers and
+  // backreferences, and caps the source at MAX_PATTERN_LENGTH.
   if (body.patternType === 'regex') {
-    try {
-      new RegExp(body.patternValue, 'im')
-    } catch (err) {
-      return badRequest(
-        `regex did not compile: ${err instanceof Error ? err.message : String(err)}`,
-      )
+    const verdict = assessRegexSafety(body.patternValue)
+    if (!verdict.ok) {
+      return badRequest(`regex rejected: ${verdict.reason}`)
     }
   }
 

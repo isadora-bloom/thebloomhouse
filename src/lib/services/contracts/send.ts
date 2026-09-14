@@ -244,10 +244,26 @@ export async function sendContract(input: {
 
   if (!result.ok) {
     console.error('[contracts/send] transport refused the send:', result.error)
+    // S5 (2026-09-14 audit item 7). Retire the credential we just minted.
+    // The signing link's thirty-day clock runs from sent_at, and sent_at
+    // is only written on a successful send — so a token left behind by a
+    // refused send would be the one link in the system with no clock on
+    // it at all. It was never emailed to anybody, so nothing is lost by
+    // taking it back, and the coordinator just presses Send again.
+    const { error: retireError } = await db
+      .from('contracts')
+      .update({ sign_token: null })
+      .eq('id', contract.id as string)
+      .eq('venue_id', input.venueId)
+    if (retireError) {
+      console.error(
+        '[contracts/send] could not retire the unsent link:',
+        redactError(retireError),
+      )
+    }
     return {
       ok: false,
-      reason: 'The email did not go out. Nothing has changed; try again in a moment.',
-      signUrl,
+      reason: 'The email did not go out. Nothing has been sent; try again in a moment.',
     }
   }
 

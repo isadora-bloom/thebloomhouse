@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import { safeHref } from '@/lib/utils/safe-url'
 import {
   ScrollText,
   Plus,
@@ -897,7 +898,7 @@ export default function RulesEditorPage() {
                             <p className="text-[11px] text-sage-400 mt-1 flex items-center gap-1">
                               <Tag className="w-3 h-3" />
                               {rule.source_url ? (
-                                <a href={rule.source_url} target="_blank" rel="noopener noreferrer" className="hover:text-teal-600 hover:underline transition-colors">
+                                <a href={safeHref(rule.source_url)} target="_blank" rel="noopener noreferrer" className="hover:text-teal-600 hover:underline transition-colors">
                                   {rule.source_reference}
                                 </a>
                               ) : (

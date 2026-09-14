@@ -309,7 +309,14 @@ export async function getZoomClient(
     }
 
     if (!tokens.access_token) {
-      console.error('[zoom] refresh returned no access_token:', tokens)
+      // S5 (2026-09-14 security audit, item 9): log the KEYS, never the
+      // object. When a refresh half-succeeds the payload still carries a
+      // refresh_token, and printing it put a live credential into stdout
+      // and from there into whatever aggregates our logs.
+      console.error(
+        '[zoom] refresh returned no access_token; keys:',
+        Object.keys(tokens),
+      )
       await markInactive(conn.id)
       throw new Error('reconnect needed')
     }
@@ -458,6 +465,27 @@ export async function fetchRecordings(
 // ---------------------------------------------------------------------------
 
 /**
+ * True only for https URLs on zoom.us itself or one of its subdomains.
+ *
+ * S5 (2026-09-14 security audit, item 9). Deliberately a suffix match on
+ * the parsed hostname rather than a regex over the string: `https://
+ * evil.example/?x=.zoom.us` and `https://zoom.us.evil.example/` both read
+ * as Zoom to a naive substring check and neither is.
+ */
+export function isZoomHost(rawUrl: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== 'https:') return false
+  if (parsed.username || parsed.password) return false
+  const host = parsed.hostname.toLowerCase()
+  return host === 'zoom.us' || host.endsWith('.zoom.us')
+}
+
+/**
  * Fetch a TRANSCRIPT recording_file's download_url and return the cleaned
  * spoken text. Zoom transcript URLs require the access token either as a
  * Bearer header OR as a `?access_token=` query param. We use the header.
@@ -469,6 +497,16 @@ export async function extractTranscriptText(
   accessToken: string
 ): Promise<string> {
   try {
+    // S5 (2026-09-14 security audit, item 9). The URL comes back inside
+    // Zoom's recording payload, and the token went onto it unconditionally.
+    // Anything that could bend that payload — a compromised account, a
+    // meeting whose recording metadata we do not fully control — got our
+    // Zoom bearer token posted to a host of its choosing. Assert the host
+    // before the Authorization header is attached, not after.
+    if (!isZoomHost(transcriptUrl)) {
+      console.error('[zoom] refusing to send the access token off-Zoom')
+      return ''
+    }
     const res = await fetch(transcriptUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })

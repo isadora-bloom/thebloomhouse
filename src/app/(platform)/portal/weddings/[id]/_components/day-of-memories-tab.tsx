@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { Camera, Film, MessageSquare, Trash2, Upload, Loader2, ExternalLink } from 'lucide-react'
+import { safeHref } from '@/lib/utils/safe-url'
 
 const BUCKET = 'day-of-media'
 
@@ -273,7 +274,7 @@ export function DayOfMemoriesTab({ weddingId, venueId }: Props) {
                     />
                     <div className="flex items-center justify-between gap-2 mt-auto">
                       <a
-                        href={item.url}
+                        href={safeHref(item.url)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-xs text-sage-500 hover:text-sage-700"

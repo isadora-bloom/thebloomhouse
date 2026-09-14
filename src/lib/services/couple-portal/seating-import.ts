@@ -275,6 +275,170 @@ function buildChart(
 }
 
 // ---------------------------------------------------------------------------
+// Shape validation for the commit payload
+// ---------------------------------------------------------------------------
+
+/**
+ * S5 (2026-09-14 security audit, item 11).
+ *
+ * The commit step takes the chart back from the browser as a JSON string
+ * and used to `JSON.parse` it and cast straight to ParsedSeatingChart. A
+ * cast is not a check: the couple's own form post decided what got
+ * written, how many rows got written, and what type every field was. A
+ * chart with 200,000 tables is a database-filling DoS that needs no
+ * exploit at all, just a loop in the console; a table_name that is an
+ * object rather than a string reaches the query builder as one.
+ *
+ * So the payload is parsed properly here, with caps that are an order of
+ * magnitude past any real wedding. Numbers are clamped rather than
+ * rejected, strings are trimmed and bounded, unknown fields are dropped.
+ * What comes out is a ParsedSeatingChart the commit path can trust.
+ */
+
+/** A very large wedding is 60 tables. Two hundred is not a real chart. */
+export const MAX_IMPORT_TABLES = 200
+/** A very large table is 14. A hundred is not a real table. */
+export const MAX_GUESTS_PER_TABLE = 100
+/** Across the whole chart. */
+export const MAX_IMPORT_GUESTS = 3000
+const MAX_NAME_CHARS = 200
+const MAX_NOTE_CHARS = 2000
+
+export class SeatingChartShapeError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SeatingChartShapeError'
+  }
+}
+
+const TABLE_TYPES: ReadonlySet<string> = new Set([
+  'round',
+  'rectangular',
+  'head',
+  'sweetheart',
+  'farm',
+  'cocktail',
+])
+
+const RSVP_STATUSES: ReadonlySet<string> = new Set([
+  'attending',
+  'pending',
+  'maybe',
+  'declined',
+])
+
+function str(value: unknown, max: number): string | null {
+  if (typeof value !== 'string') return null
+  const t = value.trim()
+  if (!t) return null
+  return t.slice(0, max)
+}
+
+function int(value: unknown, min: number, max: number): number | null {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return null
+  return Math.max(min, Math.min(max, Math.round(n)))
+}
+
+export function validateParsedSeatingChart(raw: unknown): ParsedSeatingChart {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new SeatingChartShapeError('chart must be an object')
+  }
+  const input = raw as Record<string, unknown>
+
+  if (!Array.isArray(input.tables)) {
+    throw new SeatingChartShapeError('chart.tables must be an array')
+  }
+  if (input.tables.length > MAX_IMPORT_TABLES) {
+    throw new SeatingChartShapeError(
+      `That chart has ${input.tables.length} tables; the limit is ${MAX_IMPORT_TABLES}.`,
+    )
+  }
+
+  const tables: ImportedTable[] = []
+  let totalGuests = 0
+
+  for (const rawTable of input.tables) {
+    if (!rawTable || typeof rawTable !== 'object' || Array.isArray(rawTable)) {
+      throw new SeatingChartShapeError('every table must be an object')
+    }
+    const t = rawTable as Record<string, unknown>
+
+    const tableName = str(t.table_name, MAX_NAME_CHARS)
+    if (!tableName) {
+      throw new SeatingChartShapeError('every table needs a name')
+    }
+
+    const rawGuests = Array.isArray(t.guests) ? t.guests : []
+    if (rawGuests.length > MAX_GUESTS_PER_TABLE) {
+      throw new SeatingChartShapeError(
+        `"${tableName}" has ${rawGuests.length} guests; the limit per table is ${MAX_GUESTS_PER_TABLE}.`,
+      )
+    }
+
+    const guests: ImportedGuest[] = []
+    for (const rawGuest of rawGuests) {
+      if (!rawGuest || typeof rawGuest !== 'object' || Array.isArray(rawGuest)) {
+        throw new SeatingChartShapeError('every guest must be an object')
+      }
+      const g = rawGuest as Record<string, unknown>
+      const fullName = str(g.full_name, MAX_NAME_CHARS)
+      const firstName = str(g.first_name, MAX_NAME_CHARS) ?? fullName
+      if (!fullName || !firstName) {
+        throw new SeatingChartShapeError('every guest needs a name')
+      }
+      const rsvp = str(g.rsvp_status, 32)
+      guests.push({
+        full_name: fullName,
+        first_name: firstName,
+        last_name: str(g.last_name, MAX_NAME_CHARS),
+        relationship: str(g.relationship, MAX_NAME_CHARS),
+        coordinator_notes: str(g.coordinator_notes, MAX_NOTE_CHARS),
+        dietary_restrictions: str(g.dietary_restrictions, MAX_NOTE_CHARS),
+        rsvp_status:
+          rsvp && RSVP_STATUSES.has(rsvp)
+            ? (rsvp as ImportedGuest['rsvp_status'])
+            : null,
+        seat_number: int(g.seat_number, 0, MAX_GUESTS_PER_TABLE),
+      })
+    }
+
+    totalGuests += guests.length
+    if (totalGuests > MAX_IMPORT_GUESTS) {
+      throw new SeatingChartShapeError(
+        `That chart has more than ${MAX_IMPORT_GUESTS} guests, which is past what this import handles.`,
+      )
+    }
+
+    const tableType = str(t.table_type, 32)
+    tables.push({
+      table_name: tableName,
+      table_type:
+        tableType && TABLE_TYPES.has(tableType)
+          ? (tableType as ImportedTable['table_type'])
+          : 'round',
+      capacity: int(t.capacity, 0, MAX_GUESTS_PER_TABLE) ?? guests.length,
+      notes: str(t.notes, MAX_NOTE_CHARS),
+      guests,
+    })
+  }
+
+  const warnings = Array.isArray(input.warnings)
+    ? input.warnings
+        .map((w) => str(w, MAX_NOTE_CHARS))
+        .filter((w): w is string => w !== null)
+        .slice(0, 100)
+    : []
+
+  return {
+    tables,
+    global_notes: str(input.global_notes, MAX_NOTE_CHARS * 5),
+    total_guests: totalGuests,
+    warnings,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Commit parsed chart to DB
 // ---------------------------------------------------------------------------
 

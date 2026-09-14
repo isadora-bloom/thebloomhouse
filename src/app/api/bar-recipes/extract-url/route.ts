@@ -26,6 +26,10 @@ export async function POST(request: NextRequest) {
   const weddingId = body?.weddingId?.trim()
 
   if (!url) return badRequest('Missing url')
+  // S5 (2026-09-14 security audit, item 9): refuse at the edge as well as
+  // in the service. The service is the authority; this is so a 2kb-plus
+  // paste never reaches it in the first place.
+  if (url.length > 2048) return badRequest('That URL is too long.')
   if (!weddingId) return badRequest('Missing weddingId')
   if (weddingId !== auth.weddingId) {
     return NextResponse.json({ error: 'weddingId does not match authenticated session' }, { status: 403 })

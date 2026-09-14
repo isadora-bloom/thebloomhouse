@@ -320,10 +320,12 @@ export async function generateContract(input: {
     }
   }
 
-  const { data: signed } = await db.storage
-    .from(CONTRACTS_BUCKET)
-    .createSignedUrl(storagePath, 60 * 60 * 24 * 365)
-
+  // S5 (2026-09-14 audit item 6): this used to mint a one-year signed URL
+  // and persist it in contracts.file_url. A signed URL is a bearer
+  // credential; a year of it sitting in a column is a year of anyone who
+  // can read that column holding the contract PDF itself, with no way to
+  // revoke it. The storage path below is the durable reference, and the
+  // read surfaces mint a 60-second URL when someone actually clicks.
   const { data, error } = await writeOrLog(
     db
       .from('contracts')
@@ -333,7 +335,7 @@ export async function generateContract(input: {
         filename,
         file_type: 'pdf',
         storage_path: storagePath,
-        file_url: signed?.signedUrl ?? null,
+        file_url: null,
         // The plain text goes in so the search on both contract surfaces
         // and the assistant's contract library find a generated contract
         // the same way they find an uploaded one.

@@ -23,6 +23,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { callAIJson, callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
 import { safeFetch } from '@/lib/security/safe-fetch'
+import { readCappedText, MAX_PAGE_BYTES } from '@/lib/security/fetch-limits'
 import {
   recordCall,
   shouldSkip,
@@ -138,15 +139,26 @@ import { htmlToText as stripHtml } from '@/lib/utils/html-text'
  * page directly + stripping HTML when Jina is unreachable or returns empty.
  */
 async function fetchReadableText(url: string): Promise<string> {
-  // Tier-B #88 — both fetches go through safeFetch so a couple/coordinator-
-  // supplied URL can't be steered at internal IPs (SSRF). Jina's first hop
-  // is hardcoded public (r.jina.ai) but the URL embedded in the path can
-  // chain redirects, so we still wrap it. The direct-fetch fallback hits
-  // the user URL straight on and absolutely needs SSRF protection.
-  // Try Jina first
+  // Tier-B #88 put safeFetch on both paths here, which stopped the URL
+  // being steered at an internal IP.
+  //
+  // S5 (2026-09-14 security audit, item 9) removes the second path
+  // outright. The Jina hop is pinned to r.jina.ai — a host we chose, that
+  // does the crawling on its own network — so our server never opens a
+  // connection to a stranger's address at all. The direct-fetch fallback
+  // did exactly that: same request, from inside our perimeter, with only
+  // an IP-range check between it and whatever the DNS said. safeFetch
+  // documents its own DNS-rebinding gap, and that gap is only closed by
+  // not making the request. A recipe that Jina cannot read is a recipe
+  // the couple types in; that is a smaller loss than the hole.
+  //
+  // Bodies are read with a ceiling. `res.text()` on a slow endless
+  // response is a memory-exhaustion primitive, and 2 MB is several times
+  // any real recipe page's text.
+  let res: Response
   try {
     const jinaUrl = `https://r.jina.ai/${url}`
-    const res = await safeFetch(
+    res = await safeFetch(
       jinaUrl,
       {
         headers: { 'User-Agent': 'BloomHouse-Recipe-Extractor/1.0' },
@@ -154,28 +166,21 @@ async function fetchReadableText(url: string): Promise<string> {
       },
       { hostAllowlist: ['r.jina.ai'] },
     )
-    if (res.ok) {
-      const text = await res.text()
-      if (text && text.trim().length > 100) return text.slice(0, 20_000)
-    }
   } catch {
-    // fall through to direct fetch
+    throw new Error('Could not fetch recipe page (the reader did not answer).')
   }
 
-  // Direct fetch fallback. SSRF-guarded.
-  const res = await safeFetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    },
-    signal: AbortSignal.timeout(12_000),
-  })
   if (!res.ok) {
     throw new Error(`Could not fetch recipe page (HTTP ${res.status}).`)
   }
-  const html = await res.text()
-  const stripped = stripHtml(html).slice(0, 20_000)
-  if (!stripped) throw new Error('The recipe page returned an empty body.')
+
+  const text = await readCappedText(res, MAX_PAGE_BYTES)
+  // Jina returns markdown, but a site that served HTML through it still
+  // arrives as HTML, so strip either way.
+  const stripped = stripHtml(text).slice(0, 20_000)
+  if (!stripped || stripped.trim().length === 0) {
+    throw new Error('The recipe page returned an empty body.')
+  }
   return stripped
 }
 
@@ -331,8 +336,15 @@ export async function extractRecipeFromUrl(
   weddingId: string,
   venueId: string
 ): Promise<BarRecipeRow> {
-  if (!/^https?:\/\//i.test(url)) {
-    throw new RecipeValidationError('URL must start with http:// or https://')
+  // S5 (2026-09-14 security audit, item 9): https only. The page is
+  // fetched through r.jina.ai either way, so plain http bought nothing
+  // except a downgrade for the hop the reader makes on our behalf. Cap
+  // the length too, since the URL is interpolated into the reader's path.
+  if (!/^https:\/\//i.test(url)) {
+    throw new RecipeValidationError('URL must start with https://')
+  }
+  if (url.length > 2048) {
+    throw new RecipeValidationError('That URL is too long.')
   }
 
   const pageText = await fetchReadableText(url)

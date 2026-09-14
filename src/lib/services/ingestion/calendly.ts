@@ -290,7 +290,16 @@ export async function runCalendlyUriBackfill(): Promise<{
 }
 
 async function calendlyGet<T>(token: string, path: string): Promise<T> {
-  const url = path.startsWith('http') ? path : `${CALENDLY_BASE}${path}`
+  // S5 (2026-09-14 security audit, item 9). This used to read
+  // `path.startsWith('http') ? path : CALENDLY_BASE + path`, so any caller
+  // who passed an absolute URL sent the venue's Calendly bearer token to
+  // that host. Every caller in this file passes a relative path, so the
+  // branch bought nothing and cost a credential-forwarding primitive.
+  // Paths are relative, full stop.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith('//')) {
+    throw new Error('calendlyGet takes a relative path, not a URL')
+  }
+  const url = `${CALENDLY_BASE}${path.startsWith('/') ? path : `/${path}`}`
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,

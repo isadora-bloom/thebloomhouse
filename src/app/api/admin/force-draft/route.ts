@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, forbidden, badRequest } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { pgLikeValue } from '@/lib/supabase/filter-escape'
 import {
   generateInquiryDraft,
   BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION,
@@ -99,7 +100,13 @@ export async function POST(req: NextRequest) {
           .from('people')
           .select('id, wedding_id, first_name, last_name')
           .eq('venue_id', venueId)
-          .or(`first_name.ilike.${pattern},last_name.ilike.${pattern}`)
+          // S5 (2026-09-14 audit item 12): `.ilike('from_name', pattern)`
+          // above is parameterised and fine. This one is not — `.or()`
+          // takes the filter grammar as a single string, so the name has
+          // to be quoted and its wildcards escaped before it goes in.
+          .or(
+            `first_name.ilike.${pgLikeValue(trimmed)},last_name.ilike.${pgLikeValue(trimmed)}`,
+          )
           .limit(5)
 
         const weddingIdsFound = (people ?? [])

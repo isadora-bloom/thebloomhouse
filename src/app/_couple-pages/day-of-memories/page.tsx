@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { Camera, Film, MessageSquare, Loader2, Download } from 'lucide-react'
+import { safeHref } from '@/lib/utils/safe-url'
 
 type Category = 'photo' | 'video' | 'video_message'
 
@@ -149,7 +150,7 @@ function MediaCard({ item }: { item: DayOfMediaRow }) {
         </div>
         {item.caption && <p className="text-sm text-sage-800 leading-snug">{item.caption}</p>}
         <a
-          href={item.url}
+          href={safeHref(item.url)}
           download={item.filename ?? undefined}
           className="mt-auto inline-flex items-center gap-1.5 text-xs text-sage-600 hover:text-sage-900"
         >

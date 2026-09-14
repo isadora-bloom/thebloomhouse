@@ -136,7 +136,22 @@ export async function middleware(request: NextRequest) {
     // its UI hint reuse the same cookie options the /demo Server Action
     // uses (demoTokenCookieOptions / demoHintCookieOptions) so both entry
     // paths mint an identical cookie shape.
-    const cookieOpts = { path: '/', maxAge: 86400 } as const
+    // S5 (2026-09-14 security audit, item 12) — these three lines only.
+    // The legacy trio went out with no `secure` and no `sameSite`, which
+    // meant bloom_scope (a JSON blob naming the venue) and bloom_venue (a
+    // venue uuid) travelled over plain http on any downgrade and rode
+    // along on cross-site requests. They are not auth — the signed
+    // bloom_demo_token below is — but they are venue identity, and there
+    // is no reason for them to have weaker flags than the token sitting
+    // next to them. httpOnly is deliberately NOT set: client components
+    // read bloom_scope and bloom_venue via document.cookie.
+    // The rest of this file is S1's this round.
+    const cookieOpts = {
+      path: '/',
+      maxAge: 86400,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax' as const,
+    }
     response.cookies.set('bloom_demo', demoCookies.bloom_demo, cookieOpts)
     response.cookies.set('bloom_venue', demoCookies.bloom_venue, cookieOpts)
     response.cookies.set('bloom_scope', demoCookies.bloom_scope, cookieOpts)

@@ -48,6 +48,58 @@ type Db = SupabaseClient
 const SIGNING_COLUMNS =
   'id, filename, status, kind, generated_from, sent_at, viewed_at, signed_at, signed_name'
 
+/**
+ * How long a signing link stays live. S5 (2026-09-14 security audit,
+ * item 7).
+ *
+ * Before this, a signing link never expired and was never retired. The
+ * couple's email, their inbox provider's index, a forwarded thread, a
+ * screenshot in a planning group chat: every copy stayed a working
+ * credential for a document with their names, their venue, their figures
+ * and their typed signature on it, for as long as the row existed.
+ *
+ * Thirty days is measured from `contracts.sent_at`, which is the moment
+ * the current link was emailed. Re-sending mints a new token and resets
+ * the clock, so a couple who ask for it again get a fresh thirty days
+ * rather than being told a link they were just sent has expired.
+ *
+ * There is no new column here on purpose: this workstream does not touch
+ * migrations, and sent_at already means exactly "when did the link the
+ * couple is holding go out".
+ */
+export const SIGN_TOKEN_TTL_DAYS = 30
+
+const SIGN_TOKEN_TTL_MS = SIGN_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000
+
+/**
+ * True when the link is past its thirty days, or when the row has no
+ * sent_at at all.
+ *
+ * A live token with no sent_at should not exist — send.ts retires the
+ * token when the transport refuses — but a legacy row could carry one,
+ * and "we cannot tell when this was sent" is not a reason to let it work
+ * forever.
+ */
+export function signTokenExpired(
+  sentAt: unknown,
+  now: Date = new Date(),
+): boolean {
+  if (typeof sentAt !== 'string' || !sentAt) return true
+  const sent = Date.parse(sentAt)
+  if (Number.isNaN(sent)) return true
+  return now.getTime() - sent > SIGN_TOKEN_TTL_MS
+}
+
+const EXPIRED = {
+  ok: false as const,
+  reason: 'This link has expired. Ask the venue to send it again.',
+}
+
+/** The two statuses that mean a signing link is out in the world. */
+function linkIsLive(status: unknown): boolean {
+  return status === 'sent' || status === 'viewed'
+}
+
 export function hashSignToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
@@ -151,6 +203,19 @@ export async function loadContractForSigning(
   if (!row) return NOT_FOUND
 
   const record = row as unknown as Record<string, unknown>
+
+  // S5 (2026-09-14 audit item 7). Thirty days from the send, then the
+  // link is nothing. Checked before the projection is built so an expired
+  // link does not even render the contract body — an expired credential
+  // must not still read out the couple's figures.
+  //
+  // Only the two statuses that mean "a link is out there" carry the
+  // clock. A draft has never been sent and a void one is refused on its
+  // own terms, both with messages that say more than "expired" would.
+  if (linkIsLive(record.status) && signTokenExpired(record.sent_at, now)) {
+    return EXPIRED
+  }
+
   const view = toPublicView(record)
   if (!view) return NOT_FOUND
 
@@ -237,6 +302,12 @@ export async function signContract(input: {
   const permission = canSign(view.status)
   if (!permission.ok) return { ok: false, reason: permission.reason }
 
+  // S5 (2026-09-14 audit item 7): same thirty-day bound as the read path.
+  // An expired link must not be able to put a signature on a contract.
+  // After canSign, so a draft or a withdrawn contract still gets the
+  // refusal that actually explains itself.
+  if (signTokenExpired(record.sent_at, now)) return EXPIRED
+
   const signedName = input.typedName.trim()
   const signedAt = now.toISOString()
 
@@ -247,6 +318,13 @@ export async function signContract(input: {
       signed_at: signedAt,
       signed_name: signedName,
       signed_ip: input.ip?.slice(0, 64) ?? null,
+      // S5 (2026-09-14 audit item 7). The link has done its one job.
+      // Retiring the token here means the signed contract — the version
+      // with their typed name on it — is not sitting behind a URL in an
+      // inbox any more. It stays reachable to the authenticated couple
+      // through the portal's contract library, which is the surface that
+      // knows who is asking.
+      sign_token: null,
     })
     .eq('id', record.id as string)
     // The single-use guard. Anything already signed or withdrawn matches
