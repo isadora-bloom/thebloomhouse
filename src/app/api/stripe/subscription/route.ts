@@ -30,11 +30,26 @@ export async function GET(_request: NextRequest) {
     const serviceSupabase = createServiceClient()
     const { data: profile } = await serviceSupabase
       .from('user_profiles')
-      .select('venue_id')
+      .select('venue_id, role')
       .eq('id', user.id)
       .maybeSingle()
 
-    const venueId = (profile?.venue_id as string | null) ?? null
+    if (!profile) {
+      return NextResponse.json({ error: 'User profile not found.' }, { status: 404 })
+    }
+    // Billing is an owner's decision. Anyone signed in used to be able to
+    // start a subscription, open the billing portal or read what the venue
+    // pays — coordinators included, and a coordinator is often somebody the
+    // venue hired last month. Restricted to the roles that own the account.
+    const billingRoles = ['org_admin', 'super_admin', 'venue_manager', 'manager']
+    if (!billingRoles.includes(profile.role as string)) {
+      return NextResponse.json(
+        { error: 'Billing is managed by your venue manager or organisation admin.' },
+        { status: 403 }
+      )
+    }
+
+    const venueId = (profile.venue_id as string | null) ?? null
     if (!venueId) {
       return NextResponse.json({ error: 'No venue.' }, { status: 400 })
     }

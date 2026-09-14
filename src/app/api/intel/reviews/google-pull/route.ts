@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { pollGooglePlacesForVenue } from '@/lib/services/reviews/google-places'
 
@@ -23,6 +23,10 @@ export async function POST(req: NextRequest) {
 
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const result = await pollGooglePlacesForVenue(auth.venueId)
   return NextResponse.json(result, { status: result.ok ? 200 : 400 })

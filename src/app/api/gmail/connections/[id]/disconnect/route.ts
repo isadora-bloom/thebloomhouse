@@ -12,7 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { recordCounter } from '@/lib/observability/metrics'
 import { redactError } from '@/lib/observability/redact'
@@ -44,6 +44,10 @@ export async function DELETE(
   if (!auth) {
     return NextResponse.json({ ok: false, reason: 'unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const { id } = await ctx.params
   if (!id || typeof id !== 'string') {

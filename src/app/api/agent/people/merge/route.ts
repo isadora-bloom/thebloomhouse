@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { mergePeople, undoMerge } from '@/lib/services/identity/merge-people'
 
 /**
@@ -14,6 +14,10 @@ import { mergePeople, undoMerge } from '@/lib/services/identity/merge-people'
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: {
     keepPersonId?: string
@@ -78,6 +82,10 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   const mergeId = request.nextUrl.searchParams.get('mergeId')
   if (!mergeId) return NextResponse.json({ error: 'mergeId is required' }, { status: 400 })
 

@@ -6,7 +6,7 @@ import {
   editAndApproveDraft,
   sendApprovedDraft,
 } from '@/lib/services/email/pipeline'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // GET — List drafts
@@ -79,6 +79,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
+
   try {
     const body = await request.json()
     const { draftId, action, editedBody, reason } = body
@@ -134,6 +138,10 @@ export async function PATCH(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     const body = await request.json()

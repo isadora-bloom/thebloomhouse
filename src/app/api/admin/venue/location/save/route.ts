@@ -30,6 +30,8 @@ import {
   forbidden,
   serverError,
   assertCanAccessVenue,
+  requireRole,
+  MANAGER_ROLES,
 } from '@/lib/api/auth-helpers'
 
 export const maxDuration = 30
@@ -57,6 +59,11 @@ export async function POST(req: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) return forbidden('demo cannot save venue location')
+
+  // The address drives the weather station, the trends metro and the
+  // census geography every intel surface reads. Venue configuration.
+  const roleRefusal = requireRole(auth, MANAGER_ROLES)
+  if (roleRefusal) return roleRefusal
 
   let body: SaveBody
   try {

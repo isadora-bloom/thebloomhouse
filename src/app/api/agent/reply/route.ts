@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/email/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
 import { writeOrLog } from '@/lib/db/write-or-log'
@@ -17,6 +17,10 @@ export async function POST(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     const { interactionId, body } = await request.json()

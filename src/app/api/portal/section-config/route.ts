@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  refuseDemo,
+  unauthorized,
+  forbidden,
+  badRequest,
+  serverError,
+} from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // Portal Section Config API

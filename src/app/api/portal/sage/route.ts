@@ -10,7 +10,11 @@ import { checkEscalationForVenue } from '@/config/escalation-keywords'
 import { callAIVision, CLAUDE_MODEL, AIUnavailableError, COUPLE_AI_UNAVAILABLE_MESSAGE } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
-import { getCoupleAuth, getPlatformAuth } from '@/lib/api/auth-helpers'
+import {
+  getCoupleAuth,
+  getPlatformAuth,
+  isDemoVenueAllowed,
+} from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE, DEMO_VENUE_ID as DEMO_VENUE_CONSTANT } from '@/lib/services/demo-token'
 import { createLogger } from '@/lib/observability/logger'
@@ -104,7 +108,14 @@ export async function POST(request: NextRequest) {
         if (!platform) {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
-        if (platform.venueId !== venueId) {
+        // A demo session is allowed here — talking to Sage is what the
+        // demo is for — but only against a Crestwood venue. Anything else
+        // is a real venue's knowledge base and a real venue's LLM spend.
+        if (platform.isDemo) {
+          if (!isDemoVenueAllowed(venueId)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+          }
+        } else if (platform.venueId !== venueId) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
         }
         if (weddingId) {

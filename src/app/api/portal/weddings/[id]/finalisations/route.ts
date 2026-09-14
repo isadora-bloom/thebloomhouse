@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, refuseDemo, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
 
 /**
  * Coordinator-only API for managing per-section staff sign-off.
@@ -21,9 +21,16 @@ interface Params {
   params: Promise<{ id: string }>
 }
 
-async function authorise(weddingId: string) {
+async function authorise(weddingId: string, opts: { write?: boolean } = {}) {
   const auth = await getPlatformAuth()
   if (!auth) return { error: unauthorized(), auth: null }
+
+  // The demo identity is an anonymous visitor. It may read a Crestwood
+  // wedding; it may not sign a section off.
+  if (opts.write) {
+    const demoRefusal = refuseDemo(auth)
+    if (demoRefusal) return { error: demoRefusal, auth: null }
+  }
 
   const supabase = createServiceClient()
   const { data: wedding } = await supabase
@@ -73,7 +80,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
 export async function POST(req: NextRequest, { params }: Params) {
   const { id: weddingId } = await params
   try {
-    const result = await authorise(weddingId)
+    const result = await authorise(weddingId, { write: true })
     if (result.error) return result.error
     const { auth, supabase, venueId } = result
 

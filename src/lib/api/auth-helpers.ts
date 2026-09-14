@@ -252,6 +252,137 @@ export function forbidden(reason: string) {
 }
 
 // ---------------------------------------------------------------------------
+// refuseDemo — the demo identity may read, it may not write.
+//
+// getPlatformAuth() returns a fully-formed coordinator whenever the signed
+// bloom_demo_token cookie verifies. There is no Supabase user behind it and
+// no human who can be held to anything. Read paths are the point of the
+// demo; write paths are an anonymous visitor mutating a venue.
+//
+// Returns a 403 response when the caller is a demo session, or null when
+// it isn't, so a route reads:
+//
+//     const auth = await getPlatformAuth()
+//     if (!auth) return unauthorized()
+//     const demo = refuseDemo(auth)
+//     if (demo) return demo
+//
+// Accepts null so dual-auth routes (platform session OR CRON_SECRET) can
+// call it unconditionally: a cron caller has no auth object and no demo
+// cookie, and gets null back.
+//
+// Enforced by scripts/check-demo-refused-on-writes.mjs.
+// ---------------------------------------------------------------------------
+export function refuseDemo(
+  auth: { isDemo?: boolean } | null | undefined,
+): NextResponse | null {
+  if (auth?.isDemo) {
+    return NextResponse.json(
+      { error: 'Forbidden: the demo is read-only' },
+      { status: 403 },
+    )
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// requireRole — role gate for routes that change configuration rather than
+// day-to-day data.
+//
+// The real role vocabulary is coordinator | manager | venue_manager |
+// org_admin | super_admin (user_profiles.role, plus the middleware's
+// readonly). Several routes were checking for 'admin', a value no row has
+// ever carried, so the check passed nobody and blocked nobody depending on
+// which way the surrounding condition ran.
+//
+// Returns a 403 response when the caller's role is outside `roles`, or null
+// when it is inside. Demo sessions are refused outright — the demo
+// coordinator has no business in an admin gate whatever the list says.
+// ---------------------------------------------------------------------------
+export function requireRole(
+  auth: PlatformAuth,
+  roles: readonly string[],
+): NextResponse | null {
+  if (auth.isDemo) return refuseDemo(auth)
+  if (!roles.includes(auth.role)) {
+    return NextResponse.json(
+      { error: `Forbidden: requires ${roles.join(' or ')}` },
+      { status: 403 },
+    )
+  }
+  return null
+}
+
+/**
+ * Find an auth user by email address.
+ *
+ * `supabase.auth.admin.listUsers()` with no arguments returns the FIRST
+ * PAGE only — 50 users by default. Both team-invitation routes used to
+ * call it bare and treat "not in the first page" as "no such account".
+ * At 50 users that starts silently minting duplicate profiles for people
+ * who already have one, and it flipped the invite-accept path into its
+ * create-a-new-auth-user branch for existing staff.
+ *
+ * The admin API has no getUserByEmail, so this pages until it finds the
+ * address or runs out of pages. Capped so a pathological directory can't
+ * turn one invite into an unbounded walk.
+ */
+export async function findAuthUserByEmail(
+  service: ReturnType<typeof createServiceClient>,
+  email: string,
+): Promise<{ id: string; email?: string; user_metadata?: Record<string, unknown> } | null> {
+  const needle = email.trim().toLowerCase()
+  if (!needle) return null
+
+  const PER_PAGE = 200
+  const MAX_PAGES = 50 // 10k users; past that this needs a real index
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data, error } = await service.auth.admin.listUsers({ page, perPage: PER_PAGE })
+    if (error) {
+      console.error('[findAuthUserByEmail] listUsers failed:', error.message)
+      return null
+    }
+    const users = data?.users ?? []
+    const hit = users.find((u) => u.email?.toLowerCase() === needle)
+    if (hit) return hit as { id: string; email?: string; user_metadata?: Record<string, unknown> }
+    if (users.length < PER_PAGE) return null
+  }
+
+  console.warn('[findAuthUserByEmail] gave up after %d pages', MAX_PAGES)
+  return null
+}
+
+/**
+ * Seniority ladder for the roles a team invitation can carry. Higher
+ * number = more authority. Used to stop an org_admin minting an
+ * invitation for a role above their own.
+ */
+export const ROLE_RANK: Readonly<Record<string, number>> = {
+  readonly: 0,
+  coordinator: 1,
+  manager: 2,
+  venue_manager: 2,
+  org_admin: 3,
+  super_admin: 4,
+}
+
+export function roleRank(role: string | null | undefined): number {
+  return ROLE_RANK[role ?? ''] ?? -1
+}
+
+/** Roles allowed to change org- or venue-wide configuration. */
+export const ADMIN_ROLES = ['org_admin', 'super_admin'] as const
+
+/** Admin roles plus the venue-level manager, for billing and venue settings. */
+export const MANAGER_ROLES = [
+  'org_admin',
+  'super_admin',
+  'venue_manager',
+  'manager',
+] as const
+
+// ---------------------------------------------------------------------------
 // Common error responses
 // ---------------------------------------------------------------------------
 

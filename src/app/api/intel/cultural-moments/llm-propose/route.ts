@@ -31,7 +31,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import {
   autoProposeCulturalMomentsLlm,
   autoProposeCulturalMomentsLlmAllVenues,
@@ -124,6 +124,10 @@ export async function POST(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const supabase = createServiceClient()
   const scope = request.nextUrl.searchParams.get('scope') ?? 'venue'

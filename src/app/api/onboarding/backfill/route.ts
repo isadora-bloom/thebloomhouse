@@ -21,7 +21,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, refuseDemo } from '@/lib/api/auth-helpers'
 import {
   refreshBackfillStatus,
   computeBackfillScore,
@@ -38,14 +38,14 @@ const VALID_CATEGORIES: ReadonlyArray<BackfillCategory> = [
   'weather', 'search_trends', 'fred', 'cultural_moments',
 ]
 
-async function resolveVenueId(request: NextRequest): Promise<{ ok: true; venueId: string; userId: string | null } | { ok: false; status: number; error: string }> {
+async function resolveVenueId(request: NextRequest): Promise<{ ok: true; venueId: string; userId: string | null; isDemo: boolean } | { ok: false; status: number; error: string }> {
   const auth = await getPlatformAuth()
   if (!auth) return { ok: false, status: 401, error: 'unauthorized' }
 
   const queryVenueId = request.nextUrl.searchParams.get('venueId')
-  if (!queryVenueId) return { ok: true, venueId: auth.venueId, userId: auth.userId }
+  if (!queryVenueId) return { ok: true, venueId: auth.venueId, userId: auth.userId, isDemo: auth.isDemo }
 
-  if (queryVenueId === auth.venueId) return { ok: true, venueId: queryVenueId, userId: auth.userId }
+  if (queryVenueId === auth.venueId) return { ok: true, venueId: queryVenueId, userId: auth.userId, isDemo: auth.isDemo }
 
   // Cross-venue access requires org-admin role + same org.
   if (auth.role !== 'org_admin' && auth.role !== 'super_admin') {
@@ -61,7 +61,7 @@ async function resolveVenueId(request: NextRequest): Promise<{ ok: true; venueId
   if (auth.orgId && (target.org_id as string | null) !== auth.orgId) {
     return { ok: false, status: 403, error: 'forbidden_other_org' }
   }
-  return { ok: true, venueId: queryVenueId, userId: auth.userId }
+  return { ok: true, venueId: queryVenueId, userId: auth.userId, isDemo: auth.isDemo }
 }
 
 export async function GET(request: NextRequest) {
@@ -84,6 +84,10 @@ export async function POST(request: NextRequest) {
   if (!resolved.ok) {
     return NextResponse.json({ error: resolved.error }, { status: resolved.status })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(resolved)
+  if (demoRefusal) return demoRefusal
 
   let body: { category?: string; reason?: string }
   try {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getReEngagementQueue, setReEngagementEnabled } from '@/lib/services/re-engagement'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
@@ -37,6 +37,10 @@ export async function POST(req: NextRequest) {
 
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   const body = await req.json().catch(() => ({})) as { enabled?: unknown }
   const enabled = body.enabled === true
   const sb = createServiceClient()

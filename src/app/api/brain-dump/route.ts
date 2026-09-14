@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { classifyBrainDump, routeBrainDump, nextHrefFor } from '@/lib/services/brain-dump'
 import {
   detectCsvShape,
@@ -433,6 +433,10 @@ export async function POST(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   // Tier-C #128 — per-user rate limit on AI-spend endpoints. Cost-
   // ceiling already covers venue-level cap, but a malicious or runaway

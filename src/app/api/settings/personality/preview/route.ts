@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  unauthorized,
+  badRequest,
+  forbidden,
+  serverError,
+  isDemoVenueAllowed,
+} from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { buildPersonalityPrompt, buildSignoffBlock, type PersonalityData } from '@/lib/ai/personality-builder'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -54,6 +61,15 @@ export async function POST(req: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (!auth.venueId) return badRequest('no venue scope on session')
+
+  // A POST that writes nothing — it generates one sample reply so the
+  // coordinator can hear the voice they just configured. Seeing that is
+  // the point of the demo, so a demo session is allowed through, pinned
+  // to a Crestwood venue so the LLM call is never billed against a real
+  // one.
+  if (auth.isDemo && !isDemoVenueAllowed(auth.venueId)) {
+    return forbidden('venue access denied')
+  }
 
   const body = (await req.json().catch(() => ({}))) as PreviewBody
   const venueId = auth.venueId

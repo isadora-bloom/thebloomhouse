@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logRead } from '@/lib/services/activity-logger'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, refuseDemo } from '@/lib/api/auth-helpers'
 import { getCoupleAuth } from '@/lib/api/auth-helpers'
 import { checkRateLimit } from '@/lib/rate-limit'
 
@@ -41,6 +41,12 @@ export async function POST(request: NextRequest) {
     // and-forget without console errors.
     return new NextResponse(null, { status: 204 })
   }
+
+  // A demo session has no actor to attribute an export to, and the audit
+  // log is a record of what real people did. Refuse rather than write a
+  // row nobody is accountable for. Both auth shapes carry isDemo.
+  const demoRefusal = refuseDemo(platform) ?? refuseDemo(couple)
+  if (demoRefusal) return demoRefusal
 
   // Rate-limit at the user level (or venue level if user is anon).
   const rateKey = userId ? `audit-export:${userId}` : `audit-export:venue:${venueId}`

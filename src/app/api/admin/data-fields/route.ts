@@ -17,7 +17,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  refuseDemo,
+  requireRole,
+  MANAGER_ROLES,
+} from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { labelUnmappedFields, type UnmappedKeyInput } from '@/lib/services/data-fields/labeler'
 
@@ -130,6 +135,17 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not
+  // promote a field into the venue's schema.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
+
+  // Tracking a new data field changes what every surface renders for this
+  // venue. Configuration, not day-to-day work.
+  const roleRefusal = requireRole(auth, MANAGER_ROLES)
+  if (roleRefusal) return roleRefusal
+
   const venueId = auth.venueId
   if (!venueId) {
     return NextResponse.json({ error: 'no venue in scope' }, { status: 400 })

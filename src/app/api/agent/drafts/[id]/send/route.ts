@@ -26,7 +26,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, assertCanAccessVenue } from '@/lib/api/auth-helpers'
 import { sendApprovedDraft } from '@/lib/services/email/pipeline'
 import { createServiceClient } from '@/lib/supabase/service'
 
@@ -74,16 +74,19 @@ export async function POST(
 
   // Scope: operator can only send drafts for their own venue. Auth
   // returns auth.venueId; the venue chip in the UI confirms scope.
-  if (auth.venueId && (draft.venue_id as string) !== auth.venueId) {
-    // Allow cross-venue sends only if the user is an org-level
-    // platform admin (super admin handled by RLS already, but the
-    // server-side service client bypasses RLS, so we explicit-check).
-    if (auth.role !== 'admin' && auth.role !== 'manager') {
-      return NextResponse.json(
-        { error: 'Cannot send drafts for a venue outside your scope' },
-        { status: 403 },
-      )
-    }
+  // Scope: the draft's venue has to be one the caller can reach. This used
+  // to test `auth.role !== 'admin' && auth.role !== 'manager'` — and no row
+  // has ever carried the role 'admin'. The real vocabulary is coordinator,
+  // manager, venue_manager, org_admin, super_admin, so the intended
+  // "org-level admins may cross venues" carve-out was actually "anyone
+  // whose role happens to be the string manager", and org_admins were
+  // refused. assertCanAccessVenue is the one place that knows the answer.
+  const decision = await assertCanAccessVenue(auth, draft.venue_id as string)
+  if (!decision.ok) {
+    return NextResponse.json(
+      { error: 'Cannot send drafts for a venue outside your scope' },
+      { status: 403 },
+    )
   }
 
   if (draft.status !== 'approved') {

@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import {
+  refuseDemo,
   getPlatformAuth,
   unauthorized,
   badRequest,
@@ -29,6 +30,10 @@ const ALLOWED_STATES = new Set([
 export async function POST(req: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   if (!auth.venueId) return badRequest('caller has no resolved venue')
 
   const body = (await req.json().catch(() => ({}))) as {

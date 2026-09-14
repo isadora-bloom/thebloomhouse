@@ -39,9 +39,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
   getPlatformAuth,
+  requireRole,
   unauthorized,
   forbidden,
   badRequest,
+  MANAGER_ROLES,
 } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import {
@@ -82,6 +84,10 @@ async function resolveAuth(req: NextRequest, requestedVenueId: string | null): P
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) return forbidden('demo cannot run integrity remediation')
+  // Remediation rewrites rows across the venue's whole dataset. That is a
+  // venue-manager-and-up decision, not a coordinator's.
+  const roleRefusal = requireRole(auth, MANAGER_ROLES)
+  if (roleRefusal) return roleRefusal
   if (!auth.venueId) return badRequest('caller has no resolved venue')
   const effective = requestedVenueId ?? auth.venueId
   if (effective !== auth.venueId) {

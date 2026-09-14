@@ -4,7 +4,7 @@ import {
   detectTrendDeviations,
   fetchTrendsForVenue,
 } from '@/lib/services/intel/trends'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
@@ -73,6 +73,10 @@ export async function POST(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   // Per LIMB-17.4-C: rate-limit manual refresh to once per hour per
   // venue. Pre-fix the POST was unlimited — coordinator could spam

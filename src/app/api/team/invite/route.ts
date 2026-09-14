@@ -1,16 +1,107 @@
+/**
+ * /api/team/invite — mint and send a team invitation.
+ *
+ * 2026-09-14 security remediation (S1, item 1). What this route was:
+ *
+ *   - No authentication of any kind. Anyone who could reach the URL could
+ *     POST an email, a role and an org id and have the platform send a
+ *     branded invitation on that organisation's behalf.
+ *   - orgId came from the request body, so the org being invited into was
+ *     whatever the caller typed.
+ *   - The response carried the raw invitation token, so the caller did not
+ *     even need to receive the email to use the link.
+ *   - The token was stored in plaintext in team_invitations.token.
+ *   - GET listed every pending invitation for any orgId passed in the
+ *     query string, emails included.
+ *
+ * Now: platform auth, org_admin or super_admin only, orgId derived from
+ * the session, no role above the caller's own, no token in the response,
+ * a sha256 alongside the plaintext column, and a rate limit on both verbs.
+ *
+ * Token storage: S3's migration 411 adds team_invitations.token_hash. We
+ * write BOTH columns until that lands and the backfill runs — the hash so
+ * the new read path works, the plaintext so an un-migrated deployment and
+ * the accept route's fallback keep working. When 411 is applied
+ * everywhere, drop the plaintext write here and the fallback in
+ * team/accept, and make token nullable.
+ */
+
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
 import { appUrl } from '@/lib/app-url'
-import { randomUUID } from 'crypto'
+import { randomUUID, createHash } from 'crypto'
+import {
+  getPlatformAuth,
+  unauthorized,
+  forbidden,
+  refuseDemo,
+  requireRole,
+  ADMIN_ROLES,
+  roleRank,
+  findAuthUserByEmail,
+} from '@/lib/api/auth-helpers'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
+
+/** sha256 of the invitation token, hex. Matches migration 411's column. */
+export function hashInviteToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+/** Postgres/PostgREST's way of saying "that column isn't there yet". */
+function isMissingColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  return (
+    error.code === 'PGRST204' ||
+    error.code === '42703' ||
+    /token_hash/.test(error.message ?? '')
+  )
+}
+
+async function limit(request: NextRequest, orgId: string, verb: string) {
+  for (const [key, max] of [
+    [`team-invite:${verb}:${orgId}`, 30],
+    [`team-invite-ip:${verb}:${clientIpForRateLimit(request)}`, 60],
+  ] as const) {
+    const rl = await checkRateLimit({ key, limit: max, windowSec: 3600 })
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Too many invitation requests. Try again shortly.' },
+        { status: 429, headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) } },
+      )
+    }
+  }
+  return null
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { email, role, venueId, orgId } = await request.json()
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
 
-    if (!email || !role || !orgId) {
+    // The demo identity is an anonymous visitor. It may look; it may not
+    // send invitations on a real organisation's behalf.
+    const demoRefusal = refuseDemo(auth)
+    if (demoRefusal) return demoRefusal
+
+    const roleRefusal = requireRole(auth, ADMIN_ROLES)
+    if (roleRefusal) return roleRefusal
+
+    // The org is the caller's own, never the body's. This is the whole
+    // fix: an invitation can only ever reach into the org the session
+    // already belongs to.
+    const orgId = auth.orgId
+    if (!orgId) return forbidden('no organisation in scope')
+
+    const limited = await limit(request, orgId, 'post')
+    if (limited) return limited
+
+    const { email, role, venueId } = await request.json()
+
+    if (!email || !role) {
       return NextResponse.json(
-        { error: 'Email, role, and orgId are required.' },
+        { error: 'Email and role are required.' },
         { status: 400 }
       )
     }
@@ -23,7 +114,26 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // No inviting somebody more senior than yourself. An org_admin can
+    // mint another org_admin; nobody below super_admin can mint one.
+    if (roleRank(role) > roleRank(auth.role)) {
+      return forbidden('cannot invite a role above your own')
+    }
+
     const supabase = createServiceClient()
+
+    // A venue-scoped invitation must name a venue inside the caller's
+    // org, not any uuid the client felt like sending.
+    if (venueId) {
+      const { data: targetVenue } = await supabase
+        .from('venues')
+        .select('org_id')
+        .eq('id', venueId)
+        .maybeSingle()
+      if (!targetVenue || targetVenue.org_id !== orgId) {
+        return forbidden('venue is not in your organisation')
+      }
+    }
 
     // Check if there's already a pending invitation for this email + org
     const { data: existingInvite } = await supabase
@@ -41,12 +151,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if user already has a profile in this org
-    // First find auth user by email
-    const { data: authUsers } = await supabase.auth.admin.listUsers()
-    const existingUser = authUsers?.users?.find(
-      (u) => u.email?.toLowerCase() === email.toLowerCase()
-    )
+    // Check if user already has a profile in this org. Paged lookup —
+    // a bare listUsers() only sees the first 50 accounts.
+    const existingUser = await findAuthUserByEmail(supabase, email)
 
     if (existingUser) {
       const { data: existingProfile } = await supabase
@@ -68,36 +175,45 @@ export async function POST(request: NextRequest) {
     const token = randomUUID()
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
 
-    // Get the inviting user from the auth header
-    const authHeader = request.headers.get('authorization')
-    let invitedBy: string | null = null
-    if (authHeader?.startsWith('Bearer ')) {
-      const { data: { user } } = await supabase.auth.getUser(authHeader.split(' ')[1])
-      invitedBy = user?.id ?? null
-    }
-    // Fallback: try cookie-based auth
-    if (!invitedBy) {
-      // Use anon client to resolve from cookies — but in API routes we just accept null
-      invitedBy = null
+    // The inviter is the authenticated session, full stop. The old
+    // Authorization-header sniff was decorative: it fell through to null
+    // whenever the header was absent, which was always.
+    const invitedBy: string = auth.userId
+
+    // Create the invitation. token_hash is what the accept path reads;
+    // token stays until migration 411 is applied everywhere (see header).
+    const row = {
+      org_id: orgId,
+      venue_id: venueId || null,
+      email: email.toLowerCase(),
+      role,
+      invited_by: invitedBy,
+      token,
+      token_hash: hashInviteToken(token),
+      status: 'pending',
+      expires_at: expiresAt,
     }
 
-    // Create the invitation
-    const { data: invitation, error: insertError } = await supabase
+    let { data: invitation, error: insertError } = await supabase
       .from('team_invitations')
-      .insert({
-        org_id: orgId,
-        venue_id: venueId || null,
-        email: email.toLowerCase(),
-        role,
-        invited_by: invitedBy,
-        token,
-        status: 'pending',
-        expires_at: expiresAt,
-      })
-      .select('id, token')
+      .insert(row)
+      .select('id')
       .single()
 
-    if (insertError) {
+    if (insertError && isMissingColumn(insertError)) {
+      // Migration 411 not applied on this deployment yet. Fall back to
+      // the plaintext column so invitations keep working; the accept
+      // path reads both.
+      console.warn('[team-invite] token_hash column absent — writing plaintext only (migration 411 pending)')
+      const { token_hash: _dropped, ...legacyRow } = row
+      ;({ data: invitation, error: insertError } = await supabase
+        .from('team_invitations')
+        .insert(legacyRow)
+        .select('id')
+        .single())
+    }
+
+    if (insertError || !invitation) {
       console.error('Failed to create invitation:', insertError)
       return NextResponse.json(
         { error: 'Failed to create invitation.' },
@@ -124,7 +240,7 @@ export async function POST(request: NextRequest) {
     // previous query selected columns that don't exist and always fell
     // through to "Your teammate" in the invite email.
     let inviterName = 'Your teammate'
-    if (invitedBy) {
+    {
       const { data: inviterProfile } = await supabase
         .from('user_profiles')
         .select('first_name, last_name')
@@ -227,11 +343,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // No token, and no inviteLink either — both are the credential. The
+    // invitation travels by email and only by email. A caller who needs
+    // to resend gets a fresh invitation, not a copy of this one.
     return NextResponse.json({
       success: true,
       invitationId: invitation.id,
-      inviteLink,
-      token,
       emailSent: emailResult.ok,
       emailError: emailResult.ok ? undefined : emailResult.error,
     })
@@ -247,12 +364,20 @@ export async function POST(request: NextRequest) {
 // GET: List invitations for an org
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url)
-    const orgId = searchParams.get('orgId')
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
 
-    if (!orgId) {
-      return NextResponse.json({ error: 'orgId is required.' }, { status: 400 })
-    }
+    const roleRefusal = requireRole(auth, ADMIN_ROLES)
+    if (roleRefusal) return roleRefusal
+
+    // Same rule as POST: the org is the session's, not the query string's.
+    // Listing by an arbitrary orgId handed out every pending invitee's
+    // email address to anybody who could guess an org uuid.
+    const orgId = auth.orgId
+    if (!orgId) return forbidden('no organisation in scope')
+
+    const limited = await limit(request, orgId, 'get')
+    if (limited) return limited
 
     const supabase = createServiceClient()
 

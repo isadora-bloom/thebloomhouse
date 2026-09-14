@@ -134,13 +134,65 @@ export function verifyGmailOAuthState(token: string | null | undefined): StateVe
 }
 
 /**
- * Clamp a returnTo path to safe values. Only relative paths on our
- * own domain are allowed — never absolute URLs (open-redirect).
+ * Clamp a returnTo path to safe values. Only relative paths on our own
+ * domain are allowed — never absolute URLs (open-redirect).
+ *
+ * 2026-09-14 (S1, item 10). The previous version was three string tests:
+ * starts with '/', does not start with '//'. Both are easy to walk past,
+ * because the thing that eventually consumes this value is a URL parser
+ * and a browser, and neither reads strings the way that check did.
+ *
+ *   /\evil.com        — one slash, one backslash. WHATWG URL parsing
+ *                       treats \ as / in a special-scheme URL, so the
+ *                       browser sees //evil.com: a protocol-relative URL
+ *                       to somebody else's host. Passed the old check.
+ *   /%09/evil.com     — a percent-encoded tab. Several parsers strip
+ *                       tabs, CR and LF from URLs before parsing, which
+ *                       leaves //evil.com again.
+ *   /..//evil.com     — passes both string tests, and normalises to
+ *                       //evil.com once a parser resolves the '..'.
+ *
+ * So: reject backslashes and control characters, encoded or literal,
+ * then prove the value is same-origin by resolving it against a base and
+ * checking the origin did not move — and re-check the normalised path,
+ * because normalisation is where '..' does its work.
+ *
+ * Returns the normalised path, not the raw input, so whatever the caller
+ * redirects to is the thing that was checked.
  */
+const RETURN_TO_BASE = 'https://returnto.invalid'
+const MAX_RETURN_TO = 512
+
 export function safeReturnTo(raw: string | null | undefined, fallback = '/settings/gmail'): string {
-  if (!raw) return fallback
-  if (typeof raw !== 'string') return fallback
+  if (!raw || typeof raw !== 'string') return fallback
+  if (raw.length > MAX_RETURN_TO) return fallback
+
+  // Backslash is a slash to a URL parser. Never legitimate in a path we
+  // generated ourselves.
+  if (raw.includes('\\')) return fallback
+
+  // Literal control characters (tab, CR, LF, NUL and friends) and their
+  // percent-encoded forms. Parsers disagree about which they strip, which
+  // is exactly why none of them are allowed through.
+  if (/[\u0000-\u001F\u007F]/.test(raw)) return fallback
+  if (/%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(raw)) return fallback
+
   if (!raw.startsWith('/')) return fallback
   if (raw.startsWith('//')) return fallback
-  return raw
+
+  let normalised: string
+  try {
+    const url = new URL(raw, RETURN_TO_BASE)
+    if (url.origin !== RETURN_TO_BASE) return fallback
+    normalised = `${url.pathname}${url.search}${url.hash}`
+  } catch {
+    return fallback
+  }
+
+  // '..' segments resolve during normalisation, so the protocol-relative
+  // check has to happen again on the result, not only on the input.
+  if (!normalised.startsWith('/') || normalised.startsWith('//')) return fallback
+  if (normalised.includes('\\')) return fallback
+
+  return normalised
 }

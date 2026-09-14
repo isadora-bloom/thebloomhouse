@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, unauthorized, forbidden, badRequest } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth, unauthorized, forbidden, badRequest } from '@/lib/api/auth-helpers'
 import { detectCsvShape } from '@/lib/services/brain-dump/csv-shape'
 import { runCsvImport } from '@/app/api/brain-dump/route'
 
@@ -29,6 +29,10 @@ export async function POST(
 ) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
   if (!auth.venueId) return forbidden('no venue scope on session')
 
   const { id } = await params

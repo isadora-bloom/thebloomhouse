@@ -15,7 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 const VALID_ITEM_KEY = /^(notif|anomaly|insight):[0-9a-f-]{36}$/i
@@ -63,6 +63,10 @@ export async function POST(request: NextRequest) {
 
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: { itemKey?: string; action?: string; snoozedUntilIso?: string; reason?: string }
   try {
@@ -115,6 +119,10 @@ export async function DELETE(request: NextRequest) {
 
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const itemKey = request.nextUrl.searchParams.get('itemKey')
   if (!itemKey || !VALID_ITEM_KEY.test(itemKey)) {

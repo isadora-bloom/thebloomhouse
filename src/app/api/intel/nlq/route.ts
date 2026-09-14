@@ -5,7 +5,7 @@ import { markQueryHelpful } from '@/lib/services/brain/intel-brain'
 // to the old prompt-dump brain for A/B scoring; askIntel owns that switch, so
 // this route does not need to know which path answered.
 import { askIntel } from '@/lib/intel/canonical'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, refuseDemo, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
@@ -38,6 +38,15 @@ export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // Asking a question is a read with an LLM bill attached, and it is part
+  // of the demo, so a demo session is allowed — pinned to a Crestwood
+  // venue. The whole demo shares one user id, so it also shares one rate
+  // limit bucket, which is the intended shape: the cost ceiling is the
+  // demo's, not each visitor's.
+  if (auth.isDemo && !isDemoVenueAllowed(auth.venueId)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   // Rate limit by user ID (authenticated endpoint)
@@ -130,6 +139,11 @@ export async function PATCH(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // Asking is a demo activity. Rating the answer trains a real venue's
+  // record of what worked, so it is not.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   try {
     const body = await request.json()

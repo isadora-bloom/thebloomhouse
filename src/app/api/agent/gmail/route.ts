@@ -1,7 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
 import { getOAuthUrl, handleOAuthCallback, getGmailClient, getConnections } from '@/lib/services/email/gmail'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createLogger, newCorrelationId } from '@/lib/observability/logger'
 import { redactError } from '@/lib/observability/redact'
 
@@ -171,6 +171,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
+
   const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
   log.info('gmail.oauth.callback.start', { event_type: 'gmail_oauth_callback', outcome: 'ok' })
 
@@ -267,6 +271,10 @@ export async function DELETE(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
 
@@ -390,6 +398,10 @@ export async function PATCH(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
 

@@ -93,8 +93,12 @@ export async function GET(req: NextRequest) {
   let venueNameById = new Map<string, string>()
 
   if (scope === 'group') {
-    // Group scope: members only, but verify the group belongs to the
-    // caller's org so a crafted groupId can't reach across tenants.
+    // Group scope: members only, and the group must belong to the caller's
+    // org. The old condition was `auth.orgId && group.org_id && ...`, so a
+    // caller whose profile carried a null org_id — which getPlatformAuth
+    // happily returns — skipped the comparison entirely and could read any
+    // group's cross-venue numbers by passing its id. Fail closed: no org
+    // on the caller, or no org on the group, is a refusal, not a pass.
     const { data: group } = await service
       .from('venue_groups')
       .select('id, org_id')
@@ -104,7 +108,7 @@ export async function GET(req: NextRequest) {
     if (!group) {
       return NextResponse.json({ error: 'Group not found' }, { status: 404 })
     }
-    if (auth.orgId && group.org_id && group.org_id !== auth.orgId) {
+    if (!auth.orgId || !group.org_id || group.org_id !== auth.orgId) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
@@ -114,6 +118,26 @@ export async function GET(req: NextRequest) {
       .eq('group_id', groupId as string)
 
     venueIds = (members ?? []).map((m) => m.venue_id as string)
+
+    // W56 opt-in. A venue's numbers only appear in somebody else's
+    // comparison when that venue has said yes (venue_config
+    // .benchmark_participation, migration 410). The caller's own venue is
+    // always included — they are entitled to their own row whatever they
+    // have chosen for everyone else's view. Same rule the cohort
+    // benchmark reader applies; this endpoint was reading every member of
+    // the group regardless.
+    if (venueIds.length > 0) {
+      const { data: participation } = await service
+        .from('venue_config')
+        .select('venue_id, benchmark_participation')
+        .in('venue_id', venueIds)
+      const optedIn = new Set(
+        (participation ?? [])
+          .filter((c) => c.benchmark_participation === true)
+          .map((c) => c.venue_id as string),
+      )
+      venueIds = venueIds.filter((id) => id === auth.venueId || optedIn.has(id))
+    }
 
     if (venueIds.length > 0) {
       const { data: venueRows } = await service

@@ -12,7 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { syncMeetings } from '@/lib/services/ingestion/zoom'
 
 export async function POST(request: NextRequest) {
@@ -20,6 +20,10 @@ export async function POST(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ ok: false, reason: 'unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let sinceDays = 30
   try {

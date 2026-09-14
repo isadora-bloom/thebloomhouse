@@ -16,7 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendInstagramReply } from '@/lib/services/integrations/instagram-meta'
 
 export async function POST(request: NextRequest) {
@@ -24,6 +24,10 @@ export async function POST(request: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const body = await request.json().catch(() => ({}) as Record<string, unknown>)
   const venueId = typeof body.venueId === 'string' ? body.venueId : ''

@@ -23,8 +23,9 @@
  * endpoint never sees the visitor's identity directly.
  *
  * Throughput envelope:
- *   - Per-venue rate limit at the in-memory layer (best effort). A
- *     real production deployment should put a CDN rate limit in front.
+ *   - Durable per-venue and per-IP rate limits (src/lib/rate-limit.ts,
+ *     Postgres-backed). A CDN rule in front is still the right place for
+ *     the first order of magnitude.
  *   - The unique (venue, anon_visitor_id, occurred_at minute) check
  *     dedupes accidental double-fires.
  */
@@ -32,6 +33,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createHash } from 'crypto'
+import { checkRateLimit } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -51,31 +54,38 @@ export function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS_HEADERS })
 }
 
-// In-process rate limiter. Crude — works inside a single serverless
-// instance. A production-scale deployment puts a CDN edge rule in
-// front. For our scale today this is fine.
-const rateBuckets = new Map<string, { count: number; windowStart: number }>()
-const RATE_WINDOW_MS = 60_000
-const RATE_LIMIT_PER_WINDOW = 240 // pageviews per minute per key
+// Rate limiting lives in Postgres (src/lib/rate-limit.ts), not a
+// module-scope Map. Under Vercel each function instance had its own Map,
+// so the old limiter divided by however many instances were warm and
+// horizontal scale defeated it entirely — on a public, CORS-open,
+// unauthenticated endpoint that inserts a row per call. Same bug class
+// as PROJECT-AUDIT-V2 BUG-12, which is why the durable limiter exists.
+//
+// Two keys, neither shared: the venue, so one site's traffic cannot
+// starve another's, and the caller's IP, so one machine cannot flood a
+// venue's numbers with invented pageviews.
+const VISITS_PER_VENUE_PER_MINUTE = 240
+const VISITS_PER_IP_PER_MINUTE = 60
 
-function checkRate(key: string): boolean {
-  const now = Date.now()
-  const bucket = rateBuckets.get(key)
-  if (!bucket || now - bucket.windowStart > RATE_WINDOW_MS) {
-    rateBuckets.set(key, { count: 1, windowStart: now })
-    return true
-  }
-  bucket.count++
-  return bucket.count <= RATE_LIMIT_PER_WINDOW
-}
+/**
+ * How far from now a pixel-supplied timestamp may sit. The pixel sends
+ * the browser's clock, which is attacker-controlled and also just wrong
+ * on plenty of real machines. Unclamped, `ts` wrote web_visits rows dated
+ * 1970 or 2074 and quietly bent every attribution window that reads
+ * occurred_at. A day back covers a queued beacon and honest clock skew;
+ * anything outside the window falls back to server time.
+ */
+const TS_PAST_MS = 24 * 60 * 60 * 1000
+const TS_FUTURE_MS = 5 * 60 * 1000
 
-// Garbage-collect rate buckets occasionally so we don't leak memory.
-function gcBuckets() {
-  if (rateBuckets.size < 1000) return
+function clampOccurredAt(ts: unknown): string {
   const now = Date.now()
-  for (const [k, b] of rateBuckets.entries()) {
-    if (now - b.windowStart > RATE_WINDOW_MS * 4) rateBuckets.delete(k)
+  if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0) {
+    if (ts >= now - TS_PAST_MS && ts <= now + TS_FUTURE_MS) {
+      return new Date(ts).toISOString()
+    }
   }
+  return new Date(now).toISOString()
 }
 
 function hashIp(ip: string | null, salt: string): string | null {
@@ -142,10 +152,17 @@ export async function POST(request: NextRequest) {
     return new Response(null, { status: 400, headers: CORS_HEADERS })
   }
 
-  if (!checkRate(ingestKey)) {
+  // Caller limit first: it needs no database lookup beyond the limiter
+  // itself, so an unknown key costs one round trip, not two.
+  const clientIp = clientIpForRateLimit(request)
+  const ipRl = await checkRateLimit({
+    key: `visit-ip:${clientIp}`,
+    limit: VISITS_PER_IP_PER_MINUTE,
+    windowSec: 60,
+  })
+  if (!ipRl.ok) {
     return new Response(null, { status: 429, headers: CORS_HEADERS })
   }
-  gcBuckets()
 
   const service = createServiceClient()
 
@@ -169,19 +186,28 @@ export async function POST(request: NextRequest) {
       .eq('venue_id', venueId)
   }
 
+  const venueRl = await checkRateLimit({
+    key: `visit:${venueId}`,
+    limit: VISITS_PER_VENUE_PER_MINUTE,
+    windowSec: 60,
+  })
+  if (!venueRl.ok) {
+    return new Response(null, { status: 429, headers: CORS_HEADERS })
+  }
+
   // Hash IP + UA with the ingest key as salt. The salt is per-venue so
   // hashes from different venues don't collide and aren't comparable.
-  const ipHeader =
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    request.headers.get('x-real-ip')
+  //
+  // The helper invents a per-request `anon:<uuid>` when it cannot identify
+  // the caller, which is right for a rate-limit bucket and wrong for a
+  // stored hash — it would look like a distinct visitor every time. An
+  // unidentifiable caller records no ip_hash, same as before.
+  const ipHeader = clientIp.startsWith('anon:') ? null : clientIp
   const uaHeader = request.headers.get('user-agent')
-  const ipHash = hashIp(ipHeader ?? null, ingestKey)
+  const ipHash = hashIp(ipHeader, ingestKey)
   const userAgentHash = hashUserAgent(uaHeader ?? null, ingestKey)
 
-  const occurredAt =
-    typeof payload.ts === 'number' && payload.ts > 0
-      ? new Date(payload.ts).toISOString()
-      : new Date().toISOString()
+  const occurredAt = clampOccurredAt(payload.ts)
 
   const insert = await service.from('web_visits').insert({
     venue_id: venueId,

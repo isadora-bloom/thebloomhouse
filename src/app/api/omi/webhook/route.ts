@@ -23,6 +23,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
 import { extractTourTranscript } from '@/lib/services/tour/transcript-extract'
 import { omiAdapter } from '@/lib/services/audio-capture/adapters/omi-adapter'
 import { persistAudioSegments } from '@/lib/services/audio-capture/orchestrator'
@@ -63,9 +65,39 @@ function maybeFireExtraction(input: ExtractionTriggerInput): void {
 
 export async function POST(request: NextRequest) {
   try {
-    const token = request.nextUrl.searchParams.get('token')
+    // The token is a bearer credential for a venue's audio feed. A query
+    // string is the worst place to carry one: it lands in access logs,
+    // proxy logs, browser history and Referer headers. Prefer a header;
+    // keep the query form working, and say so in the log each time, until
+    // the wearable configuration is moved over.
+    const headerToken =
+      request.headers.get('x-omi-token')?.trim() ||
+      request.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim() ||
+      ''
+    const queryToken = request.nextUrl.searchParams.get('token')?.trim() ?? ''
+    const token = headerToken || queryToken
+
     if (!token) {
       return NextResponse.json({ error: 'invalid_token' }, { status: 401 })
+    }
+    if (!headerToken && queryToken) {
+      console.warn(
+        '[api/omi/webhook] DEPRECATED: token supplied in the query string. Send it as x-omi-token instead — query strings are logged.',
+      )
+    }
+
+    // Per-caller limit before the venue is even resolved, so somebody
+    // guessing tokens cannot spend a database round trip per guess.
+    const ipRl = await checkRateLimit({
+      key: `omi-webhook-ip:${clientIpForRateLimit(request)}`,
+      limit: 600,
+      windowSec: 300,
+    })
+    if (!ipRl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited' },
+        { status: 429, headers: { 'Retry-After': String(secondsUntil(ipRl.resetAt)) } },
+      )
     }
 
     const service = createServiceClient()
@@ -85,6 +117,22 @@ export async function POST(request: NextRequest) {
     }
 
     const venueId = cfg.venue_id as string
+
+    // Per-venue limit. A wearable posting segments in real time is a
+    // handful of calls a minute; anything past this is a loop or a leaked
+    // token, and every accepted segment can fire a Sonnet extraction.
+    const venueRl = await checkRateLimit({
+      key: `omi-webhook:${venueId}`,
+      limit: 120,
+      windowSec: 300,
+    })
+    if (!venueRl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited' },
+        { status: 429, headers: { 'Retry-After': String(secondsUntil(venueRl.resetAt)) } },
+      )
+    }
+
     const autoMatchEnabled = cfg.omi_auto_match_enabled !== false
     const windowHours = typeof cfg.omi_match_window_hours === 'number'
       ? cfg.omi_match_window_hours

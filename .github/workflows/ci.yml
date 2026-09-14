@@ -246,6 +246,9 @@ jobs:
       - name: Plan-tier enforcement guard — every paid-tier API route calls requirePlan (PROJECT-AUDIT-V2 GAP-12)
         run: node scripts/check-plan-enforcement.mjs
 
+      - name: Demo-refusal guard — every mutating platform-auth route accounts for the demo identity (S1 2026-09-14)
+        run: node scripts/check-demo-refused-on-writes.mjs
+
       # --- Consolidation governance (FIX-PLAN Layer B/C/D) ------------------
       # ENFORCING since 2026-06-11 (Phase 0 §0.9 flip executed — was left
       # `continue-on-error: true` at the 2026-05-29 ratification "until

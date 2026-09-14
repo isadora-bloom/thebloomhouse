@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { revokePatternGrant, grantPattern } from '@/lib/services/brain-dump/graduation'
 
 export async function GET() {
@@ -28,6 +28,10 @@ export async function GET() {
 export async function DELETE(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   const id = request.nextUrl.searchParams.get('id')
   if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
@@ -59,6 +63,10 @@ export async function DELETE(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: { signature?: string; intent?: string; description?: string; routedTable?: string; routedAction?: string }
   try {

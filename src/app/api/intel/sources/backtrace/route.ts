@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { findBacktraceCandidates, applyBacktrace } from '@/lib/services/attribution/source-backtrace'
 
@@ -76,6 +76,10 @@ export async function POST(request: NextRequest) {
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // The demo identity is an anonymous visitor. It may look; it may not write.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
 
   let body: { weddingId?: string; newSource?: string }
   try {

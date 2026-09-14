@@ -12,7 +12,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  refuseDemo,
+} from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 
 export async function GET(
@@ -42,13 +46,16 @@ export async function GET(
     return NextResponse.json({ error: 'Draft not found' }, { status: 404 })
   }
 
-  if (auth.venueId && (draftRow.venue_id as string) !== auth.venueId) {
-    if (auth.role !== 'admin' && auth.role !== 'manager') {
-      return NextResponse.json(
-        { error: 'Cannot view insights for a draft outside your scope' },
-        { status: 403 },
-      )
-    }
+  // The old carve-out tested for the roles 'admin' and 'manager'. No row
+  // has ever carried 'admin', so org_admins were refused and the check
+  // turned on a string nobody uses. assertCanAccessVenue knows the real
+  // vocabulary, and refuses a demo caller any venue outside Crestwood.
+  const decision = await assertCanAccessVenue(auth, draftRow.venue_id as string)
+  if (!decision.ok) {
+    return NextResponse.json(
+      { error: 'Cannot view insights for a draft outside your scope' },
+      { status: 403 },
+    )
   }
 
   const { data: insights, error } = await supabase
@@ -78,6 +85,11 @@ export async function POST(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // The demo identity is an anonymous visitor. It may read the insights;
+  // it may not stamp them acknowledged.
+  const demoRefusal = refuseDemo(auth)
+  if (demoRefusal) return demoRefusal
+
   const { id: draftId } = await params
   if (!draftId) {
     return NextResponse.json({ error: 'Missing draftId' }, { status: 400 })
@@ -94,13 +106,12 @@ export async function POST(
     return NextResponse.json({ error: 'Draft not found' }, { status: 404 })
   }
 
-  if (auth.venueId && (draftRow.venue_id as string) !== auth.venueId) {
-    if (auth.role !== 'admin' && auth.role !== 'manager') {
-      return NextResponse.json(
-        { error: 'Cannot acknowledge insights outside your scope' },
-        { status: 403 },
-      )
-    }
+  const decision = await assertCanAccessVenue(auth, draftRow.venue_id as string)
+  if (!decision.ok) {
+    return NextResponse.json(
+      { error: 'Cannot acknowledge insights outside your scope' },
+      { status: 403 },
+    )
   }
 
   const { error: updErr } = await supabase
