@@ -118,6 +118,11 @@ const WAVE_MIGRATIONS: Pending[] = [
     why: 'W57: generated contracts on the contracts table (kind, status trail, sign token hash, generated_from snapshot)',
     probe: columnExists('contracts', 'sign_token'),
   },
+  {
+    file: '410_benchmark_participation.sql',
+    why: 'W56 follow-up: cross-venue benchmark participation is opt-in, default off (doctrine INV-24.1-A)',
+    probe: columnExists('venue_config', 'benchmark_participation'),
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */
