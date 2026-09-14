@@ -1,0 +1,20 @@
+# RECONSTRUCTED, NOT CAPTURED. Built from Aisle Planner's documented
+# field names (CRM -> Leads -> "Export to CSV") and the column
+# signature src/lib/services/brain-dump/csv-shape.ts already expects
+# for an Aisle Planner export: a single "Couple" cell carrying both
+# partner names, Lead ID, Email Address, Wedding Date/Event Date,
+# Estimated Budget, Status, Created/Date Created, Booked Date, Notes.
+# "Lead Source" is Aisle Planner's actual column label for the
+# attribution cell; this fixture uses it verbatim rather than the
+# bare "Source" the shape detector also accepts. No real Aisle
+# Planner account, lead or figure appears below — every row is
+# invented for this test suite. Tests strip these leading '#' lines
+# (see loadFixtureCsv in the adapter test files) before parsing, since
+# the shared CSV parser does not treat '#' as a comment marker.
+Lead ID,Couple,Email Address,Phone,Wedding Date,Estimated Budget,Status,Lead Source,Created,Booked Date,Notes
+AP-1001,"Naomi Okonkwo & Daniel Okonkwo-Reyes",naomi.okonkwo@example.com,555-0161,2027-08-21,"25,000.00",Booked,Pinterest,2026-05-02,2026-05-20,"Wants a Saturday evening ceremony."
+AP-1002,"Freya Lindqvist",freya.lindqvist@example.com,,2027-10-09,"14,500.00",New,Instagram,2026-08-15,,
+AP-1003,"Consuela Reyes, Bianca Mott",consuela.reyes@example.com,555-0119,2026-12-05,,In Progress,Referral,2026-06-22,,"Still deciding between two venues."
+AP-1004,"Petra & Simon Vance",petra.vance@example.com,555-0183,2026-03-14,"9,800.00",Completed,Google,2025-11-01,2025-11-18,
+AP-1005,"Aoife Whelan",aoife.whelan@example.com,555-0147,2027-01-30,,Lost,The Knot,2026-04-04,,"Chose a venue closer to family."
+AP-1006,"Marisol Ibarra & Tony Ibarra",marisol.ibarra@example.com,,2027-06-12,"18,000.00",On Hold,Unknown,2026-07-01,,"Waiting on a date decision from the couple."
