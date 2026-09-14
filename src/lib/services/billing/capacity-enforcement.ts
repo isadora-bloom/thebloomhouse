@@ -75,7 +75,7 @@ export async function checkAndRecordCapacityHit(
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
       .is('merged_into_id', null)
-      .gte('created_at', monthStart)
+      .gte('created_at', monthStart) // created-at-ok: the cap counts couples minted this month; the mint is the event, and the check only notifies, never blocks
 
     if (error) {
       console.error('[capacity-enforcement] couples count failed:', error.message)
