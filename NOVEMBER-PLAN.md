@@ -392,6 +392,55 @@ buildable from data Bloom already pulls in; corrected there.
 Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. No spine writes
 outside linkSignal. No database writes. Migrations wait for `npm run migrate:pending`.
 
+## Wave 6 status (integrated 2026-09-14)
+
+The session that launched W42, W43 and W44 ended with all three still writing; their work was
+found uncommitted in the worktrees, read against the plan, checked (tsc clean, own tests 16 + 31
++ 31) and committed here, then merged after W41 and W45. Gate on the integrated head: tsc 0,
+vitest 1603, governance green, links OK (312 URLs), every CI guard green, golden 16/16 dry.
+
+Two things the gate turned up, neither caused by wave 6:
+- `check-no-coordinator-facing-created-at` had been red since W18 (wave 2) on one line in the
+  billing cap. Tagged: the cap counts couples minted this month, so the mint is the event, and
+  the check only notifies. CI had been failing that step on every push.
+- `check-merge-weddings-cascade` (DB-backed, not in CI): 75 tables carry a `wedding_id` that
+  `mergeWeddings` never reassigns, including couple_identity_profile, reviews, couple_invites,
+  budget rows and rsvp rows; 9 entries in its hand-list are tables that no longer exist. The
+  remerge step of the reimport would scatter those rows. Now W60 below.
+
+What is true now: a coordinator back on a Monday can upload a Knot or HoneyBook export from the
+leads page or `/admin/imports/upload` (same form, same route as onboarding) and `/today` opens
+with a "since you were last here" strip over a venue-local window; the wedding page has the
+couple story, a searchable contract library and the editable day-of timeline as collapsed
+sections, rendered from the couple portal's own components with a role, so nothing is forked;
+the couple's seating page draws the map and the assignment list from one view model and saves
+through one path. W44 joined the couple side only; the coordinator table-map page is W61.
+
+Two gate steps need Isadora because the auto-mode classifier refuses any Supabase write from
+this session, test branch included:
+- [ ] The golden-case branch (`.env.test`, project ciwqxwohczzthvzqqgjx) has none of migrations
+  395-403, so the wet golden run fails on every case (linkSignal writes columns that are not
+  there). Run once: `npx tsx scripts/apply-pending-migrations.ts --env-file .env.test --apply`
+  (the runner gained `--env-file` today; production is refused by URL). Then `npm run test:golden`.
+- [ ] Main checkout `node_modules` lacks `jsdom` (declared in package.json), so two test files
+  (`seating-board.test.ts`, `use-now.test.ts`) could not start here; both pass in the worktrees.
+  `npm ci` in the main checkout fixes it, once no lint or test run is using node_modules.
+
+## Wave 7 launched (2026-09-14, from the wave 6 head)
+
+W46, W47, W48, W49 and W51 launched from 1eaea6fb before wave 6 landed (no shared files). W50
+and W52 launched from the wave 6 head because they sit on the wedding page and the couple pages
+W43 and W44 reshaped. Two workstreams added from the gate:
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W60 | mergeWeddings reassigns every wedding-keyed row by construction: a generated table list with a per-table strategy (reassign, one-per-wedding merge with audit, trigger-covered, archived skipped), the stale hand-list gone, the DB-backed guard fixed (Windows exit crash included) plus a CI-safe freshness check on the generated file | Opus | `src/lib/services/identity/resolver.ts` (mergeWeddings), new `wedding-fk-tables.generated.json`, `scripts/gen-wedding-fk-tables.ts`, `scripts/check-merge-weddings-cascade.mjs`, new `scripts/check-wedding-fk-tables-fresh.mjs`, package.json + ci.yml one line each |
+| W61 | The coordinator's table-map page reads the same rows as the couple's seating page: one `SeatingView`, the shared board, the same save callbacks; the layout editor stays for shapes | Sonnet | `src/app/(platform)/portal/weddings/[id]/table-map/**`, print and portal subpages (seating reads only), the assigned count on the wedding page, `seating-view.ts` (additive) |
+
+Migration slots handed out: 404 W49 (weather alerts), 405 W46 only if the column guard needs
+it, 406 W50 (commitment reconciliation). Cron budget stays 49: W49 and W50 run inside existing
+cases. Migrations owed to prod, all at once, now 395-403 plus whatever wave 7 lands.
+
 ## Wave 7 (launch after wave 6 lands): built, never wired, made to answer
 
 Source: the CEO scenario audit (W39 agent, 2026-09-14) plus its revision. The pattern named:
