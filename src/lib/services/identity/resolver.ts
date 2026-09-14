@@ -1969,6 +1969,19 @@ export async function mergeWeddings(
     throw new Error(`mergeWeddings: failed to tombstone duplicate ${duplicateId}: ${tombErr.message}`)
   }
 
+  // The winner's journey narrative was written from half the story. Stamp
+  // weddings.narrative_cache_busted_at (migration 336) so journey-narrative.ts
+  // regenerates it on the next read instead of serving the pre-merge cache.
+  // The column had a reader and no writer until 2026-09-14 (W60's report).
+  // Best effort: a failure here is logged, the merge itself has succeeded.
+  const { error: bustErr } = await supabase
+    .from('weddings')
+    .update({ narrative_cache_busted_at: new Date().toISOString() })
+    .eq('id', canonicalId)
+  if (bustErr) {
+    console.warn(`[mergeWeddings] could not bust narrative cache for ${canonicalId}: ${bustErr.message}`)
+  }
+
   // ---- audit -------------------------------------------------------------
   // One row per merge, carrying the per-table counts, every collision left
   // in place, and every table that failed. Same shape as the couples-side
