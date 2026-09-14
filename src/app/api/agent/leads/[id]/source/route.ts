@@ -11,7 +11,7 @@ import { createServiceClient } from '@/lib/supabase/service'
  * preserves them when applyBacktrace re-writes existing values), but
  * they are not selectable on the inline edit UI.
  */
-const NON_OVERRIDE_SOURCES = new Set(['calendly', 'acuity', 'honeybook', 'dubsado'])
+const NON_OVERRIDE_SOURCES = new Set(['calendly', 'acuity', 'honeybook', 'dubsado', 'aisle_planner'])
 
 /**
  * GET /api/agent/leads/[id]/source
