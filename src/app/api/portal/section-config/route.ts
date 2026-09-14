@@ -36,6 +36,12 @@ export async function GET(request: NextRequest) {
     if (!auth) return unauthorized()
 
     const venueId = searchParams.get('venue_id') || auth.venueId
+    // A venue id from the query is only honoured when the caller may see
+    // that venue (SEC-H23; the PATCH below already ignores the body).
+    if (venueId !== auth.venueId) {
+      const access = await assertCanAccessVenue(auth, venueId)
+      if (!access.ok) return forbidden(access.reason)
+    }
     const activeOnly = searchParams.get('active') === 'true'
 
     const supabase = createServiceClient()
