@@ -532,6 +532,57 @@ Migrations owed to prod, all at once: 395-403 plus 404 and 406, via `npm run mig
 then `-- --apply --allow-prod`. Then regenerate the cascade file (`scripts/gen-wedding-fk-tables.ts`)
 so 406 stops being "pending".
 
+## Wave 8 status (integrated 2026-09-14, late evening)
+
+All seven merged on `consolidation`: W58, W59, W53, W55, W54, W56, W57, in that order. Gate on
+the integrated head: tsc 0, vitest 2120 across 129 files, `next build` clean, governance green
+(including W56's new `check:browser-benchmark`), every CI guard green, `check:wedding-cascade`
+green against production, links OK (318 URLs, 255 pages, 411 API routes), lint 0 errors, golden
+16/16 wet. Conflicts: the migration ratchet three times (resolved to the on-disk count each time,
+now 406), the isolation battery header (W54 and W56 both added an item), and one signature break
+between parallel workstreams (W55 changed `sendEmail` to take a venue id while W57 still passed a
+From string; fixed at integration).
+
+What is true now:
+- Dubsado and Aisle Planner exports import through the same registry as HoneyBook and the Knot,
+  detected by header signature, with reconstructed fixtures (real exports still worth a check).
+  Aisle Planner joined Dubsado on the list of sources a coordinator cannot set by hand.
+- Google Ads, Meta Ads and TikTok Ads are real OAuth connectors (migration 407): grant flow, token
+  renewal, daily campaign spend into `marketing_spend_records` on the spine's channel keys, an ad
+  account chooser, and `connectorStatus(venueId)` so the reallocation copy flips per venue. The
+  three settings pages now sit under an "Ad platforms" category on the integrations hub. Two gaps
+  found and closed: the Google Ads callback returned 500 on every error branch, and no venue could
+  ever set its ad account. Credentials are the operator's (each page names its variables).
+- Each venue can send from its own verified domain (migration 408): Resend domain create, DNS
+  records shown with copy buttons, verify, a daily status sweep inside `heat_decay`, and a From
+  address that only uses the venue's domain once verified, with a logged fallback otherwise.
+  `sendEmail` now requires a venue id (or an explicit null for platform sends).
+- Cross-venue benchmarks exist and are off by construction until three real venues have finished
+  setup and opted in (migration 410, doctrine INV-24.1-A; the switch is in Settings). A demo venue
+  is compared against the other demo venues with a visible label. Peers are collapsed to numbers
+  before anything leaves the module; a CI guard forbids importing it from the browser.
+- Native contracts (migration 409): generated from the booking's own figures and the venue's
+  plain-language template, PDF written by hand (no pdfkit, no polyfill), sent through the guarded
+  transport, signed on a token page under `/join/contract/[token]` (token hashed, single use for
+  signing), status trail on the wedding page's fifth collapsed section and a pill on the couple's
+  library.
+- `/api/public/demo-snapshot` serves the demo venue only (fixed server-side, refuses anything
+  else), rate-limited, origin allow-listed, cached five minutes; `docs/PUBLIC-DEMO-SNAPSHOT.md`.
+- The app is ready for a custom domain: `APP_CANONICAL_HOST` redirect in middleware, one
+  `appUrl()` helper behind every absolute link, `docs/CUSTOM-DOMAIN.md` runbook.
+
+Fix-on-find at integration: the demo seed wrote dollars into `weddings.booking_value` (a cents
+column; 59 rows converted); the couple dashboard read `weddings.package`, which nothing writes;
+`mergeWeddings` never busted the winner's narrative cache (column had a reader and no writer).
+
+Migrations owed to prod, all at once: 395-403, 404, 406, 407, 408, 409, 410 (runner knows all).
+Then regenerate the cascade file. Legacy 310 must land before 407's guarded ALTER means anything.
+
+Operator findings from this wave: the demo venue id in code is Hawthorne Manor (`DEMO_VENUE_ID`),
+while the plan talks about Crestwood; both are demo venues, but the public snapshot serves
+Hawthorne. Tokens on the three ad connection tables and Instagram are still plaintext (the
+pgsodium HARDENING TODO carried forward on 407); do that before a second venue connects.
+
 ## Wave 8 (launch after wave 7 lands): the rest, built or triggered, not parked
 
 Everything that used to sit under "Parked until after November" gets a real workstream. Two
