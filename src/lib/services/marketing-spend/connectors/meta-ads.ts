@@ -9,6 +9,9 @@
  *   - Forward to recordSpend with ingestedBy='meta_ads_connector'
  */
 
+/** W54 will replace this with 'connected' once the real connector ships. */
+export const CONNECTOR_STATUS = 'manual' as const
+
 export interface MetaAdsSyncInput {
   venueId: string
   accessToken?: string
