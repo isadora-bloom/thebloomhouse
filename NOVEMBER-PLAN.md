@@ -409,4 +409,18 @@ door. Dry work, no reimport needed.
   intentions with no timeline item, shown on the wedding page.
 - Google Ads and TikTok connectors are stubs; the reallocation analyst runs on typed-in spend.
   Say so on the page until a connector exists.
-- Weather severity has no source; a warning feed is an external dependency, parked.
+- Weather, three modes (audit revision 2026-09-14): historic normals ("June's usual 4pm
+  temperature") already have code behind an annual backfill that needs activating; a future
+  trend ("August getting wetter each year") is new code over the data Bloom already pulls; only
+  a specific severity event ("the tornado warning that weekend") needs a feed that does not exist.
+- Tours as a series in the correlation engine unlocks all eight external-context channels
+  (weather, FRED, cultural moments, holiday calendar, census, government shutdown, Google Trends
+  via SerpAPI, social engagement), not just social. Google Trends silently does nothing without
+  a SerpAPI key and a venue metro; check Rixey has both.
+- Surfacing (the audit document's "wave 8"): a consolidated CEO view, coordinator daily-surface
+  links, and two couple-experience additions: personalising the couple-facing assistant from the
+  identity profile (scope with care: the repo's aggregate-not-disclose doctrine applies, and it
+  must read as warmth, not surveillance), and weather- and conversion-informed nudges. Hold every
+  new page to the wave 5 nav standard, add demo-seed coverage for anything new, and specify test,
+  battery and isolation gates per item. The cron budget sits at its ratchet (49), so any new cron
+  reuses a slot or raises the number deliberately.
