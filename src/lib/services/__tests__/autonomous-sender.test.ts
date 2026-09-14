@@ -154,6 +154,15 @@ import { checkAutoSendEligible } from '@/lib/services/email/autonomous-sender'
 
 const VENUE = 'venue-test-1'
 
+// 2026-09-14 ingestion audit item 6: `inbound` is required on
+// AutoSendCheck so no call site can inherit a permissive default. Every
+// pre-existing case here is about the rule gates, not the shape gate, so
+// they declare a low-risk inbound explicitly. The shape gate has its own
+// cases at the bottom of the file.
+const LOW_RISK_INBOUND = {
+  inbound: { kind: 'inbound' as const, assessment: { lowRisk: true, holdReason: null } },
+}
+
 const HAPPY_RULE = {
   venue_id: VENUE,
   context: 'inquiry',
@@ -176,6 +185,7 @@ beforeEach(() => {
 describe('checkAutoSendEligible', () => {
   it('happy path — eligible when all gates pass', async () => {
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -189,6 +199,7 @@ describe('checkAutoSendEligible', () => {
   it('blocks when cost-ceiling pause is active', async () => {
     mockState.paused = true
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -200,6 +211,7 @@ describe('checkAutoSendEligible', () => {
 
   it('blocks when direction is outbound (INV-15)', async () => {
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -211,6 +223,7 @@ describe('checkAutoSendEligible', () => {
 
   it('blocks unconditionally when injection suspected', async () => {
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 99,
       source: 'the_knot',
@@ -224,6 +237,7 @@ describe('checkAutoSendEligible', () => {
   it('blocks when no rule exists for the (context, source) pair', async () => {
     mockState.rules = []
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -236,6 +250,7 @@ describe('checkAutoSendEligible', () => {
   it('blocks when matching rule is disabled', async () => {
     mockState.rules = [{ ...HAPPY_RULE, enabled: false }]
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -247,6 +262,7 @@ describe('checkAutoSendEligible', () => {
 
   it('blocks when confidence is below the rule threshold', async () => {
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 50,
       source: 'the_knot',
@@ -259,6 +275,7 @@ describe('checkAutoSendEligible', () => {
   it('blocks when thread cap exhausted', async () => {
     mockState.threadCount = 3
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -272,6 +289,7 @@ describe('checkAutoSendEligible', () => {
   it('blocks when daily venue cap exhausted', async () => {
     mockState.todayCount = 10
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -286,6 +304,7 @@ describe('checkAutoSendEligible', () => {
     mockState.rules = [{ ...HAPPY_RULE, require_new_contact: true }]
     mockState.priorInteractionsCount = 5
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',
@@ -297,10 +316,77 @@ describe('checkAutoSendEligible', () => {
     expect(r.reason).toContain('require_new_contact')
   })
 
+  // -------------------------------------------------------------------
+  // S4a / 2026-09-14 ingestion audit item 6 — the inverted default.
+  // -------------------------------------------------------------------
+
+  it('holds an inbound whose shape was not recognised, with every rule gate green', async () => {
+    const r = await checkAutoSendEligible(VENUE, {
+      inbound: {
+        kind: 'inbound',
+        assessment: {
+          lowRisk: false,
+          holdReason: 'body links to pay.example, outside the sender domain',
+        },
+      },
+      contextType: 'inquiry',
+      confidenceScore: 100,
+      source: 'the_knot',
+      threadId: 'thread-hold-1',
+      direction: 'inbound',
+    })
+    expect(r.eligible).toBe(false)
+    expect(r.reason).toContain('held for review')
+    expect(r.reason).toContain('pay.example')
+  })
+
+  it('holds before the rule lookup, so a missing rule is not what the coordinator is told', async () => {
+    mockState.rules = []
+    const r = await checkAutoSendEligible(VENUE, {
+      inbound: {
+        kind: 'inbound',
+        assessment: { lowRisk: false, holdReason: 'injection marker in subject or body' },
+      },
+      contextType: 'inquiry',
+      confidenceScore: 100,
+      source: 'the_knot',
+      direction: 'inbound',
+    })
+    expect(r.eligible).toBe(false)
+    expect(r.reason).toContain('injection marker')
+    expect(r.reason).not.toContain('No auto-send rule')
+  })
+
+  it('does not apply the shape gate to a scheduled sequence with no fresh inbound', async () => {
+    const r = await checkAutoSendEligible(VENUE, {
+      inbound: { kind: 'scheduled', sequence: 'inquiry_follow_up' },
+      contextType: 'inquiry',
+      confidenceScore: 85,
+      source: 'the_knot',
+      threadId: 'thread-hold-3',
+      direction: 'inbound',
+    })
+    expect(r.eligible).toBe(true)
+  })
+
+  it('the sticky injection flag still blocks a scheduled sequence', async () => {
+    const r = await checkAutoSendEligible(VENUE, {
+      inbound: { kind: 'scheduled', sequence: 'post_tour' },
+      contextType: 'inquiry',
+      confidenceScore: 85,
+      source: 'the_knot',
+      direction: 'inbound',
+      injectionSuspected: true,
+    })
+    expect(r.eligible).toBe(false)
+    expect(r.reason).toContain('prompt-injection')
+  })
+
   it('allows via require_new_contact when no priors (≤1 — current itself)', async () => {
     mockState.rules = [{ ...HAPPY_RULE, require_new_contact: true }]
     mockState.priorInteractionsCount = 1 // just the current interaction
     const r = await checkAutoSendEligible(VENUE, {
+      ...LOW_RISK_INBOUND,
       contextType: 'inquiry',
       confidenceScore: 85,
       source: 'the_knot',

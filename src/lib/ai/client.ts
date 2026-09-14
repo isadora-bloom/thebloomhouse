@@ -180,7 +180,28 @@ export interface CallAIOptions {
   userPrompt: string
   maxTokens?: number
   temperature?: number
-  venueId?: string
+  /**
+   * The venue this call is made on behalf of. REQUIRED since the
+   * 2026-09-14 ingestion audit (item 7).
+   *
+   * It was optional, and roughly a dozen call sites had quietly stopped
+   * passing it — which meant those calls landed in `api_costs` with a
+   * null `venue_id`. An unattributed model call is invisible to the
+   * per-venue cost ceiling (`isAutonomousPaused` reads a venue's spend),
+   * invisible to the correlation lineage, and invisible to any audit
+   * asking "what did this venue's inbound actually cost". A model call
+   * triggered by attacker-controlled text that nobody can bill is a
+   * cheap denial-of-wallet primitive.
+   *
+   * Required rather than defaulted so a new call site fails to compile
+   * instead of silently going unattributed — the same reasoning behind
+   * `direction` on AutoSendCheck.
+   *
+   * Pass the literal `'system'` for genuinely venue-less work (platform
+   * cron, migration scripts) so the omission is a decision on the page
+   * rather than an accident.
+   */
+  venueId: string
   taskType?: string
   /**
    * Sensitivity tier (see ContentTier). Default 2. When set to 1, the

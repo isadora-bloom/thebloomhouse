@@ -156,14 +156,41 @@ export async function POST(request: NextRequest) {
         direction?: 'inbound' | 'outbound'
         weddingId?: string
         injectionSuspected?: boolean
+        body?: string
+        subject?: string
+        fromEmail?: string
+        intentClass?: string
+        trustedDomains?: string[]
       }
       // direction is required on AutoSendCheck (Repair K). The
       // test harness defaults to 'inbound' if the test caller didn't
       // pass it. injectionSuspected is forwarded so tests can
       // exercise the round-3 Check 0c block path.
+      //
+      // 2026-09-14 ingestion audit item 6: the harness runs the real
+      // shape assessment over whatever body / sender the test case
+      // supplies, so a test can exercise the hold path end to end. With
+      // no body supplied the assessment holds, which is the correct
+      // default — "no inbound to look at" is not "safe to send".
+      const { assessInboundShape } = await import('@/lib/services/email/auto-send-shape')
       const result = await checkAutoSendEligible(venueId, {
-        ...opts,
+        contextType: opts.contextType,
+        confidenceScore: opts.confidenceScore,
+        source: opts.source,
+        threadId: opts.threadId,
+        weddingId: opts.weddingId,
+        injectionSuspected: opts.injectionSuspected,
         direction: opts.direction ?? 'inbound',
+        inbound: {
+          kind: 'inbound',
+          assessment: assessInboundShape({
+            body: opts.body ?? '',
+            subject: opts.subject ?? '',
+            fromEmail: opts.fromEmail ?? null,
+            intentClass: opts.intentClass ?? null,
+            trustedDomains: opts.trustedDomains ?? [],
+          }),
+        },
       })
       return NextResponse.json({ ok: true, result })
     }

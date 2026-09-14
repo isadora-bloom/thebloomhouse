@@ -43,7 +43,17 @@ export interface ParsedSeatingChart {
 // Parse xlsx/csv buffer → ParsedSeatingChart
 // ---------------------------------------------------------------------------
 
-export async function parseSeatingFile(buffer: Buffer, filename: string): Promise<ParsedSeatingChart> {
+/**
+ * @param venueId  Venue the upload belongs to. Threaded down to the
+ *   column-detection model call so the spend lands on the right venue —
+ *   `venueId` is required on CallAIOptions since the 2026-09-14 audit
+ *   (item 7) and this call was going out unattributed.
+ */
+export async function parseSeatingFile(
+  buffer: Buffer,
+  filename: string,
+  venueId: string,
+): Promise<ParsedSeatingChart> {
   void filename  // used by callers for MIME validation; xlsx.read handles format detection
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
 
@@ -64,7 +74,7 @@ export async function parseSeatingFile(buffer: Buffer, filename: string): Promis
   const dataRows = rawRows.slice(1)
 
   // Use Claude Haiku to map column indices to our known fields
-  const colMap = await detectColumns(headerRow, dataRows.slice(0, 3))
+  const colMap = await detectColumns(headerRow, dataRows.slice(0, 3), venueId)
 
   // Also look for a "Notes" sheet for global notes
   const globalNotes = extractGlobalNotes(workbook, dataSheet)
@@ -141,6 +151,7 @@ interface ColumnMap {
 async function detectColumns(
   headers: (string | null)[],
   sampleRows: unknown[][],
+  venueId: string,
 ): Promise<ColumnMap> {
   const headerStr = headers.map((h, i) => `${i}: "${h ?? ''}"`).join(', ')
   const sampleStr = sampleRows
@@ -169,6 +180,8 @@ Return a JSON object mapping each logical field to its 0-based column index (nul
 Only return the JSON object, no explanation.`,
     promptVersion: 'seating-import-col-detect-v1',
     tier: 'haiku',
+    venueId,
+    taskType: 'seating_import.column_detect',
   })
 
   return result ?? {

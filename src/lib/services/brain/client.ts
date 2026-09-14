@@ -14,6 +14,7 @@
 
 import { callAI } from '@/lib/ai/client'
 import { detectKbEcho } from '@/lib/security/kb-echo-guard'
+import { buildInboundEmailContext } from '@/lib/security/inbound-context'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
   buildPersonalityPrompt,
@@ -477,8 +478,33 @@ export async function generateClientDraft(
     kbContext = `\n\n## KNOWLEDGE BASE (Use these for accurate answers):\n\n${kbLines.join('\n\n')}`
   }
 
-  // Build the context block
-  let contextBlock = `\n\n## CLIENT'S EMAIL:\n\nFrom: ${message.from}\nSubject: ${message.subject}\n\n${message.body.slice(0, 3000)}`
+  // Build the context block.
+  //
+  // 2026-09-14 ingestion audit, item 2: this used to interpolate
+  // `message.body` raw. inquiry-brain wrapped the same input properly
+  // and the client brain did not, so the booked-client path was the
+  // softer target of the two. Both now go through one builder
+  // (lib/security/inbound-context.ts) so a third brain cannot be
+  // written without the envelope.
+  const inbound = buildInboundEmailContext({
+    from: message.from,
+    subject: message.subject,
+    body: message.body,
+    heading: "CLIENT'S EMAIL",
+    label: 'client_message_body',
+  })
+  let contextBlock = inbound.block
+
+  if (inbound.injectionDetected || inbound.rolePrefixStripped || inbound.systemTagStripped) {
+    console.warn('[client-brain] prompt-sanitize signals on inbound message', {
+      from: message.from,
+      subjectLength: (message.subject ?? '').length,
+      bodyLength: (message.body ?? '').length,
+      injectionDetected: inbound.injectionDetected,
+      rolePrefixStripped: inbound.rolePrefixStripped,
+      systemTagStripped: inbound.systemTagStripped,
+    })
+  }
 
   // Surface which Gmail inbox received this message so Sage can reference
   // the correct address when relevant (multi-Gmail venues).

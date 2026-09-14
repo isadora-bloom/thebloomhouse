@@ -30,10 +30,71 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   isTerminalStatus,
   nextStatus,
+  type BookingCorroboration,
   type LifecycleSignal,
   type WeddingStatus,
 } from './wedding-lifecycle-engine'
 import { writeOrLog } from '@/lib/db/write-or-log'
+
+/** Signals whose target is 'booked' — the ones that need corroborating. */
+const BOOKING_SIGNALS: ReadonlySet<LifecycleSignal> = new Set<LifecycleSignal>([
+  'contract_signed',
+  'deposit_paid',
+])
+
+/**
+ * Look for non-text evidence that this wedding really did book
+ * (2026-09-14 ingestion audit item 3).
+ *
+ * Three independent sources, any one of which is enough:
+ *   - a `contracts` row for the wedding with status 'signed' (W57,
+ *     migration 409 — generated contracts move draft → sent → viewed →
+ *     signed and the signing route is the only writer of 'signed'),
+ *   - a `budget_payments` row against the wedding (migration 017),
+ *   - the caller is a coordinator acting deliberately, which is itself
+ *     the corroboration.
+ *
+ * Reads fail SOFT to "no evidence": a Supabase blip must not manufacture
+ * a booking. The proposal path is the safe default.
+ */
+async function loadBookingCorroboration(
+  supabase: SupabaseClient,
+  venueId: string,
+  weddingId: string,
+  detectedBy: ApplyLifecycleSignalArgs['detectedBy'],
+): Promise<BookingCorroboration> {
+  const coordinatorAction = detectedBy === 'coordinator'
+
+  let signedContract = false
+  let paymentRow = false
+
+  try {
+    const { data } = await supabase
+      .from('contracts')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('wedding_id', weddingId)
+      .eq('status', 'signed')
+      .limit(1)
+    signedContract = (data?.length ?? 0) > 0
+  } catch (err) {
+    console.warn('[lifecycle] signed-contract probe failed:', err)
+  }
+
+  try {
+    const { data } = await supabase
+      .from('budget_payments')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('wedding_id', weddingId)
+      .limit(1)
+    paymentRow = (data?.length ?? 0) > 0
+  } catch (err) {
+    console.warn('[lifecycle] payment-row probe failed:', err)
+  }
+
+  return { signedContract, paymentRow, coordinatorAction }
+}
 
 export interface ApplyLifecycleSignalArgs {
   supabase: SupabaseClient
@@ -56,6 +117,14 @@ export interface ApplyLifecycleSignalResult {
   reason: string
   /** True when the engine refused (transition was illegal for current state). */
   violation: boolean
+  /**
+   * True when the signal was recorded as a PROPOSAL rather than applied
+   * (2026-09-14 ingestion audit item 3). `weddings.status` was NOT
+   * written. A `wedding_lifecycle_events` row with signal
+   * `proposed:<signal>` and `status_to = null` holds the claim for a
+   * coordinator to confirm.
+   */
+  proposed?: boolean
 }
 
 /**
@@ -109,7 +178,14 @@ export async function applyLifecycleSignal(
   // engine itself enforces this for most paths but explicitly checking
   // here lets us record a "violation:" event with the right context
   // ("attempted contract_signed on lost wedding -- coordinator review").
-  const decision = nextStatus(currentStatus, signal)
+  // Booking signals need non-text evidence before they may write status.
+  // Only probe for the two signals that can produce it — every other
+  // signal skips two DB reads it would never use.
+  const corroboration = BOOKING_SIGNALS.has(signal)
+    ? await loadBookingCorroboration(supabase, venueId, weddingId, detectedBy)
+    : null
+
+  const decision = nextStatus(currentStatus, signal, { corroboration })
 
   if (!decision) {
     // Illegal pair. Two sub-cases:
@@ -152,9 +228,45 @@ export async function applyLifecycleSignal(
     }
   }
 
+  const reason = args.reason ?? decision.reason
+
+  // 2026-09-14 ingestion audit item 3. The engine says this WOULD be a
+  // booking, but nothing outside the message text backs it up. Record
+  // the claim and leave `weddings.status` alone. The event row carries
+  // the `proposed:` prefix and a null `status_to`, which is the same
+  // shape the violation path already uses, so the coordinator's audit
+  // feed picks it up with no new surface.
+  if (decision.requiresCorroboration) {
+    const detail = corroboration
+      ? `no signed contract, no payment row, not a coordinator action`
+      : 'no corroboration loaded'
+    try {
+      await writeOrLog(supabase.from('wedding_lifecycle_events').insert({
+        venue_id: venueId,
+        wedding_id: weddingId,
+        signal: 'proposed:' + signal,
+        status_from: currentStatus,
+        status_to: null,
+        reason: `${reason} (proposed from message text only — ${detail}; confirm to apply)`,
+        detected_by: detectedBy,
+        source_interaction_id: args.sourceInteractionId ?? null,
+        confidence: args.confidence ?? null,
+      }), { op: 'wedding_lifecycle_events.insert', venueId })
+    } catch (err) {
+      console.warn('[lifecycle] booking proposal log failed:', err)
+    }
+    return {
+      applied: false,
+      from: currentStatus,
+      to: null,
+      reason: `booking proposed, awaiting corroboration (${reason})`,
+      violation: false,
+      proposed: true,
+    }
+  }
+
   // Legal transition. UPDATE + INSERT in parallel -- they don't depend
   // on each other.
-  const reason = args.reason ?? decision.reason
   try {
     const updatePromise = supabase
       .from('weddings')

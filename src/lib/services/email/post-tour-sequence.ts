@@ -689,6 +689,9 @@ async function generateAndStampStep(
       direction: 'inbound',
       weddingId,
       injectionSuspected,
+      // Timer-driven off a completed tour, not off an inbound message.
+      // The sticky auto_send_blocked_at read above is the guard.
+      inbound: { kind: 'scheduled', sequence: 'post_tour' },
     })
 
     if (eligibility.eligible) {

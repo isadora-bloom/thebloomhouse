@@ -25,6 +25,7 @@ import {
   stampInboundVerdict,
   synthVerdictForFormLead,
   type IntentVerdict,
+  type IntentClass,
 } from '@/lib/services/intel/inbound-intent-classifier'
 import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/inquiry'
 import { generateClientDraft, BRAIN_PROMPT_VERSION as CLIENT_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/client'
@@ -1276,6 +1277,24 @@ function extractQuestionsFromNote(note: string | null | undefined): string[] {
   return questions
 }
 
+/**
+ * Intents that override a form-relay parser hit (2026-09-14 ingestion
+ * audit item 1). When the classifier reads the same body and says it is
+ * one of these, the parser's synthetic `new_inquiry` at confidence 95 is
+ * discarded in favour of the classifier's verdict.
+ *
+ * Deliberately NOT a full allow-list of the opposite: the classifier has
+ * veto power, never promotion power. Everything not in this set leaves
+ * the parser's structured extraction in place.
+ */
+const FORM_RELAY_VETO_INTENTS: ReadonlySet<IntentClass> = new Set<IntentClass>([
+  'spam_outreach',
+  'auto_reply',
+  'coordinator_internal',
+  'vendor_outreach',
+  'vendor_communication',
+])
+
 function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationResult {
   // guestCount field may be "101 - 150" / "85" / "100–150" — take the first
   // integer we can find so downstream parseGuestCount-style logic has a
@@ -1585,8 +1604,34 @@ export async function processIncomingEmail(
   // refuses .invalid; humans see "Replying to authsolic-…invalid" in the
   // inbox). Threading still works because Gmail uses In-Reply-To headers
   // off the original message id.
+  //
+  // 2026-09-14 ingestion audit item 1 — body-derived reply targets.
+  //
+  // A parser may only hand us a reply target it read out of the message
+  // BODY when the envelope that carried that body was itself trusted
+  // (venue-owned From, or a known relay / form-provider domain). Without
+  // this, anyone who can compose an email could put
+  // "Personal email: victim@example.com" in a body, get a parser to fire,
+  // and have Sage's draft addressed at a mailbox they chose. The reply
+  // target falls back to the envelope sender, which is the address that
+  // actually routes back to whoever sent the thing.
+  const formLeadReplyIsBodyDerived =
+    formLead?.replyToSource === 'body' && formLead?.envelopeTrusted !== true
+  if (formLeadReplyIsBodyDerived) {
+    log.warn('pipeline.form_relay_body_reply_refused', {
+      event_type: 'form_relay_reply_target',
+      outcome: 'skip',
+      data: {
+        source: formLead?.source ?? null,
+        matchedRelayFrom: formLead?.matchedRelayFrom ?? null,
+      },
+    })
+  }
+  const formLeadReplyTarget = formLeadReplyIsBodyDerived
+    ? rawFromEmail
+    : formLead?.replyToEmail
   const replyTargetEmail =
-    formLead?.replyToEmail ??
+    formLeadReplyTarget ??
     schedulingEvent?.inviteeEmail ??
     forwardedOriginalSender ??
     fromEmail
@@ -1872,7 +1917,13 @@ export async function processIncomingEmail(
   // drafts because both calculator emails (from rixeymanor.com) hit the
   // auto-learned filter. Bug class: a "real lead" signal arriving via
   // venue-own-domain envelope.
-  const skipDraft =
+  //
+  // 2026-09-14 ingestion audit item 1: the form-relay exemption from the
+  // no_draft filter is only as good as the parser hit behind it. When the
+  // classifier vetoes the hit below (`formLeadVetoed`), the venue's own
+  // filter rule goes back in force — `skipDraft` is recomputed as
+  // force after the classification block.
+  let skipDraft =
     opts?.skipDraft === true ||
     (!formLead && filterHit?.action === 'no_draft') ||
     (!formLead && earlyFilterHit?.action === 'no_draft') ||
@@ -1955,6 +2006,10 @@ export async function processIncomingEmail(
   // classifyInboundIntent call. Null on the synth + humanRequested
   // paths (no LLM ran, nothing to stamp).
   let unifiedVerdict: IntentVerdict | null = null
+  // Set when the classifier overrules a form-relay parser hit (audit
+  // item 1). Read straight after this block to put the venue's own
+  // no_draft filter back in force.
+  let formLeadVetoed = false
   if (humanRequested) {
     classification = {
       classification: 'inquiry_reply',
@@ -1988,6 +2043,83 @@ export async function processIncomingEmail(
       source: normalizeSource(formLead.source) ?? null,
       questions: extractQuestionsFromNote(formLead.note),
     })
+
+    // 2026-09-14 ingestion audit item 1 — the two privileges are no
+    // longer granted together.
+    //
+    // A parser hit bypasses the noise guards, and it has to: relay mail
+    // carries List-Unsubscribe headers by construction, so the guards
+    // would drop every real lead. What it may NOT also do is skip the
+    // classifier. Before this, a single forged envelope that made any
+    // parser fire produced a synthetic new_inquiry at confidence 95 that
+    // no model had ever read, with the noise guards disarmed on the same
+    // hit. One forged header, two gates down.
+    //
+    // The classifier now always runs on a parser hit, as an independent
+    // check with VETO power only. It can downgrade a parser hit to what
+    // the message really is (vendor pitch, auto-reply, spam); it cannot
+    // upgrade anything, and the parser's structured fields still win for
+    // names / dates / guest counts because those come out of labelled
+    // platform text rather than model inference.
+    //
+    // On a classifier failure we keep the parser's verdict: the parser
+    // matched real structure, and dropping a live lead because an API
+    // call blipped is the worse failure. The log line makes the gap
+    // visible.
+    try {
+      const corroboration = await classifyInboundRaw({
+        body: email.body,
+        subject: email.subject,
+        venueId,
+        channel: 'email',
+        fromEmail,
+        priorInteractionCount,
+        threadHasPriorOutbound,
+        correlationId,
+      })
+      if (FORM_RELAY_VETO_INTENTS.has(corroboration.intent_class)) {
+        log.warn('pipeline.form_relay_classifier_veto', {
+          event_type: 'form_relay_corroboration',
+          outcome: 'skip',
+          data: {
+            source: formLead.source,
+            matchedRelayFrom: formLead.matchedRelayFrom,
+            classifierIntent: corroboration.intent_class,
+            envelopeTrusted: formLead.envelopeTrusted,
+          },
+        })
+        formLeadVetoed = true
+        unifiedVerdict = corroboration
+        classification = {
+          classification: intentToEmailClassification(corroboration.intent_class),
+          confidence: corroboration.confidence,
+          extractedData: {
+            senderName: corroboration.signals.sender_name ?? undefined,
+            partnerName: corroboration.signals.partner_name ?? undefined,
+            eventDate: corroboration.signals.event_date ?? undefined,
+            guestCount: corroboration.signals.guest_count ?? undefined,
+            estimatedGuests: corroboration.signals.guest_count ?? undefined,
+            source: corroboration.signals.source ?? undefined,
+            questions: corroboration.signals.questions,
+            urgencyLevel: corroboration.signals.urgency_level,
+            sentiment: corroboration.signals.sentiment,
+            mentionsTourRequest: corroboration.signals.mentions_tour_request,
+            mentionsFamilyAttending: corroboration.signals.mentions_family_attending,
+            commitmentLevel: corroboration.signals.commitment_level,
+            specificityScore: corroboration.signals.specificity_score,
+          },
+        }
+      }
+    } catch (corrErr) {
+      log.warn('pipeline.form_relay_corroboration_failed', {
+        event_type: 'form_relay_corroboration',
+        outcome: 'fail',
+        data: {
+          source: formLead.source,
+          error: corrErr instanceof Error ? corrErr.message : String(corrErr),
+        },
+      })
+    }
   } else {
     // 2026-05-12 — unified classifier path. classifyInboundRaw returns the
     // full IntentVerdict (intent_class, extracted_facts, signals,
@@ -2040,6 +2172,16 @@ export async function processIncomingEmail(
       }, correlationId)
       return { interactionId: null, draftId: null, classification: 'error', autoSent: false }
     }
+  }
+
+  // Audit item 1, second half of the exemption. `skipDraft` above lets a
+  // form-relay hit past the venue's auto-learned no_draft filter, because
+  // a calculator notification arrives from the venue's own domain and
+  // would otherwise be vetoed by a rule that is right for transactional
+  // mail. That exemption is only earned while the parser hit stands. Once
+  // the classifier has overruled it, the filter applies again.
+  if (formLeadVetoed && (filterHit?.action === 'no_draft' || earlyFilterHit?.action === 'no_draft')) {
+    skipDraft = true
   }
 
   // Step 2.5 — Calendly custom-questions source enrichment (2026-05-27).
@@ -5103,6 +5245,31 @@ export async function processIncomingEmail(
             .is('auto_send_blocked_at', null)
         }
 
+        // 2026-09-14 ingestion audit item 6: assess the inbound's shape
+        // and let the eligibility check hold anything that isn't boring.
+        // Trusted domains are the venue's own addresses plus the relay
+        // that carried the message, so a Knot lead whose body links back
+        // to theknot.com is still eligible while one that links
+        // somewhere else is not.
+        const { assessInboundShape } = await import('@/lib/services/email/auto-send-shape')
+        const trustedDomains = new Set<string>()
+        for (const own of ownEmails) {
+          const at = own.lastIndexOf('@')
+          if (at > 0) trustedDomains.add(own.slice(at + 1).toLowerCase())
+        }
+        if (formLead?.matchedRelayFrom) {
+          const at = formLead.matchedRelayFrom.lastIndexOf('@')
+          if (at > 0) trustedDomains.add(formLead.matchedRelayFrom.slice(at + 1).toLowerCase())
+        }
+        const inboundShape = assessInboundShape({
+          body: email.body,
+          subject: email.subject,
+          fromEmail: rawFromEmail,
+          intentClass: unifiedVerdict?.intent_class ?? null,
+          emailClassification: classification.classification,
+          trustedDomains: [...trustedDomains],
+        })
+
         // Confidence scale conversion now happens INSIDE
         // checkAutoSendEligible (Repair K, 2026-05-01). Pass raw
         // brain output; the function normalises 0-100 → 0.0-1.0
@@ -5117,6 +5284,7 @@ export async function processIncomingEmail(
           direction: 'inbound',
           weddingId: weddingId ?? undefined,
           injectionSuspected,
+          inbound: { kind: 'inbound', assessment: inboundShape },
         })
 
         if (eligibility.eligible) {

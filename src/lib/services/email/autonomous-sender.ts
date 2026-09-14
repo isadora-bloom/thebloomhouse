@@ -21,6 +21,7 @@ import { writeOrLog } from '@/lib/db/write-or-log'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { isAutonomousPaused } from '@/lib/services/cost-ceiling'
 import { isTrialExpiredNoSub } from '@/lib/services/billing/billing-state'
+import type { AutoSendInbound } from './auto-send-shape'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -108,6 +109,18 @@ interface AutoSendCheck {
    * audit follow-up #36.
    */
   injectionSuspected?: boolean
+  /**
+   * What triggered this draft (2026-09-14 ingestion audit item 6).
+   *
+   * REQUIRED, and a union rather than an optional, for the same reason
+   * `direction` is required: a call site that forgets should fail to
+   * compile, not inherit a permissive default. `{ kind: 'inbound' }`
+   * carries the shape assessment for the message being replied to;
+   * `{ kind: 'scheduled' }` says there is no fresh inbound at all
+   * (follow-up sequences, post-tour sequences) and the sticky
+   * `auto_send_blocked_at` on the wedding is what guards those.
+   */
+  inbound: AutoSendInbound
 }
 
 interface AutoSendResult {
@@ -330,6 +343,25 @@ export async function checkAutoSendEligible(
     return {
       eligible: false,
       reason: 'Auto-send blocked: inbound email contained a prompt-injection signal',
+    }
+  }
+
+  // Check 0d: recognised-shape gate (2026-09-14 ingestion audit item 6).
+  //
+  // The default is inverted here. Check 0c above is a deny-list — a
+  // fixed set of English regexes — and it was the only hard block on the
+  // path. This gate is the allow-list: an inbound reply only auto-sends
+  // when the message it is replying to has a shape we recognise as
+  // boring (a classifier intent we answer unattended, no links or
+  // addresses in the body pointing outside the sender's own domain, no
+  // injection markers). Everything else holds for coordinator review.
+  //
+  // A hold is not a failure. The draft is written either way; the
+  // coordinator just presses the button.
+  if (draft.inbound.kind === 'inbound' && !draft.inbound.assessment.lowRisk) {
+    return {
+      eligible: false,
+      reason: `Auto-send held for review: ${draft.inbound.assessment.holdReason ?? 'inbound did not match a recognised low-risk shape'}`,
     }
   }
 

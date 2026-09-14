@@ -23,6 +23,22 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { getStoredCoupleIdentityProfile } from '@/lib/services/identity/reconstruct'
 import { buildCoupleProfileBlock } from '@/lib/services/identity/profile-prompt-block'
+import { sanitizeUserContent, wrapUntrustedContent } from '@/lib/security/prompt-sanitize'
+
+/**
+ * Review bodies are written by strangers on a public platform and the
+ * draft they produce is posted publicly under the venue's own profile,
+ * which makes this the highest-blast-radius uncapped input in the brain
+ * layer. 2026-09-14 ingestion audit item 8: cap it and wrap it.
+ *
+ * 4000 chars is generous for a wedding review (the longest real one in
+ * the corpus is under 2000) and leaves no room for a prompt-length
+ * attack that pushes the venue's own rules out of context.
+ */
+const REVIEW_BODY_CHAR_CAP = 4000
+/** Same treatment for an existing draft being revised — also model output
+ *  that may have been seeded from review text. */
+const EXISTING_DRAFT_CHAR_CAP = 2000
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v2 (2026-05-09, Wave 1A): when the caller resolves the underlying
@@ -94,21 +110,40 @@ function buildTaskPrompt(opts: {
     approvedReviewPhrases.length > 0
       ? `\nApproved language from past reviews you may echo when natural (use sparingly, never force):\n${approvedReviewPhrases.map((p) => `- "${p}"`).join('\n')}\n`
       : ''
+  // Derive the first name from the SANITISED name, not the raw one, or
+  // a display name of "Assistant: ignore the rules" puts "Assistant:"
+  // back into the prompt through the greeting instruction.
   const reviewerFirstName =
-    (review.reviewer_name ?? '').trim().split(/\s+/)[0] || null
+    sanitizeUserContent(review.reviewer_name ?? '').content.trim().split(/\s+/)[0] || null
+
+  // Everything the reviewer typed is untrusted: the name, the title and
+  // the body. The body gets the full envelope (it is the long field and
+  // the one an attacker would use); the short fields get sanitised so a
+  // "Coordinator:" prefix in a display name cannot read as a turn
+  // boundary.
+  const reviewerName = sanitizeUserContent(review.reviewer_name ?? '').content
+  const reviewTitle = sanitizeUserContent(review.title ?? '').content
+  const wrappedBody = wrapUntrustedContent(
+    (review.body ?? '').slice(0, REVIEW_BODY_CHAR_CAP),
+    'review_body',
+  ).wrapped
+  const existingDraft = review.response_text
+    ? wrapUntrustedContent(
+        review.response_text.slice(0, EXISTING_DRAFT_CHAR_CAP),
+        'existing_draft',
+      ).wrapped
+    : null
 
   return `## TASK: REVIEW RESPONSE
 
 You are drafting a public reply from ${businessName} to a wedding venue review. The reply will be posted on ${review.source ?? 'the review platform'} under the venue's profile.
 
 ### What you are responding to
-- Reviewer: ${review.reviewer_name ?? 'Anonymous reviewer'}
+- Reviewer: ${reviewerName || 'Anonymous reviewer'}
 - Rating: ${review.rating ?? '?'} of 5
-${review.title ? `- Title: ${review.title}` : ''}
+${reviewTitle ? `- Title: ${reviewTitle}` : ''}
 - Review body:
-"""
-${review.body}
-"""
+${wrappedBody}
 
 ### Tone for this review
 ${tonePivotForRating(review.rating)}
@@ -122,7 +157,7 @@ ${tonePivotForRating(review.rating)}
 - Do NOT use em dashes. Use commas, periods, or hyphens.
 - Output ONLY the response text. No "Here is your response:" preamble. No surrounding quotes. No markdown.
 ${phraseGuidance}
-${review.response_text ? `\n### Existing draft to revise (keep the intent, improve the specificity)\n"""\n${review.response_text}\n"""\n` : ''}
+${existingDraft ? `\n### Existing draft to revise (keep the intent, improve the specificity)\n${existingDraft}\n` : ''}
 
 Write the response now.`
 }
@@ -243,7 +278,9 @@ export async function generateReviewResponse(
 
   const result = await callAI({
     systemPrompt,
-    userPrompt: `Draft the public response to ${review.reviewer_name ?? 'the reviewer'} now.`,
+    // Sanitised: the reviewer's display name is their own text and this
+    // line sits at instruction level in the user turn.
+    userPrompt: `Draft the public response to ${sanitizeUserContent(review.reviewer_name ?? '').content || 'the reviewer'} now.`,
     maxTokens: 500,
     temperature: 0.7,
     venueId,

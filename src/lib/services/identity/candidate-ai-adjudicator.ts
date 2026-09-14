@@ -155,7 +155,9 @@ function buildUserPrompt(
 export async function adjudicateAmbiguousMatch(args: {
   candidate: CandidateContextForAI
   candidates: WeddingContextForAI[]
-  venueId?: string
+  /** Required since the 2026-09-14 audit (item 7) — the adjudication
+   *  call is billed against this venue. */
+  venueId: string
 }): Promise<AdjudicatorVerdict> {
   const { candidate, candidates, venueId } = args
   if (candidates.length === 0) {

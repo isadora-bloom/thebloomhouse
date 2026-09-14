@@ -17,6 +17,17 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { sanitizeUserContent, wrapUntrustedContent } from '@/lib/security/prompt-sanitize'
+import {
+  PLANNING_NOTE_STATUS_BY_SOURCE,
+  type PlanningNoteSource,
+} from './planning-note-status'
+
+export {
+  PLANNING_NOTE_STATUS_BY_SOURCE,
+  UNCONFIRMED_PLANNING_NOTE_STATUSES,
+  type PlanningNoteSource,
+} from './planning-note-status'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
@@ -76,6 +87,31 @@ export interface PlanningNote {
   source_interaction_id?: string | null
   /** 'email' | 'sms' | 'instagram' | ... Null for the older writers. */
   source_channel?: string | null
+  /**
+   * Who decided this note says what it says (2026-09-14 ingestion audit
+   * item 7).
+   *
+   *   'ai_extracted' — a model read an inbound message written by
+   *     somebody outside the venue and produced this sentence. Nobody has
+   *     confirmed it. It is a claim, not a fact.
+   *   'regex'        — a deterministic pattern matched. Also unconfirmed,
+   *     but it cannot have been talked into saying something new.
+   *   'contract'     — pulled out of an uploaded contract.
+   *
+   * Persisted through `planning_notes.status` (see `statusForNote` and
+   * `planning-note-status.ts`), not a column of its own: this workstream
+   * does not own migrations and `status` already means "how settled is
+   * this row". A coordinator surface reading status = 'ai_extracted'
+   * shows the note as unconfirmed.
+   */
+  source?: PlanningNoteSource
+}
+
+function statusForNote(note: PlanningNote): string {
+  // Default is the AI status, not the neutral one. A note that arrives
+  // without declaring where it came from is treated as the less trusted
+  // of the two, which is the right way round for a default.
+  return PLANNING_NOTE_STATUS_BY_SOURCE[note.source ?? 'ai_extracted']
 }
 
 /** Shape returned by the AI extraction prompt. */
@@ -200,6 +236,10 @@ export function extractPlanningDecisions(
             category: config.category,
             content,
             source_message: sourceMessage,
+            // A pattern matched. Still unconfirmed, but it cannot have
+            // been argued into producing a new sentence, so it does not
+            // carry the ai_extracted label.
+            source: 'regex',
           })
         }
 
@@ -260,7 +300,7 @@ export async function savePlanningNotes(
     source_message: note.source_message,
     source_interaction_id: note.source_interaction_id ?? null,
     source_channel: note.source_channel ?? null,
-    status: 'pending',
+    status: statusForNote(note),
   }))
 
   const { error } = await supabase.from('planning_notes').insert(rows)
@@ -302,14 +342,28 @@ Return a JSON array of objects with { category, content, confidence }.
  */
 export async function extractPlanningNotesAI(
   messageText: string,
-  weddingContext?: string
+  /**
+   * Venue this extraction belongs to. Required by `callAIJson` since the
+   * 2026-09-14 audit (item 7) — every model call is billed and logged
+   * against a venue, and an unattributed call is an unattributed cost.
+   * Moved ahead of `weddingContext` because a required parameter cannot
+   * follow an optional one.
+   */
+  venueId: string,
+  weddingContext?: string,
 ): Promise<PlanningNote[]> {
   if (!messageText || messageText.trim().length < 10) return []
 
   try {
+    // 2026-09-14 ingestion audit item 7. `messageText` is whatever a
+    // couple typed into Sage chat, or the body of an inbound email. It
+    // was being concatenated straight into the prompt, and the output
+    // becomes rows on the coordinator's planning surface — so a message
+    // could write its own notes. Wrap it.
+    const wrapped = wrapUntrustedContent(messageText, 'message_to_extract').wrapped
     const userPrompt = weddingContext
-      ? `Wedding context: ${weddingContext}\n\nMessage:\n${messageText}`
-      : messageText
+      ? `Wedding context: ${sanitizeUserContent(weddingContext).content}\n\nMessage:\n${wrapped}`
+      : wrapped
 
     const aiNotes = await callAIJson<AIPlanningNote[]>({
       systemPrompt: AI_EXTRACTION_PROMPT,
@@ -318,6 +372,7 @@ export async function extractPlanningNotesAI(
       temperature: 0.1,
       taskType: 'planning_extraction',
       promptVersion: PLANNING_EXTRACTION_PROMPT_VERSION,
+      venueId,
     })
 
     if (!Array.isArray(aiNotes)) return []
@@ -338,6 +393,9 @@ export async function extractPlanningNotesAI(
         content: n.content.trim(),
         source_message: sourceMessage,
         confidence: n.confidence,
+        // Provenance is set at the point of production, not guessed by
+        // the writer. These came out of a model.
+        source: 'ai_extracted' as const,
       }))
   } catch (err) {
     console.error('[planning-extraction] AI extraction failed:', err)
@@ -359,7 +417,7 @@ export async function extractAndSaveAINotes(
   weddingId: string,
   message: string
 ): Promise<void> {
-  const aiNotes = await extractPlanningNotesAI(message)
+  const aiNotes = await extractPlanningNotesAI(message, venueId)
   if (aiNotes.length === 0) return
   await savePlanningNotes(venueId, weddingId, aiNotes)
 }
@@ -435,7 +493,7 @@ export async function extractVenueConversationNotes(args: {
     return { saved: 0, skipped: 'already_extracted' }
   }
 
-  const aiNotes = await extractPlanningNotesAI(text)
+  const aiNotes = await extractPlanningNotesAI(text, venueId)
   const extra = args.additionalNotes ?? []
   const all = [...aiNotes, ...extra]
   if (all.length === 0) return { saved: 0, skipped: null }

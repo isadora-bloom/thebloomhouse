@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { classifyBrainDump, routeBrainDump, nextHrefFor } from '@/lib/services/brain-dump'
@@ -16,6 +16,13 @@ import {
 } from '@/lib/services/brain-dump/imports'
 import { importIdentityCandidates } from '@/lib/services/ingestion/tangential-signals'
 import { detectPlatformSource } from '@/lib/services/platform-detectors'
+import { sanitizeUserContent, wrapUntrustedContent } from '@/lib/security/prompt-sanitize'
+import {
+  normalizeHandle,
+  stripVenueHandles,
+  getVenueSocialHandles,
+} from '@/lib/services/identity/handles'
+import type { HandlePlatform } from '@/lib/services/identity/sources/types'
 import { importPlatformSignals } from '@/lib/services/ingestion/platform-signals'
 import { clusterSignals } from '@/lib/services/identity/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/identity/candidate-resolver'
@@ -169,6 +176,61 @@ function extractAttachmentMeta(rawText: string): { name: string; type: string; p
   const legacy = rawText.match(/\[Attached file:\s*(.+?)\s*\(([^()]*)\)\s+stored at\s+([^\]]+)\]/)
   if (!legacy) return null
   return { name: legacy[1].trim(), type: legacy[2].trim(), path: legacy[3].trim() }
+}
+
+/**
+ * 2026-09-14 ingestion audit item 9 — storage-path confinement.
+ *
+ * The attachment `path` is parsed out of `rawText`, which is the user's
+ * own typed note. The upload client writes `${venueId}/${uuid}-${name}`,
+ * but nothing on the server checked that, and the download runs on the
+ * SERVICE client — so RLS is not in the way. A note reading
+ *
+ *     [Attached file: {"name":"x","type":"text/csv",
+ *                      "path":"<other-venue-uuid>/their-export.csv"}]
+ *
+ * would have pulled another venue's file out of the shared bucket and
+ * fed it to the classifier. Same shape as the `..` traversal, with a
+ * tenant boundary instead of a directory one.
+ *
+ * Confinement rule: the path must begin with this venue's id followed by
+ * a slash, must contain no `..` segment, and must not be absolute.
+ */
+/**
+ * Wrap attached-file content for the classifier prompt (2026-09-14
+ * ingestion audit item 9).
+ *
+ * The old envelope was a fixed ASCII fence:
+ *
+ *     --- ATTACHED FILE CONTENT (name) ---
+ *     ...
+ *     --- END ATTACHED FILE ---
+ *
+ * A CSV cell, a filename, or a pasted note can contain that exact
+ * string, which closes the block early and puts everything after it back
+ * at instruction level. Known delimiters are forgeable delimiters.
+ *
+ * Two changes: the real untrusted-content envelope from
+ * lib/security/prompt-sanitize (which carries the do-not-obey preamble
+ * the fence never had), and a per-call random nonce in the tag so the
+ * content cannot name its own terminator. The filename is sanitised too;
+ * it is user-chosen text sitting outside the block.
+ */
+function wrapAttachedFileContent(attachmentName: string, fileText: string): string {
+  const nonce = randomBytes(9).toString('hex')
+  const safeName = sanitizeUserContent(attachmentName).content.replace(/[\r\n]+/g, ' ').slice(0, 200)
+  const { wrapped } = wrapUntrustedContent(fileText, `attached_file_${nonce}`)
+  return `## ATTACHED FILE (${safeName})\n${wrapped}`
+}
+
+export function isPathInsideVenue(path: string | null | undefined, venueId: string): boolean {
+  if (!path || !venueId) return false
+  const p = String(path)
+  if (p.startsWith('/') || p.startsWith('\\')) return false
+  if (p.includes('\\')) return false
+  const segments = p.split('/')
+  if (segments.some((s) => s === '..' || s === '.' || s === '')) return false
+  return segments[0] === venueId && segments.length >= 2
 }
 
 const FILE_SIZE_CAP_BYTES = 5 * 1024 * 1024 // 5 MB
@@ -484,6 +546,21 @@ export async function POST(request: NextRequest) {
 
   const supabase = createServiceClient()
   const attachment = extractAttachmentMeta(rawText)
+
+  // Audit item 9: refuse a storage path that is not inside this venue's
+  // own prefix, before anything downloads it. Loud 400 rather than a
+  // silent drop — a coordinator whose upload genuinely broke needs to
+  // know, and a probe deserves no ambiguity either.
+  if (attachment && !isPathInsideVenue(attachment.path, auth.venueId)) {
+    console.warn('[brain-dump] refused attachment path outside venue prefix', {
+      venueId: auth.venueId,
+      pathPrefix: attachment.path.split('/')[0],
+    })
+    return NextResponse.json(
+      { error: 'Attachment path is not inside this venue’s storage prefix' },
+      { status: 400 },
+    )
+  }
 
   // Bug 10: server-side derivation. MIME wins; extension is a fallback.
   // No attachment → 'text' regardless of what the client sent.
@@ -977,24 +1054,68 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'venue_id in JSON does not match auth scope' }, { status: 403 })
       }
 
+      // 2026-09-14 ingestion audit item 9 — the scraper-contract path was
+      // the one identity import that skipped both handle guards that
+      // every other ingestion path applies.
+      //
+      //   normalizeHandle  — per-platform shape + reserved-segment check.
+      //     Without it "instagram.com/explore" or "@@@" lands in
+      //     `handles` and the fragment sweep matches couples on junk.
+      //   stripVenueHandles — the venue's OWN handle appearing in a
+      //     scraped row is not evidence about a couple. Every other
+      //     writer strips it (email pipeline, tangential-signals,
+      //     crm-import); this one did not, so a scraper that picked up
+      //     the venue's own account would have minted the venue as a
+      //     prospect.
+      //
+      // A JSON file is attacker-shaped input like any other: nothing
+      // proves the third-party tool wrote it.
+      const platformRaw = typeof parsed?.source === 'string' ? parsed.source.toLowerCase() : null
+      const venueHandles = await getVenueSocialHandles(supabase, auth.venueId)
       const candidates: Array<Parameters<typeof importIdentityCandidates>[0]['candidates'][number]> = []
       const errors: string[] = []
       for (let i = 0; i < rowsRaw.length; i++) {
         const r = rowsRaw[i] as Record<string, unknown>
         const ident = (r.extracted_identity ?? {}) as Record<string, unknown>
+
+        // Validate + strip the handle-ish fields before the has-field
+        // test, so a row whose ONLY identifier was a malformed handle or
+        // the venue's own account is rejected rather than imported on the
+        // strength of a value we just threw away.
+        let cleanUsername: string | undefined
+        let cleanHandle: string | undefined
+        if (platformRaw) {
+          const platform = platformRaw as HandlePlatform
+          const forPlatform = (raw: unknown): string | undefined => {
+            if (typeof raw !== 'string') return undefined
+            const normalized = normalizeHandle(platform, raw)
+            if (!normalized) return undefined
+            const kept = stripVenueHandles({ [platform]: normalized }, venueHandles)
+            return kept?.[platform] ?? undefined
+          }
+          cleanUsername = forPlatform(ident.username)
+          cleanHandle = forPlatform(ident.handle)
+        }
+        if (typeof ident.username === 'string' && ident.username && !cleanUsername) {
+          errors.push(`row ${i}: username rejected (bad handle shape, or the venue's own account)`)
+        }
+        if (typeof ident.handle === 'string' && ident.handle && !cleanHandle) {
+          errors.push(`row ${i}: handle rejected (bad handle shape, or the venue's own account)`)
+        }
+
         const hasIdentField = Boolean(
-          ident.first_name || ident.last_name || ident.username || ident.handle ||
+          ident.first_name || ident.last_name || cleanUsername || cleanHandle ||
           ident.email_fragment || ident.phone_fragment,
         )
         if (!hasIdentField) {
-          errors.push(`row ${i}: extracted_identity has no identifying field`)
+          errors.push(`row ${i}: extracted_identity has no usable identifying field`)
           continue
         }
         candidates.push({
           first_name: typeof ident.first_name === 'string' ? ident.first_name : undefined,
           last_name: typeof ident.last_name === 'string' ? ident.last_name : undefined,
-          username: typeof ident.username === 'string' ? ident.username : undefined,
-          handle: typeof ident.handle === 'string' ? ident.handle : undefined,
+          username: cleanUsername,
+          handle: cleanHandle,
           platform: typeof parsed?.source === 'string' ? parsed.source : undefined,
           context: typeof r.source_context === 'string' ? r.source_context : undefined,
           signal_type: typeof r.signal_type === 'string' ? r.signal_type : 'other',
@@ -1526,7 +1647,7 @@ export async function POST(request: NextRequest) {
     if (isTextLike) {
       const fileText = await readAttachedFileText(supabase, attachment.path)
       if (fileText) {
-        classifierText = `${rawText}\n\n--- ATTACHED FILE CONTENT (${attachment.name}) ---\n${fileText}\n--- END ATTACHED FILE ---`
+        classifierText = `${rawText}\n\n${wrapAttachedFileContent(attachment.name, fileText)}`
       }
     }
   }
@@ -1869,7 +1990,7 @@ async function runClassifierFallback(args: {
   attachmentName: string
 }) {
   const { supabase, auth, entry, rawText, fileText, attachmentName } = args
-  const classifierText = `${rawText}\n\n--- ATTACHED FILE CONTENT (${attachmentName}) ---\n${fileText}\n--- END ATTACHED FILE ---`
+  const classifierText = `${rawText}\n\n${wrapAttachedFileContent(attachmentName, fileText)}`
   try {
     const parsed = await classifyBrainDump({ venueId: auth.venueId, rawText: classifierText })
     const route = await routeBrainDump({

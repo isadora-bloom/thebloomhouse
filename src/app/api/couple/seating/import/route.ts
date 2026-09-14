@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer())
-    const chart = await parseSeatingFile(buffer, file.name)
+    const chart = await parseSeatingFile(buffer, file.name, auth.venueId)
     return NextResponse.json({ chart })
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Failed to parse file'
