@@ -64,13 +64,20 @@ interface PartnerOut {
   name_picked_source: string | null
   email: string | null
   phone: string | null
-  platform_handles: Record<string, string | null>
   name_evidence: NameEvidenceEntry[]
 }
 
 interface ApiResponse {
   partners: PartnerOut[]
   partnerCount: number | null
+  /** W64: `couples.handles` (migration 398). A handle lives on the
+   *  couple, not on a person row (HANDLE-IDENTITY-SPEC.md §1), so the
+   *  chips moved out of the partner card and are drawn once. */
+  handles?: Record<string, string>
+  /** True when the couple has no mirrored wedding, so there are no
+   *  person rows to hold an evidence chain. "Nowhere to look", which
+   *  reads differently from "we looked and found nothing". */
+  chainUnavailable?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -267,9 +274,6 @@ function PartnerEvidenceBlock({
   const hasName = !!display
   const conf = partner.name_confidence
   const unverified = typeof conf === 'number' && conf < 40
-  const handles = Object.entries(partner.platform_handles ?? {}).filter(
-    ([, v]) => typeof v === 'string' && v.length > 0,
-  ) as Array<[string, string]>
   const evidence = partner.name_evidence ?? []
   const pickedTs = evidence.find((e) => e.source === partner.name_picked_source)?.captured_at
 
@@ -398,43 +402,58 @@ function PartnerEvidenceBlock({
         )}
       </div>
 
-      {/* Found across platforms — hide when empty */}
-      {handles.length > 0 && (
-        <div className="mt-3">
-          <p className="text-[11px] font-medium text-sage-700 mb-1.5">Found across platforms</p>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {handles.map(([platform, handle]) => {
-              const url = platformUrl(platform, handle)
-              const label = platformLabel(platform)
-              const inner = (
-                <>
-                  <span className="text-sage-500 mr-1">{label}:</span>
-                  <span className="font-mono">{handle}</span>
-                  {url && <ExternalLink className="w-2.5 h-2.5 ml-1 opacity-70" />}
-                </>
-              )
-              return url ? (
-                <a
-                  key={platform}
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[11px] inline-flex items-center px-2 py-0.5 rounded bg-sage-50 text-sage-700 border border-sage-200 hover:bg-sage-100"
-                >
-                  {inner}
-                </a>
-              ) : (
-                <span
-                  key={platform}
-                  className="text-[11px] inline-flex items-center px-2 py-0.5 rounded bg-sage-50 text-sage-700 border border-sage-200"
-                >
-                  {inner}
-                </span>
-              )
-            })}
-          </div>
-        </div>
-      )}
+    </div>
+  )
+}
+
+/**
+ * The couple's handles, drawn once.
+ *
+ * W64: these used to be per-partner, read off `people.platform_handles`.
+ * A handle identifies the couple, not one half of it — the spine says so
+ * (`couples.handles`, migration 398) and so did the bug it caused: the
+ * same Instagram handle printed under both partners because nobody could
+ * say which of them owned it.
+ */
+function CoupleHandles({ handles }: { handles: Record<string, string> }) {
+  const entries = Object.entries(handles).filter(
+    ([, v]) => typeof v === 'string' && v.length > 0,
+  )
+  if (entries.length === 0) return null
+  return (
+    <div className="mb-4">
+      <p className="text-[11px] font-medium text-sage-700 mb-1.5">Found across platforms</p>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {entries.map(([platform, handle]) => {
+          const url = platformUrl(platform, handle)
+          const label = platformLabel(platform)
+          const inner = (
+            <>
+              <span className="text-sage-500 mr-1">{label}:</span>
+              <span className="font-mono">{handle}</span>
+              {url && <ExternalLink className="w-2.5 h-2.5 ml-1 opacity-70" />}
+            </>
+          )
+          return url ? (
+            <a
+              key={platform}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] inline-flex items-center px-2 py-0.5 rounded bg-sage-50 text-sage-700 border border-sage-200 hover:bg-sage-100"
+            >
+              {inner}
+            </a>
+          ) : (
+            <span
+              key={platform}
+              className="text-[11px] inline-flex items-center px-2 py-0.5 rounded bg-sage-50 text-sage-700 border border-sage-200"
+            >
+              {inner}
+            </span>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -545,8 +564,14 @@ export function NameEvidencePanel({ weddingId }: { weddingId: string }) {
         </div>
       )}
 
+      <CoupleHandles handles={data?.handles ?? {}} />
+
       {partners.length === 0 ? (
-        <p className="text-sm text-sage-400 italic">No partners on this wedding yet.</p>
+        <p className="text-sm text-sage-400 italic">
+          {data?.chainUnavailable
+            ? 'This couple has no mirrored wedding, so there are no person rows carrying an evidence chain yet.'
+            : 'No partners on this couple yet.'}
+        </p>
       ) : (
         partners.map((p) => (
           <PartnerEvidenceBlock

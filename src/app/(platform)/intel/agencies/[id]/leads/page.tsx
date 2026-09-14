@@ -21,7 +21,12 @@ import {
 } from 'lucide-react'
 
 interface LeadRow {
+  /** Spine id. The row's identity, and what the link keys on. */
+  coupleId: string
+  /** The wedding this couple was minted from, when there is one.
+   *  Falls back to the couple id so a key is never blank. */
   id: string
+  /** Spine lifecycle_state, not the legacy weddings.status. */
   status: string | null
   estimatedValueCents: number | null
   inquiryDate: string | null
@@ -65,6 +70,7 @@ export default function AgencyLeadsPage({
   const statusFilter = searchParams.get('status')
 
   const [leads, setLeads] = useState<LeadRow[]>([])
+  const [valueNote, setValueNote] = useState<string | null>(null)
   const [agencyName, setAgencyName] = useState<string>('')
   const [loading, setLoading] = useState(true)
 
@@ -81,8 +87,11 @@ export default function AgencyLeadsPage({
           fetch(`/api/intel/agencies/${agencyId}`),
         ])
         if (leadsResp.ok) {
-          const j = (await leadsResp.json()) as { leads: LeadRow[] }
-          if (!cancelled) setLeads(j.leads ?? [])
+          const j = (await leadsResp.json()) as { leads: LeadRow[]; valueNote?: string }
+          if (!cancelled) {
+            setLeads(j.leads ?? [])
+            setValueNote(j.valueNote ?? null)
+          }
         }
         if (agencyResp.ok) {
           const j = (await agencyResp.json()) as { agency: { name: string } }
@@ -97,7 +106,10 @@ export default function AgencyLeadsPage({
     }
   }, [agencyId, statusFilter])
 
-  const totalRevenue = leads.reduce((s, l) => s + (l.estimatedValueCents ?? 0), 0)
+  // W64: no revenue total. `couples` carries no revenue column, so every
+  // row's value is null and a sum of nulls renders as a confident $0 —
+  // the exact shape of lie this workstream exists to remove. The stat
+  // says so instead, and `valueNote` from the route explains why.
   const bookedCount = leads.filter(
     (l) => l.status === 'booked' || l.status === 'completed',
   ).length
@@ -115,8 +127,8 @@ export default function AgencyLeadsPage({
           Leads attributed to {agencyName || 'this agency'}
         </h1>
         <p className="mt-1 text-sm text-[var(--bh-muted)]">
-          Weddings whose first-touch attribution landed on a channel this
-          agency manages, last 365 days
+          Couples whose first touch landed on a channel this agency manages,
+          last 365 days. Same attribution the channel table uses
           {statusFilter ? `, filtered to status: ${statusLabel(statusFilter)}` : null}.
         </p>
       </div>
@@ -124,12 +136,13 @@ export default function AgencyLeadsPage({
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Stat label="Leads in window" value={leads.length} />
         <Stat label="Booked" value={bookedCount} />
-        <Stat
-          label="Pipeline revenue"
-          value={formatDollars(totalRevenue)}
-        />
+        <Stat label="Lead value" value="Not recorded" />
         <Stat label="Filter" value={statusFilter || 'all statuses'} />
       </div>
+
+      {valueNote ? (
+        <p className="text-xs text-[var(--bh-muted)]">{valueNote}</p>
+      ) : null}
 
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-[var(--bh-muted)]">
@@ -157,7 +170,7 @@ export default function AgencyLeadsPage({
             <tbody>
               {leads.map((l) => (
                 <tr
-                  key={l.id}
+                  key={l.coupleId}
                   className="border-b border-[var(--bh-line)]/60 hover:bg-[var(--bh-sage-50)]/30"
                 >
                   <td className="py-3 px-4">
@@ -194,7 +207,7 @@ export default function AgencyLeadsPage({
                   </td>
                   <td className="py-3 px-4">
                     <Link
-                      href={`/intel/clients/${l.id}`}
+                      href={`/intel/couples/${l.coupleId}`}
                       className="inline-flex items-center gap-1 text-xs text-[var(--bh-sage-700)] hover:underline"
                     >
                       Open <ExternalLink className="h-3 w-3" />

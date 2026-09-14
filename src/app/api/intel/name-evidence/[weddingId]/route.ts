@@ -1,26 +1,29 @@
 /**
- * Wedding-scoped name-evidence audit + manual-override API.
+ * Couple-scoped name-evidence audit + manual-override API.
  *
- * Wave 2D (2026-05-09). Surfaces the new `people.name_evidence`,
- * `people.platform_handles`, `people.display_handle`, and
- * `people.name_confidence` columns introduced by migration 255.
+ * Wave 2D (2026-05-09) surfaced `people.name_evidence`,
+ * `people.platform_handles`, `people.display_handle` and
+ * `people.name_confidence` (migration 255).
+ *
+ * W64 re-keyed it on the couple. The URL segment is still a wedding id,
+ * because every link into this panel was written that way, but nothing
+ * here reads `weddings` any more: `loadCoupleKeyForWedding` maps the
+ * wedding id onto the couple through `couples.source_wedding_id` and IS
+ * the tenancy check in the same query. The evidence chain itself is read
+ * by `loadCoupleNameEvidence`, which is the one place in the intel layer
+ * that knows how to reach the legacy person rows from a couple, and the
+ * override write moved to `applyNameOverride`.
  *
  * GET  /api/intel/name-evidence/[weddingId]
- *   Returns one row per partner (role IN ('partner1','partner2')) with
- *   the picked display name, confidence chip, evidence chain (sorted
- *   pinned-first then confidence DESC then captured_at DESC), and the
- *   per-platform handle map.
- *
- *   Phase 1 reality: most rows have an empty `name_evidence` array. The
- *   panel renders gracefully — it shows a "no evidence chain yet" empty
- *   state and lets the coordinator override regardless.
+ *   One row per partner with the picked display name, confidence chip,
+ *   evidence chain (pinned first, then confidence, then recency), and
+ *   the per-platform handle map, alongside the couple's own spine handle
+ *   map. Most rows have an empty chain; the panel renders a
+ *   no-evidence-yet state and still lets the coordinator override.
  *
  * POST /api/intel/name-evidence/[weddingId]
- *   Body: { personId: string, firstName: string, lastName: string }
- *   Coordinator manual override. Appends a confidence-100 evidence row
- *   tagged `manual_override`, then writes the new first/last/confidence
- *   onto the people row directly (Phase 2 picker is not built yet, so
- *   this endpoint is also the picker for the override case).
+ *   Body: { personId, firstName, lastName }. Coordinator manual
+ *   override. See src/lib/services/identity/name-override.ts.
  *
  * Auth: getPlatformAuth — venue-scoped. Demo cannot mutate.
  */
@@ -34,45 +37,10 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { logEvent } from '@/lib/observability/logger'
-import { captureNameEvidence } from '@/lib/services/identity/name-capture'
+import { loadCoupleKeyForWedding } from '@/lib/intel/readers/couple-key'
+import { loadCoupleNameEvidence } from '@/lib/intel/readers/name-evidence'
+import { applyNameOverride } from '@/lib/services/identity/name-override'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
-
-interface NameEvidenceEntry {
-  source?: string
-  value?: { first?: string | null; last?: string | null } | null
-  raw?: string
-  confidence?: number | null
-  captured_at?: string | null
-  interaction_id?: string | null
-  pinned?: boolean
-  superseded?: boolean
-}
-
-interface PersonOut {
-  id: string
-  role: string
-  first_name: string | null
-  last_name: string | null
-  display_handle: string | null
-  name_confidence: number | null
-  name_picked_source: string | null
-  email: string | null
-  phone: string | null
-  platform_handles: Record<string, string | null>
-  name_evidence: NameEvidenceEntry[]
-}
-
-async function loadWeddingForVenue(weddingId: string, venueId: string) {
-  const supabase = createServiceClient()
-  const { data: wedding } = await supabase
-    .from('weddings')
-    .select('id, venue_id, partner_count')
-    .eq('id', weddingId)
-    .maybeSingle()
-  if (!wedding) return null
-  if (wedding.venue_id !== venueId) return null
-  return wedding as { id: string; venue_id: string; partner_count: number | null }
-}
 
 // ---------------------------------------------------------------------------
 // GET — name evidence + handles for every partner
@@ -92,79 +60,19 @@ export async function GET(
   const { weddingId } = await params
   if (!weddingId) return badRequest('missing weddingId')
 
-  const wedding = await loadWeddingForVenue(weddingId, auth.venueId)
-  if (!wedding) return forbidden('wedding not in venue scope')
-
   const supabase = createServiceClient()
+  const couple = await loadCoupleKeyForWedding(supabase, auth.venueId, weddingId)
+  if (!couple) return forbidden('couple not in venue scope')
 
-  // Try the mig-255 columns first; fall back to legacy when the column
-  // hasn't shipped to this environment yet. Wave 2D is a UI layer that
-  // must render on either side of the migration boundary.
-  let rows: Array<Record<string, unknown>> = []
-  const fullSelect =
-    'id, role, first_name, last_name, email, phone, name_evidence, ' +
-    'display_handle, name_confidence, name_picked_source, platform_handles'
-  const { data: fullRows, error: fullErr } = await supabase
-    .from('people')
-    .select(fullSelect)
-    .eq('wedding_id', weddingId)
-    .eq('venue_id', auth.venueId)
-
-  if (fullErr) {
-    const msg = (fullErr as { message?: string }).message ?? ''
-    if (/column .* does not exist/i.test(msg)) {
-      const legacy = await supabase
-        .from('people')
-        .select('id, role, first_name, last_name, email, phone')
-        .eq('wedding_id', weddingId)
-        .eq('venue_id', auth.venueId)
-      rows = (legacy.data ?? []) as unknown as Array<Record<string, unknown>>
-    } else {
-      return NextResponse.json({ error: msg || 'people query failed' }, { status: 500 })
-    }
-  } else {
-    rows = (fullRows ?? []) as unknown as Array<Record<string, unknown>>
-  }
-
-  const partners: PersonOut[] = rows
-    .filter((r) => r.role === 'partner1' || r.role === 'partner2')
-    .map((r) => {
-      const evidenceRaw = (r.name_evidence as NameEvidenceEntry[] | null) ?? []
-      const evidence = Array.isArray(evidenceRaw)
-        ? evidenceRaw.filter((e) => e && typeof e === 'object')
-        : []
-      // Sort: pinned first, then confidence DESC, then captured_at DESC.
-      const sorted = [...evidence].sort((a, b) => {
-        const aPinned = a.pinned === true ? 1 : 0
-        const bPinned = b.pinned === true ? 1 : 0
-        if (aPinned !== bPinned) return bPinned - aPinned
-        const aConf = typeof a.confidence === 'number' ? a.confidence : -1
-        const bConf = typeof b.confidence === 'number' ? b.confidence : -1
-        if (aConf !== bConf) return bConf - aConf
-        const aTs = a.captured_at ?? ''
-        const bTs = b.captured_at ?? ''
-        return bTs.localeCompare(aTs)
-      })
-      const handles = (r.platform_handles as Record<string, string | null> | null) ?? {}
-      return {
-        id: r.id as string,
-        role: r.role as string,
-        first_name: (r.first_name as string | null) ?? null,
-        last_name: (r.last_name as string | null) ?? null,
-        display_handle: (r.display_handle as string | null) ?? null,
-        name_confidence:
-          typeof r.name_confidence === 'number' ? (r.name_confidence as number) : null,
-        name_picked_source: (r.name_picked_source as string | null) ?? null,
-        email: (r.email as string | null) ?? null,
-        phone: (r.phone as string | null) ?? null,
-        platform_handles: handles && typeof handles === 'object' ? handles : {},
-        name_evidence: sorted,
-      }
-    })
+  const evidence = await loadCoupleNameEvidence(supabase, auth.venueId, couple.coupleId)
+  if (!evidence) return forbidden('couple not in venue scope')
 
   return NextResponse.json({
-    partners,
-    partnerCount: wedding.partner_count ?? null,
+    coupleId: evidence.coupleId,
+    partners: evidence.partners,
+    partnerCount: evidence.partnerCount,
+    handles: evidence.handles,
+    chainUnavailable: evidence.chainUnavailable,
   })
 }
 
@@ -193,8 +101,9 @@ export async function POST(
   const { weddingId } = await params
   if (!weddingId) return badRequest('missing weddingId')
 
-  const wedding = await loadWeddingForVenue(weddingId, auth.venueId)
-  if (!wedding) return forbidden('wedding not in venue scope')
+  const supabase = createServiceClient()
+  const couple = await loadCoupleKeyForWedding(supabase, auth.venueId, weddingId)
+  if (!couple) return forbidden('couple not in venue scope')
 
   let body: PostBody
   try {
@@ -207,168 +116,21 @@ export async function POST(
   const last = (body.lastName ?? '').trim().slice(0, 80)
   if (!first && !last) return badRequest('first or last name required')
 
-  const supabase = createServiceClient()
-
-  // Load current evidence to append to, scoped to this wedding/venue.
-  const { data: person, error: pErr } = await supabase
-    .from('people')
-    .select('id, wedding_id, venue_id, name_evidence')
-    .eq('id', body.personId)
-    .maybeSingle()
-  if (pErr) {
-    const msg = (pErr as { message?: string }).message ?? ''
-    if (/column .* does not exist/i.test(msg)) {
-      return NextResponse.json(
-        { error: 'name_evidence column not deployed yet — run migration 255' },
-        { status: 503 },
-      )
-    }
-    return NextResponse.json({ error: msg || 'person lookup failed' }, { status: 500 })
-  }
-  if (!person) return NextResponse.json({ error: 'person not found' }, { status: 404 })
-  if (person.venue_id !== auth.venueId || person.wedding_id !== weddingId) {
-    return forbidden('person not in scope')
-  }
-
-  const existing: NameEvidenceEntry[] = Array.isArray(person.name_evidence)
-    ? (person.name_evidence as NameEvidenceEntry[])
-    : []
-
-  // Route through the chokepoint. `manual_override` is the highest
-  // confidence source in the ladder (100), so the picker is guaranteed
-  // to project these values onto first_name/last_name/name_confidence
-  // and stamp the evidence row with shape='real_name' (or 'first_only'
-  // / 'first_initial' depending on token shape — which is what we want;
-  // a one-token override should never be picked as a last name). Per
-  // design doc §4b manual override is law — and the chokepoint's picker
-  // implements that law by preferring the highest-confidence evidence.
-  const captureResult = await captureNameEvidence(supabase, body.personId, {
+  const result = await applyNameOverride({
+    supabase,
+    venueId: auth.venueId,
+    weddingId: couple.sourceWeddingId,
+    personId: body.personId,
     first: first || null,
     last: last || null,
-    source: 'manual_override',
+    userId: auth.userId,
   })
-
-  // Follow-up: stamp `name_picked_source` and pin the freshly appended
-  // evidence row. These columns are outside the chokepoint's contract
-  // (picker doesn't write them) but are part of the manual-override
-  // UI contract — the panel surfaces the override source label and
-  // sorts pinned evidence to the top.
-  const reread = await supabase
-    .from('people')
-    .select('name_evidence')
-    .eq('id', body.personId)
-    .maybeSingle()
-  const updatedEvidence = Array.isArray(reread.data?.name_evidence)
-    ? (reread.data!.name_evidence as NameEvidenceEntry[])
-    : []
-  // Find the just-added manual_override row at confidence 100 and pin it.
-  // We pin the LAST matching row so re-overrides update the pin to the
-  // most recent decision.
-  let pinnedIdx = -1
-  for (let i = updatedEvidence.length - 1; i >= 0; i--) {
-    const e = updatedEvidence[i]
-    if (e?.source === 'manual_override' && (e?.confidence ?? 0) === 100) {
-      pinnedIdx = i
-      break
-    }
-  }
-  const pinnedEvidence = pinnedIdx >= 0
-    ? updatedEvidence.map((e, i) => (i === pinnedIdx ? { ...e, pinned: true } : e))
-    : updatedEvidence
-  const followUp: Record<string, unknown> = {
-    name_picked_source: 'manual_override',
-  }
-  if (pinnedIdx >= 0) followUp.name_evidence = pinnedEvidence
-  const { error: updErr } = await supabase
-    .from('people')
-    .update(followUp)
-    .eq('id', body.personId)
-
-  if (updErr) {
-    return NextResponse.json({ error: updErr.message }, { status: 500 })
-  }
-  // captureResult is informational only — the picker dual-write already
-  // landed via the chokepoint above.
-  void captureResult
-
-  // Step 7 / A1 (2026-05-13): set the profile-level operator lock so
-  // the next Wave 4 reconstruction can't drift the
-  // couple_identity_profile.profile.names.partner{1,2} fields away
-  // from the operator-confirmed values. Two writes:
-  //   1. push the override into profile.names.partner{N} so the
-  //      forensic record matches the operator's truth NOW (not after
-  //      the next nightly judge run)
-  //   2. set partner{N}_locked_by_operator=true so future runs preserve
-  //      the override even when the LLM proposes a different name
-  // Per-partner role drives which side is locked. Best-effort —
-  // failure logs + continues (the people-side override already
-  // succeeded; profile lock is the consistency layer).
-  try {
-    const { data: personRole } = await supabase
-      .from('people')
-      .select('role')
-      .eq('id', body.personId)
-      .maybeSingle()
-    const role = (personRole?.role as string | null) ?? null
-    if (role === 'partner1' || role === 'partner2') {
-      const { data: prof } = await supabase
-        .from('couple_identity_profile')
-        .select('profile')
-        .eq('wedding_id', weddingId)
-        .maybeSingle()
-      const currentProfile = (prof?.profile ?? null) as {
-        names?: {
-          partner1?: { first?: string | null; last?: string | null; confidence_0_100?: number; evidence_quote?: string | null } | null
-          partner2?: { first?: string | null; last?: string | null; confidence_0_100?: number; evidence_quote?: string | null } | null
-          name_quality?: string
-          is_phantom_partner_relationship?: boolean
-        }
-      } | null
-      if (currentProfile && currentProfile.names) {
-        const partnerKey = role === 'partner1' ? 'partner1' : 'partner2'
-        const overriddenPartner = {
-          first: first || null,
-          last: last || null,
-          confidence_0_100: 100,
-          evidence_quote: 'operator manual override',
-        }
-        const mergedProfile = {
-          ...currentProfile,
-          names: {
-            ...currentProfile.names,
-            [partnerKey]: overriddenPartner,
-            // Upgrade name_quality when partner1 is set — operator
-            // confirmation is the highest possible signal.
-            ...(role === 'partner1'
-              ? { name_quality: 'high' as const }
-              : {}),
-          },
-        }
-        const lockColumn =
-          role === 'partner1'
-            ? { partner1_locked_by_operator: true }
-            : { partner2_locked_by_operator: true }
-        await supabase
-          .from('couple_identity_profile')
-          .update({
-            profile: mergedProfile,
-            ...lockColumn,
-            locked_at: new Date().toISOString(),
-            locked_by_user_id: auth.userId,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('wedding_id', weddingId)
-      }
-    }
-  } catch (err) {
-    console.warn(
-      '[name-evidence] profile lock write failed (non-fatal):',
-      err instanceof Error ? err.message : err,
-    )
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error }, { status: result.status })
   }
 
-  // Telemetry — analytics chain uses this to measure how much manual
-  // cleanup the system requires per venue.
+  // Telemetry — the analytics chain uses this to measure how much manual
+  // cleanup a venue needs.
   logEvent({
     level: 'info',
     msg: 'identity.name_override',
@@ -377,40 +139,11 @@ export async function POST(
     event_type: 'identity.manual_override',
     outcome: 'ok',
     data: {
-      wedding_id: weddingId,
+      couple_id: couple.coupleId,
+      wedding_id: couple.sourceWeddingId,
       person_id: body.personId,
-      had_evidence: existing.length > 0,
     },
   })
-
-  // Fire the identity-discovery cascade in the background. A
-  // coordinator-confirmed name is the strongest possible identity
-  // binding — anonymous storefront signals (Knot proxy "User <hex>",
-  // IG "@justinandsandy_wedding") that match this first_name +
-  // last_initial in the engagement window now have evidence to bind.
-  // Fire-and-forget: the override write already succeeded, the
-  // cascade is pure follow-up. Never block the operator's UI.
-  void (async () => {
-    try {
-      const { triggerIdentityCascade } = await import(
-        '@/lib/services/identity/cascade-on-enrichment'
-      )
-      // Use the same service client the override write ran on. Auth
-      // is already validated above so this can run with full
-      // service-role scope.
-      await triggerIdentityCascade({
-        venueId: auth.venueId as string,
-        weddingId,
-        supabase,
-        reason: 'name_evidence_override',
-      })
-    } catch (err) {
-      console.warn(
-        '[name-evidence] cascade fire-and-forget threw:',
-        err instanceof Error ? err.message : err,
-      )
-    }
-  })()
 
   return NextResponse.json({ ok: true })
 }

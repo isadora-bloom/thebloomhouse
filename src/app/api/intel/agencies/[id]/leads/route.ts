@@ -9,35 +9,39 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { requireAgencyScope } from '@/lib/services/intel/agency-access'
 import { createServiceClient } from '@/lib/supabase/service'
 import { listEngagementsForAgency } from '@/lib/services/intel/marketing-agencies'
+import { loadChannelLeads } from '@/lib/intel/readers/channel-leads'
+
+export const maxDuration = 120
 
 interface RouteContext {
   params: Promise<{ id: string }>
 }
 
-interface AttributionRow {
-  wedding_id: string | null
-  source_platform: string | null
-  decided_at: string
-}
-
-interface WeddingRow {
-  id: string
-  status: string | null
-  quoted_value: number | null
-  inquiry_date: string | null
-  booked_at: string | null
-  wedding_date: string | null
-}
-
 /**
  * GET /api/intel/agencies/[id]/leads
  *
- * Wave 6E — drill-down. Returns weddings whose first-touch attribution
- * landed on a channel this agency manages, within the requested window.
+ * Wave 6E — drill-down. The couples whose first touch landed on a
+ * channel this agency manages, inside the requested window.
+ *
+ * W64: this used to read `attribution_events` for the first touch,
+ * `weddings` for the row and `people` for the partner names — a third
+ * derivation of "which channel found this couple", sitting next to the
+ * agency ROI card's and the channel table's. All three now come out of
+ * `buildCoupleAttribution`, the builder the canonical
+ * `getSourceAttribution` wraps, through `loadChannelLeads`. The count on
+ * the agency card and the length of this list cannot drift apart,
+ * because they are the same computation with a filter on it.
+ *
+ * Two deliberate changes an operator will see:
+ *   - `status` is the spine lifecycle, not `weddings.status`. One
+ *     vocabulary, the one the pills speak.
+ *   - `valueCents` is always null. The old figure was
+ *     `weddings.quoted_value`, and a quote is not revenue; `couples`
+ *     carries no revenue column, so the honest answer is a dash.
  *
  * Query params:
  *   ?venue_id=UUID   — single venue (defaults to auth.venueId)
- *   ?status=booked   — optional wedding status filter
+ *   ?status=booked   — optional lifecycle filter (spine vocabulary)
  *   ?window=DAYS     — default 90, clamped 1..3650
  */
 export async function GET(request: NextRequest, ctx: RouteContext) {
@@ -61,9 +65,12 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
       ? Math.min(windowParam, 3650)
       : 90
 
-  const venueIds = venueIdParam ? [venueIdParam] : [auth.venueId]
+  const venueIds = (venueIdParam ? [venueIdParam] : [auth.venueId]).filter(
+    (v): v is string => Boolean(v),
+  )
+  if (venueIds.length === 0) return badRequest('no venue in scope')
 
-  const startDate = new Date(Date.now() - windowDays * 86_400_000).toISOString()
+  const since = new Date(Date.now() - windowDays * 86_400_000).toISOString()
 
   try {
     const engagements = await listEngagementsForAgency(id, { venueIds })
@@ -75,85 +82,43 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
     }
 
     const service = createServiceClient()
-    const { data: attRows } = await service
-      .from('attribution_events')
-      .select('wedding_id, source_platform, decided_at')
-      .in('venue_id', venueIds)
-      .in('source_platform', managedChannels)
-      .eq('is_first_touch', true)
-      .is('reverted_at', null)
-      .gte('decided_at', startDate)
-      .order('decided_at', { ascending: false })
 
-    const channelByWeddingId = new Map<string, string>()
-    const firstTouchByWeddingId = new Map<string, string>()
-    const weddingIds = new Set<string>()
-    for (const r of (attRows ?? []) as AttributionRow[]) {
-      if (r.wedding_id) {
-        weddingIds.add(r.wedding_id)
-        if (!channelByWeddingId.has(r.wedding_id)) {
-          channelByWeddingId.set(
-            r.wedding_id,
-            r.source_platform ?? 'unknown',
-          )
-          firstTouchByWeddingId.set(r.wedding_id, r.decided_at)
-        }
-      }
-    }
-    if (weddingIds.size === 0) {
-      return NextResponse.json({ leads: [] })
-    }
+    // Attribution is read one venue at a time: credit is a per-venue
+    // computation and merging two venues' ribbons would credit a channel
+    // for couples it never touched.
+    const perVenue = await Promise.all(
+      venueIds.map((venueId) =>
+        loadChannelLeads(service, venueId, { channels: managedChannels, since }),
+      ),
+    )
+    let leads = perVenue.flat()
 
-    let wq = service
-      .from('weddings')
-      .select(
-        'id, status, quoted_value, inquiry_date, booked_at, wedding_date',
-      )
-      .in('id', [...weddingIds])
     if (statusFilter) {
-      wq = wq.eq('status', statusFilter)
-    }
-    const { data: wRows } = await wq
-
-    // weddings has no partner1_name/partner2_name columns — names live on
-    // people (role partner1/partner2). Batch-derive them alongside the
-    // weddings query rather than N+1.
-    const { data: partnerRows } = await service
-      .from('people') // legacy-read-ok: replaces the phantom weddings.partner1_name column; agencies suite awaits migration 304
-      .select('wedding_id, first_name, role')
-      .in('wedding_id', [...weddingIds])
-      .in('role', ['partner1', 'partner2'])
-    const partnerNamesByWedding = new Map<string, { partner1Name: string | null; partner2Name: string | null }>()
-    for (const p of (partnerRows ?? []) as Array<{ wedding_id: string; first_name: string | null; role: string }>) {
-      const entry = partnerNamesByWedding.get(p.wedding_id) ?? { partner1Name: null, partner2Name: null }
-      if (p.role === 'partner1') entry.partner1Name = p.first_name
-      else if (p.role === 'partner2') entry.partner2Name = p.first_name
-      partnerNamesByWedding.set(p.wedding_id, entry)
+      leads = leads.filter((l) => l.lifecycleState === statusFilter)
     }
 
-    const leads = ((wRows ?? []) as WeddingRow[]).map((w) => ({
-      id: w.id,
-      status: w.status,
-      estimatedValueCents:
-        w.quoted_value !== null && Number.isFinite(Number(w.quoted_value))
-          ? Math.round(Number(w.quoted_value) * 100)
-          : null,
-      inquiryDate: w.inquiry_date,
-      bookedAt: w.booked_at,
-      partner1Name: partnerNamesByWedding.get(w.id)?.partner1Name ?? null,
-      partner2Name: partnerNamesByWedding.get(w.id)?.partner2Name ?? null,
-      weddingDate: w.wedding_date,
-      attributedChannel: channelByWeddingId.get(w.id) ?? null,
-      firstTouchAt: firstTouchByWeddingId.get(w.id) ?? null,
-    }))
+    leads.sort((a, b) => (b.firstTouchAt ?? '').localeCompare(a.firstTouchAt ?? ''))
 
-    leads.sort((a, b) => {
-      const ax = a.firstTouchAt ?? ''
-      const bx = b.firstTouchAt ?? ''
-      return bx.localeCompare(ax)
+    return NextResponse.json({
+      leads: leads.map((l) => ({
+        // The drill-down still links into the wedding-keyed operator
+        // pages, so both ids travel. `coupleId` is the one to key on.
+        coupleId: l.coupleId,
+        id: l.sourceWeddingId ?? l.coupleId,
+        status: l.lifecycleState,
+        estimatedValueCents: l.valueCents,
+        inquiryDate: l.firstTouchAt,
+        bookedAt: l.bookedAt,
+        partner1Name: l.primaryContactName,
+        partner2Name: l.partnerContactName,
+        weddingDate: l.weddingDate,
+        attributedChannel: l.attributedChannel,
+        firstTouchAt: l.firstTouchAt,
+        creditWeight: l.creditWeight,
+      })),
+      valueNote:
+        'Lead value is not shown: the identity spine carries no revenue column, and the quoted value this list used to print was a quote, not a booking.',
     })
-
-    return NextResponse.json({ leads })
   } catch (err) {
     return serverError(err)
   }

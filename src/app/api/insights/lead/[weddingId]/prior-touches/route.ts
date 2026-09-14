@@ -1,18 +1,31 @@
 /**
  * GET /api/insights/lead/[weddingId]/prior-touches
  *
- * Wedding-scoped facade over /api/agent/inbox/prior-touches/[personId].
+ * "Has this couple touched us before, and how often?" — for the lead
+ * detail panel, which only knows a wedding id.
  *
- * Why exist: the inbox already has a person-scoped endpoint, but the
- * lead detail panel only knows the wedding id. Rather than duplicate
- * the prior-touches query logic on the wedding side, this resolves
- * the wedding's primary partner (partner1, fallback partner2) and
- * forwards to the same getPriorTouches service. Same numbers as the
- * inbox chip — no parallel implementation.
+ * W64: this used to read `weddings` for the tenant, then `people` for a
+ * partner row, then hand that person id to the person-keyed
+ * `getPriorTouches`, which re-joined `interactions` and
+ * `tangential_signals`. Three tables deep to answer a question the spine
+ * ribbon already holds in one: every signal a couple sends lands on
+ * `touchpoints` as it arrives, bound to the couple by the linker.
  *
- * Auth + scope mirror the parent /api/insights/lead/[weddingId]
- * endpoint exactly so coordinators with cross-venue access still get
- * the lookup. Demo mode bypasses auth checks.
+ * So the route now does two spine reads and no legacy ones:
+ *   1. `loadCoupleKeyForWedding` — maps the wedding id onto the couple
+ *      AND is the tenancy check, because the row only comes back for a
+ *      venue the caller holds.
+ *   2. `loadCouplePriorTouches` — the ribbon, outbound excluded.
+ *
+ * It also fixes a quiet under-count. A signal that arrived before the
+ * couple had a `people` row carried no `matched_person_id`, so the old
+ * reader never saw it and the panel said "no prior touches" about a
+ * couple with several.
+ *
+ * Demo mode is still allow-listed to the Crestwood venues, and the
+ * venue now comes from the caller's own auth rather than from the row
+ * being asked about, so an unauthenticated caller cannot use a wedding
+ * UUID to discover which venue owns it.
  *
  * T5-γ.4 / Playbook ARCH-INSIGHTS.4.
  */
@@ -20,9 +33,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
-import { getPriorTouches } from '@/lib/services/intel/prior-touches'
+import { loadCoupleKeyForWedding } from '@/lib/intel/readers/couple-key'
+import { loadCouplePriorTouches } from '@/lib/intel/readers/prior-touches'
 import { redactError } from '@/lib/observability/redact'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+
+/** "We looked and found nothing" — distinct from "we did not look".
+ *  INV-8.5.5. */
+function emptySummary(coupleId: string) {
+  return {
+    coupleId,
+    warmth: 'cold' as const,
+    touches: [],
+    counts: { inbound: 0, unstamped: 0, tours: 0 },
+  }
+}
 
 export async function GET(
   request: NextRequest,
@@ -37,85 +62,46 @@ export async function GET(
     return NextResponse.json({ error: 'invalid_wedding_id' }, { status: 400 })
   }
 
-  const supabase = createServiceClient()
   const demo = await isDemoMode()
 
-  const { data: wedding } = await supabase
-    .from('weddings')
-    .select('venue_id')
-    .eq('id', weddingId)
-    .maybeSingle()
-  if (!wedding) {
-    return NextResponse.json({ error: 'wedding_not_found' }, { status: 404 })
-  }
-  const venueId = wedding.venue_id as string
-
+  // Venue comes from the caller, not from the row. A caller who cannot
+  // name a venue cannot ask.
+  let venueId: string | null = null
   if (demo) {
-    // Demo-mode authz (#85, T5-followup-QQQ): the bloom_demo cookie is
-    // an open bypass on this route. Any caller could ask for prior
-    // touches on any wedding by UUID and read tier-1 data on real
-    // production venues. Restrict demo callers to the Crestwood
-    // Collection's 4 venues; the wedding's owning venue must be in the
-    // allowlist. Mirrors the parent /api/insights/lead/[weddingId]
-    // route's pattern.
-    if (!isDemoVenueAllowed(venueId)) {
+    const platform = await getPlatformAuth()
+    venueId = platform?.venueId ?? null
+    // Demo-mode authz (#85, T5-followup-QQQ): the bloom_demo cookie is an
+    // open bypass, so demo callers stay inside the Crestwood Collection.
+    if (!venueId || !isDemoVenueAllowed(venueId)) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 })
     }
   } else {
     const platform = await getPlatformAuth()
-    if (!platform) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
-    }
-    if (platform.venueId !== venueId) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 })
-    }
+    if (!platform) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+    venueId = platform.venueId
+    if (!venueId) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   }
 
-  // Resolve the wedding's primary partner. Prefer partner1, fall back
-  // to partner2, then any person on the wedding. People without a
-  // role still count — better to surface "1 prior touch" off the
-  // first available person than 404 because role wasn't assigned.
-  const { data: people } = await supabase
-    .from('people')
-    .select('id, role')
-    .eq('wedding_id', weddingId)
-    .eq('venue_id', venueId)
-
-  const peopleRows = (people ?? []) as Array<{ id: string; role: string | null }>
-  const primary =
-    peopleRows.find((p) => p.role === 'partner1')
-    ?? peopleRows.find((p) => p.role === 'partner2')
-    ?? peopleRows[0]
-    ?? null
-
-  if (!primary) {
-    // No people yet — return an empty cold-style summary so the panel
-    // can still render "No prior touches" honestly (matches the inbox
-    // INV-8.5.5 contract for "we looked, found nothing").
-    return NextResponse.json({
-      personId: '',
-      warmth: 'cold',
-      touches: [],
-      counts: { tangential: 0, interactions: 0, tours: 0 },
-    })
-  }
+  const supabase = createServiceClient()
 
   try {
-    const summary = await getPriorTouches({
-      supabase,
-      venueId,
-      personId: primary.id,
+    const couple = await loadCoupleKeyForWedding(supabase, venueId, weddingId)
+    if (!couple) {
+      // Either the venue does not own it or the spine has not minted a
+      // couple for it yet. Both are "nothing to show", not an error the
+      // panel should render as a failure.
+      return NextResponse.json(emptySummary(''))
+    }
+
+    const summary = await loadCouplePriorTouches(supabase, venueId, couple.coupleId, {
+      sourceWeddingId: couple.sourceWeddingId,
     })
     return NextResponse.json(summary)
   } catch (err) {
-    // #86 (T5-followup-QQQ): redact PII from both the stdout log AND
-    // the response body. getPriorTouches → Supabase / downstream errors
-    // can echo couple emails, phone numbers, and quoted message text.
-    // Wrap with redactError before serialising to either sink.
+    // #86 (T5-followup-QQQ): redact PII from both the stdout log AND the
+    // response body. Downstream errors can echo couple emails, phone
+    // numbers and quoted message text.
     console.error('[insights/prior-touches] lookup failed:', redactError(err))
-    return NextResponse.json(
-      { error: redactError(err) },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: redactError(err) }, { status: 500 })
   }
 }

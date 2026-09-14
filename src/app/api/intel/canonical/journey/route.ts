@@ -24,6 +24,11 @@
  * this supplementary select goes away.
  *
  * GET ?coupleId=X → { ok, journey, venueId, ribbonFields, heat }
+ * GET ?weddingId=X → the same, for a caller that only holds a wedding
+ *   id. W64: the wedding is mapped onto its couple through
+ *   `couples.source_wedding_id` by `loadCoupleKeyForWedding`, which is
+ *   also the tenancy check, so a wedding-keyed operator page can read
+ *   the spine without a `weddings` query of its own.
  *
  * `journey` is returned whole, so Wave 3's additions to `CoupleJourney`
  * (`handles`, `firstSeenAt`, `pointZeroAt`, `discovery`, and `zeroPhase`
@@ -38,6 +43,7 @@ import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getCoupleJourney, type CoupleJourney } from '@/lib/intel/canonical'
 import { buildHeatWhy, type HeatWhy } from '@/lib/intel/adapters/heat-why'
+import { loadCoupleKeyForWedding } from '@/lib/intel/readers/couple-key'
 
 export const maxDuration = 60
 
@@ -47,6 +53,10 @@ interface RibbonField {
   id: string
   signal_tier: string
   confidence_tier: string | null
+  /** W64: write-time direction stamp (migration 381). The wedding-keyed
+   *  client page renders the ribbon as a communication history, which
+   *  needs to say which way each message went. Never inferred. */
+  direction: string | null
   raw_payload: Record<string, unknown> | null
 }
 
@@ -75,8 +85,12 @@ export async function GET(req: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 
-  const coupleId = new URL(req.url).searchParams.get('coupleId')
-  if (!coupleId) return badRequest('coupleId param required')
+  const sp = new URL(req.url).searchParams
+  const coupleIdParam = sp.get('coupleId')
+  const weddingIdParam = sp.get('weddingId')
+  if (!coupleIdParam && !weddingIdParam) {
+    return badRequest('coupleId or weddingId param required')
+  }
 
   const venueIds = (await resolveScopeVenueIds()).slice(0, MAX_VENUES)
   if (venueIds.length === 0) {
@@ -84,6 +98,30 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // A wedding id resolves to a couple through the spine's own back
+    // pointer. Nothing reads `weddings` to do it.
+    let coupleId = coupleIdParam
+    if (!coupleId && weddingIdParam) {
+      const service = createServiceClient()
+      for (const venueId of venueIds) {
+        const key = await loadCoupleKeyForWedding(service, venueId, weddingIdParam)
+        if (key) {
+          coupleId = key.coupleId
+          break
+        }
+      }
+    }
+    if (!coupleId) {
+      return NextResponse.json({
+        ok: true,
+        journey: null,
+        venueId: null,
+        contact: null,
+        ribbonFields: [],
+        heat: null,
+      })
+    }
+
     // Walk the scoped venues until one owns the couple. Sequential on
     // purpose: the first venue is the operator's own in the overwhelming
     // majority of calls, so the loop usually runs once.
@@ -113,7 +151,7 @@ export async function GET(req: NextRequest) {
     const [fieldRes, contactRes] = await Promise.all([
       service
         .from('touchpoints')
-        .select('id, signal_tier, confidence_tier, raw_payload')
+        .select('id, signal_tier, confidence_tier, direction, raw_payload')
         .eq('couple_id', coupleId)
         .eq('venue_id', ownerVenueId)
         .limit(1000),
