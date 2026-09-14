@@ -39,6 +39,10 @@ import { createNotification } from '@/lib/services/admin-notifications'
 import { getSageTaskPrompt } from '@/config/prompts/task-prompts-sage'
 import { formatBrainBlock, type AutoContextNote } from '@/lib/services/identity/auto-context-loader'
 import {
+  formatProfileReflectionBlock,
+  scopeProfileForReflection,
+} from './profile-reflection-scope'
+import {
   buildSectionsDirectoryBlock,
   buildCurrentSectionBlock,
   getSectionBySlug,
@@ -644,6 +648,40 @@ export async function generateSageResponse(
     weddingBlock = `\n--- WEDDING CONTEXT ---\n${parts.join('\n')}\n--- END WEDDING CONTEXT ---\n`
   }
 
+  // W52 (2026-09-14). A scoped slice of the reconstructed identity
+  // profile, so the assistant can say "you mentioned wanting the
+  // ceremony outdoors" instead of making a couple repeat themselves.
+  //
+  // What may be reflected back is decided in one place, by
+  // ./profile-reflection-scope.ts, and it is a short allow-list: the
+  // first names they use, the preferences they stated, and dates they
+  // gave. Everything the profile infers, scores or gets from somebody
+  // else stays on the operator's side of the wall, and the scope
+  // function names each exclusion with its reason. Do not widen the
+  // slice here; widen it there, where the tests are.
+  //
+  // Best-effort and fire-and-forget, like the climate and reviews
+  // lookups below: a profile read must never block a couple's chat.
+  let profileBlock = ''
+  if (weddingId) {
+    try {
+      const { data: profileRow } = await createServiceClient()
+        .from('couple_identity_profile')
+        .select('profile')
+        .eq('venue_id', venueId)
+        .eq('wedding_id', weddingId)
+        .maybeSingle<{ profile: Record<string, unknown> | null }>()
+
+      const scope = scopeProfileForReflection({
+        profile: profileRow?.profile ?? null,
+        statedDates: [{ label: 'Wedding date', value: weddingContext?.eventDate }],
+      })
+      profileBlock = formatProfileReflectionBlock(scope)
+    } catch (err) {
+      console.warn('[sage] profile reflection lookup failed:', err)
+    }
+  }
+
   // TIER 6++ (2026-05-14). Venue climate context for the wedding's
   // month. Lets Sage answer couple questions like "what's the weather
   // usually like for an October wedding here?" from the venue's own
@@ -736,6 +774,7 @@ export async function generateSageResponse(
   const systemPrompt = [
     built.systemPrompt,
     weddingBlock,
+    profileBlock,
     climateBlock,
     reviewsBlock,
     kbContext,

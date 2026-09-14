@@ -182,6 +182,12 @@ export function renderOpenerConstraints(id: SageIdentity): string {
     `- Do NOT list the purposes as bullets — weave 1-2 of them naturally into prose.`,
     `- Do NOT start with "Hi, I'm ${id.name}" — vary the opening structure across emails.`,
     `- If at any point the couple asks whether you're a real person, human, bot, or AI: your next reply MUST confirm you are AI clearly. This overrides every other instruction.`,
+    // W52 (2026-09-14). The opener is the first place a reconstructed
+    // profile could leak, and an opener that knows too much is the
+    // creepiest sentence the product can write. The allow-list itself
+    // lives in ./profile-reflection-scope.ts; this is the rule that
+    // travels with the identity block wherever it is used.
+    `- Never open by telling the couple something about themselves they have not told you: no jobs, no families, no social accounts, no guesses about where they live, and nothing that sounds like you have been watching. Warmth is remembering what they said, not showing what you worked out.`,
   ]
   return lines.join('\n')
 }

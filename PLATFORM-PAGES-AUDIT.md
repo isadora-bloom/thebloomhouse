@@ -57,6 +57,11 @@ brief's short list happened to name them, and this audit's real work is the
 | delete (recorded, not deleted) | 2 |
 | **Total** | **185** |
 
+Pages added since the sweep, each landing in the table below with its own
+verdict: `/intel/monthly-story` (Wave 7 W52, 2026-09-14, **keep**). The 185
+above is the count as swept on 2026-09-12 and is left as it was, so the
+sweep's own arithmetic still adds up.
+
 Orphans found (no nav href and no nav `matchPrefix` reaches them): 29,
 including the root index — within the 2026-09-08 audit's 23–44 range. Of the
 29: 2 are load-bearing infrastructure that a nav item doesn't apply to
@@ -106,6 +111,7 @@ the table.
 | `/org` | Full-page mirror of `GEAR_GROUPS` (same data the gear-menu dropdown renders) | Nothing — the gear icon links straight to each leaf item's href, never to `/org` itself | **delete** — duplicates the gear menu; zero inbound links anywhere in `src/` |
 | `/sage` | Full-page mirror of `MODE_SAGE.sections` (same data the sidebar renders) | Nothing — `mode-strip.tsx` links `defaultHref` (`/settings/sage-identity`) directly, bypassing this index | **delete** — duplicates the Sage's Brain sidebar; zero inbound links |
 | `/pulse` | "Coordinator's single inbox for things that need attention" | Only the bell icon (`notification-bell.tsx:234`) and `/today`'s "Anything wrong" card — no sidebar entry (UX-AUDIT-NON-TECHNICAL.md finding 14) | **keep, but under-reachable** — added a nav entry (see Nav changes) |
+| `/intel/monthly-story` | The owner's one screen: response time, which tour weekdays book, channel return, review direction — every number read through `src/lib/intel/adapters/monthly-story.ts` off the canonical layer | Nav entry under Intel → Daily (`nav-config.ts`), added in the same change that added the page | **keep** — added 2026-09-14 by Wave 7 W52, shipped with its nav entry per the wave 5 standard |
 | `/system/consolidation-status` | Static snapshot of the May 2026 "Batch 1/2" migration rollout | Only `ConsolidationChip` in the top bar (org_admin/super_admin only) | **hide (scaffold)** — the snapshot (`SNAPSHOT_AS_OF = '2026-05-26'`) is four months stale and describes a rollout NOVEMBER-PLAN.md has long superseded; the chip that pointed at it is switched off (`CONSOLIDATION_IN_FLIGHT = false`) so no kept surface links to a hidden page |
 
 `/settings/omi` is not in this table: it matches the `/settings` nav prefix
