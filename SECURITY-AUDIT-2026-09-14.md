@@ -113,3 +113,31 @@ The contract template and PDF writer escape everything. `normalizeHandle`.
 Not covered by any auditor: live `pg_policies` (all RLS findings are from migration files; S3's
 read-only script reports the live state), Supabase Edge Functions, Server Actions, e2e tests, the
 Vercel dashboard's actual environment values.
+
+## Remediation status (same day)
+
+All six workstreams merged on `consolidation`: S3 (6338fb51, migration 411 + two guards), S2
+(b80d0260), S1 (600e771a), S4b (bbd1017a), S4a (56af9244), S5 (532e7e4c). New CI guards:
+`check-storage-policies-scoped`, `check-cron-auth-helper`, `check-no-secrets`,
+`check-demo-refused-on-writes`, the disclosure guard's chat check, and the RLS ratchet at zero.
+
+Left open, with an owner named:
+- OPERATOR: rotate the service-role key and `CRON_SECRET`; set `CRON_SECRET_DESTRUCTIVE`,
+  `STATE_SIGNING_SECRET`, `STRIPE_WEBHOOK_SECRET`, `CALENDLY_WEBHOOK_SECRET` in Vercel production
+  BEFORE master moves (cron jobs, OAuth connects and both webhooks refuse without them); apply 411
+  (its storage half may need the SQL editor, `scripts/check-live-policies.mjs` shows before and
+  after); regenerate `types.generated.ts` after the migrations and delete the 24 `as unknown as`
+  casts they forced; confirm the `venue-assets` bucket excludes `image/svg+xml`; CI installs now
+  need `cdn.sheetjs.com` for `xlsx` 0.20.3.
+- CODE, follow-up: `day-of-memories-tab.tsx` hand-builds a public URL for a bucket 411 makes
+  private (needs `createSignedUrl`); `settings/page.tsx` selects `*` from `venue_config` and
+  writes it from the browser (411 restricts both; route the writes through an API and name the
+  columns); `booked_vendors.portal_token` hash column exists, code still reads plaintext; the
+  in-process OAuth nonce set does not catch a cross-instance replay; the CSP still carries
+  `unsafe-inline`/`unsafe-eval` until a nonce is minted in middleware; ~140 admin routes remain
+  coordinator-reachable by design (list in S1's report); 64 commits on this branch fail
+  `check-pr-cites-section` (inert in CI because of the shallow checkout; do not relax it, cite a
+  W-tag in every commit from now on).
+- The plan's own headline goal (every visible number through the canonical layer) is not met:
+  255 legacy reads remain and `/agent/leads` and `/agent/pipeline` still read `weddings`
+  directly. That is a wave, not a patch.

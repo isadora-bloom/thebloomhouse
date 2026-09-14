@@ -85,14 +85,33 @@ Shared rules for every agent:
 - End your report with WHERE TO LOOK (files, routes) and WHAT TO TEST (static now vs needs
   the database), per the standing handoff convention.
 
+## Security audit and remediation (2026-09-14, after the plan audit)
+
+Six read-only auditors (unauthenticated surface, tenant isolation, chatbots and LLM chains,
+integrations and OAuth, injection and files, secrets and config) and six fix workstreams S1 to S5,
+all merged the same day. Findings, status and what is still open: `SECURITY-AUDIT-2026-09-14.md`.
+The two things that matter most are operator actions: the production service-role key was
+committed to this public repository (rotate it), and `CRON_SECRET` is a guessable literal that
+also signs OAuth state (rotate, and set the four companion secrets before master moves).
+
+Plan-audit verdict (nine verifiers over W1-W61): every workstream is built and wired as claimed,
+with the gaps fixed in 88bece9d/e5c2e449/6d923d31, except the headline goal itself: the visible
+layer still reads the legacy tables in 255 places and two of the four daily surfaces read
+`weddings` directly. Proposed wave 9: finish W2 (canonical wiring of `/intel/**`, `/agent/leads`,
+`/agent/pipeline`), plus the security follow-ups listed in the audit document.
+
 ## Operator items (Isadora), current as of 2026-09-14 evening
 
-- [ ] **RECONNECT GMAIL FIRST.** `gmail_connections` for Rixey has been `status=error`
+- [ ] **SECURITY FIRST (see SECURITY-AUDIT-2026-09-14.md):** rotate the Supabase service-role key;
+  rotate `CRON_SECRET` (32 random bytes); set `CRON_SECRET_DESTRUCTIVE`, `STATE_SIGNING_SECRET`,
+  `STRIPE_WEBHOOK_SECRET`, `CALENDLY_WEBHOOK_SECRET` in Vercel production. The merged code refuses
+  cron jobs, OAuth connects and both webhooks without them, so this comes before the master FF.
+- [ ] **RECONNECT GMAIL.** `gmail_connections` for Rixey has been `status=error`
   ("Token refresh failed") since **2026-07-24**. Settings → Gmail → Connect. Nothing else replaces it.
 - [ ] Fast-forward `master` to `consolidation` (129+ commits: waves 1 to 7 gated and pushed).
 - [ ] Prod migrations, one run: `npm run migrate:pending` (dry) then
-  `npm run migrate:pending -- --apply --allow-prod` (395, 397, 398, 399, 400, 401, 402, 403, 404, 406;
-  wave 8 adds 407, 408, 409 when it lands). Then the older six with `--include-legacy`, 308 in the
+  `npm run migrate:pending -- --apply --allow-prod` (395, 397, 398, 399, 400, 401, 402, 403, 404, 406, 407, 408, 409, 410, 411;
+  411's storage half may need the Supabase SQL editor, `scripts/check-live-policies.mjs` shows before and after). Then the older six with `--include-legacy`, 308 in the
   SQL editor. Then `npx tsx scripts/gen-wedding-fk-tables.ts` (read-only, regenerates the cascade
   list so 406 stops being "pending") and the types regeneration `check-types-fresh` asks for.
 - [x] Test branch (`.env.test`) brought to 395-403 on 2026-09-14; golden 16/16 wet. Re-run
