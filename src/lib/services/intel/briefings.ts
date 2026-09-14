@@ -1225,6 +1225,7 @@ async function deliverBriefingEmail(
       to: briefingEmail,
       subject,
       html: body,
+      venueId,
     })
 
     if (fallback.ok) {

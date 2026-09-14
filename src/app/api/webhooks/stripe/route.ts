@@ -192,7 +192,11 @@ async function sendPaymentAlertEmail(opts: {
     const html = `<p>${body.replace(/\n/g, '<br>')}</p>`
     // disclosure-justified: system billing email (payment-issue alert) to the
     //   venue owner via the transactional sendEmail; not a Sage-authored couple-facing send.
-    const result = await sendEmail({ to: ownerEmail, subject, html, text: body })
+    // venueId passed through (W55) — this alert is specifically about this
+    // venue's own subscription, so once its sending domain is verified the
+    // envelope legitimately comes from the venue's own address to its own
+    // owner inbox. Falls back to the platform default (logged) until then.
+    const result = await sendEmail({ to: ownerEmail, subject, html, text: body, venueId })
     if (!result.ok) {
       console.warn(`[webhook/stripe] sendPaymentAlertEmail failed for venue ${venueId}:`, result.error)
     } else {

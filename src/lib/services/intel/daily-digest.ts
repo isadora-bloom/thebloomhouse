@@ -781,6 +781,7 @@ export async function sendDigestEmail(
       to: briefingEmail,
       subject,
       html,
+      venueId,
     })
 
     if (fallback.ok) {
@@ -866,6 +867,7 @@ export async function sendDigestEmailForUser(
       to: recipientEmail,
       subject,
       html,
+      venueId,
     })
 
     if (fallback.ok) {

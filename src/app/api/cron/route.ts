@@ -76,6 +76,14 @@ const VALID_JOBS = [
   'email_poll',
   'heat_decay',
   'model_currency',
+  // W55 (NOVEMBER-PLAN.md wave 8). Refreshes venue_config.sending_domain_
+  // status against Resend for venues that added a domain but aren't
+  // verified yet, so a fixed DNS record flips to verified without a
+  // coordinator clicking "check now". NOT registered in vercel.json
+  // (cron budget at the 49/49 ratchet); piggybacks on the daily
+  // heat_decay tick below, same shape as model_currency. Operator can
+  // curl /api/cron?job=sending_domain_status_sweep for a manual run.
+  'sending_domain_status_sweep',
   'trends_refresh',
   'weather_forecast',
   // TIER 6+ (2026-05-14). Annual sweep that pulls 20 years of hourly
@@ -563,7 +571,23 @@ async function runJob(
       } catch (err) {
         modelCurrency = { error: err instanceof Error ? err.message : String(err) }
       }
-      return { heat, identity_decay: identityDecay, model_currency: modelCurrency }
+      // Piggyback the daily sending-domain status sweep here too (W55).
+      // Same reasoning as modelCurrency above: vercel.json is at the
+      // Pro-plan cron cap, so this rides the 06:00 tick rather than
+      // registering its own entry.
+      let sendingDomainSweep: unknown = null
+      try {
+        const { sweepSendingDomainStatuses } = await import('@/lib/services/email/sending-domain-sweep')
+        sendingDomainSweep = await sweepSendingDomainStatuses()
+      } catch (err) {
+        sendingDomainSweep = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return {
+        heat,
+        identity_decay: identityDecay,
+        model_currency: modelCurrency,
+        sending_domain_status_sweep: sendingDomainSweep,
+      }
     }
 
     case 'model_currency': {
@@ -572,6 +596,13 @@ async function runJob(
       // The scheduled run rides the daily heat_decay tick above.
       const { checkModelCurrency } = await import('@/lib/ai/model-currency')
       return checkModelCurrency()
+    }
+
+    case 'sending_domain_status_sweep': {
+      // Standalone entry point for the sweep, for manual/ops curls. The
+      // scheduled run rides the daily heat_decay tick above.
+      const { sweepSendingDomainStatuses } = await import('@/lib/services/email/sending-domain-sweep')
+      return sweepSendingDomainStatuses()
     }
 
     case 'trends_refresh':
