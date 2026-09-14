@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
 import { createHash, timingSafeEqual } from 'crypto'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // Public wedding website API
@@ -404,7 +405,7 @@ async function handleWebsiteRead(request: NextRequest, providedPw: string) {
         : null,
     })
   } catch (error) {
-    console.error('[public/wedding-website] GET error:', error)
+    console.error('[public/wedding-website] GET error:', redactError(error))
     return err('Internal server error', 500)
   }
 }
@@ -589,7 +590,7 @@ export async function POST(request: NextRequest) {
 
     return json({ success: true, message: 'RSVP submitted successfully' })
   } catch (error) {
-    console.error('[public/wedding-website] POST error:', error)
+    console.error('[public/wedding-website] POST error:', redactError(error))
     return err('Internal server error', 500)
   }
 }

@@ -5,6 +5,7 @@ import { recomputeFirstTouch } from '@/lib/services/identity/candidate-resolver'
 import { recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * Attribution mutation endpoint (Phase B / PB.12 fixes #2 + #3).
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest) {
     try {
       await recalculateHeatScore(r.venue_id, r.wedding_id)
     } catch (err) {
-      console.warn('[attribution revert] heat recalc failed:', err)
+      console.warn('[attribution revert] heat recalc failed:', redactError(err))
     }
     return NextResponse.json({ ok: true })
   }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/sources/wedding-rollup
@@ -166,7 +167,6 @@ export async function GET(request: NextRequest) {
       totals: { bookings: totalBookings, revenue_cents: totalRevenueCents },
     })
   } catch (err) {
-    console.error('[api/intel/sources/wedding-rollup]', err)
-    return NextResponse.json({ error: 'Failed to compute wedding rollup' }, { status: 500 })
+    return apiError(err)
   }
 }

@@ -4,6 +4,7 @@ import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/email/gmail'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/intel/reengagement/[id]
@@ -66,7 +67,7 @@ export async function POST(
         sent_by: auth.userId ?? null,
       })
       .eq('id', actionId)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return apiError(error)
     return NextResponse.json({ ok: true, status: 'discarded' })
   }
 
@@ -113,7 +114,7 @@ export async function POST(
       sent_text: sentText,
     })
     .eq('id', actionId)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   return NextResponse.json({ ok: true, status: 'sent', channel })
 }

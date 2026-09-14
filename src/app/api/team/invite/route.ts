@@ -44,6 +44,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { apiError } from '@/lib/api/api-error'
 
 /** sha256 of the invitation token, hex. Matches migration 411's column. */
 export function hashInviteToken(token: string): string {
@@ -370,11 +371,7 @@ export async function POST(request: NextRequest) {
       emailError: emailResult.ok ? undefined : emailResult.error,
     })
   } catch (err) {
-    console.error('Team invite error:', err)
-    return NextResponse.json(
-      { error: 'An unexpected error occurred.' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }
 
@@ -405,13 +402,11 @@ export async function GET(request: NextRequest) {
       .order('created_at', { ascending: false })
 
     if (error) {
-      console.error('Failed to fetch invitations:', error)
-      return NextResponse.json({ error: 'Failed to fetch invitations.' }, { status: 500 })
+      return apiError(error)
     }
 
     return NextResponse.json({ invitations: data ?? [] })
   } catch (err) {
-    console.error('List invitations error:', err)
-    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 })
+    return apiError(err)
   }
 }

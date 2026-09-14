@@ -7,6 +7,8 @@ import {
   sendApprovedDraft,
 } from '@/lib/services/email/pipeline'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // GET — List drafts
@@ -60,13 +62,12 @@ export async function GET(request: NextRequest) {
       .limit(limit)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return apiError(error)
     }
 
     return NextResponse.json({ drafts: drafts ?? [] })
   } catch (err) {
-    console.error('[api/agent/drafts] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -130,8 +131,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, action })
   } catch (err) {
-    console.error('[api/agent/drafts] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -165,7 +165,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: true, sent: true })
   } catch (err) {
-    console.error('[api/agent/drafts] PATCH error:', err)
+    console.error('[api/agent/drafts] PATCH error:', redactError(err))
     const message = err instanceof Error ? err.message : 'Internal server error'
     return NextResponse.json({ error: message }, { status: 500 })
   }

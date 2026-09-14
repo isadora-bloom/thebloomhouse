@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getWeddingJourney } from '@/lib/services/wedding-journey'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/agent/leads/[id]/journey
@@ -33,10 +34,6 @@ export async function GET(
     const events = await getWeddingJourney(auth.venueId, weddingId)
     return NextResponse.json({ events })
   } catch (err) {
-    console.error('[api/agent/leads/[id]/journey]', err)
-    return NextResponse.json(
-      { error: 'Failed to load journey' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

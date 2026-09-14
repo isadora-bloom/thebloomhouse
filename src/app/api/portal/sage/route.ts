@@ -23,6 +23,7 @@ import {
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE, DEMO_VENUE_ID as DEMO_VENUE_CONSTANT } from '@/lib/services/demo-token'
 import { createLogger } from '@/lib/observability/logger'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // Rate limit: 20 requests per 15 minutes per wedding (falls back to venue or
@@ -391,7 +392,7 @@ export async function POST(request: NextRequest) {
           }
         }
       } catch (err) {
-        console.warn('[api/portal/sage] File context extraction failed (non-blocking):', err)
+        console.warn('[api/portal/sage] File context extraction failed (non-blocking):', redactError(err))
       }
     }
 
@@ -543,7 +544,7 @@ export async function POST(request: NextRequest) {
           priority: 'high',
         })
       } catch (err) {
-        console.warn('[api/portal/sage] notification failed (non-blocking):', err)
+        console.warn('[api/portal/sage] notification failed (non-blocking):', redactError(err))
       }
 
       // Finding 3 (November plan W10): the pitch deck promises "a Sage
@@ -610,7 +611,7 @@ export async function POST(request: NextRequest) {
       // warm reply as a normal Sage turn (200) so the UI renders it in the
       // chat rather than as an error toast.
       if (!(err instanceof AIUnavailableError)) throw err
-      console.error('[api/portal/sage] AI unavailable:', err.stage, err.message)
+      console.error('[api/portal/sage] AI unavailable:', err.stage, redactError(err))
 
       // Sign-off chokepoint (item 4). The outage reply is the branch that
       // most needs the escalation line: the couple is being told nothing
@@ -752,7 +753,7 @@ export async function POST(request: NextRequest) {
           await savePlanningNotes(venueId, weddingId, planningNotes)
         }
       } catch (err) {
-        console.warn('[api/portal/sage] Regex planning extraction failed (non-blocking):', err)
+        console.warn('[api/portal/sage] Regex planning extraction failed (non-blocking):', redactError(err))
       }
 
       // Layer 2: AI extraction (richer, fire-and-forget — don't block the response)
@@ -769,7 +770,7 @@ export async function POST(request: NextRequest) {
       // surface shows them as unconfirmed.
       // --------------------------------------------------------------------
       extractAndSaveAINotes(venueId, weddingId, message).catch((err) =>
-        console.warn('[api/portal/sage] AI planning extraction failed (non-blocking):', err)
+        console.warn('[api/portal/sage] AI planning extraction failed (non-blocking):', redactError(err))
       )
     }
 
@@ -818,7 +819,7 @@ export async function POST(request: NextRequest) {
           priority: 'high',
         })
       } catch (err) {
-        console.warn('[api/portal/sage] Failed to create notification (non-blocking):', err)
+        console.warn('[api/portal/sage] Failed to create notification (non-blocking):', redactError(err))
       }
     }
 

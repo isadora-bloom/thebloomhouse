@@ -28,6 +28,8 @@ import { clientIpForRateLimit } from '@/lib/security/client-ip'
 import { extractTourTranscript } from '@/lib/services/tour/transcript-extract'
 import { omiAdapter } from '@/lib/services/audio-capture/adapters/omi-adapter'
 import { persistAudioSegments } from '@/lib/services/audio-capture/orchestrator'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 interface ExtractionTriggerInput {
   venueId: string
@@ -58,7 +60,7 @@ function maybeFireExtraction(input: ExtractionTriggerInput): void {
     try {
       await extractTourTranscript(tourId)
     } catch (err) {
-      console.error('[api/omi/webhook] auto-extract failed:', err)
+      console.error('[api/omi/webhook] auto-extract failed:', redactError(err))
     }
   })()
 }
@@ -194,7 +196,6 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ session: result.session })
   } catch (err) {
-    console.error('[api/omi/webhook] unexpected error:', err)
-    return NextResponse.json({ error: 'internal' }, { status: 500 })
+    return apiError(err)
   }
 }

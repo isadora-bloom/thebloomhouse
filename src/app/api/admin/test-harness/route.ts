@@ -42,6 +42,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { isCronSecretConfigured, verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export async function POST(request: NextRequest) {
   // S2 (2026-09-14 security audit). The non-prod CRON_SECRET fallback
@@ -216,9 +217,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: `unknown action: ${action}` }, { status: 400 })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

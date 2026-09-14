@@ -229,7 +229,7 @@ export function InternalNotesFeed({ weddingId, venueId, legacyNote, onLegacyDism
                   <div className="text-[11px] text-sage-500 flex items-center gap-2 flex-wrap">
                     <span>{note.author_name ?? 'Unknown'}</span>
                     <span>·</span>
-                    <span>{fmt(note.created_at)}</span>
+                    <span>{fmt(note.created_at)}{/* created-at-ok: internal note write time is the real event */}</span>
                     {edited && <span className="italic">edited</span>}
                   </div>
                   {!isEditing && (

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/dedupe-interactions
@@ -41,7 +42,7 @@ export async function POST() {
     .order('created_at', { ascending: true })
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   // Bucket by (from_email|gmail_thread_id|subject|minute). Keep the

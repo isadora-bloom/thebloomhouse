@@ -9,6 +9,7 @@ import { getPlatformAuth, refuseDemo, isDemoVenueAllowed } from '@/lib/api/auth-
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // Minimum weddings required before NLQ will attempt to answer.
@@ -121,8 +122,7 @@ export async function POST(request: NextRequest) {
       evidence: result.evidence,
     })
   } catch (err) {
-    console.error('[api/intel/nlq] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -167,7 +167,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[api/intel/nlq] PATCH error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

@@ -1676,6 +1676,7 @@ function PrintDayOfPackagePage() {
               {internalNotes.map((n) => (
                 <div key={n.id} className="border border-sage-100 rounded p-2 bg-sage-50/40">
                   <p className="text-xs text-gray-500 mb-1">
+                    {/* created-at-ok: internal notes created_at is the write time, the real event */}
                     {new Date(n.created_at).toLocaleString('en-US', {
                       month: 'short',
                       day: 'numeric',

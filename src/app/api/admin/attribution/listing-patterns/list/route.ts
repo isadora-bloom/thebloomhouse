@@ -26,6 +26,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 30
 
@@ -99,12 +100,7 @@ export async function GET(req: NextRequest) {
   }
 
   const { data, error } = await query
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: `query failed: ${error.message}` },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   const patterns = data ?? []
   // Split for the UI: globals (venue_id NULL) live above venue-scoped

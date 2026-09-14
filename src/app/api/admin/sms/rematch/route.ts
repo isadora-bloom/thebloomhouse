@@ -23,6 +23,7 @@ import {
   forbidden,
 } from '@/lib/api/auth-helpers'
 import { tryMatchSmsByName } from '@/lib/services/ingestion/sms-name-match'
+import { apiError } from '@/lib/api/api-error'
 
 const LOOKBACK_DAYS = 90
 
@@ -65,7 +66,7 @@ export async function POST(req: NextRequest) {
     .limit(500)
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   const list = (rows ?? []) as Array<{

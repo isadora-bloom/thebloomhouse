@@ -7,6 +7,7 @@ import {
   unauthorized,
   forbidden,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * PATCH /api/notifications/read
@@ -56,13 +57,11 @@ export async function PATCH(request: NextRequest) {
       .eq('id', id)
 
     if (error) {
-      console.error('[notifications/read] Update failed:', error.message)
-      return NextResponse.json({ error: 'Update failed' }, { status: 500 })
+      return apiError(error)
     }
 
     return NextResponse.json({ ok: true })
   } catch (err) {
-    console.error('[notifications/read] Unexpected error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

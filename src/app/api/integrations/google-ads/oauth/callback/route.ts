@@ -6,6 +6,7 @@ import {
   exchangeCodeForTokens,
   persistTokens,
 } from '@/lib/services/integrations/google-ads-oauth'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * GET /api/integrations/google-ads/oauth/callback
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
     })
     return back('?ok=1')
   } catch (err) {
-    console.error('[google-ads-oauth/callback]', err)
+    console.error('[google-ads-oauth/callback]', redactError(err))
     return back('?error=exchange_failed')
   }
 }

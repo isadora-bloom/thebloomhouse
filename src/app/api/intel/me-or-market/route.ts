@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { computeMeOrMarket } from '@/lib/services/intel/me-or-market'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET /api/intel/me-or-market
@@ -27,10 +28,6 @@ export async function GET(req: NextRequest) {
     const diagnosis = await computeMeOrMarket(auth.venueId)
     return NextResponse.json({ diagnosis })
   } catch (err) {
-    console.error('[me-or-market] Failed to compute diagnosis:', err)
-    return NextResponse.json(
-      { error: 'Failed to compute diagnosis' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

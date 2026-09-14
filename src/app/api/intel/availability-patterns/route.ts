@@ -7,6 +7,7 @@ import {
   deriveTopAvailabilityInsight,
   type MonthlyFillRate,
 } from '@/lib/services/intel/quality-signals'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/availability-patterns
@@ -99,7 +100,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ rows })
   } catch (err) {
-    console.error('[api/intel/availability-patterns] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

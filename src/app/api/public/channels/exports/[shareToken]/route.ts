@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { renderFrozenExport } from '@/lib/services/channel-intel-hub/export'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 30
 
@@ -36,7 +37,7 @@ export async function GET(
       .eq('share_token', shareToken)
       .maybeSingle()
     if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+      return apiError(error)
     }
     if (!data) {
       return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 })

@@ -44,6 +44,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { archiveExpiredCulturalMoments } from '@/lib/services/external-context/cultural-moments'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 60
 
@@ -75,13 +76,6 @@ export async function POST(req: NextRequest) {
       calledForVenueId: venueId,
     })
   } catch (err) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err instanceof Error ? err.message : 'archive failed',
-        calledForVenueId: venueId,
-      },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

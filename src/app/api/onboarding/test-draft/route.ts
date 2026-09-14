@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { callAI } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST — Generate a test draft using the venue's personality settings + KB
@@ -130,7 +131,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ draft: result.text })
   } catch (err) {
-    console.error('[api/onboarding/test-draft] POST error:', err)
-    return NextResponse.json({ error: 'Failed to generate test draft' }, { status: 500 })
+    return apiError(err)
   }
 }

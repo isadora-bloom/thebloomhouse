@@ -25,6 +25,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { labelUnmappedFields, type UnmappedKeyInput } from '@/lib/services/data-fields/labeler'
+import { apiError } from '@/lib/api/api-error'
 
 // entity_type → { table, jsonb column }. The jsonb column is the raw
 // catchall an importer preserves un-homed columns into.
@@ -187,11 +188,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     )
     .select('id')
     .single()
-  if (error) {
-    return NextResponse.json(
-      { error: 'create_failed', detail: error.message },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
   return NextResponse.json({ ok: true, id: (data as { id: string }).id })
 }

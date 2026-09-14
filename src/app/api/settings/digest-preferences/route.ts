@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getOrCreateDefault, updatePreferences, type DigestPreferences } from '@/lib/services/intel/digest-preferences'
+import { apiError } from '@/lib/api/api-error'
 
 const MUTABLE_FIELDS: Array<keyof DigestPreferences> = [
   'cadence',
@@ -33,7 +34,7 @@ export async function GET() {
     const prefs = await getOrCreateDefault(supabase, auth.userId, auth.venueId)
     return NextResponse.json(prefs)
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'load_failed' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -86,6 +87,6 @@ export async function PATCH(request: NextRequest) {
     })
     return NextResponse.json(updated)
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'update_failed' }, { status: 500 })
+    return apiError(err)
   }
 }

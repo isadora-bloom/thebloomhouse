@@ -6,6 +6,7 @@ import { insertAttributionEventsIdempotent } from '@/lib/services/identity/attri
 import { recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * Manual candidate-to-wedding link from the coordinator review queue
@@ -174,7 +175,7 @@ export async function POST(req: NextRequest) {
   try {
     await recalculateHeatScore(c.venue_id, w.id)
   } catch (err) {
-    console.warn('[candidate link] heat recalc failed:', err)
+    console.warn('[candidate link] heat recalc failed:', redactError(err))
   }
 
   return NextResponse.json({ ok: true, attributions_written: rows.length })

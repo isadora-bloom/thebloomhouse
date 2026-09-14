@@ -14,6 +14,8 @@ import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 import { enqueueReviewSolicit } from '@/lib/services/reviews/solicit'
+import { redactError } from '@/lib/observability/redact'
+import { apiError } from '@/lib/api/api-error'
 
 export async function POST(req: NextRequest) {
   const plan = await requirePlan(req, 'pre_opening')
@@ -76,16 +78,13 @@ export async function POST(req: NextRequest) {
         if (result.skipped) skipped++
         else enqueued++
       } catch (err) {
-        console.warn('[solicit-gap-backfill] enqueue failed:', err)
+        console.warn('[solicit-gap-backfill] enqueue failed:', redactError(err))
         skipped++
       }
     }
 
     return NextResponse.json({ ok: true, enqueued, skipped })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

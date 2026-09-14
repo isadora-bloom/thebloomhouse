@@ -46,9 +46,14 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
+// W67 (2026-09-14) expansion: adapters shape the view models the platform
+// renders and the join flow is a coordinator-adjacent invite surface, both
+// previously unscanned.
 const SCAN_DIRS = [
   'src/app/(platform)',
   'src/components',
+  'src/lib/intel/adapters',
+  'src/app/join',
 ]
 
 // Skip the formatter itself + page-local wrappers that re-export the

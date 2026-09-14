@@ -20,6 +20,7 @@ import {
 } from '@/lib/services/brain-dump/parse-result-schema'
 import { generateBrainDumpSummaryBounded } from '@/lib/services/brain-dump/summary'
 import { pgLikeValue } from '@/lib/supabase/filter-escape'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * Resolve a pending brain-dump clarification.
@@ -363,7 +364,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           trigger: 'brain_dump_confirm',
         })
       } catch (err) {
-        console.warn('[brain-dump/resolve] profile-enrichment failed:', err instanceof Error ? err.message : err)
+        console.warn('[brain-dump/resolve] profile-enrichment failed:', err instanceof Error ? redactError(err) : err)
       }
     })()
 

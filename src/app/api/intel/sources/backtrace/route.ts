@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { findBacktraceCandidates, applyBacktrace } from '@/lib/services/attribution/source-backtrace'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * Source-backtrace endpoints.
@@ -66,8 +67,7 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (err) {
-    console.error('[api/intel/sources/backtrace GET]', err)
-    return NextResponse.json({ error: 'Failed to compute backtrace' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -99,7 +99,6 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ ok: true, oldSource: result.oldSource, newSource })
   } catch (err) {
-    console.error('[api/intel/sources/backtrace POST]', err)
-    return NextResponse.json({ error: 'Failed to apply backtrace' }, { status: 500 })
+    return apiError(err)
   }
 }

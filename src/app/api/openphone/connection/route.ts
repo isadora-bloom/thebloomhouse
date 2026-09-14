@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import type { OpenPhonePhoneNumber } from '@/lib/services/ingestion/openphone'
+import { apiError } from '@/lib/api/api-error'
 
 interface PublicConnection {
   hasApiKey: boolean
@@ -56,7 +57,7 @@ export async function GET() {
     .eq('venue_id', auth.venueId)
     .maybeSingle()
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ connection: maskedView(data) })
 }
@@ -127,7 +128,7 @@ export async function PUT(request: NextRequest) {
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ connection: maskedView(data) })
 }
@@ -146,7 +147,7 @@ export async function DELETE() {
     .update({ is_active: false, updated_at: new Date().toISOString() })
     .eq('venue_id', auth.venueId)
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ success: true })
 }

@@ -99,7 +99,7 @@ export function BrainDumpQueue() {
                 {e.raw_input.length > 80 ? `${e.raw_input.slice(0, 80)}…` : e.raw_input}
               </p>
               <p className="text-xs text-sage-500 mt-0.5 flex items-center gap-2">
-                <span>{timeAgo(e.created_at)}</span>
+                <span>{timeAgo(e.created_at)}{/* created-at-ok: single-item brain-dump ingest — created_at is the real event, not a batch-import stamp */}</span>
                 {e.parse_result?.intent && (
                   <>
                     <span>·</span>

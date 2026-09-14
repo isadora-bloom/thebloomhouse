@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // Confirm Booking API
@@ -134,7 +135,7 @@ export async function POST(request: NextRequest) {
         )
         await provisionCouplePortal(supabase, targetWeddingId)
       } catch (err) {
-        console.warn('[confirm-booking] portal provision failed:', err)
+        console.warn('[confirm-booking] portal provision failed:', redactError(err))
       }
       // Coordinator-confirmed booking — write a contract_signed
       // touchpoint with the wedding's first-touch source so /intel/
@@ -148,7 +149,7 @@ export async function POST(request: NextRequest) {
           metadata: { confirmed_by: 'coordinator_ui' },
         })
       } catch (err) {
-        console.warn('[confirm-booking] touchpoint failed:', err)
+        console.warn('[confirm-booking] touchpoint failed:', redactError(err))
       }
     }
   }

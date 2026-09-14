@@ -33,6 +33,7 @@ import {
   type ProposedPackage,
 } from '@/lib/services/crm-import/web-form-packages'
 import { findHint, type FormHint } from '@/lib/services/crm-import/web-form'
+import { apiError } from '@/lib/api/api-error'
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024
 
@@ -136,12 +137,7 @@ export async function POST(request: NextRequest) {
       })
       .select('id, kind, name')
 
-    if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500 },
-      )
-    }
+    if (error) return apiError(error)
 
     return NextResponse.json({
       ok: true,

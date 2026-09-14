@@ -30,6 +30,7 @@ import {
 } from '@/lib/services/content-suggester/fetch-page'
 import { extractSeasonalContent } from '@/lib/services/content-suggester/extract-seasonal'
 import type { ExistingSeasonalContent, Season } from '@/config/prompts/seasonal-extractor'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 60
 
@@ -115,15 +116,7 @@ export async function POST(req: NextRequest) {
   try {
     fetchResult = await fetchVenueHomepage(websiteUrl)
   } catch (err) {
-    if (err instanceof ContentFetchError) {
-      return NextResponse.json(
-        {
-          error: `We couldn't read ${websiteUrl}: ${err.message}`,
-          reason: err.reason,
-        },
-        { status: 400 },
-      )
-    }
+    if (err instanceof ContentFetchError) return apiError(err, undefined, 400)
     throw err
   }
 

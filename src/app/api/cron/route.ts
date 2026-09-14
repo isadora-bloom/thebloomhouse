@@ -67,6 +67,8 @@ import {
   computeFreshnessReports,
   suggestNextCadence,
 } from '@/lib/services/intel/source-freshness'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -664,7 +666,7 @@ async function runJob(
       try {
         ingestion = await runIngestionVolumeMonitorAllVenues()
       } catch (err) {
-        console.error('[cron] ingestion_volume_monitor failed:', err)
+        console.error('[cron] ingestion_volume_monitor failed:', redactError(err))
         ingestion = { error: err instanceof Error ? err.message : String(err) }
       }
       return { metricAnomalies, ingestion }
@@ -1508,7 +1510,7 @@ async function runPruneRateLimits(): Promise<{ rows_deleted: number }> {
   const supabase = createServiceClient()
   const { data, error } = await supabase.rpc('prune_rate_limit_buckets')
   if (error) {
-    console.error('[prune_rate_limits] RPC failed:', error.message)
+    console.error('[prune_rate_limits] RPC failed:', redactError(error))
     return { rows_deleted: 0 }
   }
   return { rows_deleted: Number(data ?? 0) }
@@ -1750,7 +1752,7 @@ async function runWeatherForecastWithTourStamp() {
     const { stampTourWeather } = await import('@/lib/services/intel/tour-weather')
     tourStamp = await stampTourWeather(createServiceClient())
   } catch (err) {
-    console.error('[weather_forecast] tour stamp failed:', err)
+    console.error('[weather_forecast] tour stamp failed:', redactError(err))
     tourStamp.errors.push(err instanceof Error ? err.message : String(err))
   }
   let alertsRefresh: Record<string, unknown> = {}
@@ -1758,7 +1760,7 @@ async function runWeatherForecastWithTourStamp() {
     const { refreshAllVenueAlerts } = await import('@/lib/services/intel/nws-alerts')
     alertsRefresh = await refreshAllVenueAlerts(createServiceClient())
   } catch (err) {
-    console.error('[weather_forecast] NWS alerts refresh failed:', err)
+    console.error('[weather_forecast] NWS alerts refresh failed:', redactError(err))
     alertsRefresh = { error: err instanceof Error ? err.message : String(err) }
   }
   return { forecast: forecastResult, tour_stamp: tourStamp, alerts_refresh: alertsRefresh }
@@ -1903,7 +1905,7 @@ async function runSourceFreshnessSweep(): Promise<{
       }
     } catch (err) {
       errors += 1
-      console.error(`[source_freshness] venue ${venue.id} failed:`, err)
+      console.error(`[source_freshness] venue ${venue.id} failed:`, redactError(err))
     }
   }
 
@@ -1942,7 +1944,7 @@ async function runPruneBrainDumpStale(): Promise<{ rows_abandoned: number }> {
     .lt('created_at', cutoff)
     .select('id')
   if (error) {
-    console.error('[prune_brain_dump_stale] update failed:', error.message)
+    console.error('[prune_brain_dump_stale] update failed:', redactError(error))
     return { rows_abandoned: 0 }
   }
   return { rows_abandoned: (data ?? []).length }
@@ -2116,7 +2118,7 @@ async function sweepPhaseBAllVenues(): Promise<
         conflicts: 0,
         errors: 1,
       }
-      console.error(`[phase_b_sweep] ${v.name}:`, err instanceof Error ? err.message : err)
+      console.error(`[phase_b_sweep] ${v.name}:`, err instanceof Error ? redactError(err) : err)
     }
   }
 
@@ -2200,13 +2202,13 @@ async function runRecomputePendingTemporal(): Promise<{
         .eq('id', w.id)
         .eq('heat_recompute_pending', true)
       if (error) {
-        console.error(`[recompute_pending_temporal] flag clear failed for ${w.id}:`, error.message)
+        console.error(`[recompute_pending_temporal] flag clear failed for ${w.id}:`, redactError(error))
         failed++
         continue
       }
       recomputed++
     } catch (err) {
-      console.error(`[recompute_pending_temporal] recompute failed for ${w.id}:`, err)
+      console.error(`[recompute_pending_temporal] recompute failed for ${w.id}:`, redactError(err))
       failed++
     }
   }
@@ -2347,7 +2349,7 @@ async function runCulturalMomentsAutoPropose(): Promise<{
     const archiveResult = await archiveExpiredCulturalMoments(supabase)
     summary.expiredArchived = archiveResult.archivedCount
   } catch (err) {
-    console.error('[cron][cultural_moments_archive_expired] failed:', err)
+    console.error('[cron][cultural_moments_archive_expired] failed:', redactError(err))
     summary.errors += 1
   }
 
@@ -2366,7 +2368,7 @@ async function runCulturalMomentsAutoPropose(): Promise<{
         errors: r.errors,
       })
     } catch (err) {
-      console.error(`[cron][cultural_moments_auto_propose] failed for venue ${venueId}:`, err)
+      console.error(`[cron][cultural_moments_auto_propose] failed for venue ${venueId}:`, redactError(err))
       summary.errors += 1
       summary.perVenue.push({
         venueId,
@@ -2441,7 +2443,7 @@ async function scanBacktraceAllVenues(): Promise<
 
       out[venueId] = { highConfidence: high, mediumConfidence: medium, notified }
     } catch (err) {
-      console.error(`[cron] backtrace scan failed for venue ${venueId}:`, err)
+      console.error(`[cron] backtrace scan failed for venue ${venueId}:`, redactError(err))
       out[venueId] = { highConfidence: -1, mediumConfidence: -1, notified: false }
     }
   }
@@ -2491,7 +2493,7 @@ async function pollZoomAllVenues(): Promise<
       if (err instanceof Error && err.message === 'reconnect needed') {
         out[venueId] = { fetched: 0, newlyProcessed: 0, matched: 0, errors: 0, reconnectNeeded: true }
       } else {
-        console.error(`[cron] zoom poll failed for venue ${venueId}:`, err)
+        console.error(`[cron] zoom poll failed for venue ${venueId}:`, redactError(err))
         out[venueId] = { fetched: 0, newlyProcessed: 0, matched: 0, errors: 1 }
       }
     }
@@ -2510,7 +2512,7 @@ async function refreshQualitySignalsAllVenues(): Promise<Record<string, number>>
     try {
       out[v.id as string] = await persistDropoffInsights(v.id as string)
     } catch (err) {
-      console.error(`[quality-signals] failed for ${v.id}:`, err)
+      console.error(`[quality-signals] failed for ${v.id}:`, redactError(err))
       out[v.id as string] = -1
     }
   }
@@ -2597,12 +2599,12 @@ async function checkAndNotifyAutoSendCap(venueId: string): Promise<void> {
     if (error) {
       const code = (error as unknown as { code?: string }).code
       if (code !== '23505') {
-        console.error('[cron] auto_send_cap notification failed:', error.message)
+        console.error('[cron] auto_send_cap notification failed:', redactError(error))
       }
     }
   } catch (err) {
     // Best-effort — never let notification errors block the poll.
-    console.error('[cron] checkAndNotifyAutoSendCap failed:', err)
+    console.error('[cron] checkAndNotifyAutoSendCap failed:', redactError(err))
   }
 }
 
@@ -2646,12 +2648,12 @@ async function checkAndNotifyGmailTokenErrors(venueId: string): Promise<void> {
       if (error) {
         const code = (error as unknown as { code?: string }).code
         if (code !== '23505') {
-          console.error('[cron] gmail_token_expired notification failed:', error.message)
+          console.error('[cron] gmail_token_expired notification failed:', redactError(error))
         }
       }
     }
   } catch (err) {
-    console.error('[cron] checkAndNotifyGmailTokenErrors failed:', err)
+    console.error('[cron] checkAndNotifyGmailTokenErrors failed:', redactError(err))
   }
 }
 
@@ -2745,7 +2747,7 @@ async function applyDecayAllVenues(): Promise<
         autoLost: summary.autoLostCount,
       }
     } catch (err) {
-      console.error(`[cron] Heat decay failed for venue ${id}:`, err)
+      console.error(`[cron] Heat decay failed for venue ${id}:`, redactError(err))
       results[id] = { decayed: 0, warnings: 0, autoLost: 0 }
     }
   }
@@ -2875,7 +2877,7 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
 
       results[id] = true
     } catch (err) {
-      console.error(`[cron] Attribution refresh failed for venue ${id}:`, err)
+      console.error(`[cron] Attribution refresh failed for venue ${id}:`, redactError(err))
       results[id] = false
     }
   }
@@ -2907,7 +2909,7 @@ async function fetchWeatherForAllVenues(): Promise<Record<string, number>> {
       const records = await fetchWeatherForecast(id)
       results[id] = records.length
     } catch (err) {
-      console.error(`[cron] Weather forecast failed for venue ${id}:`, err)
+      console.error(`[cron] Weather forecast failed for venue ${id}:`, redactError(err))
       results[id] = 0
     }
   }
@@ -3007,7 +3009,7 @@ async function generateDigestsForAllVenues(): Promise<Record<string, boolean>> {
 
       results[id] = true
     } catch (err) {
-      console.error(`[cron] Weekly digest failed for venue ${id}:`, err)
+      console.error(`[cron] Weekly digest failed for venue ${id}:`, redactError(err))
       results[id] = false
     }
   }
@@ -3039,7 +3041,7 @@ async function measureOutcomesAllVenues(): Promise<Record<string, number>> {
       const measured = await measureInsightOutcomes(id)
       results[id] = measured
     } catch (err) {
-      console.error(`[cron] Outcome measurement failed for venue ${id}:`, err)
+      console.error(`[cron] Outcome measurement failed for venue ${id}:`, redactError(err))
       results[id] = 0
     }
   }
@@ -3087,7 +3089,7 @@ async function generateBriefingsForAllVenues(
       }
       results[id] = true
     } catch (err) {
-      console.error(`[cron] ${type} briefing failed for venue ${id}:`, err)
+      console.error(`[cron] ${type} briefing failed for venue ${id}:`, redactError(err))
       results[id] = false
     }
   }
@@ -3178,7 +3180,7 @@ async function checkPostEventFeedback(): Promise<{ notified: number }> {
       })
       notified++
     } catch (err) {
-      console.error(`[cron] Feedback notification failed for wedding ${weddingId}:`, err)
+      console.error(`[cron] Feedback notification failed for wedding ${weddingId}:`, redactError(err))
     }
   }
 
@@ -3402,10 +3404,6 @@ export async function GET(request: NextRequest) {
     console.log(`[cron] Completed job: ${job} in ${wrapped.duration_ms}ms`)
     return NextResponse.json({ job, success: true, result: wrapped.result, duration_ms: wrapped.duration_ms })
   } catch (err) {
-    console.error(`[cron] Job ${job} failed:`, err)
-    return NextResponse.json(
-      { job, success: false, error: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

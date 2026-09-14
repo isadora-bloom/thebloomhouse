@@ -7,6 +7,7 @@ import {
   persistTikTokConnection,
 } from '@/lib/services/marketing-spend/connectors/tiktok-ads'
 import { verifyAdOauthState } from '@/lib/services/marketing-spend/connectors/shared'
+import { redactError } from '@/lib/observability/redact'
 
 const SETTINGS_PATH = '/settings/integrations/tiktok-ads'
 
@@ -88,7 +89,7 @@ export async function GET(request: NextRequest) {
     })
     return back('?ok=1')
   } catch (err) {
-    console.error('[tiktok-ads/oauth/callback]', err)
+    console.error('[tiktok-ads/oauth/callback]', redactError(err))
     return back('?error=exchange_failed')
   }
 }

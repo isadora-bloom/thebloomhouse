@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api/auth-helpers'
 import { trackCoordinatorAction } from '@/lib/services/intel/consultant-tracking'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/tracking
@@ -49,7 +50,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[api/tracking] Error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

@@ -36,6 +36,7 @@ import {
   updateThreadLifecycleFolder,
   type LifecycleFolder,
 } from '@/lib/services/inbox/lifecycle'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 300
 
@@ -107,7 +108,7 @@ export async function POST(req: NextRequest) {
     .limit(maxRows)
 
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   const candidates = (rows ?? []).filter(

@@ -51,6 +51,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { crossPlatformHandleMerge } from '@/lib/services/identity/handle-convergence'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 60
 
@@ -158,9 +159,6 @@ export async function GET() {
       proposals: [...live, ...audit],
     })
   } catch (err) {
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : 'unknown error' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

@@ -22,6 +22,7 @@ import {
   unauthorized,
   forbidden,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST /api/portal/quick-add — Analyze uploaded file / pasted data
@@ -268,9 +269,7 @@ export async function POST(request: NextRequest) {
               fileWarning = `Workbook has ${workbook.SheetNames.length} sheets; imported "${chosenSheetName}". Split into separate files to import others.`
             }
           } catch (err) {
-            return NextResponse.json({
-              error: `Could not parse Excel file: ${err instanceof Error ? err.message : 'unknown error'}. Try saving as CSV.`,
-            }, { status: 400 })
+            return apiError(err, undefined, 400)
           }
           break
         }
@@ -352,9 +351,7 @@ Return ONLY the CSV text. No explanation, no markdown code blocks. Just raw CSV.
           content = await fetchGoogleSheetCsv(parsed.id, parsed.gid)
           fileName = `Google Sheet ${parsed.id}${parsed.gid ? ` (tab ${parsed.gid})` : ''}`
         } catch (err) {
-          return NextResponse.json({
-            error: err instanceof Error ? err.message : 'Failed to fetch Google Sheet.',
-          }, { status: 400 })
+          return apiError(err, undefined, 400)
         }
       }
       // Try parsing as JSON if it looks like JSON
@@ -437,10 +434,6 @@ Return ONLY the CSV text. No explanation, no markdown code blocks. Just raw CSV.
 
     return NextResponse.json({ error: 'Invalid action. Use "detect" or "import".' }, { status: 400 })
   } catch (err) {
-    console.error('[QUICK-ADD ERROR]', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // /api/public/vendor-portal — Token-based vendor self-service (no auth)
@@ -101,8 +102,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ data: { ...publicVendor, venue_name: venueName } })
   } catch (error) {
-    console.error('[api/public/vendor-portal] GET error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(error)
   }
 }
 
@@ -222,7 +222,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ data })
   } catch (error) {
-    console.error('[api/public/vendor-portal] PATCH error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(error)
   }
 }

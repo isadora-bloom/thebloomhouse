@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { computeFreshnessReports } from '@/lib/services/intel/source-freshness'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/sources/freshness
@@ -25,10 +26,6 @@ export async function GET(request: NextRequest) {
     const reports = await computeFreshnessReports(auth.venueId)
     return NextResponse.json({ reports })
   } catch (err) {
-    console.error('[GET /api/intel/sources/freshness] failed:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to compute freshness' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

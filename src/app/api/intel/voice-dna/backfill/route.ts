@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, forbidden } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { backfillGmailVoice } from '@/lib/services/voice/gmail-backfill'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/intel/voice-dna/backfill
@@ -37,10 +38,6 @@ export async function POST(req: NextRequest) {
     const result = await backfillGmailVoice(auth.venueId)
     return NextResponse.json(result)
   } catch (err) {
-    console.error('[voice-dna/backfill] failed:', err)
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

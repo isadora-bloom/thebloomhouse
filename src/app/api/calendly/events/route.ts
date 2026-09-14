@@ -5,6 +5,7 @@ import {
   CalendlyNotConfiguredError,
   CalendlyReconnectError,
 } from '@/lib/services/ingestion/calendly'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET /api/calendly/events
@@ -31,23 +32,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ events })
   } catch (err) {
     if (err instanceof CalendlyNotConfiguredError) {
+      // Developer-authored, fixed-default message on the error class
+      // itself (never raw driver/exception text) — safe to surface.
+      const safeMessage = err.message
       return NextResponse.json({
         events: [],
         notConfigured: true,
-        message: err.message,
+        message: safeMessage,
       })
     }
     if (err instanceof CalendlyReconnectError) {
+      const safeMessage = err.message
       return NextResponse.json({
         events: [],
         reconnect: true,
-        message: err.message,
+        message: safeMessage,
       })
     }
-    console.error('[api/calendly/events] error:', err)
-    return NextResponse.json(
-      { error: 'Failed to fetch Calendly events', detail: err instanceof Error ? err.message : String(err) },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, unauthorized, badRequest } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 60
 
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest) {
     .limit(limit)
 
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   const rows = (data ?? []) as ReferralRow[]

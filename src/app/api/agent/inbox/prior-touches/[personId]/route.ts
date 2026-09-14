@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getPriorTouches } from '@/lib/services/intel/prior-touches'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/agent/inbox/prior-touches/:personId
@@ -69,10 +70,6 @@ export async function GET(
     })
     return NextResponse.json(summary)
   } catch (err) {
-    console.error('[prior-touches] lookup failed:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

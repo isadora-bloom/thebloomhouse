@@ -26,6 +26,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 interface EventRow {
   id: string
@@ -86,12 +87,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .eq('venue_id', scope.venueId)
       .eq('run_id', runId)
       .order('occurred_at', { ascending: true })
-    if (error) {
-      return NextResponse.json(
-        { error: 'lookup_failed', detail: error.message },
-        { status: 500 },
-      )
-    }
+    if (error) return apiError(error)
     return NextResponse.json({ run_id: runId, events: (data ?? []) as EventRow[] })
   }
 
@@ -102,12 +98,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .eq('venue_id', scope.venueId)
     .order('occurred_at', { ascending: false })
     .limit(200)
-  if (error) {
-    return NextResponse.json(
-      { error: 'lookup_failed', detail: error.message },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
   type RunRow = {
     run_id: string
     stage: string

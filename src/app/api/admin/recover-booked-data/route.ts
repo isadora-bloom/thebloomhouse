@@ -29,6 +29,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { recoverBookedDataForVenue } from '@/lib/services/booked-data-recovery'
 import { createServiceClient } from '@/lib/supabase/service'
 import { isCronSecretConfigured, verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export async function POST(request: NextRequest) {
   // S2 (2026-09-14 security audit). The CRON_SECRET arm used to be an
@@ -75,12 +76,6 @@ export async function POST(request: NextRequest) {
     const report = await recoverBookedDataForVenue(supabase, venueId)
     return NextResponse.json({ ok: true, report })
   } catch (err) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err instanceof Error ? err.message : 'unknown',
-      },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

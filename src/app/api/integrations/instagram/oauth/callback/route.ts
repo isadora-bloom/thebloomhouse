@@ -10,6 +10,7 @@ import {
   subscribePageToMessages,
   verifyInstagramState,
 } from '@/lib/services/integrations/instagram-meta'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * GET /api/integrations/instagram/oauth/callback
@@ -141,7 +142,7 @@ export async function GET(request: NextRequest) {
     if (!sub.ok) settings.searchParams.set('warn', 'subscribe_failed')
     return NextResponse.redirect(settings)
   } catch (err) {
-    console.error('[instagram-oauth/callback]', err)
+    console.error('[instagram-oauth/callback]', redactError(err))
     return fail(
       err instanceof Error
         ? err.message.slice(0, 120).replace(/\s+/g, '_')

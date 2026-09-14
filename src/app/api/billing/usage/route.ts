@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { resolveBillingState } from '@/lib/services/billing/billing-state'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET /api/billing/usage
@@ -82,8 +83,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
     .in('key', keys)
 
   if (error) {
-    console.error('[api/billing/usage] failed to read rate_limit_buckets:', error)
-    return NextResponse.json({ error: 'Failed to load usage data' }, { status: 500 })
+    return apiError(error)
   }
 
   const bucketMap = new Map<string, { hits: unknown[] }>(

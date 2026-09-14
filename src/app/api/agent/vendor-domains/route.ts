@@ -25,6 +25,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { clearVendorDomainCache } from '@/lib/services/inbox/vendor-domains'
+import { apiError } from '@/lib/api/api-error'
 
 // Tightest acceptable shape for a domain string. Mirrors the CHECK
 // constraint on the table (lower-case, non-empty) plus a basic syntax
@@ -61,7 +62,7 @@ export async function GET() {
     .order('added_at', { ascending: false })
 
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ ok: true, domains: data ?? [] })
 }
@@ -106,7 +107,7 @@ export async function POST(req: NextRequest) {
       .select('id, domain, source, confidence, note, added_at, updated_at, added_by')
       .single()
     if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+      return apiError(error)
     }
     clearVendorDomainCache(auth.venueId)
     return NextResponse.json({ ok: true, domain: data, upserted: true })
@@ -126,7 +127,7 @@ export async function POST(req: NextRequest) {
     .single()
 
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
   clearVendorDomainCache(auth.venueId)
   return NextResponse.json({ ok: true, domain: data, upserted: false })
@@ -151,7 +152,7 @@ export async function DELETE(req: NextRequest) {
     .eq('venue_id', auth.venueId)
 
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
   clearVendorDomainCache(auth.venueId)
   return NextResponse.json({ ok: true })

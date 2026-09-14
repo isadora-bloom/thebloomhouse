@@ -20,6 +20,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { computePersonaChannelRollups } from '@/lib/services/intel/persona-channel-rollup'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 // Recompute walks every spend row + attribution event in a venue across
 // three windows. ~30s in practice for a venue with thousands of rows;
@@ -85,12 +86,6 @@ export async function POST(req: NextRequest) {
       diagnostics: result.diagnostics,
     })
   } catch (err) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

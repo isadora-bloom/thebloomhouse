@@ -4,6 +4,7 @@ import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { isReEngagementEnabled } from '@/lib/services/re-engagement'
 import { draftReEngagementMessage, type ReEngagementChannel } from '@/lib/services/brain/re-engagement-drafter'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/intel/reengagement/draft  body={ candidate_id, channel }
@@ -71,8 +72,7 @@ export async function POST(req: NextRequest) {
   try {
     drafted = await draftReEngagementMessage(sb, { candidate_id: candidateId, channel })
   } catch (err) {
-    console.error('[reengagement/draft] AI failed:', err)
-    return NextResponse.json({ error: 'Drafter failed' }, { status: 500 })
+    return apiError(err)
   }
   if (!drafted) return NextResponse.json({ error: 'Empty draft from AI' }, { status: 500 })
 
@@ -88,8 +88,7 @@ export async function POST(req: NextRequest) {
     .select('id, platform, draft_text, drafted_at')
     .single()
   if (error) {
-    console.error('[reengagement/draft] insert failed:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   return NextResponse.json({ action: inserted, intended_channel: channel })

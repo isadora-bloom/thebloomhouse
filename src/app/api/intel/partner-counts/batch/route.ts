@@ -23,6 +23,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { redact } from '@/lib/observability/redact'
+import { apiError } from '@/lib/api/api-error'
 
 const MAX_BATCH = 200
 const UUID_RE = /^[0-9a-f-]{36}$/i
@@ -103,8 +104,7 @@ export async function POST(request: NextRequest) {
       if (r.partner_count === 1) counts[r.id] = 1
     }
   } catch (err) {
-    console.error('[partner-counts/batch] unexpected error:', err)
-    return NextResponse.json({ counts })
+    return apiError(err)
   }
 
   return NextResponse.json({ counts })

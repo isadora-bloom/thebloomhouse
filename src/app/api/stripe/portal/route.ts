@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { appUrl } from '@/lib/app-url'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // POST /api/stripe/portal
@@ -88,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ url: session.url })
   } catch (err) {
-    console.error('[stripe/portal] error:', err)
+    console.error('[stripe/portal] error:', redactError(err))
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json(
       { error: `Portal session failed: ${message}` },

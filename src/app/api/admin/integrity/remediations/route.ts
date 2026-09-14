@@ -21,6 +21,7 @@ import {
 import { createServiceClient } from '@/lib/supabase/service'
 import { isSupportedInvariantId } from '@/lib/services/data-integrity/remediation'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
@@ -65,7 +66,7 @@ export async function GET(req: NextRequest) {
   }
   const { data, error } = await query
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   return NextResponse.json({

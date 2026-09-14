@@ -7,6 +7,7 @@ import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/reprocess-orphans
@@ -131,7 +132,7 @@ export async function POST(req: Request) {
         body: (row.full_body as string) || '',
       })
     } catch (err) {
-      console.error(`[reprocess-orphans] classify failed for ${row.id}:`, err)
+      console.error(`[reprocess-orphans] classify failed for ${row.id}:`, redactError(err))
       skipped++
       continue
     }

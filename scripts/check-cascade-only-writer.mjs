@@ -405,6 +405,64 @@ const GRANDFATHERED = new Map([
 ])
 
 // ---------------------------------------------------------------------------
+// UPDATE / DELETE on the SPINE tables (W67, 2026-09-14 verification gap).
+//
+// R1 was a CREATION boundary, not a commit boundary (see the file header),
+// so it only ever scanned `.insert(` / `.upsert(`. The 2026-09-14
+// verification pass found that the same three spine tables — couples,
+// touchpoints, fragments — also take direct `.update(` / `.delete(` calls
+// from outside the cascade, all of them from operator-driven admin
+// endpoints doing exactly the kind of surgical correction (re-parent,
+// split, demote, bulk lifecycle transition) the automatic cascade can't
+// safely do for itself.
+//
+// The exemption boundary here is coarser than the chokepoint-file list
+// above: everything under `src/lib/services/identity/` is exempt (the
+// identity layer is allowed to update/delete its own spine rows as part
+// of ordinary lifecycle work — decay, resurrection, progression,
+// point-zero, mirror-couple, etc. — none of that is a "new identity"
+// question the way insert/upsert is). Outside that directory, an
+// update/delete on a SPINE table must be named in
+// GRANDFATHERED_UPDATE_DELETE below with a reason, or the guard fails.
+//
+// UPDATE_DELETE_RATCHET_MAX is a ceiling, not a target: it records the
+// grandfathered call-site count as of the last time this list changed.
+// It may only fall — fixing a site and forgetting to lower the constant
+// fails the guard on purpose, so the count can never quietly creep back
+// up between now and Phase 4's `recordLifecycleEvent` / `splitCouple`
+// primitives closing these out for good.
+// ---------------------------------------------------------------------------
+const SPINE_UPDATE_DELETE_TABLES = ['couples', 'touchpoints', 'fragments']
+const IDENTITY_DIR_PREFIX = 'src/lib/services/identity/'
+
+const GRANDFATHERED_UPDATE_DELETE = new Map([
+  [
+    'src/app/api/admin/identity/resolve/route.ts',
+    'touchpoints.update (re-parent an orphan touchpoint onto the confirmed couple) + fragments.update (promote a fragment to that couple) on operator candidate_confirmed. Surgical correction of a specific match the resolver already flagged, not a new identity decision — the cascade chokepoint would re-run the matcher instead of honouring the operator override. Phase 4 follow-up: a `recordLifecycleEvent`/attach primitive.',
+  ],
+  [
+    'src/app/api/admin/identity/undo-merge/route.ts',
+    'fragments.update (promoted_to_couple_id -> null) walking back a fragment_promoted audit row when an operator undoes a merge. Paired reversal of an admin action, not a fresh cascade write.',
+  ],
+  [
+    'src/app/api/admin/identity/unmerge/route.ts',
+    'touchpoints.update (re-parent onto a new or existing couple) + touchpoints.delete (demote-to-fragment path: mirror into fragments then drop the touchpoint row) across the three unmerge destinations. Operator-forced split — the cascade chokepoint resolves to the existing couple by design, which is the opposite of what unmerge needs.',
+  ],
+  [
+    'src/app/api/admin/intel/lifecycle-audit/apply/route.ts',
+    'couples.update (lifecycle_state) applying one operator-reviewed lifecycle-audit decision. Metadata transition on an existing couple, not identity creation; paired with the couple_merge_events audit insert already grandfathered above.',
+  ],
+  [
+    'src/app/api/admin/intel/lifecycle-audit/bulk-apply/route.ts',
+    'couples.update (lifecycle_state, bulk) — same operator lifecycle-audit shape as the per-row apply endpoint, applied to a reviewed batch.',
+  ],
+])
+
+// Recorded 2026-09-14 (W67): 8 call sites across the 5 files above (2 in
+// resolve, 1 in undo-merge, 3 in unmerge, 1 each in apply/bulk-apply).
+const UPDATE_DELETE_RATCHET_MAX = 8
+
+// ---------------------------------------------------------------------------
 // Patterns. Multi-line regexes — `.from('<TABLE>')` can sit on its own
 // line with `.insert(` / `.upsert(` on the next.
 // ---------------------------------------------------------------------------
@@ -422,8 +480,17 @@ const sqlInsertPattern = (table) =>
 // `lockAndMintCouple` wrapper which is the only sanctioned caller).
 const rpcMintCouplePattern = /\.rpc\(\s*['"`]lock_and_mint_couple['"`]/g
 
+// update/delete counterpart to insertUpsertPattern above.
+const updateDeletePattern = (table) =>
+  new RegExp(
+    `\\.from\\(\\s*['"\`]${table}['"\`]\\s*\\)\\s*\\n?\\s*\\.\\s*(update|delete)\\s*\\(`,
+    'g',
+  )
+
 const OFFENDERS = []
 const GRANDFATHER_HITS = []
+const UPDATE_DELETE_OFFENDERS = []
+const UPDATE_DELETE_GRANDFATHER_HITS = []
 
 function isAllowed(rel) {
   return CHOKEPOINT_FILES.has(rel)
@@ -490,6 +557,25 @@ function scan(file) {
   while ((m = rpcMintCouplePattern.exec(text)) !== null) {
     record(rel, lineOf(text, m.index), 'lock_and_mint_couple', 'rpc')
   }
+
+  // UPDATE / DELETE on the spine tables — coarser exemption than the
+  // chokepoint list above: the whole identity/ directory, not a named
+  // file set (see the doc comment above GRANDFATHERED_UPDATE_DELETE).
+  if (!rel.startsWith(IDENTITY_DIR_PREFIX)) {
+    for (const table of SPINE_UPDATE_DELETE_TABLES) {
+      const reUpdateDelete = updateDeletePattern(table)
+      let um
+      while ((um = reUpdateDelete.exec(text)) !== null) {
+        const op = um[1] // 'update' | 'delete'
+        const line = lineOf(text, um.index)
+        if (GRANDFATHERED_UPDATE_DELETE.has(rel)) {
+          UPDATE_DELETE_GRANDFATHER_HITS.push({ file: rel, line, table, op })
+        } else {
+          UPDATE_DELETE_OFFENDERS.push({ file: rel, line, table, op })
+        }
+      }
+    }
+  }
 }
 
 walk(SRC_DIR)
@@ -503,33 +589,92 @@ for (const h of GRANDFATHER_HITS) {
 }
 for (const [file, hits] of grandfatherFiles) {
   const tables = [...new Set(hits.map((h) => `${h.table}.${h.op}`))].join(', ')
-   
+
   console.log(`grandfathered: ${file} — ${tables} — ${GRANDFATHERED.get(file)}`)
 }
 
-if (OFFENDERS.length === 0) {
-   
-  console.log(`\nOK — no new direct insert/upsert sites detected on guarded tables: ${GUARDED_TABLES.join(', ')}.`)
+// Same one-line-per-file acknowledgment for the update/delete grandfather.
+const updateDeleteGrandfatherFiles = new Map()
+for (const h of UPDATE_DELETE_GRANDFATHER_HITS) {
+  if (!updateDeleteGrandfatherFiles.has(h.file)) updateDeleteGrandfatherFiles.set(h.file, [])
+  updateDeleteGrandfatherFiles.get(h.file).push(h)
+}
+for (const [file, hits] of updateDeleteGrandfatherFiles) {
+  const tables = [...new Set(hits.map((h) => `${h.table}.${h.op}`))].join(', ')
+
+  console.log(`grandfathered (update/delete): ${file} — ${tables} — ${GRANDFATHERED_UPDATE_DELETE.get(file)}`)
+}
+
+let failed = false
+
+if (OFFENDERS.length > 0) {
+  failed = true
+
+  console.error('\nFAIL — direct insert/upsert/RPC sites detected on guarded cascade tables:\n')
+  for (const o of OFFENDERS) {
+
+    console.error(`  ${o.file}:${o.line}: ${o.table} ${o.op} outside chokepoint`)
+  }
+
+  console.error(
+    '\nRoute through the cascade barrel at `@/lib/spine/cascade` (linkSignal /'
+      + ' lockAndMintCouple / mintPerson / mintWedding).',
+  )
+
+  console.error(
+    'If this is a legitimate non-cascade writer (operator-driven admin shape,'
+      + ' status-change touchpoint, etc.), add it to GRANDFATHERED in this script'
+      + ' with a one-line justification.',
+  )
+}
+
+if (UPDATE_DELETE_OFFENDERS.length > 0) {
+  failed = true
+
+  console.error('\nFAIL — direct update/delete site(s) on guarded SPINE tables outside identity/:\n')
+  for (const o of UPDATE_DELETE_OFFENDERS) {
+
+    console.error(`  ${o.file}:${o.line}: ${o.table} ${o.op} outside src/lib/services/identity/`)
+  }
+
+  console.error(
+    '\nEither move the write into src/lib/services/identity/, or add the file to'
+      + ' GRANDFATHERED_UPDATE_DELETE in this script with a one-line justification'
+      + ' — and raise UPDATE_DELETE_RATCHET_MAX by the number of new sites you added.',
+  )
+}
+
+const updateDeleteCount = UPDATE_DELETE_GRANDFATHER_HITS.length
+if (updateDeleteCount > UPDATE_DELETE_RATCHET_MAX) {
+  failed = true
+
+  console.error(
+    `\nFAIL — ${updateDeleteCount} grandfathered update/delete site(s) found, `
+      + `exceeding UPDATE_DELETE_RATCHET_MAX (${UPDATE_DELETE_RATCHET_MAX}). The ratchet may only`
+      + ' rise when a new, justified grandfather entry is added alongside it — raise the'
+      + ' constant in the same commit as the new GRANDFATHERED_UPDATE_DELETE entry.',
+  )
+} else if (updateDeleteCount < UPDATE_DELETE_RATCHET_MAX) {
+  failed = true
+
+  console.error(
+    `\nFAIL — only ${updateDeleteCount} grandfathered update/delete site(s) found, below`
+      + ` UPDATE_DELETE_RATCHET_MAX (${UPDATE_DELETE_RATCHET_MAX}). The ratchet may only fall:`
+      + ` lower UPDATE_DELETE_RATCHET_MAX to ${updateDeleteCount} in this script now that a`
+      + ' site has been cleaned up, so it can never quietly creep back up.',
+  )
+}
+
+if (!failed) {
+
+  console.log(
+    `\nOK — no new direct insert/upsert sites on guarded tables (${GUARDED_TABLES.join(', ')}), `
+      + `and update/delete on ${SPINE_UPDATE_DELETE_TABLES.join(', ')} outside identity/ matches`
+      + ` the recorded ratchet (${UPDATE_DELETE_RATCHET_MAX}).`,
+  )
   process.exit(0)
 }
 
- 
-console.error('\nFAIL — direct insert/upsert/RPC sites detected on guarded cascade tables:\n')
-for (const o of OFFENDERS) {
-   
-  console.error(`  ${o.file}:${o.line}: ${o.table} ${o.op} outside chokepoint`)
-}
- 
-console.error(
-  '\nRoute through the cascade barrel at `@/lib/spine/cascade` (linkSignal /'
-    + ' lockAndMintCouple / mintPerson / mintWedding).',
-)
- 
-console.error(
-  'If this is a legitimate non-cascade writer (operator-driven admin shape,'
-    + ' status-change touchpoint, etc.), add it to GRANDFATHERED in this script'
-    + ' with a one-line justification.',
-)
- 
-console.error('See CASCADE-CANONICAL-WRITER.md + CONSOLIDATION-PLAN-PHASED.md §1.6.\n')
+
+console.error('\nSee CASCADE-CANONICAL-WRITER.md + CONSOLIDATION-PLAN-PHASED.md §1.6.\n')
 process.exit(1)

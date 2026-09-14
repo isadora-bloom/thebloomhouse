@@ -37,6 +37,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 30
 
@@ -99,12 +100,7 @@ export async function GET(req: NextRequest) {
   if (toDate) q = q.lte('spend_date', toDate)
 
   const { data, error } = await q
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   const rows = (data ?? []) as SpendRow[]
   const totalCents = rows.reduce((acc, r) => acc + (r.amount_cents || 0), 0)

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // /api/vendor-portal/[token] — Token-based booked-vendor self-service
@@ -122,8 +123,7 @@ export async function GET(
       couple_names: coupleNames,
     })
   } catch (error) {
-    console.error('[api/vendor-portal/[token]] GET error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(error)
   }
 }
 
@@ -209,12 +209,11 @@ export async function PUT(
       .eq('id', existing.id as string)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return apiError(error)
     }
 
     return NextResponse.json({ ok: true })
   } catch (error) {
-    console.error('[api/vendor-portal/[token]] PUT error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(error)
   }
 }

@@ -9,6 +9,7 @@ import {
 } from '@/lib/services/intel/review-language'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET — Review phrases for the venue
@@ -52,13 +53,12 @@ export async function GET(request: NextRequest) {
       .order('frequency', { ascending: false })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return apiError(error)
     }
 
     return NextResponse.json({ phrases: phrases ?? [] })
   } catch (err) {
-    console.error('[api/intel/reviews] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -94,8 +94,7 @@ export async function POST(request: NextRequest) {
     const phrases = await extractReviewLanguage(auth.venueId, text, rating)
     return NextResponse.json({ phrases })
   } catch (err) {
-    console.error('[api/intel/reviews] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -145,7 +144,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[api/intel/reviews] PATCH error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

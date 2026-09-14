@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getPostTourBrowsingLeads } from '@/lib/services/intel/post-tour-browsing'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/post-tour-browsing
@@ -28,7 +29,6 @@ export async function GET(req: NextRequest) {
     const leads = await getPostTourBrowsingLeads(sb, auth.venueId)
     return NextResponse.json({ leads })
   } catch (err) {
-    console.error('[api/intel/post-tour-browsing]', err)
-    return NextResponse.json({ error: 'Failed to load post-tour browsing leads' }, { status: 500 })
+    return apiError(err)
   }
 }

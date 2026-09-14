@@ -3,6 +3,8 @@ import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { recordInsightAction } from '@/lib/services/intel/insight-tracking'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // PATCH — Update insight status (seen, acted_on, dismissed)
@@ -71,8 +73,7 @@ export async function PATCH(
     .single()
 
   if (error) {
-    console.error('Insight update error:', error)
-    return NextResponse.json({ error: 'Failed to update insight' }, { status: 500 })
+    return apiError(error)
   }
 
   if (!data) {
@@ -89,7 +90,7 @@ export async function PATCH(
       }
     } catch (err) {
       // Log but don't fail the main request
-      console.error('[insights/[id]] Outcome tracking failed:', err)
+      console.error('[insights/[id]] Outcome tracking failed:', redactError(err))
     }
   }
 

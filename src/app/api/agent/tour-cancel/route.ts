@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST { tourId, cancellationReason?, cancellationNote? }
@@ -162,10 +163,6 @@ export async function POST(request: NextRequest) {
       cancellationNote: note,
     })
   } catch (err) {
-    console.error('[api/agent/tour-cancel] POST error:', err)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

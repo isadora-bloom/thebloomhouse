@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { fetchNewEmails } from '@/lib/services/email/gmail'
 import { processIncomingEmail } from '@/lib/services/email/pipeline'
+import { redactError } from '@/lib/observability/redact'
 
 // Vercel serverless cap — 300s is the max for Pro, 10s is the default
 // hobby limit. This route fans out Gmail fetches × classifier calls, so
@@ -107,7 +108,7 @@ export async function POST(req: Request) {
         }
       } catch (err) {
         errors++
-        console.error('[api/agent/sync] processIncomingEmail error:', err)
+        console.error('[api/agent/sync] processIncomingEmail error:', redactError(err))
       }
     }
 
@@ -134,7 +135,7 @@ export async function POST(req: Request) {
       done,
     })
   } catch (err) {
-    console.error('[api/agent/sync] POST error:', err)
+    console.error('[api/agent/sync] POST error:', redactError(err))
     const message = err instanceof Error ? err.message : 'Internal server error'
     return NextResponse.json({ error: message }, { status: 500 })
   }

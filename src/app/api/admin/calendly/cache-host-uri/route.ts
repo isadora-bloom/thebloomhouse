@@ -41,6 +41,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 interface CalendlyTokens {
   access_token?: string
@@ -177,12 +178,7 @@ export async function POST(request: NextRequest) {
     .select('venue_id, calendly_tokens')
     .not('calendly_tokens', 'is', null)
     .limit(1000)
-  if (error) {
-    return NextResponse.json(
-      { error: `lookup failed: ${error.message}` },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   const candidates = (rows ?? []).filter((row) => {
     const t = row.calendly_tokens as CalendlyTokens | null

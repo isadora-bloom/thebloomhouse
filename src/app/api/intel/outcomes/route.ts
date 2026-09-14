@@ -5,6 +5,7 @@ import {
   getOutcomeForInsight,
 } from '@/lib/services/intel/insight-tracking'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET — Fetch insight outcomes
@@ -53,7 +54,6 @@ export async function GET(req: NextRequest) {
       },
     })
   } catch (err) {
-    console.error('[api/intel/outcomes] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

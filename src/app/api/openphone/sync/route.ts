@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { syncMessages } from '@/lib/services/ingestion/openphone'
+import { apiError } from '@/lib/api/api-error'
 
 // Polling several phone numbers + three endpoints each can take a while —
 // give ourselves the full Vercel Pro budget so a multi-line workspace
@@ -43,7 +44,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, ...result })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Internal server error'
-    console.error('[api/openphone/sync] error:', err)
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    return apiError(err)
   }
 }

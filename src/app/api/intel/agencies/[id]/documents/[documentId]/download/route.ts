@@ -11,6 +11,7 @@ import {
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { requireAgencyScope } from '@/lib/services/intel/agency-access'
 import { createServiceClient } from '@/lib/supabase/service'
+import { redactError } from '@/lib/observability/redact'
 
 interface RouteContext {
   params: Promise<{ id: string; documentId: string }>
@@ -136,7 +137,7 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
           user_agent_hash: userAgentHash,
         }), { op: 'agency_document_downloads.insert', venueId: null })
       } catch (err) {
-        console.warn('[documents/download] audit write failed:', err)
+        console.warn('[documents/download] audit write failed:', redactError(err))
       }
     })()
 

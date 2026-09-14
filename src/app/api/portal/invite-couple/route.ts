@@ -12,6 +12,7 @@ import {
   unauthorized,
   forbidden,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/portal/invite-couple
@@ -390,7 +391,6 @@ export async function POST(request: NextRequest) {
       emailError: allSent ? undefined : sent.find((s) => !s.ok)?.error,
     })
   } catch (err) {
-    console.error('[INVITE EMAIL ERROR]', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

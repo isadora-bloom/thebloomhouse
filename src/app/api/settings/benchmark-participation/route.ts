@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET() {
   const auth = await getPlatformAuth()
@@ -22,7 +23,7 @@ export async function GET() {
     .select('benchmark_participation')
     .eq('venue_id', auth.venueId)
     .maybeSingle()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   return NextResponse.json({
     participating: (data as { benchmark_participation: boolean | null } | null)?.benchmark_participation === true,
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
     .eq('venue_id', auth.venueId)
     .select('benchmark_participation')
     .maybeSingle()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   if (!data) return NextResponse.json({ error: 'venue_config row not found' }, { status: 404 })
 
   return NextResponse.json({

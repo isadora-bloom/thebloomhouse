@@ -32,11 +32,18 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-// Coordinator-facing scope only. Couple-portal lives at
-// src/app/(couple)/ and that audience hits a different RLS profile;
-// the bug shape doesn't apply there.
+// Coordinator-facing scope, widened W67 (2026-09-14) to the couple-facing
+// surfaces too: the couple portal, the path-based couple app and the join
+// (invite-acceptance) flow all render browser-side, and a shared component
+// under src/components can be pulled into either audience. Any of them
+// re-introducing the browser `getSupabase().from('weddings')` pattern hits
+// the same anon-RLS $0 shape the coordinator surfaces did.
 const SCAN_DIRS = [
   'src/app/(platform)',
+  'src/app/_couple-pages',
+  'src/app/couple',
+  'src/app/join',
+  'src/components',
 ]
 
 // Pattern matches the canonical bug shape — the EXACT call form that

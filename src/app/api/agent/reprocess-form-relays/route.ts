@@ -11,6 +11,7 @@ import { normalizeSource } from '@/lib/services/normalize-source'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { captureNameEvidence } from '@/lib/services/identity/name-capture'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 300
 
@@ -59,7 +60,7 @@ export async function POST() {
     .eq('direction', 'inbound')
     .limit(5000)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   let scanned = 0
   let matched = 0

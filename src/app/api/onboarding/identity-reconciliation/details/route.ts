@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET(request: NextRequest) {
   const auth = await getPlatformAuth()
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
     `)
     .eq('venue_id', auth.venueId)
     .in('id', ids)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   const out = ((weddings ?? []) as unknown as Array<Record<string, unknown>>).map((r) => {
     const people = (r.people as Array<Record<string, unknown>>) ?? []

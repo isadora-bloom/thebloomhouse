@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/agent/auto-send-shadow
@@ -43,8 +44,7 @@ export async function GET(req: NextRequest) {
 
   const { data: decisions, error } = await query
   if (error) {
-    console.error('[auto-send-shadow GET]', error)
-    return NextResponse.json({ error: 'Failed to load decisions' }, { status: 500 })
+    return apiError(error)
   }
 
   // Sibling fetch: the rules in shadow mode for this venue (so the UI
@@ -119,8 +119,7 @@ export async function POST(req: NextRequest) {
       })
       .eq('id', body.id)
     if (error) {
-      console.error('[auto-send-shadow verdict]', error)
-      return NextResponse.json({ error: 'Failed to save verdict' }, { status: 500 })
+      return apiError(error)
     }
     return NextResponse.json({ ok: true })
   }
@@ -155,8 +154,7 @@ export async function POST(req: NextRequest) {
       })
       .eq('id', body.ruleId)
     if (error) {
-      console.error('[auto-send-shadow promote]', error)
-      return NextResponse.json({ error: 'Failed to promote rule' }, { status: 500 })
+      return apiError(error)
     }
     return NextResponse.json({ ok: true })
   }

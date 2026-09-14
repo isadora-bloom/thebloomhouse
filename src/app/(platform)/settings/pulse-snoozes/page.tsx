@@ -207,7 +207,7 @@ function SnoozeGroup({
                   <code className="text-xs font-mono text-sage-700 truncate">{row.item_key}</code>
                 </div>
                 <div className="text-xs text-sage-500 mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                  <span>Created {fmtRelative(row.created_at)} ({fmtDateTime(row.created_at)})</span>
+                  <span>Created {fmtRelative(row.created_at)} ({fmtDateTime(row.created_at)}){/* created-at-ok: pulse_snoozes.created_at is the real event (already TELEMETRY_TABLES for the filter check) */}</span>
                   {showSnoozedUntil && row.snoozed_until && (
                     <span>
                       Re-surfaces {fmtRelative(row.snoozed_until)} ({fmtDateTime(row.snoozed_until)})

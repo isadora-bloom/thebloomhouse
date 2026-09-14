@@ -8,6 +8,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { generatePositioningSuggestions } from '@/lib/services/brain/intel-brain'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // POST — Generate AI positioning suggestions for the venue
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
       suggestions: result.suggestions,
     })
   } catch (err) {
-    console.error('[api/intel/positioning] POST error:', err)
+    console.error('[api/intel/positioning] POST error:', redactError(err))
     return serverError(err)
   }
 }

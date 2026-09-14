@@ -7,6 +7,7 @@ import {
   forbidden,
   ADMIN_ROLES,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/venue-groups/tree
@@ -82,9 +83,9 @@ export async function GET() {
     supabase.from('venue_group_members').select('group_id, venue_id'),
   ])
 
-  if (groupsRes.error) return NextResponse.json({ error: groupsRes.error.message }, { status: 500 })
-  if (venuesRes.error) return NextResponse.json({ error: venuesRes.error.message }, { status: 500 })
-  if (membersRes.error) return NextResponse.json({ error: membersRes.error.message }, { status: 500 })
+  if (groupsRes.error) return apiError(groupsRes.error)
+  if (venuesRes.error) return apiError(venuesRes.error)
+  if (membersRes.error) return apiError(membersRes.error)
 
   const groups = (groupsRes.data ?? []) as Array<{
     id: string

@@ -9,6 +9,7 @@ import {
   extractDiscoveryAnswerFromCalendly,
   extractReferrerNameFromCalendly,
 } from '@/lib/services/discovery-source/capture'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // Calendly webhook handler
@@ -556,10 +557,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ received: true, engagementRecorded: true })
   } catch (err) {
-    console.error('[webhook/calendly] Error processing webhook:', err)
-    return NextResponse.json(
-      { error: 'Webhook processing failed' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

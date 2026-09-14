@@ -450,7 +450,7 @@ function OverviewTab({
               <div className="mt-2 space-y-1">
                 {escalationMessages.slice(0, 3).map(m => (
                   <p key={m.id} className="text-xs text-red-700 line-clamp-1">
-                    {new Date(m.created_at).toLocaleDateString()}: &ldquo;{m.content.slice(0, 120)}&rdquo;
+                    {new Date(m.created_at).toLocaleDateString()}: &ldquo;{m.content.slice(0, 120)}&rdquo;{/* created-at-ok: messages.created_at is the send time, the real per-message event */}
                   </p>
                 ))}
               </div>
@@ -622,7 +622,7 @@ function PlanningNotesTab({ notes }: { notes: PlanningNoteRow[] }) {
                     Source: &quot;{note.source_message}&quot;
                   </p>
                 )}
-                <p className="text-[10px] text-sage-400 mt-1">{formatShortDate(note.created_at)}</p>
+                <p className="text-[10px] text-sage-400 mt-1">{formatShortDate(note.created_at)}{/* created-at-ok: planning_notes.created_at is the extraction time, the real event */}</p>
               </div>
             ))}
           </div>
@@ -1120,7 +1120,7 @@ function CommunicationsTab({
             {sageMessages.slice(0, 20).map((msg) => (
               <div key={msg.id} className="bg-warm-white rounded-lg p-3 border border-sage-100">
                 <p className="text-sm text-sage-900 line-clamp-2">{msg.content}</p>
-                <p className="text-[10px] text-sage-400 mt-1">{formatShortDate(msg.created_at)}</p>
+                <p className="text-[10px] text-sage-400 mt-1">{formatShortDate(msg.created_at)}{/* created-at-ok: sage_conversations.created_at is the send time, the real event */}</p>
               </div>
             ))}
             {sageMessages.length > 20 && (
@@ -1147,7 +1147,7 @@ function CommunicationsTab({
               )}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-[10px] font-medium text-sage-500 capitalize">{msg.sender_role || 'unknown'}</span>
-                  <span className="text-[10px] text-sage-400">{formatShortDate(msg.created_at)}</span>
+                  <span className="text-[10px] text-sage-400">{formatShortDate(msg.created_at)}{/* created-at-ok: messages.created_at is the send time, the real per-message event */}</span>
                 </div>
                 <p className="text-sm text-sage-900 line-clamp-3">{msg.content}</p>
               </div>

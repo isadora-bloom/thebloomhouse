@@ -16,6 +16,7 @@ import {
   forbidden,
   badRequest,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 100
@@ -55,12 +56,7 @@ export async function GET(req: NextRequest) {
     .order('derived_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   return NextResponse.json({
     ok: true,

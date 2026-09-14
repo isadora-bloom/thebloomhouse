@@ -27,6 +27,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 interface HandleClaim {
   platform: string
@@ -76,12 +77,7 @@ export async function GET(req: NextRequest) {
     .eq('venue_id', venueId)
     .order('last_reconstructed_at', { ascending: false })
     .limit(limit)
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   const out: ProfileHandleRow[] = []
   for (const r of (data ?? []) as Array<{

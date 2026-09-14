@@ -8,6 +8,7 @@ import {
   checkRegistrationEligibility,
   type CoupleInviteRow,
 } from '@/lib/services/portal/provision'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/couple/register
@@ -327,7 +328,6 @@ export async function POST(request: NextRequest) {
       partnerNumber: eligibility.partnerNumber,
     })
   } catch (err) {
-    console.error('[COUPLE REGISTER ERROR]', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

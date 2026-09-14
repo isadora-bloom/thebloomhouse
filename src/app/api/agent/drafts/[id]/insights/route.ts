@@ -18,6 +18,7 @@ import {
   refuseDemo,
 } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET(
   _request: NextRequest,
@@ -67,7 +68,7 @@ export async function GET(
     .order('created_at', { ascending: true })
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   return NextResponse.json({ insights: insights ?? [] })

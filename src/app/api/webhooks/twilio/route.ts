@@ -44,6 +44,7 @@ import { pgArrayElement } from '@/lib/supabase/filter-escape'
 // resolvePersonOnly + mintWedding are dynamically imported below; the
 // top-level static import was resolveIdentity pre-Step-5b.
 import { enqueueIdentityReconstruction } from '@/lib/services/identity/enqueue-reconstruction'
+import { redactError } from '@/lib/observability/redact'
 
 const TWIML_OK = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
@@ -99,7 +100,7 @@ async function locateVenueAndDirection(
     .limit(2)
 
   if (error) {
-    console.error('[webhook/twilio] venue lookup failed:', error.message)
+    console.error('[webhook/twilio] venue lookup failed:', redactError(error))
     return null
   }
   if (!data || data.length === 0) return null
@@ -138,7 +139,7 @@ export async function POST(request: NextRequest) {
       formParams[k] = typeof v === 'string' ? v : ''
     }
   } catch (err) {
-    console.error('[webhook/twilio] body parse failed:', err)
+    console.error('[webhook/twilio] body parse failed:', redactError(err))
     return jsonError('bad_payload', 400)
   }
 
@@ -273,7 +274,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     // Identity resolution should never crash the route — record the
     // webhook anyway so coordinator audit can backfill manually.
-    console.error('[webhook/twilio] person resolve failed; continuing without person/wedding:', err)
+    console.error('[webhook/twilio] person resolve failed; continuing without person/wedding:', redactError(err))
   }
 
   // ---- Insert interaction ----
@@ -366,7 +367,7 @@ export async function POST(request: NextRequest) {
         referenced_couple_name: verdict.referenced_couple_name ?? null,
       }
     } catch (err) {
-      console.warn('[webhook/twilio] intent-classify failed (non-fatal):', err)
+      console.warn('[webhook/twilio] intent-classify failed (non-fatal):', redactError(err))
     }
 
     // Couple-intent gate. Only mint when classifier verdicts the SMS as
@@ -432,7 +433,7 @@ export async function POST(request: NextRequest) {
         venueId,
         triggerSignal: 'sms_received',
       }).catch((err) =>
-        console.warn('[webhook/twilio] reconstruction enqueue failed (non-fatal):', err),
+        console.warn('[webhook/twilio] reconstruction enqueue failed (non-fatal):', redactError(err)),
       )
     }
   }

@@ -7,6 +7,7 @@ import {
   type AttributionModel,
   type SourceFunnelRow,
 } from '@/lib/services/attribution'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/sources/funnel
@@ -112,8 +113,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ model, rows: flat, totals })
   } catch (err) {
-    console.error('[api/intel/sources/funnel]', err)
-    return NextResponse.json({ error: 'Failed to compute source funnel' }, { status: 500 })
+    return apiError(err)
   }
 }
 

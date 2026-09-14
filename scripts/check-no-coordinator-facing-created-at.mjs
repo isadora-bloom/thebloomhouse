@@ -56,6 +56,16 @@ const SCAN_DIRS = [
   'src/app/(platform)/portal/sage-queue',
   'src/app/(platform)/agent/analytics',
   'src/app/(platform)/agent/learning',
+  // W67 (2026-09-14) expansion: the new daily landing page, the coordinator
+  // wedding-detail portal page, settings and admin all read time-windowed
+  // data too, as do the shared components and the intel view-model adapters
+  // both of those page families render through.
+  'src/app/(platform)/today',
+  'src/app/(platform)/portal/weddings/[id]',
+  'src/app/(platform)/settings',
+  'src/app/(platform)/admin',
+  'src/components',
+  'src/lib/intel/adapters',
 ]
 
 // T5-Rixey-UU Bug F: additional scopes for the updated_at-as-freshness
@@ -87,6 +97,15 @@ const EVENT_ROW_DISPLAY_SCAN_DIRS = [
   'src/app/(platform)/agent/pipeline',
   'src/components/agent',
   'src/components/intel',
+  // W67 (2026-09-14) expansion — same per-row created_at render trap on
+  // the newer coordinator surfaces and the shared/adapters layers they
+  // render through.
+  'src/app/(platform)/today',
+  'src/app/(platform)/portal/weddings/[id]',
+  'src/app/(platform)/settings',
+  'src/app/(platform)/admin',
+  'src/components',
+  'src/lib/intel/adapters',
 ]
 
 // Tables where created_at IS the meaningful timestamp.

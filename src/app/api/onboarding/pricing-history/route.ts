@@ -26,6 +26,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 const FIVE_YEARS_MS = 5 * 365 * 86_400_000
 const MAX_PRICE_CENTS = 1_000_000 * 100  // $1,000,000
@@ -146,7 +148,7 @@ export async function GET() {
     .eq('venue_id', auth.venueId)
     .order('changed_at', { ascending: false })
     .limit(200)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ rows: data ?? [] })
 }
 
@@ -189,7 +191,7 @@ export async function POST(request: NextRequest) {
       source_provenance: 'manual_form',
       confidence_flag: 'imported_high',
     })
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return apiError(error)
 
     // Cascade Pattern 2 (migration 314): flag drafts created before the
     // new effective_date as pricing-stale. Fire-and-forget.
@@ -204,7 +206,7 @@ export async function POST(request: NextRequest) {
           supabase,
         })
       } catch (err) {
-        console.warn('[pricing-history] cascade non-fatal:', err)
+        console.warn('[pricing-history] cascade non-fatal:', redactError(err))
       }
     })()
 
@@ -246,7 +248,7 @@ export async function POST(request: NextRequest) {
       confidence_flag: 'imported_high' as const,
     }))
     const { error } = await supabase.from('pricing_history').insert(payloads)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return apiError(error)
 
     // Cascade Pattern 2 (migration 314): flag stale drafts. Fire from
     // the EARLIEST effective_date in the batch so any draft predating
@@ -266,7 +268,7 @@ export async function POST(request: NextRequest) {
           supabase,
         })
       } catch (err) {
-        console.warn('[pricing-history] cascade non-fatal:', err)
+        console.warn('[pricing-history] cascade non-fatal:', redactError(err))
       }
     })()
 
@@ -300,6 +302,6 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'only manual rows can be deleted' }, { status: 400 })
   }
   const { error } = await supabase.from('pricing_history').delete().eq('id', id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ ok: true })
 }

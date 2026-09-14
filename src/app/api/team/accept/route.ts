@@ -26,6 +26,7 @@ import { findAuthUserByEmail } from '@/lib/api/auth-helpers'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
 import { createHash } from 'crypto'
+import { apiError } from '@/lib/api/api-error'
 
 /** sha256 of the invitation token, hex. Matches migration 411's column. */
 function hashInviteToken(token: string): string {
@@ -143,8 +144,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ invitation })
   } catch (err) {
-    console.error('Validate invitation error:', err)
-    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -329,7 +329,6 @@ export async function POST(request: NextRequest) {
       role: invitation.role,
     })
   } catch (err) {
-    console.error('Accept invitation error:', err)
-    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 })
+    return apiError(err)
   }
 }

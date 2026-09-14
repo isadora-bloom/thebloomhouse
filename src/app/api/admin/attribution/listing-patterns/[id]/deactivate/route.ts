@@ -33,6 +33,7 @@ import {
   notFound,
 } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 30
 
@@ -144,12 +145,7 @@ export async function POST(
     .select('id, venue_id, platform, pattern_type, pattern_value, weight, source, enabled, created_at')
     .single()
 
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: `update failed: ${error.message}` },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   return NextResponse.json({ ok: true, alreadyDisabled: false, pattern: updated })
 }

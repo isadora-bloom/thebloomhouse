@@ -205,7 +205,11 @@ export const reviewsToolSource: IntelToolSource = {
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   subjects: ['reviews', 'review ratings', 'review themes', 'reputation trend', 'what couples say about us'],
-  batteryQuestions: ['41'],
+  // '44' (W67, wave 9): review sentiment ground-truth question, added
+  // once W46 stops leaving reviews.sentiment_score/themes null on most
+  // ingest paths — this source's rollup already reads sentiment_score,
+  // it just wasn't populated before.
+  batteryQuestions: ['41', '44'],
   // Review bodies, written by strangers on a public listing platform and
   // ingested verbatim. See IntelToolSource.freeTextFields.
   freeTextFields: ['exampleQuotes'],
