@@ -1,40 +1,48 @@
 #!/usr/bin/env node
 /**
- * Guard: mergeWeddings cascade list must match the schema.
+ * Guard: the generated cascade file matches the live schema.
  *
- * Step 8 / G7 (2026-05-13, bloom-identity-resolution-doctrine.md).
+ * Step 8 / G7 (2026-05-13, bloom-identity-resolution-doctrine.md),
+ * rewritten by W60 (2026-09-14).
  *
- * Reads every FK column targeting weddings.id from pg_constraint (via
- * the _list_wedding_fk_columns RPC, migration 334) and diffs against
- * the hand-maintained reassign(...) list inside
- * src/lib/services/identity/resolver.ts mergeWeddings().
+ * What changed and why
+ * --------------------
+ * This guard used to parse a hand-written list of reassign('table') calls
+ * out of mergeWeddings and diff it against pg_constraint. The hand-list
+ * lost: 35 tables listed, nine of them long dropped, and 75 tables with a
+ * wedding_id foreign key that no merge ever touched. mergeWeddings now
+ * iterates src/lib/services/identity/wedding-fk-tables.generated.json,
+ * written from the live schema by scripts/gen-wedding-fk-tables.ts, so
+ * this guard's job is the one diff that still matters: does the committed
+ * file still describe the database?
+ *
+ * Sources, both read-only:
+ *   - rpc('_list_wedding_fk_columns')  (migration 334) for FK columns
+ *   - GET /rest/v1/  (the PostgREST OpenAPI document) for every relation
+ *     with a wedding_id column, FK or not
  *
  * Behaviour
  * ---------
- * - SCHEMA - HAND_LIST: schema has FK columns mergeWeddings doesn't
- *   reassign. Loud failure — a merge will orphan rows. Exit 1.
- *
- * - HAND_LIST - SCHEMA: mergeWeddings reassigns columns that no longer
- *   exist (table dropped or column renamed). Warning only — PostgREST
- *   returns rowcount=0 on a missing column, so this is wasted work but
- *   not incorrect. Exit 0 with a notice.
- *
- * - Tables covered by the migration-202 attach trigger
- *   (attribution_events / wedding_touchpoints / candidate_identities)
- *   are allow-listed: they live in the schema FK list but don't need
- *   an explicit reassign call because the trigger re-points them when
- *   the duplicate is tombstoned.
+ *   - in the schema, missing from the file: a merge would orphan those
+ *     rows. Exit 1.
+ *   - in the file, gone from the schema: stale. Warning, exit 0 — a
+ *     PostgREST update against a missing table is a no-op, so it costs a
+ *     wasted request, not correctness.
+ *   - the file's per-table strategies are reported so a human reading CI
+ *     output can see what a merge will actually do.
  *
  * Usage
  * -----
  *   node scripts/check-merge-weddings-cascade.mjs
  *
- * Exits 0 on success, 1 on drift. Wire into CI alongside
- * check-no-direct-wedding-insert.mjs.
+ * Needs .env.local, so it is NOT in CI. The CI-safe half is
+ * scripts/check-wedding-fk-tables-fresh.mjs.
  */
 
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+
+const GENERATED = 'src/lib/services/identity/wedding-fk-tables.generated.json'
 
 // -----------------------------------------------------------------------
 // Env loader — mirrors check-mig-283.mjs / inspect-couple-identity-profile.mjs
@@ -55,120 +63,125 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
 }
 const sb = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
 
-// -----------------------------------------------------------------------
-// Allow-list: covered by migration-202 attach trigger on weddings.merged_into_id
-// -----------------------------------------------------------------------
-const TRIGGER_COVERED = new Set([
-  'attribution_events',
-  'wedding_touchpoints',
-  'candidate_identities',
-])
-
-// -----------------------------------------------------------------------
-// Parse the hand-list out of resolver.ts mergeWeddings.
-// Looks for `await reassign('table'[, 'column'])` between `function mergeWeddings`
-// and the next `export async function` / `function ` at column 0.
-// -----------------------------------------------------------------------
-function parseHandList() {
-  const path = 'src/lib/services/identity/resolver.ts'
-  const src = readFileSync(path, 'utf8')
-  const start = src.indexOf('export async function mergeWeddings')
-  if (start < 0) {
-    console.error(`could not find mergeWeddings in ${path}`)
-    process.exit(2)
+/**
+ * Close the HTTP keep-alive sockets and the realtime client before the
+ * process ends, then let node exit on its own.
+ *
+ * Why: calling process.exit() while undici still holds a TLS socket
+ * aborted this script on Windows with
+ *   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)
+ * after it had already printed its verdict — a green run that looked like
+ * a crash. Setting exitCode and returning avoids tearing libuv handles
+ * down underneath themselves.
+ */
+async function finish(code) {
+  try {
+    sb.realtime?.disconnect?.()
+  } catch {
+    // no realtime connection was opened; nothing to close
   }
-  // Find function body end: closing brace of mergeWeddings. Cheap heuristic:
-  // next `\nexport ` or `\n}` at indent 0 that follows a `return ` block.
-  const tail = src.slice(start)
-  const endMarker = tail.search(/\n\}\s*\n(?:export |\/\*|\/\/|$)/)
-  const body = endMarker > 0 ? tail.slice(0, endMarker) : tail
-
-  const out = new Set()
-  const re = /await\s+reassign\(\s*['"]([a-zA-Z0-9_]+)['"]/g
-  for (const m of body.matchAll(re)) {
-    out.add(m[1])
+  try {
+    const dispatcher = globalThis[Symbol.for('undici.globalDispatcher.1')]
+    if (dispatcher?.close) await dispatcher.close()
+  } catch {
+    // older runtime without the global dispatcher symbol
   }
-  return out
+  process.exitCode = code
 }
 
 // -----------------------------------------------------------------------
-// Pull FK list from pg_constraint via RPC.
+// Live schema
 // -----------------------------------------------------------------------
-async function fetchSchemaList() {
+async function fetchFkColumns() {
   const { data, error } = await sb.rpc('_list_wedding_fk_columns')
   if (error) {
     console.error('rpc _list_wedding_fk_columns failed:', error.message)
     console.error('  migration 334 may not be applied. Apply')
     console.error('  supabase/migrations/334_list_wedding_fk_columns.sql in Studio.')
-    process.exit(2)
+    return null
   }
   if (!Array.isArray(data)) {
     console.error('unexpected rpc shape:', typeof data)
-    process.exit(2)
+    return null
   }
   return data // [{ table_name, column_name }]
+}
+
+async function fetchWeddingIdRelations() {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+  })
+  if (!res.ok) {
+    console.error('OpenAPI fetch failed:', res.status)
+    return null
+  }
+  const doc = await res.json()
+  const out = []
+  for (const [name, def] of Object.entries(doc.definitions ?? {})) {
+    if (def?.properties?.wedding_id) out.push(name)
+  }
+  return out
 }
 
 // -----------------------------------------------------------------------
 // Diff + report
 // -----------------------------------------------------------------------
 async function main() {
-  const handList = parseHandList()
-  const schemaRows = await fetchSchemaList()
-
-  // Group schema rows: table -> Set(columns)
-  const schemaByTable = new Map()
-  for (const { table_name, column_name } of schemaRows) {
-    if (!schemaByTable.has(table_name)) schemaByTable.set(table_name, new Set())
-    schemaByTable.get(table_name).add(column_name)
+  let doc
+  try {
+    doc = JSON.parse(readFileSync(GENERATED, 'utf8'))
+  } catch (err) {
+    console.error(`cannot read ${GENERATED}: ${err.message}`)
+    console.error('  Generate it: npx tsx scripts/gen-wedding-fk-tables.ts')
+    return finish(2)
   }
+  const fileKeys = new Set((doc.tables ?? []).map((t) => `${t.table}.${t.column}`))
 
-  // Missing from hand-list (schema says FK exists, mergeWeddings doesn't reassign).
-  const missing = []
-  for (const [table, cols] of schemaByTable.entries()) {
-    if (TRIGGER_COVERED.has(table)) continue
-    if (cols.has('wedding_id') && !handList.has(table)) {
-      missing.push(table)
-    }
-  }
+  const fkRows = await fetchFkColumns()
+  if (!fkRows) return finish(2)
+  const relations = await fetchWeddingIdRelations()
+  if (!relations) return finish(2)
 
-  // Stale entries (hand-list mentions a table not in schema).
-  const stale = []
-  for (const table of handList) {
-    if (!schemaByTable.has(table)) stale.push(table)
-  }
+  const schemaKeys = new Set()
+  for (const { table_name, column_name } of fkRows) schemaKeys.add(`${table_name}.${column_name}`)
+  for (const t of relations) schemaKeys.add(`${t}.wedding_id`)
 
-  // Report.
-  console.log(`mergeWeddings hand-list: ${handList.size} tables`)
-  console.log(`schema FK columns:        ${schemaRows.length} rows across ${schemaByTable.size} tables`)
-  console.log(`trigger-covered (skipped): ${[...TRIGGER_COVERED].join(', ')}`)
+  const missing = [...schemaKeys].filter((k) => !fileKeys.has(k)).sort()
+  const stale = [...fileKeys].filter((k) => !schemaKeys.has(k)).sort()
+
+  const counts = {}
+  for (const t of doc.tables ?? []) counts[t.strategy] = (counts[t.strategy] ?? 0) + 1
+
+  console.log(`generated file:   ${fileKeys.size} wedding-keyed columns (watermark migration ${doc.migration_watermark})`)
+  console.log(`live schema:      ${schemaKeys.size} wedding-keyed columns`)
+  for (const [s, n] of Object.entries(counts).sort()) console.log(`  ${s.padEnd(22)} ${n}`)
   console.log('')
 
   if (missing.length > 0) {
-    console.error(`✗ DRIFT: ${missing.length} table(s) have wedding_id FK but mergeWeddings does NOT reassign:`)
-    for (const t of missing) console.error(`    - ${t}`)
+    console.error(`✗ DRIFT: ${missing.length} wedding-keyed column(s) in the schema are NOT in the cascade file:`)
+    for (const k of missing) console.error(`    - ${k}`)
     console.error('')
-    console.error('  Fix: add `await reassign(\'<table>\')` to mergeWeddings in')
-    console.error('  src/lib/services/identity/resolver.ts, OR if the table is')
-    console.error('  covered by an attach trigger, add it to TRIGGER_COVERED here.')
+    console.error('  A merge leaves those rows on the losing wedding.')
+    console.error('  Fix: npx tsx scripts/gen-wedding-fk-tables.ts   (then commit the file)')
     if (stale.length > 0) {
       console.error('')
-      console.error(`  (Also: ${stale.length} stale entries in hand-list: ${stale.join(', ')})`)
+      console.error(`  (Also ${stale.length} stale entr${stale.length === 1 ? 'y' : 'ies'}: ${stale.join(', ')})`)
     }
-    process.exit(1)
+    return finish(1)
   }
 
   if (stale.length > 0) {
-    console.warn(`⚠  ${stale.length} stale entr${stale.length === 1 ? 'y' : 'ies'} in hand-list (table no longer exists):`)
-    for (const t of stale) console.warn(`    - ${t}`)
-    console.warn('  Not a failure: PostgREST returns rowcount=0 on missing tables.')
-    console.warn('  Remove from mergeWeddings to keep the file accurate.')
+    console.warn(`⚠  ${stale.length} entr${stale.length === 1 ? 'y' : 'ies'} in the file that the schema no longer has:`)
+    for (const k of stale) console.warn(`    - ${k}`)
+    console.warn('  Not a failure: an update against a missing table is a no-op.')
+    console.warn('  Regenerate to tidy: npx tsx scripts/gen-wedding-fk-tables.ts')
   }
 
-  console.log('✓ mergeWeddings cascade list matches schema')
+  console.log('✓ cascade file matches the live schema')
+  return finish(0)
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('check-merge-weddings-cascade crashed:', err?.message ?? err)
-  process.exit(2)
+  await finish(2)
 })

@@ -30,6 +30,9 @@
  *      the wave 5 isolation battery's coverage"). A daily count series
  *      carries no uuids, so the walker above cannot see a leak in it. See
  *      TOURS SERIES below.
+ *   8. Asks mergeWeddings to merge a wedding from the other venue and
+ *      asserts it refuses before writing anything (W60). That is the one
+ *      identity write that could move one venue's rows to another.
  *
  * WRITES
  * ------
@@ -302,6 +305,10 @@ function failResult(surface: string, venue: 'A' | 'B', venueId: string, note: st
   return { surface, venue, venueId, rows: 0, foreignIds: [], venueIdMismatches: [], status: 'FAIL', note }
 }
 
+function passResult(surface: string, venue: 'A' | 'B', venueId: string, note: string): SurfaceResult {
+  return { surface, venue, venueId, rows: 0, foreignIds: [], venueIdMismatches: [], status: 'PASS', note }
+}
+
 // ---------------------------------------------------------------------------
 // Known-write tool source — never invoked, reported instead.
 // ---------------------------------------------------------------------------
@@ -369,6 +376,71 @@ async function findOneCoupleId(supabase: SupabaseClient, venueId: string): Promi
   if (error) throw new Error(`isolation-battery: couples lookup failed — ${error.message}`)
   const row = (data ?? [])[0] as { id: string } | undefined
   return row?.id ?? null
+}
+
+async function findOneWeddingId(supabase: SupabaseClient, venueId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('weddings')
+    .select('id')
+    .eq('venue_id', venueId)
+    .is('merged_into_id', null)
+    .limit(1)
+  if (error) throw new Error(`isolation-battery: weddings lookup failed — ${error.message}`)
+  const row = (data ?? [])[0] as { id: string } | undefined
+  return row?.id ?? null
+}
+
+/**
+ * The one write path in the identity layer that could cross a tenant
+ * boundary: mergeWeddings (W60). A merge re-points every wedding-keyed row
+ * from the loser to the winner, so a merge across two venues would hand one
+ * venue's rows to another — the worst shape of leak this battery looks for,
+ * and the only one that is a write rather than a read.
+ *
+ * mergeWeddings reads both weddings and refuses on a venue mismatch before
+ * it touches anything, so calling it here is safe: the refusal happens
+ * during the two SELECTs. If it ever got as far as a write, the read-only
+ * client would throw ReadOnlyViolation, and that is reported as a FAIL
+ * rather than a REFUSED, because reaching a write at all means the venue
+ * check moved or went missing.
+ */
+async function checkMergeVenueIsolation(
+  venueA: string,
+  venueB: string,
+  supabase: SupabaseClient,
+): Promise<SurfaceResult[]> {
+  const surface = 'mergeWeddings (cross-venue refusal)'
+  const out: SurfaceResult[] = []
+  const [weddingA, weddingB] = await Promise.all([
+    findOneWeddingId(supabase, venueA),
+    findOneWeddingId(supabase, venueB),
+  ])
+  if (!weddingA || !weddingB) {
+    out.push(skipResult(surface, 'A', venueA, 'needs one live wedding in each venue; one of them has none'))
+    return out
+  }
+
+  const { mergeWeddings } = await import('@/lib/services/identity/resolver')
+  const attempts: Array<{ venue: 'A' | 'B'; venueId: string; canonical: string; duplicate: string }> = [
+    { venue: 'A', venueId: venueA, canonical: weddingA, duplicate: weddingB },
+    { venue: 'B', venueId: venueB, canonical: weddingB, duplicate: weddingA },
+  ]
+  for (const a of attempts) {
+    try {
+      await mergeWeddings(a.canonical, a.duplicate, { supabase, reason: 'isolation-battery probe' })
+      out.push(failResult(surface, a.venue, a.venueId, 'merged a wedding from the other venue instead of refusing'))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (err instanceof ReadOnlyViolation) {
+        out.push(failResult(surface, a.venue, a.venueId, `reached a write before checking the venue: ${msg}`))
+      } else if (msg.includes('refusing to merge across venues')) {
+        out.push(passResult(surface, a.venue, a.venueId, 'refused before any write'))
+      } else {
+        out.push(failResult(surface, a.venue, a.venueId, `threw something other than the venue refusal: ${msg}`))
+      }
+    }
+  }
+  return out
 }
 
 interface VenuePair {
@@ -885,6 +957,8 @@ async function main(): Promise<void> {
   }
 
   results.push(...(await checkToursSeries(venueA, venueB, supabase)))
+
+  results.push(...(await checkMergeVenueIsolation(venueA, venueB, supabase)))
 
   results.push(...(await checkScopeHelper(venueA, venueB, supabase)))
   results.push(...(await checkCommitmentWriters(venueA, venueB, supabase)))
