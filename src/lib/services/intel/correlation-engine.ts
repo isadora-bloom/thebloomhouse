@@ -15,6 +15,8 @@
  *        by source + metric, mapped by label to the day they represent
  *      - {source}_signals: tangential_signals created_at grouped by day
  *        per platform
+ *      - tours: count of tours held per day, grouped off the couple
+ *        spine's own tour touchpoints (NOVEMBER-PLAN.md wave 7, W47)
  *   2. For every ordered pair (A, B) of channels, compute Pearson r
  *      at lags 0, 3, 5, 7, 14 days (B shifted forward relative to A).
  *      Pick the lag with highest |r|.
@@ -67,6 +69,14 @@ const CORRELATION_CONTEXT_NAMESPACE = 'd6b5c1fa-21d9-4f7d-9c3e-5d6e8a1b2c34'
  * cron runs). Bug it replaces (corr:<a>|<b> string crammed into a
  * uuid column) was P1: any insert on a real-prod schema would 22P02
  * before reaching the row.
+ *
+ * A new channel id is therefore safe to add: the pair key is the two
+ * channel ids sorted plus the lag, so `tours` (wave 7, W47) hashes to
+ * UUIDs no existing pair has ever produced. It adds rows, it never
+ * rewrites or duplicates one. The only way to collide would be to reuse
+ * a channel id that already ships, which is why `tours` is a new name
+ * rather than a redefinition of `tours_scheduled` or `tours_completed`
+ * in format-series-label.ts.
  */
 function uuidV5(name: string, namespace: string = CORRELATION_CONTEXT_NAMESPACE): string {
   const nsHex = namespace.replace(/-/g, '')
@@ -122,6 +132,12 @@ const MIN_NONZERO_DAYS = 12
 // doesn't guarantee a NOTABLE effect a coordinator should act on.
 // Surfacing requirement is actionable correlations, not merely
 // non-random ones.
+//
+// Wave 7 (W47) added the `tours` channel and did not move this bar. One
+// more channel widens the family by 2×N×|lags| tests, which nudges the
+// Bonferroni-adjusted critical |r| up by a couple of hundredths, and that
+// is the correct price for searching wider. Lowering the floor to let
+// tour pairs through would have been buying the same pairs on credit.
 const CORRELATION_THRESHOLD = 0.6
 const FAMILY_ALPHA = 0.05
 
@@ -288,7 +304,156 @@ interface Series {
   values: Map<string, number>
 }
 
-async function buildSeries(
+// ---------------------------------------------------------------------------
+// Tours as a series (NOVEMBER-PLAN.md wave 7, W47).
+//
+// Before this, every External Context channel could only pair against
+// inquiries, because inquiries was the engine's only venue-outcome
+// channel. Tours are the other half of the funnel a coordinator actually
+// runs their week on, and the questions worth asking (does rain cost us
+// tours, did the shutdown, does search interest lead them) all need a
+// tours series to pair against.
+//
+// The spine is the source of truth. `get_tour_cohort`
+// (src/lib/intel/tool-sources/tour-cohort.ts) reads exactly these four
+// touchpoint action types and groups them exactly this way, so the engine
+// and the tool source cannot disagree about how many tours a day held.
+// Nothing here reads `weddings` or the legacy `tours` table.
+// ---------------------------------------------------------------------------
+
+/** The four action types a tour can carry on the couple spine. Mirrors
+ *  TOUR_ACTION_TYPES in tour-cohort.ts. Duplicated rather than imported so
+ *  a service does not depend on a tool source's internals, the same way
+ *  tour-cohort.ts keeps its own copy of the venue-timezone loader. */
+const TOUR_ACTION_TYPES = ['tour_booked', 'tour_attended', 'tour_no_show', 'tour_cancelled'] as const
+
+/** Most tour touchpoints one venue's window read will pull. Ordered newest
+ *  first, unlike tour-cohort.ts, because the correlation window is always
+ *  the recent past: a venue past the cap must lose its oldest tours, not
+ *  the ones being correlated. */
+const TOUR_TOUCHPOINT_SCAN_LIMIT = 5000
+
+export interface TourDayCounts {
+  /** Tours that went ahead, keyed by UTC day. Cancellations and no-shows
+   *  are excluded: the question these pair against is whether the tour
+   *  happened, not whether it was on the books. */
+  held: Map<string, number>
+  /** Every tour the window saw, cancellations and no-shows included.
+   *  Not a correlation channel; kept so a caller can tell "no tours" from
+   *  "tours, all cancelled". */
+  seen: Map<string, number>
+  /** The couples the counts were built from. A daily count has no id in
+   *  it, so this is the only handle a caller has on whose tours they are.
+   *  The isolation battery cross-checks these against the other venue's
+   *  `couples` rows. */
+  coupleIds: string[]
+}
+
+/**
+ * The tour's actual time. `tour_booked` and `tour_attended` stamp
+ * occurred_at with the scheduled start already; `tour_cancelled` stamps
+ * occurred_at with the moment of cancellation instead, so its tour time
+ * comes from raw_payload.scheduled_start. Same rule as
+ * tour-cohort.ts resolveTourTime.
+ */
+function resolveTourTime(row: {
+  occurred_at: string | null
+  raw_payload: Record<string, unknown> | null
+}): string | null {
+  const raw = row.raw_payload
+  const scheduledStart =
+    raw && typeof raw === 'object' && typeof raw.scheduled_start === 'string' && raw.scheduled_start
+      ? raw.scheduled_start
+      : null
+  const candidate = scheduledStart ?? row.occurred_at
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null
+}
+
+/**
+ * Daily tour counts for one venue, straight off the spine.
+ *
+ * A booking and its eventual outcome are the same physical tour, so rows
+ * are grouped by (couple, resolved tour time) and reduced to one outcome
+ * per group, terminal state winning over a bare booking. A group with no
+ * outcome recorded counts as held: it was on the books and nothing on the
+ * spine says it did not happen.
+ *
+ * Days are UTC, because the engine's whole grid is UTC (`dayKey`). Reading
+ * tours in the venue's own timezone would put them on a different grid
+ * from every channel they are meant to pair against, which is a worse
+ * error than an evening tour occasionally landing on the next UTC day.
+ *
+ * Venue-scoped at the query. Exported for the isolation battery and the
+ * engine's tests; the engine itself is the only production caller.
+ */
+export async function loadTourDayCounts(
+  supabase: SupabaseClient,
+  venueId: string,
+  start: Date,
+  end: Date,
+): Promise<TourDayCounts> {
+  const held = new Map<string, number>()
+  const seen = new Map<string, number>()
+  const coupleIds = new Set<string>()
+
+  const { data, error } = await supabase
+    .from('touchpoints')
+    .select('couple_id, action_type, occurred_at, raw_payload')
+    .eq('venue_id', venueId)
+    .in('action_type', TOUR_ACTION_TYPES as unknown as string[])
+    .not('couple_id', 'is', null)
+    .order('occurred_at', { ascending: false })
+    .limit(TOUR_TOUCHPOINT_SCAN_LIMIT)
+
+  if (error) {
+    // Additive channel — a failed read leaves the engine with the channels
+    // it already had rather than killing the run.
+    console.warn('[correlation-engine] tour touchpoints load failed:', error.message)
+    return { held, seen, coupleIds: [] }
+  }
+
+  const startKey = dayKey(start)
+  const endKey = dayKey(end)
+
+  interface Group {
+    day: string
+    coupleId: string
+    actionTypes: Set<string>
+  }
+  const groups = new Map<string, Group>()
+  for (const row of (data ?? []) as Array<{
+    couple_id: string | null
+    action_type: string | null
+    occurred_at: string | null
+    raw_payload: Record<string, unknown> | null
+  }>) {
+    if (!row.couple_id || !row.action_type) continue
+    const tourAt = resolveTourTime(row)
+    if (!tourAt) continue
+    const ms = Date.parse(tourAt)
+    if (!Number.isFinite(ms)) continue
+    const day = dayKey(new Date(ms))
+    if (day < startKey || day > endKey) continue
+    const key = `${row.couple_id}::${tourAt}`
+    let group = groups.get(key)
+    if (!group) {
+      group = { day, coupleId: row.couple_id, actionTypes: new Set() }
+      groups.set(key, group)
+    }
+    group.actionTypes.add(row.action_type)
+  }
+
+  for (const group of groups.values()) {
+    seen.set(group.day, (seen.get(group.day) ?? 0) + 1)
+    coupleIds.add(group.coupleId)
+    if (group.actionTypes.has('tour_cancelled') || group.actionTypes.has('tour_no_show')) continue
+    held.set(group.day, (held.get(group.day) ?? 0) + 1)
+  }
+
+  return { held, seen, coupleIds: [...coupleIds] }
+}
+
+export async function buildSeries(
   supabase: SupabaseClient,
   venueId: string,
   windowDays: number = WINDOW_DAYS,
@@ -371,7 +536,26 @@ async function buildSeries(
   }
   for (const [k, v] of tsBySeries) series.push({ channel: k, values: v })
 
-  // 4. External Context channels (T2-C / Playbook 17.4-A).
+  // 4. Tours held per day, from the couple spine (wave 7, W47).
+  //
+  // The channel is only pushed when the venue actually held tours in the
+  // window. An all-zero channel would still count towards the Bonferroni
+  // family (correctedThresholdFor takes numChannels), so a venue with no
+  // tours on the spine would pay a significance penalty for a series that
+  // can never correlate with anything. Same rule the marketing-metric and
+  // signal blocks above already follow; `inquiries` is pushed
+  // unconditionally only because it predates the rule.
+  //
+  // The MIN_NONZERO_DAYS floor applies unchanged. Tours are sparser than
+  // inquiries, so a venue running fewer than twelve tour days in ninety
+  // simply gets no tour pairs. That is the honest outcome: the fred_*
+  // relaxation below exists because a detrended monthly series is sparse
+  // by construction, not because the venue is quiet, and tours do not
+  // have that excuse.
+  const tourDays = await loadTourDayCounts(supabase, venueId, start, now)
+  if (tourDays.held.size > 0) series.push({ channel: 'tours', values: tourDays.held })
+
+  // 5. External Context channels (T2-C / Playbook 17.4-A).
   // Extends the engine beyond Internal-only signals (inquiries +
   // marketing_metric + tangential_signals) to include the macro
   // channels playbook 17.4-A flagged as the competitive moat.

@@ -25,6 +25,11 @@
  *   6. Best-effort exercises the scope-aware helper
  *      (src/lib/api/resolve-platform-scope.ts) — see the SCOPE HELPER
  *      note below for why this is necessarily partial.
+ *   7. Checks the correlation engine's `tours` channel by day rather than
+ *      by id (NOVEMBER-PLAN.md wave 7, W47 — "add W47's new channel to
+ *      the wave 5 isolation battery's coverage"). A daily count series
+ *      carries no uuids, so the walker above cannot see a leak in it. See
+ *      TOURS SERIES below.
  *
  * WRITES
  * ------
@@ -58,6 +63,19 @@
  * output when that happens). The venue-level branch itself
  * (`if (scope.level === 'venue') return [scope.venueId]`) takes no query
  * and is correct by construction.
+ *
+ * TOURS SERIES
+ * ------------
+ * `tours` is a count per day, so there is no id in it for the walker to
+ * catch, and comparing one venue's counts against the other's proves
+ * nothing on its own: a leaked count and a legitimate count look the same.
+ * What separates them is whose couples produced them. loadTourDayCounts
+ * returns the couple ids it grouped, and those go through the same
+ * findForeignIds cross-check against `couples` as everything else here.
+ * A tour of venue B's appearing in venue A's series means one of B's
+ * couples is behind one of A's counts, and that is a FAIL. A venue with
+ * no tours in the window is a SKIP with the reason, not a pass it did
+ * not earn.
  *
  * USAGE
  *   npx tsx scripts/isolation-battery.ts [--venue-a <uuid>] [--venue-b <uuid>] [--json] [--allow-prod]
@@ -382,6 +400,98 @@ async function runAndCheck(
 }
 
 /**
+ * The correlation engine's `tours` channel, checked by day. See the TOURS
+ * SERIES note at the top of the file.
+ *
+ * The window matches the engine's own default of 90 days. Hard-coded
+ * rather than imported because WINDOW_DAYS is private to the engine and
+ * exporting it only for a script would be the wrong direction of
+ * dependency; if the engine's default ever changes, this check still
+ * proves the same property over a slightly different window.
+ */
+const TOURS_WINDOW_DAYS = 90
+
+export function toursIsolationVerdict(args: {
+  venue: 'A' | 'B'
+  venueId: string
+  /** The tours series itself — days to counts. Reported, not asserted on;
+   *  the assertion is on whose couples produced it. */
+  held: Map<string, number>
+  /** The couples the series was built from. */
+  coupleIds: readonly string[]
+  /** Those couple ids that turned out to belong to the OTHER venue. */
+  foreignIds: ForeignIdHit[]
+}): SurfaceResult {
+  const { venue, venueId, held, coupleIds, foreignIds } = args
+
+  if (coupleIds.length === 0) {
+    return skipResult(
+      'correlation tours series',
+      venue,
+      venueId,
+      'no tour touchpoints on the spine for this venue in the window, so the series is empty and ' +
+        'there is nothing to attribute. Re-run against a venue with tours on record.',
+    )
+  }
+
+  const toursCounted = [...held.values()].reduce((a, b) => a + b, 0)
+  return {
+    surface: 'correlation tours series',
+    venue,
+    venueId,
+    rows: coupleIds.length,
+    foreignIds,
+    venueIdMismatches: [],
+    status: foreignIds.length === 0 ? 'PASS' : 'FAIL',
+    note:
+      foreignIds.length === 0
+        ? `${toursCounted} tour(s) across ${held.size} day(s), from ${coupleIds.length} couple(s), ` +
+          'none of which belong to the other venue'
+        : `${foreignIds.length} couple(s) behind this series belong to the other venue`,
+  }
+}
+
+async function checkToursSeries(
+  venueA: string,
+  venueB: string,
+  supabase: SupabaseClient,
+): Promise<SurfaceResult[]> {
+  try {
+    const { loadTourDayCounts } = await import('@/lib/services/intel/correlation-engine')
+    const end = new Date()
+    const start = new Date(end.getTime() - TOURS_WINDOW_DAYS * 86400e3)
+    const pairs: VenuePair[] = [
+      { venue: 'A', venueId: venueA, otherVenueId: venueB },
+      { venue: 'B', venueId: venueB, otherVenueId: venueA },
+    ]
+    const out: SurfaceResult[] = []
+    for (const p of pairs) {
+      const counts = await loadTourDayCounts(supabase, p.venueId, start, end)
+      const foreignIds = await findForeignIds(supabase, p.otherVenueId, counts.coupleIds)
+      out.push(
+        toursIsolationVerdict({
+          venue: p.venue,
+          venueId: p.venueId,
+          held: counts.held,
+          coupleIds: counts.coupleIds,
+          foreignIds,
+        }),
+      )
+    }
+    return out
+  } catch (err) {
+    return [
+      failResult(
+        'correlation tours series',
+        'A',
+        venueA,
+        `threw: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    ]
+  }
+}
+
+/**
  * Best-effort exercise of the scope-aware helper. See the SCOPE HELPER
  * note at the top of the file for why this is necessarily partial.
  */
@@ -617,6 +727,8 @@ async function main(): Promise<void> {
       )
     }
   }
+
+  results.push(...(await checkToursSeries(venueA, venueB, supabase)))
 
   results.push(...(await checkScopeHelper(venueA, venueB, supabase)))
 

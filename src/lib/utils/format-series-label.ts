@@ -39,6 +39,17 @@ const SERIES_LABELS: Record<string, string> = {
   // Internal venue series — the engine writes one row per inquiry,
   // tour event, booking. Coordinator-readable names.
   inquiries: 'Inquiries',
+  // `tours` is the channel the engine actually emits (wave 7, W47): one
+  // count per day of tours that went ahead, grouped off the couple
+  // spine's tour touchpoints. "Held" is in the label on purpose, because
+  // a cancelled tour is not in the count and a coordinator reading a
+  // correlation card should not have to guess that.
+  tours: 'Tours Held',
+  // The two below are older names kept for rows already written under
+  // them. The engine emits neither today: there is no booking-creation
+  // timestamp on a tour touchpoint (tour_booked stamps occurred_at with
+  // the scheduled tour time, see calendly-to-signal.ts), so a genuine
+  // "booked on this day" series cannot be built from the spine yet.
   tours_scheduled: 'Tours Scheduled',
   tours_completed: 'Tours Completed',
   bookings: 'Bookings',
@@ -182,6 +193,15 @@ export function classifySeries(raw: string | null | undefined): SignalClass {
   if (trimmed.startsWith('fred_')) return 'macro'
   if (trimmed.startsWith('calendar_')) return 'macro'
   if (trimmed === 'cultural_moments') return 'macro'
+  // `government_signals` is an External Context channel too (it comes out
+  // of external-context/government.ts, not tangential_signals), but its
+  // name ends in `_signals`, so the platform rule below was claiming it
+  // as venue-internal. Found wiring the tours channel (wave 7, W47): a
+  // government shutdown is the most exogenous thing on the list, and
+  // classing it as venue both cost it the macro surfacing boost and let
+  // the engine evaluate "tours precede the shutdown", which is not a
+  // direction that exists. Checked before the suffix rule, deliberately.
+  if (trimmed === 'government_signals') return 'macro'
 
   // tangential_signals: `{platform}_signals`. Social platforms get
   // their own class; others (the_knot_signals, website_signals,
@@ -192,8 +212,12 @@ export function classifySeries(raw: string | null | undefined): SignalClass {
     return 'venue'
   }
 
-  // Everything else (inquiries, tours, bookings, marketing_metric
-  // `{source}_{metric}` channels) is venue-internal.
+  // Everything else (inquiries, `tours`, bookings, marketing_metric
+  // `{source}_{metric}` channels) is venue-internal. `tours` lands here
+  // by the fallthrough rather than by a rule of its own, which is right:
+  // it is a venue outcome in exactly the way inquiries is, so a macro
+  // channel pairing against it gets the same 1.5x surfacing boost and
+  // the same 30-to-180-day lag set.
   return 'venue'
 }
 
@@ -212,14 +236,26 @@ export type PairClass =
   | 'venue_x_social'
   | 'social_x_social'
 
+/** Canonical order for the pair label: macro, then venue, then social.
+ *  Not alphabetical. Alphabetical sorting produced 'social_x_venue', a
+ *  string that is not in the PairClass union at all, so every social ×
+ *  venue pair fell through rankMultiplierForPair's default and was ranked
+ *  at 1.0 instead of the 1.3 the taxonomy says it should get. Found while
+ *  wiring the tours channel (wave 7, W47): social engagement against
+ *  tours is precisely the pair that was being under-ranked. Rows already
+ *  persisted under the old spelling are still handled below. */
+const CLASS_ORDER: Record<SignalClass, number> = { macro: 0, venue: 1, social: 2 }
+
 export function classifyPair(
   a: string | null | undefined,
   b: string | null | undefined,
 ): PairClass {
   const ca = classifySeries(a)
   const cb = classifySeries(b)
-  // Sorted alphabetic so the pair-class is order-independent.
-  const [first, second] = [ca, cb].sort() as [SignalClass, SignalClass]
+  const [first, second] = [ca, cb].sort((x, y) => CLASS_ORDER[x] - CLASS_ORDER[y]) as [
+    SignalClass,
+    SignalClass,
+  ]
   return `${first}_x_${second}` as PairClass
 }
 
@@ -235,13 +271,21 @@ export function classifyPair(
  * - macro × social → 1.0 (neutral — directional but downstream)
  * - social × social → 1.0 (neutral)
  */
-export function rankMultiplierForPair(pair: PairClass): number {
+export function rankMultiplierForPair(pair: PairClass | string): number {
   switch (pair) {
     case 'macro_x_macro': return 0.4
     case 'macro_x_venue': return 1.5
     case 'venue_x_social': return 1.3
+    // Rows written before the classifyPair ordering fix carry the
+    // alphabetical spelling, and /intel/macro-correlations re-ranks
+    // straight off the persisted signal_class. They were scoring 1.0 by
+    // accident; they score 1.3 here so the two spellings now agree. Old
+    // social × venue cards will move up the page once, which is the fix
+    // landing, not a regression.
+    case 'social_x_venue': return 1.3
     case 'venue_x_venue': return 1.2
     case 'macro_x_social': return 1.0
+    case 'social_x_macro': return 1.0
     case 'social_x_social': return 1.0
     default: return 1.0
   }

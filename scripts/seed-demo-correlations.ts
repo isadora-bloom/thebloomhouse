@@ -24,6 +24,12 @@
  *     rows for Hawthorne (the demo cookie's hard-pinned venue per
  *     DEMO_VENUE_ID).
  *
+ * NOVEMBER-PLAN.md wave 7 (W47) added a sixth story to the SQL: a
+ * government shutdown against tours held. It is the first demo card whose
+ * venue side is not inquiries, which is the whole point of the tours
+ * channel — a coordinator's week is tours, and until the engine had a
+ * tours series every macro story stopped at the top of the funnel.
+ *
  * Usage
  * -----
  *   npx tsx scripts/seed-demo-correlations.ts
