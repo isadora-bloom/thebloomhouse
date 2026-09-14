@@ -17,7 +17,8 @@
  * length). We mirror that logic in chunkForCookies().
  */
 import { Browser, BrowserContext, APIRequestContext } from '@playwright/test'
-import { createClient } from '@supabase/supabase-js'
+import { anonClient } from './seed'
+import { loadE2EEnv } from './env'
 
 export type ApiAuthHandle = {
   context: BrowserContext
@@ -28,7 +29,7 @@ export type ApiAuthHandle = {
 const MAX_CHUNK_SIZE = 3180 // matches @supabase/ssr utils/chunker.js
 
 function projectRef(): string {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const url = loadE2EEnv().supabaseUrl
   const m = url.match(/https?:\/\/([^.]+)\.supabase\.co/)
   if (!m) throw new Error(`Could not extract project ref from ${url}`)
   return m[1]
@@ -76,11 +77,7 @@ export async function loginAsApi(
   creds: { email: string; password: string },
   opts: { venueId?: string } = {}
 ): Promise<ApiAuthHandle> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  const supabase = createClient(url, anon, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+  const supabase = anonClient()
   const { data, error } = await supabase.auth.signInWithPassword({
     email: creds.email,
     password: creds.password,
@@ -102,7 +99,10 @@ export async function loginAsApi(
   const context = await browser.newContext()
   await context.clearCookies()
 
-  const cookies: Parameters<BrowserContext['addCookies']>[0] = chunks.map((c) => ({
+  // addCookies takes a readonly array, so build a mutable one and hand it
+  // over at the end. (Surfaced the first time e2e/ was type-checked.)
+  type CookieArg = Parameters<BrowserContext['addCookies']>[0][number]
+  const cookies: CookieArg[] = chunks.map((c) => ({
     name: c.name,
     value: c.value,
     domain: 'localhost',

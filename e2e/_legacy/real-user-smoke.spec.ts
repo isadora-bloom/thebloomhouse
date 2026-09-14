@@ -12,8 +12,10 @@ const TEST_PASSWORD = 'TestPassword123!'
 // Pages to verify after auth — not all 97, just the critical ones
 // that depend on scope-aware queries + auth'd RLS
 const REAL_USER_PAGES = [
-  // Dashboard + core
-  '/',
+  // Landing + core. `/` is a redirect now (setup / onboarding / today);
+  // the dashboard itself moved to /dashboard.
+  '/today',
+  '/dashboard',
   // Agent (scope refactored)
   '/agent/inbox',
   '/agent/pipeline',

@@ -56,7 +56,10 @@ async function visitDemoPlatform(page: Page): Promise<void> {
     null,
     { timeout: 15_000 }
   )
-  await page.waitForURL((url) => url.pathname === '/' || url.pathname.startsWith('/intel') || url.pathname.startsWith('/agent') || url.pathname === '/welcome', { timeout: 15_000 }).catch(() => null)
+  // `/` no longer renders the dashboard: it decides where a coordinator
+  // should start and redirects (/setup, /onboarding, or /today). So the
+  // settled URL after launchDemo is /today far more often than /.
+  await page.waitForURL((url) => url.pathname === '/' || url.pathname === '/today' || url.pathname === '/dashboard' || url.pathname.startsWith('/intel') || url.pathname.startsWith('/agent') || url.pathname === '/welcome', { timeout: 15_000 }).catch(() => null)
   await page.waitForLoadState('networkidle').catch(() => null)
 }
 

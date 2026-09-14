@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
+import { adminClient } from '../helpers/seed'
 import {
   signGmailOAuthState,
 } from '../../src/lib/services/email/gmail-oauth-state'
@@ -33,11 +34,7 @@ const BASE_URL =
 let _admin: SupabaseClient
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
-  _admin = createClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+  _admin = adminClient()
   return _admin
 }
 

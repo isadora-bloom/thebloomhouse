@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
 import {
   createContext,
   createTestOrg,
@@ -8,6 +8,8 @@ import {
   createTestWedding,
   cleanup,
   TestContext,
+  adminClient,
+  anonClient,
 } from '../helpers/seed'
 import { seedInteraction, seedDraft } from '../helpers/email-seed'
 
@@ -42,17 +44,10 @@ import { seedInteraction, seedDraft } from '../helpers/email-seed'
 let _admin: SupabaseClient
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
-  _admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+  _admin = adminClient()
   return _admin
 }
 
-function anonClient(): SupabaseClient {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
-}
 
 test.describe('§6 Email Pipeline', () => {
   let ctx: TestContext

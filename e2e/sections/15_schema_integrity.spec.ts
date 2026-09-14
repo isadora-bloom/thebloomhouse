@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
 import * as fs from 'fs'
 import * as path from 'path'
-import { createContext, createTestOrg, createTestVenue, cleanup, TestContext } from '../helpers/seed'
+import { createContext, createTestOrg, createTestVenue, cleanup, TestContext, adminClient } from '../helpers/seed'
 
 /**
  * §15 SCHEMA & CONSTRAINT INTEGRITY
@@ -17,10 +17,7 @@ import { createContext, createTestOrg, createTestVenue, cleanup, TestContext } f
 let admin: SupabaseClient
 function getAdmin(): SupabaseClient {
   if (admin) return admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) throw new Error('§15: env missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY')
-  admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+  admin = adminClient()
   return admin
 }
 

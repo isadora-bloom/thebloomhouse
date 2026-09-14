@@ -47,13 +47,13 @@ test.describe('§1 Authentication & Roles', () => {
     expect(page.url()).not.toContain('/agent/inbox')
   })
 
-  test('coordinator cannot access /couple/{slug}/dashboard', async ({ page }) => {
+  test('coordinator cannot access /couple/{slug}', async ({ page }) => {
     const { orgId } = await createTestOrg(ctx)
     const { venueId, slug } = await createTestVenue(ctx, { orgId })
     const user = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
 
     await loginAs(page, 'coordinator', { email: user.email, password: user.password })
-    await page.goto(`/couple/${slug}/dashboard`)
+    await page.goto(`/couple/${slug}`)
     await page.waitForLoadState('domcontentloaded')
     // Coordinator lacks 'couple' role; middleware redirects to /couple/login
     expect(page.url()).toMatch(/couple\/login|\/login/)
@@ -135,7 +135,7 @@ test.describe('§1 Authentication & Roles', () => {
     // Attempt to fetch couple B's wedding by id via a known portal endpoint
     // if one exists. We do a softer assertion: couple A navigating to their
     // dashboard should not render couple B's email anywhere.
-    await page.goto(`/couple/${slug}/dashboard`).catch(() => null)
+    await page.goto(`/couple/${slug}`).catch(() => null)
     await page.waitForLoadState('domcontentloaded')
     const html = await page.content()
     expect(html).not.toContain(b.coupleEmail)

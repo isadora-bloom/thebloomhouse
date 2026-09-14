@@ -1,5 +1,6 @@
 import { test, expect, request as pwRequest } from '@playwright/test'
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
+import { adminClient } from '../helpers/seed'
 
 /**
  * §22 — Behavioural integration tests for the four gaps flagged in the
@@ -29,9 +30,7 @@ const TAG = '[e2e:22-behaviour]'
 let _admin: SupabaseClient
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
-  _admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+  _admin = adminClient()
   return _admin
 }
 
@@ -286,7 +285,9 @@ test.describe('§22 Phase 8 behavioural integration', () => {
       const dbCount = (dbCheck ?? []).length
       expect(dbCount, `Expected 4 weddings in DB, got ${dbCount}`).toBe(4)
 
-      const targets = ['/agent/leads', '/agent/inbox', '/intel/dashboard', '/']
+      // `/` is a redirect now, not a surface. The dashboard moved to
+      // /dashboard and the landing page is /today.
+      const targets = ['/agent/leads', '/agent/inbox', '/intel/dashboard', '/today', '/dashboard']
       let seen: typeof pairs = []
       const triedDiag: string[] = []
       for (const path of targets) {

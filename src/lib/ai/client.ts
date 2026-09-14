@@ -11,6 +11,15 @@ import {
   isFallbackDisabled,
 } from '@/lib/ai/circuit-breaker'
 import { alertFallbackFired } from '@/lib/ai/alert-fallback'
+import {
+  isStubActive,
+  isRecordActive,
+  stubAnswer,
+  recordFixture,
+  STUB_MODEL,
+  JSON_INSTRUCTION,
+  GENERIC_JSON_ANSWER,
+} from '@/lib/ai/e2e-stub'
 
 let anthropicClient: Anthropic | null = null
 let openaiClient: OpenAI | null = null
@@ -517,6 +526,39 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   const started = Date.now()
   const requestedModel = modelForTier(options.tier)
 
+  // E2E fixture mode. Answers from e2e/fixtures/ai/<promptVersion>.json,
+  // still logs the cost row, never reaches a provider, and cannot turn on
+  // in production. See src/lib/ai/e2e-stub.ts.
+  if (isStubActive()) {
+    const answer = await stubAnswer({
+      promptVersion: options.promptVersion,
+      systemPrompt: options.systemPrompt,
+      taskType,
+    })
+    logUsage(
+      options.venueId,
+      taskType,
+      0,
+      0,
+      0,
+      STUB_MODEL,
+      'anthropic',
+      options.contentTier ?? 2,
+      options.promptVersion,
+      options.correlationId
+    )
+    console.log(
+      JSON.stringify({
+        model: STUB_MODEL,
+        stub: answer.source,
+        promptVersion: answer.key,
+        taskType,
+        durationMs: Date.now() - started,
+      })
+    )
+    return { text: answer.text, inputTokens: 0, outputTokens: 0, cost: 0, model: STUB_MODEL }
+  }
+
   // Operator overrides + circuit-breaker (T1-F / OPS-21.5.6).
   // AI_FORCE_FALLBACK skips Claude entirely (degraded-Anthropic
   // incident, or local fallback testing). The breaker also skips
@@ -537,6 +579,16 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
           durationMs: Date.now() - started,
         })
       )
+      // AI_E2E_RECORD=1: keep this answer as the fixture the stub will
+      // replay. Fire and forget; a write failure never touches the call.
+      if (isRecordActive()) {
+        void recordFixture({
+          promptVersion: options.promptVersion,
+          taskType,
+          model: result.model ?? requestedModel,
+          text: result.text,
+        })
+      }
       return result
     } catch (claudeErr) {
       recordCall('anthropic', false)
@@ -604,6 +656,14 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     )
     // Floor two fired — page the operator (rate-limited, fire-and-forget).
     void alertFallbackFired({ kind: 'fallback_fired', taskType, vision: false, skipReason })
+    if (isRecordActive()) {
+      void recordFixture({
+        promptVersion: options.promptVersion,
+        taskType,
+        model: OPENAI_FALLBACK_MODEL,
+        text: result.text,
+      })
+    }
     return result
   } catch (openaiErr) {
     recordCall('openai', false)
@@ -645,9 +705,7 @@ export async function callAIJson<T = unknown>(
   options: CallAIOptions & { validate?: (parsed: unknown) => boolean }
 ): Promise<T> {
   const { validate, ...rest } = options
-  const jsonInstruction =
-    '\n\nRespond with valid JSON only. No markdown, no code blocks, no explanation.'
-  const systemPrompt = rest.systemPrompt + jsonInstruction
+  const systemPrompt = rest.systemPrompt + JSON_INSTRUCTION
   const taskType = rest.taskType ?? 'general'
 
   const tryParse = (text: string): { ok: true; value: T } | { ok: false } => {
@@ -667,6 +725,25 @@ export async function callAIJson<T = unknown>(
   const first = await callAI({ ...rest, systemPrompt })
   const firstParsed = tryParse(first.text)
   if (firstParsed.ok) return firstParsed.value
+
+  // Stub mode: there is no second provider to try, and a journey must not
+  // die because a fixture has not been recorded yet. Hand back the generic
+  // empty object and say which key would have fixed it. The cost row for
+  // the call above has already been written.
+  if (isStubActive()) {
+    console.warn(
+      JSON.stringify({
+        event: 'ai_e2e_stub_json_unusable',
+        promptVersion: rest.promptVersion ?? null,
+        taskType,
+        reason: validate
+          ? 'the fixture did not satisfy the caller validate()'
+          : 'the fixture was not parseable JSON',
+        answered: 'generic empty object',
+      })
+    )
+    return JSON.parse(GENERIC_JSON_ANSWER) as T
+  }
 
   console.warn(
     JSON.stringify({ event: 'json_validation_failed', stage: 'primary', taskType })
@@ -805,6 +882,38 @@ export async function callAIVision(options: CallAIVisionOptions): Promise<CallAI
   const taskType = options.taskType ?? 'vision'
   const started = Date.now()
 
+  // E2E fixture mode — same contract as callAI. The image is not read.
+  if (isStubActive()) {
+    const answer = await stubAnswer({
+      promptVersion: options.promptVersion,
+      systemPrompt: options.systemPrompt,
+      taskType,
+    })
+    logUsage(
+      options.venueId,
+      taskType,
+      0,
+      0,
+      0,
+      STUB_MODEL,
+      'anthropic',
+      options.contentTier ?? 2,
+      options.promptVersion,
+      options.correlationId
+    )
+    console.log(
+      JSON.stringify({
+        model: STUB_MODEL,
+        vision: true,
+        stub: answer.source,
+        promptVersion: answer.key,
+        taskType,
+        durationMs: Date.now() - started,
+      })
+    )
+    return { text: answer.text, inputTokens: 0, outputTokens: 0, cost: 0, model: STUB_MODEL }
+  }
+
   const skipClaude = isFallbackForced() || shouldSkip('anthropic')
 
   if (!skipClaude) {
@@ -814,6 +923,14 @@ export async function callAIVision(options: CallAIVisionOptions): Promise<CallAI
       console.log(
         JSON.stringify({ model: CLAUDE_MODEL, vision: true, fallback: false, taskType, durationMs: Date.now() - started })
       )
+      if (isRecordActive()) {
+        void recordFixture({
+          promptVersion: options.promptVersion,
+          taskType,
+          model: result.model ?? CLAUDE_MODEL,
+          text: result.text,
+        })
+      }
       return result
     } catch (claudeErr) {
       recordCall('anthropic', false)
@@ -870,6 +987,14 @@ export async function callAIVision(options: CallAIVisionOptions): Promise<CallAI
     )
     // Floor two fired on a vision call — page the operator.
     void alertFallbackFired({ kind: 'fallback_fired', taskType, vision: true, skipReason })
+    if (isRecordActive()) {
+      void recordFixture({
+        promptVersion: options.promptVersion,
+        taskType,
+        model: OPENAI_FALLBACK_MODEL,
+        text: result.text,
+      })
+    }
     return result
   } catch (openaiErr) {
     recordCall('openai', false)

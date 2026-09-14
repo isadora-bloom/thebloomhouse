@@ -14,6 +14,12 @@ export default defineConfig({
       // Isolation battery (NOVEMBER-PLAN.md wave 5, W38) — proves the
       // walker + checker catch a leak against a fake client, no database.
       'tests/isolation/**/*.test.ts',
+      // E2E harness guards (E2E-PLAN.md W69). The production refusal has
+      // to be proven on every commit, not only on the nights the
+      // Playwright suite runs, so it lives here rather than in a spec.
+      // Playwright's testMatch is sections/** and pending/**, so these
+      // never load under the browser runner.
+      'e2e/helpers/__tests__/**/*.test.ts',
     ],
     globals: false,
   },

@@ -12,16 +12,17 @@
  * child rows, but we also clear rows on tables that are not wired to the
  * FK cascade chain).
  */
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
 import { Page } from '@playwright/test'
-import { TestContext } from './seed'
+import {
+  TestContext,
+  adminClient,
+} from './seed'
 
 let _admin: SupabaseClient | null = null
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
-  _admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+  _admin = adminClient()
   return _admin
 }
 

@@ -10,18 +10,16 @@
  * Do NOT modify `e2e/helpers/seed.ts`. This file extends it non-invasively
  * using the `ctx.extra` bag.
  */
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { TestContext } from './seed'
+import { SupabaseClient } from '@supabase/supabase-js'
+import {
+  TestContext,
+  adminClient,
+} from './seed'
 
 let _admin: SupabaseClient | null = null
 function admin(): SupabaseClient {
   if (_admin) return _admin
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    throw new Error('staff-seed: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing from env')
-  }
-  _admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
+  _admin = adminClient()
   return _admin
 }
 
