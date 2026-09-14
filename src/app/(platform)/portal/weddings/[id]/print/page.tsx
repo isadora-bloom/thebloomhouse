@@ -12,6 +12,7 @@ import {
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
+import { normaliseTableName } from '@/lib/services/couple-portal/seating-view'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,7 +32,11 @@ interface Guest {
   group_name: string | null
   rsvp_status: string | null
   meal_preference: string | null
-  table_assignment_id: string | null
+  // Authoritative "who sits where" column — holds the table NAME, not an
+  // id. `table_assignment_id` is a dead FK nothing in src/ writes; reading
+  // it here used to print an empty seating chart every time. See the
+  // doctrine comment at the top of seating-view.ts.
+  table_assignment: string | null
   dietary_restrictions: string | null
   plus_one: boolean | null
   plus_one_name: string | null
@@ -492,7 +497,7 @@ function PrintDayOfPackagePage() {
         internalNotesRes,
       ] = await Promise.allSettled([
         supabase.from('people').select('id, first_name, last_name, role, email, phone').eq('wedding_id', weddingId),
-        supabase.from('guest_list').select('id, group_name, rsvp_status, meal_preference, table_assignment_id, dietary_restrictions, plus_one, plus_one_name, care_notes, person_id').eq('wedding_id', weddingId),
+        supabase.from('guest_list').select('id, group_name, rsvp_status, meal_preference, table_assignment, dietary_restrictions, plus_one, plus_one_name, care_notes, person_id').eq('wedding_id', weddingId),
         supabase.from('timeline').select('*').eq('wedding_id', weddingId).maybeSingle(),
         supabase.from('timeline').select('id, time, duration_minutes, title, description, category, location, sort_order').eq('wedding_id', weddingId).order('sort_order', { ascending: true }),
         supabase.from('ceremony_order').select('id, participant_name, role, side, sort_order, notes').eq('wedding_id', weddingId).order('sort_order'),
@@ -588,6 +593,14 @@ function PrintDayOfPackagePage() {
   // Build keyed lookups
   const peopleById = new Map(people.map((p) => [p.id, p]))
   const tablesById = new Map(seatingTables.map((t) => [t.id, t]))
+  // `table_assignment` holds the table's NAME (see seating-view.ts), so
+  // guests are matched to a seating_tables row by normalised name, the
+  // same join every other seating surface uses.
+  const tableIdByName = new Map(
+    seatingTables
+      .filter((t) => t.table_name)
+      .map((t) => [normaliseTableName(t.table_name), t.id]),
+  )
 
   // Group guests by table for the seating section
   const seatingByTable: Record<string, Array<{ guest: Guest; person: Person | null }>> = {}
@@ -595,9 +608,10 @@ function PrintDayOfPackagePage() {
   for (const g of guests) {
     const person = g.person_id ? peopleById.get(g.person_id) ?? null : null
     const entry = { guest: g, person }
-    if (g.table_assignment_id) {
-      if (!seatingByTable[g.table_assignment_id]) seatingByTable[g.table_assignment_id] = []
-      seatingByTable[g.table_assignment_id].push(entry)
+    const tableId = tableIdByName.get(normaliseTableName(g.table_assignment))
+    if (tableId) {
+      if (!seatingByTable[tableId]) seatingByTable[tableId] = []
+      seatingByTable[tableId].push(entry)
     } else {
       unseatedGuests.push(entry)
     }
@@ -656,7 +670,7 @@ function PrintDayOfPackagePage() {
   const hasAllergies = allergies.length > 0
   const hasGuestCare = guestCare.length > 0
   const hasRooms = rooms.length > 0
-  const hasTables = seatingTables.length > 0 || guests.some((g) => !!g.table_assignment_id)
+  const hasTables = seatingTables.length > 0 || guests.some((g) => !!normaliseTableName(g.table_assignment))
   const hasMakeup = makeup.length > 0
   const hasShuttle = shuttles.length > 0
   const hasBar =
@@ -1169,9 +1183,7 @@ function PrintDayOfPackagePage() {
                   .map((g) => ({ g, p: g.person_id ? peopleById.get(g.person_id) ?? null : null }))
                   .sort((a, b) => (a.p?.last_name ?? '').localeCompare(b.p?.last_name ?? ''))
                   .map(({ g, p }) => {
-                    const tableName = g.table_assignment_id
-                      ? tablesById.get(g.table_assignment_id)?.table_name ?? '--'
-                      : '--'
+                    const tableName = normaliseTableName(g.table_assignment) ? g.table_assignment : '--'
                     return (
                       <tr key={g.id}>
                         <td className="font-medium">

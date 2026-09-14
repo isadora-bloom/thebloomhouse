@@ -13,7 +13,15 @@ import { cn } from '@/lib/utils'
 import {
   ArrowLeft, ZoomIn, ZoomOut, Maximize, RotateCw, Download, Save,
   Check, Trash2, Loader2, Plus, MousePointer2, BoxSelect, Armchair,
+  LayoutGrid, Users,
 } from 'lucide-react'
+import { SeatingBoard } from '@/components/couple/seating-board'
+import {
+  buildSeatingView,
+  type SeatingGuestRow,
+  type SeatingTableRow,
+} from '@/lib/services/couple-portal/seating-view'
+import { saveTableAssignment, clearTableAssignment } from '@/lib/services/couple-portal/seating-assignment'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -190,6 +198,17 @@ export default function AdminTableMapEditor() {
   const [showRectPicker, setShowRectPicker] = useState(false)
   const [blockPrompt, setBlockPrompt] = useState<typeof BLOCK_TYPES[0] | null>(null)
 
+  // Wave 6 W61 — the joined seating board sits next to the layout editor
+  // as a second tab. Both read `elements` (this page's own in-memory
+  // layout state) so the board reflects the plan the coordinator is
+  // looking at, saved or not, without a second read of
+  // `table_map_layouts`.
+  const [tab, setTab] = useState<'layout' | 'seating'>('layout')
+  const [seatingTables, setSeatingTables] = useState<SeatingTableRow[]>([])
+  const [guests, setGuests] = useState<SeatingGuestRow[]>([])
+  const [seatingLoading, setSeatingLoading] = useState(true)
+  const [pendingGuestId, setPendingGuestId] = useState<string | null>(null)
+
   // Task #11 — marquee selection. When `selectMode` is on, dragging on
   // empty canvas creates a selection rectangle; clicking a table toggles
   // it in/out of the selection. When off, behaviour matches the original
@@ -227,6 +246,74 @@ export default function AdminTableMapEditor() {
     img.src = floorPlanUrl
     img.onload = () => { setFloorImg(img); setImgW(img.naturalWidth); setImgH(img.naturalHeight) }
   }, [floorPlanUrl])
+
+  // Wave 6 W61 — the same rows the couple seating page loads: the
+  // couple's tables and the guest list's `table_assignment` (the
+  // authoritative column, see seating-view.ts). Kept separate from the
+  // venue/layout effect above so an assignment save can re-run this
+  // alone without re-fetching the floor plan.
+  const fetchSeatingData = useCallback(async () => {
+    if (!weddingId) return
+    const [tablesRes, guestsRes] = await Promise.all([
+      supabase
+        .from('seating_tables')
+        .select('id, table_name, table_type, capacity, sort_order')
+        .eq('wedding_id', weddingId)
+        .order('sort_order', { ascending: true }),
+      supabase
+        .from('guest_list')
+        .select(
+          'id, table_assignment, rsvp_status, plus_one, has_plus_one, plus_one_name, group_name, first_name, last_name',
+        )
+        .eq('wedding_id', weddingId)
+        .order('created_at', { ascending: true }),
+    ])
+    if (tablesRes.data) setSeatingTables(tablesRes.data as unknown as SeatingTableRow[])
+    if (guestsRes.data) setGuests(guestsRes.data as unknown as SeatingGuestRow[])
+    setSeatingLoading(false)
+  }, [supabase, weddingId])
+
+  useEffect(() => {
+    fetchSeatingData()
+  }, [fetchSeatingData])
+
+  // The one view both this board and the couple's page build from — same
+  // guests, same tables, same map. `elements` is this page's own layout
+  // state, so switching to the Seating tab reflects whatever is on
+  // screen, saved or not.
+  const seatingView = useMemo(
+    () => buildSeatingView({ tables: seatingTables, guests, mapElements: elements }),
+    [seatingTables, guests, elements],
+  )
+
+  // The one save route both surfaces use (seating-assignment.ts).
+  const assignGuest = useCallback(
+    async (guestId: string, tableName: string) => {
+      setPendingGuestId(guestId)
+      setGuests((prev) =>
+        prev.map((g) => (g.id === guestId ? { ...g, table_assignment: tableName } : g)),
+      )
+      const { error } = await saveTableAssignment(supabase, { guestId, tableName, venueId })
+      setPendingGuestId(null)
+      if (error) alert(`Could not seat that guest: ${error.message}`)
+      fetchSeatingData()
+    },
+    [supabase, venueId, fetchSeatingData],
+  )
+
+  const unassignGuest = useCallback(
+    async (guestId: string) => {
+      setPendingGuestId(guestId)
+      setGuests((prev) =>
+        prev.map((g) => (g.id === guestId ? { ...g, table_assignment: null } : g)),
+      )
+      const { error } = await clearTableAssignment(supabase, guestId, venueId)
+      setPendingGuestId(null)
+      if (error) alert(`Could not take that guest off the table: ${error.message}`)
+      fetchSeatingData()
+    },
+    [supabase, venueId, fetchSeatingData],
+  )
 
   const isLandscape = planRotation % 180 === 0
   const effectiveW = isLandscape ? imgW : imgH
@@ -481,14 +568,8 @@ export default function AdminTableMapEditor() {
 
   if (loading) return <div className="text-muted-foreground text-center py-16">Loading table map editor...</div>
 
-  if (!floorPlanUrl) {
-    return (
-      <div className="max-w-lg mx-auto text-center py-16">
-        <p className="text-muted-foreground mb-4">No floor plan uploaded for this venue.</p>
-        <p className="text-sm text-muted-foreground">Go to <strong>Venue Config &gt; Seating Config</strong> to upload one.</p>
-      </div>
-    )
-  }
+  const seatedCount = seatingView.totals.seatedPeople
+  const totalGuestCount = seatingView.totals.people
 
   return (
     <div className="space-y-3">
@@ -498,7 +579,7 @@ export default function AdminTableMapEditor() {
           <ArrowLeft className="w-4 h-4" />
         </Link>
         <div className="flex-1">
-          <h1 className="text-lg font-semibold">Table Map Editor</h1>
+          <h1 className="text-lg font-semibold">Table Map</h1>
           <p className="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
             <span>{elements.length} element{elements.length !== 1 ? 's' : ''} placed</span>
             {/* Task #10 — live seat total. Hidden when no tables exist
@@ -516,15 +597,71 @@ export default function AdminTableMapEditor() {
             )}
           </p>
         </div>
-        <button onClick={handleSave} disabled={saving}
-          className={cn('inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition',
-            saved ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground hover:opacity-90',
-            'disabled:opacity-50')}>
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
-          {saving ? 'Saving...' : saved ? 'Saved' : 'Save Layout'}
+        {tab === 'layout' && (
+          <button onClick={handleSave} disabled={saving || !floorPlanUrl}
+            className={cn('inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition',
+              saved ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground hover:opacity-90',
+              'disabled:opacity-50')}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
+            {saving ? 'Saving...' : saved ? 'Saved' : 'Save Layout'}
+          </button>
+        )}
+      </div>
+
+      {/* Wave 6 W61 — layout editor vs the joined guest/table board. Same
+          `elements`, same `weddings.id`, so an assignment made here shows
+          on the couple's page and the reverse. */}
+      <div className="flex items-center gap-1 border-b">
+        <button
+          onClick={() => setTab('layout')}
+          className={cn(
+            'inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition',
+            tab === 'layout' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <LayoutGrid className="w-3.5 h-3.5" />
+          Layout
+        </button>
+        <button
+          onClick={() => setTab('seating')}
+          className={cn(
+            'inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition',
+            tab === 'seating' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Users className="w-3.5 h-3.5" />
+          Guests &amp; Seating
+          {!seatingLoading && totalGuestCount > 0 && (
+            <span className="text-[11px] text-muted-foreground tabular-nums">
+              ({seatedCount}/{totalGuestCount})
+            </span>
+          )}
         </button>
       </div>
 
+      {tab === 'seating' ? (
+        <div className="pt-1">
+          {seatingLoading ? (
+            <div className="text-muted-foreground text-center py-16">Loading guests and tables...</div>
+          ) : (
+            <SeatingBoard
+              view={seatingView}
+              floorPlanUrl={floorPlanUrl}
+              mapElements={elements}
+              venueWidthFt={venueWidthFt}
+              onAssign={assignGuest}
+              onUnassign={unassignGuest}
+              pendingGuestId={pendingGuestId}
+            />
+          )}
+        </div>
+      ) : !floorPlanUrl ? (
+        <div className="max-w-lg mx-auto text-center py-16">
+          <p className="text-muted-foreground mb-4">No floor plan uploaded for this venue.</p>
+          <p className="text-sm text-muted-foreground">Go to <strong>Venue Config &gt; Seating Config</strong> to upload one.</p>
+        </div>
+      ) : (
+        <>
       {/* Toolbar: add elements */}
       <div className="space-y-2 text-xs">
         <div className="flex flex-wrap items-center gap-2">
@@ -706,6 +843,8 @@ export default function AdminTableMapEditor() {
         <BlockPrompt preset={blockPrompt}
           onConfirm={(fw, fh) => addBlock(blockPrompt, fw, fh)}
           onCancel={() => setBlockPrompt(null)} />
+      )}
+        </>
       )}
     </div>
   )

@@ -208,6 +208,19 @@ export function partySize(guest: SeatingGuestRow): number {
   return plusOneName(guest) ? 2 : 1
 }
 
+/**
+ * How many parties (invitations) are seated. The same rule
+ * `buildSeatingView` uses for `totals.seatedParties`, exposed on its own so
+ * a caller that only has `table_assignment` — the coordinator wedding
+ * page's guest count (W61), for one — counts it the same way the board
+ * does, without building a whole view just to read one number.
+ */
+export function countSeatedParties(
+  guests: Array<Pick<SeatingGuestRow, 'table_assignment'>>,
+): number {
+  return guests.filter((g) => normaliseTableName(g.table_assignment)).length
+}
+
 export function toParty(guest: SeatingGuestRow): SeatedParty {
   const host = hostName(guest)
   const plusOne = plusOneName(guest)
