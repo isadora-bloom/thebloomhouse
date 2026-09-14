@@ -163,6 +163,32 @@ All of these go through the same real, working door: `Agent → Brain-dump`,
 | Instagram **new-follower list** (named followers, not aggregate metrics) | Text-paste works; the dedicated screenshot uploader is built and disabled ("V1.1"), and its vision-extraction code (`vision-prompt.ts`) is never called from any live route — **see W42** |
 | Facebook / Pinterest **new-follower list** or engagement detail | Not built — the aggregate ad-spend and organic-reach paths above exist for these platforms, but no per-handle/per-engagement capture exists the way the (partial) Instagram one does |
 
+### D. External signals — checked properly this time, not just weather and FRED
+
+Isadora asked directly: check the APIs aren't just Google, check weather, "the
+politics," everything touched on. Fair, my first pass under-covered this.
+`correlation-engine.ts`'s `buildSeries` carries **eight** channels, checked
+individually against their actual loader code, not the page's description of
+them:
+
+| Signal | Real API? | Status |
+|---|---|---|
+| Weather (Open-Meteo) | Yes | Working for temp/precip/forecast. No severity field — W45 |
+| FRED (CPI, mortgage rate, S&P 500, unemployment, consumer sentiment) | Yes | Working |
+| Cultural moments | Hybrid | LLM proposes, operator confirms, then enters the engine — working |
+| Holiday/event calendar (`calendar.ts`) | Yes, DB-backed | Federal holidays, school holidays, university calendars, sporting events, conventions, **and election days** — working, per-venue hierarchical geo_scope |
+| **Government events (`government.ts`) — the "politics" signal** | Yes, DB-backed | Real: shutdowns/threatened shutdowns/partial shutdowns, weighted 1.5x for DC/VA/MD venues to reflect federal-employee clientele exposure — directly relevant to Rixey specifically. Working, feeds the engine today |
+| Census (`ingestion/census.ts`) | Yes, real US Census Bureau ACS API | Working — county/state demographics into `market_intelligence` |
+| Market intelligence | Backed by the same `market_intelligence` table census populates | Not independently verified beyond census as a source — flag for a closer look if it matters, not confirmed further here |
+| Google Trends (`intel/trends.ts`) | Yes, real API — via SerpAPI, not Google directly | **Config-dependent, not guaranteed live**: silently skips with a console warning if `SERPAPI_API_KEY` isn't set, and requires each venue to have a `google_trends_metro` configured. Worth an explicit check that Rixey has both before relying on it |
+
+None of these eight are stubs. The Google Ads / TikTok Ads / Meta Ads
+*spend* connectors checked earlier are the only stub connectors found in this
+whole audit, and they're already correctly parked. The real gap, as W44 now
+reflects, is that none of these eight can be paired against tours — only
+against inquiries — so the highest-leverage single fix in this entire plan is
+still W44, now worth more than originally scoped.
+
 ---
 
 ## Cross-cutting patterns, both reports
@@ -206,8 +232,8 @@ All five run in parallel, in separate worktrees, from `git reset --hard consolid
 | W41 | Reach what's already built: nav entry for `/intel/marketing-roi/recommendations` (Intel → Conversion, near Marketing Spend); a daily-reachable door for the Knot leads CSV re-upload (not just onboarding) — likely a link from `/intel/sources/track` or `/agent/brain-dump` into the structured `crm-import` flow rather than a UI rebuild; delete `/org` and `/sage` per the W39 "delete" verdict | Haiku | `nav-config.ts`, `intel/marketing-roi/recommendations/page.tsx` (remove gate), `org/page.tsx`, `sage/page.tsx` (delete), one new link | A coordinator can reach the reallocation page and re-run a Knot leads import without knowing a URL; `/org` and `/sage` are gone; `check:links` still passes |
 | W42 | Finish the Instagram follower-screenshot capture: wire the existing `vision-prompt.ts` into `/api/intel/social-integration/capture`, enable the file input in `CaptureNowModal.tsx` | Sonnet | `capture/route.ts`, `CaptureNowModal.tsx`, `vision-prompt.ts` | A screenshot of a followers list produces the same `social_captures`/`social_engagements` rows the text-paste path produces today, tested against a real screenshot fixture |
 | W43 | Make review sentiment real: run sentiment/theme extraction at ingestion time (Google Places poll, CSV/paste import, and the brain-dump `reviews_from_screenshot` case) so `reviews.sentiment_score`/`themes` actually get written | Sonnet | `google-places.ts`, `data-import.ts`, brain-dump route's review case | `/intel/reviews`'s sentiment trend renders a real direction, not "—", on a venue with reviews |
-| W44 | Add a tours channel to the correlation engine, so social volume (already reaching `marketing_metric` via brain-dump) can be paired against it | Opus | `correlation-engine.ts`, `format-series-label.ts` | `/intel/macro-correlations` can show a real Instagram/TikTok-volume-vs-tours-booked card when the data supports it, `enoughData`-gated like everything else |
-| W45 | Weather severity: add a severity/alert field to weather ingestion, fix or remove the dead tornado-keyword branch in `weather-cancellation.ts`, widen the "active anomaly" window so a weekend event is still visible the following week | Sonnet | `weather.ts`, `weather-cancellation.ts`, `climate-context.ts`, one migration | A severe-weather day from the past 7-14 days surfaces in the hypothesis prompt and on `/intel/weather`'s "notable past weather" section, not just same-day |
+| W44 | Add a tours channel to the correlation engine. This is higher-leverage than "social vs tours" alone: `buildSeries` already carries **eight** real external channels (weather, FRED economics, cultural moments/holiday calendar including election days, government shutdown impact — a real "politics" signal, live for DC-region venues like Rixey — census demographics, and Google Trends via a real SerpAPI integration), and **none of them** can be paired against tour bookings today, only against inquiries. One missing series unlocks all eight pairings at once, not just social | Opus | `correlation-engine.ts`, `format-series-label.ts` | `/intel/macro-correlations` can show a real card for any of the eight existing channels against tours-booked, not just Instagram/TikTok volume, `enoughData`-gated like everything else |
+| W45 | Weather, three modes (per Isadora 2026-09-14 — "specific, historic, and future," not just a severity flag): **specific** — add a severity/alert field, fix or remove the dead tornado-keyword branch, widen the "active anomaly" window so a weekend event is still visible the following week; **historic** — the "typical conditions per month with decade trend deltas" already has real code (`weather-climate-norms.ts`, rendered on `/intel/weather`) but depends on the 20-year archive backfill actually having been run per venue (confirmed opt-in/annual, not automatic) — activate it, don't rebuild it, and verify it's actually populated for Rixey; **future** — the decade-delta comparison is two points (this decade vs last), not the continuous "getting wetter every year" trend line Isadora described — add a proper year-over-year regression per month/metric, distinct from the 14-day operational forecast which already exists | Sonnet | `weather.ts`, `weather-cancellation.ts`, `climate-context.ts`, `weather-climate-norms.ts` (activation + new trend calc), one migration | A coordinator can see, for one venue: last weekend's actual severe event; June's normal 4pm temperature against this decade; and whether August has been trending wetter year over year — three different questions, three different answers, on the same page |
 | — | Carried forward from the existing "Follow-ups for wave 5" list, unchanged | — | `crm-import/index.ts` (progression event type), `phrase-selector.ts` decision, Instagram reply send path (blocked on Meta credentials — operator), investor-materials template | As already scoped in NOVEMBER-PLAN.md |
 
 ### Reference pattern: the Rixey portal, read-only, `C:\Users\Ismar\rixey-portal`
@@ -299,7 +325,7 @@ and the gap wave 8 closes:
 
 | # | Workstream | Model | Owns (files) | Depends on | Done when |
 |---|---|---|---|---|---|
-| W53 | CEO "monthly story": one screen (or a generated one-pager, reusing the TBH Report's print styling pattern) that pulls response time, weekday tour conversion, channel ROI, and review volume/rating into a single narrated view, instead of five separate pages | Sonnet | New `src/app/(platform)/intel/monthly-story/page.tsx` (or extend an existing summary page — implementer's call), reusing existing canonical reads only, no new computation | W41 (reallocation page must be reachable to cite it), W43 (real sentiment to cite) | A CEO can open one page and get every answer from report 2's scenario without hunting across Intel |
+| W53 | CEO "monthly story": one screen (or a generated one-pager, reusing the TBH Report's print styling pattern) that pulls response time, weekday tour conversion, channel ROI, and review volume/rating into a single narrated view, instead of five separate pages | Sonnet | New `src/app/(platform)/intel/monthly-story/page.tsx` (or extend an existing summary page — implementer's call), `nav-config.ts` (a real entry — do not repeat W39's own lesson and ship an orphan), reusing existing canonical reads only, no new computation | W41 (reallocation page must be reachable to cite it), W43 (real sentiment to cite) | A CEO can open one page and get every answer from report 2's scenario without hunting across Intel; the page has a nav entry from day one |
 | W54 | Coordinator daily-surface links: `/today` and `/agent/leads` get a one-line pointer out to the deeper answers (weekday conversion, channel spend) instead of leaving them undiscoverable in Intel submenus | Sonnet | `today/page.tsx`, `today/view-model.ts` (links only, no new data) | W41 | A coordinator on `/today` can get to the weekday-conversion table and the reallocation page in one click, not zero |
 | W55 | Couple-experience personalisation: wire the identity/preference data already captured (today Intel-only) into the couple-portal Sage prompt layer, so the product's own stated USP ("4-layer custom voice") actually reaches the couple, not just venue-facing drafts | Opus | `src/lib/services/brain/**` (the couple-portal prompt builder specifically — do not touch the venue-facing draft brain), `couple_identity_profile` read path | None — identity data already exists, this is purely a wiring job, can start immediately | A couple whose profile notes a specific preference or detail gets a portal response that reflects it, verified against a fixture couple, not just theoretically wired |
 | W56 | Weather-aware and conversion-informed couple nudges: surface honest, plain-language weather context on the couple's wedding-day view, and use real weekday-conversion data to make midweek tour slots an honest, informed suggestion during booking rather than an unexplained default | Sonnet | `_couple-pages/**` (wedding-day weather card), tour-booking/scheduling surface (wherever tour slots are offered to an inquiring couple) | W44, W45 | A couple sees real forecast context for their date; an inquiring lead offered a midweek tour sees why, backed by the real conversion number, not marketing copy |
@@ -344,3 +370,83 @@ tail or immediately after. Wave 7 touches more surfaces per workstream
 (coordinator UI reuse of couple-side components) and benefits from testing
 against real, reimported Rixey data rather than the demo seed, so it's placed
 after the reimport in the sequence, not before it.
+
+---
+
+## What this plan missed, checked honestly against itself
+
+Asked directly what I hadn't accounted for. Here's what a second pass found,
+not padding — each of these would genuinely bite if the plan above ran
+exactly as first written.
+
+1. **Cron budget is at its ratchet, exactly, today.** `check:cleanup-budget`
+   reports `cron_count 49/49, at budget` on this branch right now. W52's
+   "a cron entry" for commitment reconciliation can't just be added — it has
+   to reuse the existing cron dispatcher's schedule slots or someone has to
+   consciously raise the budget number and say why. Same caution applies to
+   any new periodic job wave 8 might imply (e.g. a monthly job behind W53).
+
+2. **RLS/security scoping for every shared coordinator/couple component
+   (W46, W47, W49).** "Mount the same component on both sides" is a UI
+   instruction; the API routes underneath still need explicit role checks so
+   a coordinator's broader session can't leak into what a couple's session
+   is allowed to write, and vice versa. This needs its own design pass per
+   workstream, not an assumption that reusing a component reuses safety.
+
+3. **W55 (couple-experience personalisation) is a trust risk, not just a
+   wiring job.** The identity-reconstruction data is explicitly documented
+   elsewhere in this codebase as "aggregate ≠ disclose" — several existing
+   dashboards deliberately never show a specific couple's personal detail
+   back to anyone, only aggregates. W55 proposes using that same class of
+   data to shape what a couple is told, directly. Done carelessly that reads
+   as "how does this company know that," not as warmth. This needs explicit,
+   careful scoping (which fields are safe to reflect back, which are strictly
+   internal-only) before it's built, not discovered after a couple notices.
+
+4. **No test/battery/isolation coverage was specified.** Every "done when"
+   above is a functional description, not a gate. Matching how real waves
+   report "vitest 1485/1485, golden 16/16, governance green": W43 and W44
+   should add ground-truth probes to `scripts/battery-ground-truth.ts` for
+   the new answerable questions (the standing rule from wave 2's own
+   integration notes); anything W44/W52 add should be added to the wave 5
+   two-venue isolation battery's coverage, not left for it to silently miss.
+
+5. **Legacy-reads ratchet.** Any new read in waves 6-8 must go through a
+   canonical reader or the spine, not `weddings`/`interactions` directly —
+   restating this explicitly since the shared-rules block for waves 6-8 was
+   never written out the way waves 1-5 each state it.
+
+6. **Demo venue coverage.** Nothing above mentions the Crestwood demo seed.
+   If W44's correlation card, W53's CEO story, or W57's review-buzz alert
+   only ever have real data on Rixey, external demos and Isadora's own
+   day-to-day QA won't show them working. Each new surface needs a credible
+   demo-data case, not just a real-venue one.
+
+7. **Expectation-setting on W44 specifically.** Building the tours channel
+   makes the *question* answerable, it doesn't make the *answer* exist on
+   day one — a correlation needs weeks or months of paired history after
+   launch before `enoughData` gates open. Worth saying plainly so "we built
+   it" doesn't get read as "we now know whether social posting drives
+   tours."
+
+8. **No shared-rules restatement for waves 6-8.** Waves 1-5 each open with
+   "no database writes, work in your worktree, stage explicit paths, no
+   `git add -A`, plain English, British spelling, no em dashes, `tsc` +
+   `vitest` + governance clean before committing." None of that was
+   re-stated for this plan. It should carry forward unchanged, verbatim, not
+   assumed.
+
+9. **Coordinator rollout/training isn't in scope here and should be
+   someone's job.** UX-AUDIT-NON-TECHNICAL.md already establishes the
+   audience is non-technical; six new tabs, a new page, and a role-shared
+   timeline/table editor is a real amount of new surface for a coordinator
+   to learn in one go. Not an engineering workstream, but worth a named
+   owner before wave 8 ships, not after.
+
+10. **This document itself has no nav entry problem, but it does have a
+    self-consistency one worth naming out loud:** wave 8 adds real new
+    surface area (a new page, new tabs, a new queue) right after W39 spent
+    an entire wave trimming surface area down. Every new page above lists
+    `nav-config.ts` or an explicit tab placement in its Owns column for
+    exactly this reason — worth double-checking at merge time that none of
+    wave 8's additions become wave 9's orphan-page audit.
