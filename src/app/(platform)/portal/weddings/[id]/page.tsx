@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { countSeatedParties } from '@/lib/services/couple-portal/seating-view'
 import { type Cents, formatCents } from '@/lib/types/monetary'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import Link from 'next/link'
@@ -684,7 +685,9 @@ function GuestsTab({ guests, guestCountEstimate }: { guests: GuestRow[]; guestCo
   const attending = guests.filter((g) => g.rsvp_status === 'attending').length
   const declined = guests.filter((g) => g.rsvp_status === 'declined').length
   const pending = guests.filter((g) => !g.rsvp_status || g.rsvp_status === 'pending' || g.rsvp_status === 'maybe').length
-  const assigned = guests.filter((g) => g.table_assignment && g.table_assignment.trim().length > 0).length
+  // Same rule the seating board uses (W61), so this count and the board
+  // can never disagree about how many parties are seated.
+  const assigned = countSeatedParties(guests)
 
   // Dietary summary
   const dietaryMap: Record<string, number> = {}

@@ -12,6 +12,7 @@ import {
   SEATING_ASSIGNMENT_COLUMN,
   buildSeatingView,
   capacityNote,
+  countSeatedParties,
   hostName,
   normaliseTableName,
   partySize,
@@ -228,6 +229,23 @@ describe('buildSeatingView', () => {
       guests: [],
     })
     expect(view.tables.map((t) => t.tableId)).toEqual(['t1', 't2'])
+  })
+})
+
+describe('countSeatedParties — used by the coordinator wedding page (W61)', () => {
+  it('counts rows with a non-blank table_assignment, matching totals.seatedParties', () => {
+    const guests = [
+      guest({ id: 'g1', table_assignment: 'Table 1' }),
+      guest({ id: 'g2', first_name: 'Ben', table_assignment: '   ' }),
+      guest({ id: 'g3', first_name: 'Cara', table_assignment: null }),
+    ]
+    expect(countSeatedParties(guests)).toBe(1)
+    const view = buildSeatingView({ tables: TABLES, guests, mapElements: ELEMENTS })
+    expect(countSeatedParties(guests)).toBe(view.totals.seatedParties)
+  })
+
+  it('needs nothing but table_assignment, not the full guest shape', () => {
+    expect(countSeatedParties([{ table_assignment: 'Table 1' }, { table_assignment: null }])).toBe(1)
   })
 })
 

@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { type Cents, formatCents } from '@/lib/types/monetary'
 import { cn } from '@/lib/utils'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
+import { normaliseTableName } from '@/lib/services/couple-portal/seating-view'
 import {
   Printer,
   ExternalLink,
@@ -530,7 +531,9 @@ function GuestSection({ guests }: { guests: Guest[] }) {
                     </span>
                   </td>
                   <td className="py-1.5 text-sage-600">{g.meal_choice || '--'}</td>
-                  <td className="py-1.5 text-sage-600">{g.table_assignment || '--'}</td>
+                  <td className="py-1.5 text-sage-600">
+                    {normaliseTableName(g.table_assignment) ? g.table_assignment : '--'}
+                  </td>
                 </tr>
               ))}
             </tbody>
