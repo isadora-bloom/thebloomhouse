@@ -37,6 +37,7 @@ import {
   badRequest,
   notFound,
 } from '@/lib/api/auth-helpers'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 30
 
@@ -80,7 +81,7 @@ async function resolveAuth(
   req: NextRequest,
   body: AddBody,
 ): Promise<{ ctx: AuthCtx } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

@@ -38,6 +38,7 @@ import {
   KNOWLEDGE_GAP_CATEGORIES,
   type KnowledgeGapCategory,
 } from '@/lib/services/knowledge-gaps/categories'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 interface PostBody {
   knowledgeGapId?: string
@@ -103,8 +104,7 @@ export async function POST(req: NextRequest) {
       : 'operator_input'
 
   // ---- Dual auth: cron OR platform ----
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string
   let operatorId: string | null = null

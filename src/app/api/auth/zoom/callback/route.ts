@@ -10,24 +10,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createHmac, timingSafeEqual } from 'crypto'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { verifyOAuthState } from '@/lib/services/integrations/oauth-state'
 
 interface StatePayload {
   venueId: string
   userId: string
   returnTo: string
-  ts: number
-}
-
-function getStateSecret(): string {
-  return (
-    process.env.ZOOM_STATE_SECRET ||
-    process.env.CRON_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    'bloom-zoom-state-dev-secret'
-  )
 }
 
 function getRedirectUri(request: NextRequest): string {
@@ -37,40 +27,22 @@ function getRedirectUri(request: NextRequest): string {
   return `${origin}/api/auth/zoom/callback`
 }
 
+/**
+ * S2 (2026-09-14 security audit). Signature, freshness and single-use
+ * all live in the shared signer now; the only thing left here is the
+ * shape of the payload this route expects. The window tightened from
+ * fifteen minutes to the shared ten, and a replayed state is refused
+ * outright rather than accepted a second time.
+ */
 function verifyState(state: string): StatePayload | null {
-  if (!state || !state.includes('.')) return null
-  const dot = state.lastIndexOf('.')
-  const payloadB64 = state.slice(0, dot)
-  const sig = state.slice(dot + 1)
-  if (!payloadB64 || !sig) return null
-
-  const expected = createHmac('sha256', getStateSecret())
-    .update(payloadB64)
-    .digest('base64url')
-
-  // Constant-time compare; both must be the same length.
-  const a = Buffer.from(sig)
-  const b = Buffer.from(expected)
-  if (a.length !== b.length) return null
-  if (!timingSafeEqual(a, b)) return null
-
-  try {
-    const payload = JSON.parse(
-      Buffer.from(payloadB64, 'base64url').toString('utf-8')
-    ) as StatePayload
-    if (
-      typeof payload.venueId !== 'string' ||
-      typeof payload.userId !== 'string' ||
-      typeof payload.returnTo !== 'string' ||
-      typeof payload.ts !== 'number'
-    ) {
-      return null
-    }
-    if (Date.now() - payload.ts > 15 * 60 * 1000) return null
-    return payload
-  } catch {
+  const result = verifyOAuthState(state, 'zoom')
+  if (!result.ok) {
+    console.warn(`[zoom/callback] state rejected: ${result.reason}`)
     return null
   }
+  const { venueId, userId, returnTo } = result.payload
+  if (typeof returnTo !== 'string') return null
+  return { venueId, userId, returnTo }
 }
 
 function redirectBack(

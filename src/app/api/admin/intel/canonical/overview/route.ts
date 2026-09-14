@@ -20,13 +20,14 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { getVenueOverview } from '@/lib/intel/canonical'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const venueIdParam = url.searchParams.get('venueId')
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string | null = null
   if (cronAuth) {

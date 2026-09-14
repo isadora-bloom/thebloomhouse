@@ -37,6 +37,7 @@ import {
   autoProposeCulturalMomentsLlmAllVenues,
 } from '@/lib/services/insights/cultural-moments-llm-propose'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 interface SampleSummary {
   venuesProposed: number
@@ -57,8 +58,7 @@ export async function POST(request: NextRequest) {
   // ops-side runs are trusted. Still enforces scope=venue + a
   // body-supplied venueId so a leaked secret can't fan out cross-
   // tenant.
-  const cronAuth =
-    request.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(request).ok
   if (cronAuth) {
     let body: CronBody = {}
     try {

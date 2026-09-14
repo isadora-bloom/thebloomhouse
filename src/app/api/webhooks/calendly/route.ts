@@ -20,6 +20,9 @@ import {
 // The signature header is `Calendly-Webhook-Signature` with format:
 //   t=<timestamp>,v1=<signature>
 // See: https://developer.calendly.com/api-docs/ZG9jOjM2MzE2MDM4-webhook-signatures
+//
+// Env-gated: with CALENDLY_WEBHOOK_SECRET unset the route answers 503 and
+// does nothing else. It never parses an unverified body.
 // ---------------------------------------------------------------------------
 
 /**
@@ -69,29 +72,37 @@ function verifyCalendlySignature(
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
+  // S2 (2026-09-14 security audit). Refuse before reading the body when
+  // the signing secret is missing. The old shape logged a warning and
+  // carried on, so an unsigned POST could create tour_booked engagement
+  // events, cancel a real tour, and write discovery-source attribution
+  // for any venue. Same posture as /api/webhooks/twilio and
+  // /api/webhooks/instagram: no secret, no work, 503.
+  const webhookSecret = process.env.CALENDLY_WEBHOOK_SECRET
+  if (!webhookSecret) {
+    console.error(
+      '[webhook/calendly] CALENDLY_WEBHOOK_SECRET is not set — refusing the ' +
+        'delivery. Nothing was parsed or processed. Set the variable in ' +
+        'Vercel; Calendly retries, so a short gap is recoverable.',
+    )
+    return NextResponse.json({ error: 'calendly_not_configured' }, { status: 503 })
+  }
+
   try {
     // Read raw body for signature validation, then parse
     const rawBody = await request.text()
 
     // ---- Signature validation ----
     const sigHeader = request.headers.get('calendly-webhook-signature')
-    const webhookSecret = process.env.CALENDLY_WEBHOOK_SECRET
 
-    if (webhookSecret) {
-      if (!sigHeader) {
-        console.warn('[webhook/calendly] Missing Calendly-Webhook-Signature header')
-        return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
-      }
+    if (!sigHeader) {
+      console.warn('[webhook/calendly] Missing Calendly-Webhook-Signature header')
+      return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
+    }
 
-      if (!verifyCalendlySignature(rawBody, sigHeader, webhookSecret)) {
-        console.warn('[webhook/calendly] Invalid webhook signature')
-        return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-      }
-    } else {
-      console.warn(
-        '[webhook/calendly] CALENDLY_WEBHOOK_SECRET not set — skipping signature validation. ' +
-        'Set this env var in production.'
-      )
+    if (!verifyCalendlySignature(rawBody, sigHeader, webhookSecret)) {
+      console.warn('[webhook/calendly] Invalid webhook signature')
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
     }
 
     const body = JSON.parse(rawBody)

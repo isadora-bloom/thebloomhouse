@@ -45,7 +45,6 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { randomUUID } from 'crypto'
 
 // ---------------------------------------------------------------------------
 // Config
@@ -84,55 +83,40 @@ export function readGoogleAdsOauthEnv():
 // State token (anti-CSRF for the OAuth roundtrip)
 // ---------------------------------------------------------------------------
 //
-// We don't add a new table for transient state tokens. Encoded form is
-// `${venueId}:${nonce}:${signature}` where signature = HMAC-SHA256 of
-// `${venueId}:${nonce}` using CRON_SECRET (already shared between the
-// app and the deploy environment). 10-minute validity enforced by
-// embedding a unix timestamp in the nonce.
+// S2 (2026-09-14 security audit). This used to be its own HMAC over
+// `${venueId}:${nonce}` keyed on CRON_SECRET — the cron and admin-ops
+// bearer token, reused as an OAuth signing key, with no user binding and
+// no single-use marker. It now delegates to the shared implementation in
+// ./oauth-state.ts, which signs with STATE_SIGNING_SECRET, binds the
+// user id, and consumes the nonce. Meta Ads and TikTok Ads reach the
+// same two functions through marketing-spend/connectors/shared.ts.
+//
+// The wrappers stay so those three providers keep one import path and
+// one `provider` tag each.
 
-import { createHmac, timingSafeEqual } from 'crypto'
+import {
+  mintOAuthState,
+  verifyOAuthState,
+  type OAuthStateProvider,
+} from './oauth-state'
 
-const STATE_TTL_MS = 10 * 60 * 1000
+export { isOAuthStateConfigured } from './oauth-state'
 
-export function mintOauthState(venueId: string): string {
-  const secret = process.env.CRON_SECRET ?? ''
-  if (!secret) throw new Error('CRON_SECRET missing — cannot sign OAuth state')
-  const nonce = `${Date.now()}:${randomUUID()}`
-  const payload = `${venueId}:${nonce}`
-  const signature = createHmac('sha256', secret)
-    .update(payload)
-    .digest('hex')
-  return Buffer.from(`${payload}:${signature}`).toString('base64url')
+export function mintOauthState(
+  venueId: string,
+  userId: string,
+  provider: OAuthStateProvider = 'google_ads',
+): string {
+  return mintOAuthState({ provider, venueId, userId })
 }
 
 export function verifyOauthState(
   state: string,
-): { ok: true; venueId: string } | { ok: false; reason: string } {
-  const secret = process.env.CRON_SECRET ?? ''
-  if (!secret) return { ok: false, reason: 'CRON_SECRET missing' }
-  let decoded: string
-  try {
-    decoded = Buffer.from(state, 'base64url').toString('utf-8')
-  } catch {
-    return { ok: false, reason: 'invalid encoding' }
-  }
-  const parts = decoded.split(':')
-  if (parts.length < 4) return { ok: false, reason: 'malformed state' }
-  // Last segment is the signature; everything else is the payload.
-  const signature = parts.pop() as string
-  const payload = parts.join(':')
-  const expected = createHmac('sha256', secret).update(payload).digest('hex')
-  const sigBuf = Buffer.from(signature, 'hex')
-  const expBuf = Buffer.from(expected, 'hex')
-  if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
-    return { ok: false, reason: 'signature mismatch' }
-  }
-  const [venueId, tsStr] = parts
-  const ts = Number(tsStr)
-  if (!Number.isFinite(ts) || Date.now() - ts > STATE_TTL_MS) {
-    return { ok: false, reason: 'state expired' }
-  }
-  return { ok: true, venueId }
+  provider: OAuthStateProvider = 'google_ads',
+): { ok: true; venueId: string; userId: string } | { ok: false; reason: string } {
+  const result = verifyOAuthState(state, provider)
+  if (!result.ok) return { ok: false, reason: result.reason }
+  return { ok: true, venueId: result.payload.venueId, userId: result.payload.userId }
 }
 
 // ---------------------------------------------------------------------------

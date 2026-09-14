@@ -16,7 +16,8 @@ import { mintAdOauthState } from '@/lib/services/marketing-spend/connectors/shar
  * Begins the Meta Ads grant. The coordinator clicks Connect on
  * /settings/integrations/meta-ads, we mint an anti-forgery state token
  * (an HMAC of the venue id, a nonce and a timestamp, signed with
- * CRON_SECRET and good for ten minutes), and send them to Meta.
+ * STATE_SIGNING_SECRET, single use, and good for ten minutes), and send
+ * them to Meta.
  *
  * A 503 with the missing variable names comes back when the app
  * credentials are not provisioned yet, and the settings page shows that
@@ -40,7 +41,7 @@ export async function GET(_request: NextRequest) {
     )
   }
 
-  const state = mintAdOauthState(auth.venueId)
+  const state = mintAdOauthState(auth.venueId, auth.userId, 'meta_ads')
   return NextResponse.redirect(
     buildMetaAuthorizeUrl({ env: envCheck.env, state }),
     302,

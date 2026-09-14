@@ -37,6 +37,7 @@ import {
   getStoredVenueThesis,
   VENUE_THESIS_PROMPT_VERSION,
 } from '@/lib/services/intel/onboarding/generate-thesis'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // One thesis is one Sonnet call over the cohort aggregate. Pad for the
 // evidence-load latency.
@@ -63,8 +64,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

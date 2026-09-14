@@ -40,6 +40,7 @@ import {
   getStoredVenueIntel,
   COHORT_ROLLUP_PROMPT_VERSION,
 } from '@/lib/services/intel/cohort-rollup'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // One rollup is one Sonnet call over ~30-60 anonymised summaries — a
 // few minutes worst case. Pad for evidence-load latency.
@@ -65,8 +66,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')
@@ -187,8 +187,7 @@ export async function GET(req: NextRequest) {
   const venueIdParam = url.searchParams.get('venueId')
 
   // Auth resolution.
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   let venueId: string | null = null
   if (cronAuth) {
     if (!venueIdParam) return badRequest('CRON_SECRET path requires venueId param')

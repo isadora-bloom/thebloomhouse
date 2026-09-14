@@ -41,28 +41,28 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-
-function resolveSecret(): string | null {
-  const harnessSecret = process.env.TEST_HARNESS_SECRET
-  if (harnessSecret) return harnessSecret
-  // Non-prod fallback to CRON_SECRET so local dev / CI without the
-  // dedicated harness secret still works. Prod requires explicit set.
-  if (process.env.NODE_ENV !== 'production' && process.env.CRON_SECRET) {
-    return process.env.CRON_SECRET
-  }
-  return null
-}
+import { isCronSecretConfigured, verifyCronAuth } from '@/lib/cron-auth'
 
 export async function POST(request: NextRequest) {
-  const expected = resolveSecret()
-  if (!expected) {
+  // S2 (2026-09-14 security audit). The non-prod CRON_SECRET fallback
+  // stays — scripts/e2e-data-flow-test.mjs authenticates with it — but it
+  // is verified by the helper now rather than by an inline `===` that
+  // matched the literal `Bearer undefined` when the variable was unset.
+  const harnessSecret = process.env.TEST_HARNESS_SECRET
+  const cronFallback = process.env.NODE_ENV !== 'production' && isCronSecretConfigured()
+
+  if (!harnessSecret && !cronFallback) {
     return NextResponse.json(
       { error: 'Admin test harness disabled (TEST_HARNESS_SECRET unset)' },
       { status: 501 }
     )
   }
+
   const auth = request.headers.get('authorization')
-  if (auth !== `Bearer ${expected}`) {
+  const authorised = harnessSecret
+    ? auth === `Bearer ${harnessSecret}`
+    : verifyCronAuth(request).ok
+  if (!authorised) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

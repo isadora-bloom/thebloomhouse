@@ -23,6 +23,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { runDataIntegrityChecks } from '@/lib/services/data-integrity'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 120
 
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const requestedVenueId = url.searchParams.get('venueId')
 
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   let venueId: string | null = null
   if (cronAuth) {
     if (!requestedVenueId) return badRequest('CRON_SECRET path requires venueId')

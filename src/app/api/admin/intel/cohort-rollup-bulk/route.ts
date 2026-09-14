@@ -44,6 +44,7 @@ import {
   getStoredVenueIntel,
 } from '@/lib/services/intel/cohort-rollup'
 import { enqueueCohortRollup } from '@/lib/services/intel/enqueue-cohort-rollup'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 300
 
@@ -69,8 +70,7 @@ interface AuthContext {
 async function resolveAuth(
   req: NextRequest,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     return { ctx: { isCron: true } }
   }

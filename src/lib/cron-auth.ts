@@ -1,14 +1,17 @@
 /**
- * Cron auth helper. Tier-C #126.
+ * Cron auth helper. Tier-C #126, hardened by the 2026-09-14 security
+ * audit (S2).
  *
  * Two-tier model:
- *   - CRON_SECRET — required for every cron route. Verified by all
- *     callers, including Vercel's automatic cron triggers.
- *   - CRON_SECRET_DESTRUCTIVE — optional second tier. When set, jobs in
- *     DESTRUCTIVE_JOBS need EITHER a vercel-cron user-agent (Vercel-
- *     fired schedule) OR an explicit X-Destructive-Secret header. This
- *     blocks ad-hoc curl invocations of merge/prune/replay jobs from
- *     anyone holding only the base CRON_SECRET.
+ *   - CRON_SECRET — required for every cron route and every admin ops
+ *     route. Verified by all callers, including Vercel's automatic cron
+ *     triggers. Must be at least MIN_SECRET_LENGTH characters when
+ *     VERCEL_ENV is 'production'.
+ *   - CRON_SECRET_DESTRUCTIVE — second tier for jobs in DESTRUCTIVE_JOBS
+ *     (and for routes passing alwaysDestructive). Those need EITHER a
+ *     vercel-cron user-agent (Vercel-fired schedule) OR an explicit
+ *     X-Destructive-Secret header. This blocks ad-hoc curl invocations of
+ *     merge/prune/replay jobs from anyone holding only the base secret.
  *
  * Why not pure per-job env vars: Vercel cron triggers send a single
  * Authorization header derived from CRON_SECRET. Adding 39 separate
@@ -16,16 +19,30 @@
  * AND adds rotation pain that exceeds the security gain. A single
  * destructive-class secret is the right granularity.
  *
- * The destructive secret is OPTIONAL by design: leaving CRON_SECRET_
- * DESTRUCTIVE unset preserves the current behaviour (single-secret
- * gate). Setting it enables the harder gate. Opt-in hardening.
+ * S2 changes, all fail-closed:
+ *   1. Comparison is constant-time (crypto.timingSafeEqual over
+ *      equal-length buffers) rather than `===` on a template string.
+ *      The old inline shape produced the literal `Bearer undefined` when
+ *      CRON_SECRET was unset, which a caller could simply send.
+ *   2. An unset CRON_SECRET is a 503 (server misconfigured), not a 401.
+ *      Nothing runs.
+ *   3. A CRON_SECRET shorter than MIN_SECRET_LENGTH is refused in
+ *      production. Short secrets are guessable and the whole admin ops
+ *      surface hangs off this one value.
+ *   4. The destructive tier is no longer opt-in in production. It used
+ *      to return ok when CRON_SECRET_DESTRUCTIVE was unset, which meant
+ *      the hardening was off by default on the deployment that needed it
+ *      most. Unset in production now refuses with a 503 naming the var.
+ *      Local dev keeps the permissive behaviour behind a logged warning
+ *      so nobody has to invent a second secret to run a sweep by hand.
  */
 
 /**
  * Jobs that mutate identity-resolution state, dedup people / weddings,
  * delete telemetry, or send outbound emails to real people. Adding a
  * job here makes it require the destructive secret on non-Vercel-cron
- * traffic when CRON_SECRET_DESTRUCTIVE is set.
+ * traffic, and makes it refuse outright in production while
+ * CRON_SECRET_DESTRUCTIVE is unset.
  *
  * Conservative bias: when in doubt, mark destructive. Cost of a
  * false-positive is "ops has to set the X-Destructive-Secret header
@@ -116,6 +133,43 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   'voice_dna_sweep',
 ])
 
+import { timingSafeEqual } from 'node:crypto'
+
+/**
+ * Minimum CRON_SECRET length accepted in production. `openssl rand -hex
+ * 32` gives 64 characters; 32 is the floor below which the value is
+ * almost certainly a hand-typed placeholder rather than random bytes.
+ */
+export const MIN_SECRET_LENGTH = 32
+
+/** Vercel sets VERCEL_ENV to 'production' only on the production deployment. */
+function inProduction(): boolean {
+  return process.env.VERCEL_ENV === 'production'
+}
+
+/**
+ * Whether a cron secret exists at all. For routes that offer a second
+ * credential (the test harness, say) and want to answer 501 "no
+ * credential configured" rather than 401 "wrong credential". Reading
+ * process.env.CRON_SECRET inside a route is a CI failure by design —
+ * scripts/check-cron-auth-helper.mjs — so ask here instead.
+ */
+export function isCronSecretConfigured(): boolean {
+  return Boolean(process.env.CRON_SECRET)
+}
+
+/**
+ * Constant-time compare of two secrets. Unequal lengths short-circuit —
+ * timingSafeEqual throws on mismatched buffers — so the length is
+ * observable but never the bytes.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided, 'utf-8')
+  const b = Buffer.from(expected, 'utf-8')
+  if (a.length !== b.length) return false
+  return timingSafeEqual(a, b)
+}
+
 export type CronAuthResult =
   | { ok: true }
   | { ok: false; status: number; error: string }
@@ -143,10 +197,19 @@ export function verifyCronAuth(req: Request, opts: CronAuthOpts = {}): CronAuthR
   // ----- Tier 1: base secret (always required) -----
   const baseSecret = process.env.CRON_SECRET
   if (!baseSecret) {
-    return { ok: false, status: 401, error: 'CRON_SECRET unset' }
+    // 503, not 401: the caller did nothing wrong, the deployment is
+    // misconfigured. Either way nothing downstream runs.
+    return { ok: false, status: 503, error: 'CRON_SECRET unset' }
+  }
+  if (inProduction() && baseSecret.length < MIN_SECRET_LENGTH) {
+    return {
+      ok: false,
+      status: 503,
+      error: `CRON_SECRET shorter than ${MIN_SECRET_LENGTH} characters`,
+    }
   }
   const auth = req.headers.get('authorization')
-  if (auth !== `Bearer ${baseSecret}`) {
+  if (!auth || !secretsMatch(auth, `Bearer ${baseSecret}`)) {
     return { ok: false, status: 401, error: 'invalid Authorization' }
   }
 
@@ -159,9 +222,25 @@ export function verifyCronAuth(req: Request, opts: CronAuthOpts = {}): CronAuthR
 
   const destSecret = process.env.CRON_SECRET_DESTRUCTIVE
   if (!destSecret) {
-    // Opt-in hardening: when the destructive secret isn't configured,
-    // we fall back to single-secret behaviour. Document this loudly
-    // in the runbook so ops knows whether the gate is active.
+    if (inProduction()) {
+      // Was: fall through to single-secret behaviour. That made the
+      // destructive gate inert exactly where it matters — a leaked
+      // CRON_SECRET could fire every merge, prune and replay job in the
+      // set. Refuse instead, and name the variable so the fix is obvious
+      // from the response body.
+      return {
+        ok: false,
+        status: 503,
+        error:
+          'destructive job refused: CRON_SECRET_DESTRUCTIVE is unset in production',
+      }
+    }
+    console.warn(
+      '[cron-auth] CRON_SECRET_DESTRUCTIVE is unset. Allowing this ' +
+        'destructive job because VERCEL_ENV is not production. Set the ' +
+        'variable in Vercel before the next production deploy or every ' +
+        'destructive job will answer 503.',
+    )
     return { ok: true }
   }
 
@@ -172,7 +251,7 @@ export function verifyCronAuth(req: Request, opts: CronAuthOpts = {}): CronAuthR
   if (isVercelCron) return { ok: true }
 
   const dstHeader = req.headers.get('x-destructive-secret')
-  if (dstHeader !== destSecret) {
+  if (!dstHeader || !secretsMatch(dstHeader, destSecret)) {
     return {
       ok: false,
       status: 403,

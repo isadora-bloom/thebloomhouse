@@ -57,6 +57,7 @@ import {
   getStoredCoupleIdentityProfile,
 } from '@/lib/services/identity/reconstruct'
 import { enqueueIdentityReconstruction } from '@/lib/services/identity/enqueue-reconstruction'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // 5 min — Vercel Pro maxDuration ceiling. Cap inline-mode batch sizes
 // so we don't blow this budget mid-sweep.
@@ -96,8 +97,7 @@ async function resolveAuth(
   req: NextRequest,
   body: BulkBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

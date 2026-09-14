@@ -22,6 +22,7 @@ import {
   actionMarketingFlag,
   getMarketingFlag,
 } from '@/lib/services/marketing-spend/loop'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 30
 
@@ -43,8 +44,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     body = {}
   }
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let actorUserId: string | null = null
   let scopedVenueId: string | null = null

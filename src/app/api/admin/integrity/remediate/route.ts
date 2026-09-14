@@ -53,6 +53,7 @@ import {
   type RemediationMode,
   type RemediationResult,
 } from '@/lib/services/data-integrity/remediation'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 300
 
@@ -70,7 +71,7 @@ interface AuthContext {
 }
 
 async function resolveAuth(req: NextRequest, requestedVenueId: string | null): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!requestedVenueId) return badRequest('CRON_SECRET path requires venueId')
     // Validate venue exists (defense in depth).

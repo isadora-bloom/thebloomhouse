@@ -19,6 +19,7 @@ import {
   forbidden,
   badRequest,
 } from '@/lib/api/auth-helpers'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 30
 
@@ -34,8 +35,7 @@ async function resolveAuth(
   req: NextRequest,
   bodyVenueId: string | null,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!bodyVenueId) {
       return badRequest('CRON_SECRET path requires venueId query param')

@@ -43,6 +43,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { archiveExpiredCulturalMoments } from '@/lib/services/external-context/cultural-moments'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 60
 
@@ -51,7 +52,7 @@ interface PostBody {
 }
 
 export async function POST(req: NextRequest) {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (!cronAuth) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }

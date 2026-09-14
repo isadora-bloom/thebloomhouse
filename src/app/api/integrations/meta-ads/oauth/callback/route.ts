@@ -43,11 +43,13 @@ export async function GET(request: NextRequest) {
   if (errorParam) return back(`?error=${encodeURIComponent(errorParam)}`)
   if (!code || !state) return back('?error=missing_code_or_state')
 
-  const stateCheck = verifyAdOauthState(state)
+  const stateCheck = verifyAdOauthState(state, 'meta_ads')
   if (!stateCheck.ok) {
     return back(`?error=${encodeURIComponent(stateCheck.reason)}`)
   }
   if (stateCheck.venueId !== auth.venueId) return back('?error=venue_mismatch')
+  // S2: bound to the user who started the flow, not only the venue.
+  if (stateCheck.userId !== auth.userId) return back('?error=user_mismatch')
 
   const envCheck = readMetaAdsEnv()
   if (!envCheck.ok) return back('?error=not_configured')

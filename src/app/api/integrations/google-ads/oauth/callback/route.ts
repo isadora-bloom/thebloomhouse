@@ -52,6 +52,10 @@ export async function GET(request: NextRequest) {
     return back(`?error=${encodeURIComponent(stateCheck.reason)}`)
   }
   if (stateCheck.venueId !== auth.venueId) return back('?error=venue_mismatch')
+  // S2: the state is bound to the user who clicked Connect, not just the
+  // venue. Two coordinators at one venue can no longer finish each
+  // other's consent round trip.
+  if (stateCheck.userId !== auth.userId) return back('?error=user_mismatch')
 
   const envCheck = readGoogleAdsOauthEnv()
   if (!envCheck.ok) return back('?error=not_configured')

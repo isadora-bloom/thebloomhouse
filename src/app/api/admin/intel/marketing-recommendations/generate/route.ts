@@ -33,6 +33,7 @@ import {
   generateMarketingRecommendations,
   MARKETING_RECOMMENDATIONS_PROMPT_VERSION,
 } from '@/lib/services/marketing-spend/recommendations'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // One Sonnet call ~30s on a venue with full data; pad for very large
 // rollups + cohort.
@@ -53,8 +54,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

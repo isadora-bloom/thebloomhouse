@@ -16,6 +16,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { loadCohortData } from '@/lib/services/cohort/data'
 import { buildSourceQualityReport } from '@/lib/services/cohort/source-quality'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 90
 
@@ -23,8 +24,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const venueIdParam = url.searchParams.get('venueId')
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string | null = null
   if (cronAuth) {

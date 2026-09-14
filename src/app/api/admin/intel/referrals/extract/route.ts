@@ -27,6 +27,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { extractReferrers } from '@/lib/services/intel/referrals/extract'
 import { resolveReferrer } from '@/lib/services/intel/referrals/resolve'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 120
 
@@ -43,7 +44,7 @@ async function resolveAuth(
   req: NextRequest,
   weddingId: string | null,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!weddingId) {
       return badRequest('CRON_SECRET path requires weddingId')

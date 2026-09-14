@@ -36,6 +36,7 @@ import {
   EXTERNAL_MATCH_PROMPT_VERSION,
 } from '@/lib/services/intel/external-match'
 import { enqueueExternalMatch } from '@/lib/services/intel/enqueue-external-match'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // External-match scan can run several Sonnet calls (one per cultural
 // moment + one regional benchmark). 280s budget mirrors Wave 5B.
@@ -58,8 +59,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

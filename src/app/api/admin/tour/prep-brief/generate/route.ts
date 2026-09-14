@@ -34,6 +34,7 @@ import {
   getStoredTourPrepBrief,
   TOUR_PREP_BRIEF_PROMPT_VERSION,
 } from '@/lib/services/tour/prep-brief'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 120
 
@@ -53,7 +54,7 @@ async function resolveAuth(
   req: NextRequest,
   tourId: string | null,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!tourId) {
       return badRequest('CRON_SECRET path requires tourId')

@@ -246,6 +246,12 @@ jobs:
       - name: Plan-tier enforcement guard — every paid-tier API route calls requirePlan (PROJECT-AUDIT-V2 GAP-12)
         run: node scripts/check-plan-enforcement.mjs
 
+      - name: Cron-auth helper guard — no inline CRON_SECRET comparison under src/app/api (S2)
+        run: node scripts/check-cron-auth-helper.mjs
+
+      - name: Secret-scanning guard — no committed API key, JWT or webhook secret (S2)
+        run: node scripts/check-no-secrets.mjs
+
       # --- Consolidation governance (FIX-PLAN Layer B/C/D) ------------------
       # ENFORCING since 2026-06-11 (Phase 0 §0.9 flip executed — was left
       # `continue-on-error: true` at the 2026-05-29 ratification "until

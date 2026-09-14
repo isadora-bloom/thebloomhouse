@@ -16,6 +16,7 @@ import {
   notFound,
 } from '@/lib/api/auth-helpers'
 import { getStoredTourPrepBrief } from '@/lib/services/tour/prep-brief'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 interface Params {
   params: Promise<{ tourId: string }>
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest, ctx: Params) {
   const { tourId } = await ctx.params
   if (!tourId) return badRequest('tourId required')
 
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (!cronAuth) {
     const auth = await getPlatformAuth()
     if (!auth) return unauthorized()
