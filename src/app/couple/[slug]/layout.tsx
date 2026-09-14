@@ -4,6 +4,7 @@ import { CoupleShell } from '@/components/couple/couple-shell'
 import { FloatingSage } from '@/components/couple/floating-sage'
 import { CoupleAiNameProvider } from '@/lib/hooks/use-couple-context'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { getWeddingRecord } from '@/lib/intel/readers/wedding-record'
 
 /**
  * Layout for path-based couple portal: /couple/[slug]/...
@@ -62,41 +63,39 @@ async function getVenueBranding(slug: string) {
     .eq('venue_id', venue.id)
     .maybeSingle()
 
-  // For the demo, fetch the first wedding's client code so the top bar can
-  // display a reference code unobtrusively. In real use this would be scoped
-  // to the currently authenticated couple's wedding_id.
-  const { data: demoWedding } = await supabase
-    .from('weddings')
-    .select('id, code_extension')
+  // For the demo, resolve the venue's earliest booked/completed couple
+  // off the spine — never `weddings` directly — so the top bar's
+  // reference code and the Final Review sidebar badge come from the
+  // same source `getWeddingRecord` uses everywhere else (W65). Legacy
+  // status 'booked' and 'completed' both mirror to lifecycle_state
+  // 'booked' (mirror-couple.ts), so this one filter covers what the old
+  // `.in('status', ['booked', 'completed'])` query covered. In real use
+  // this would be scoped to the currently authenticated couple's
+  // wedding_id rather than "earliest for the venue".
+  const { data: demoCouple } = await supabase
+    .from('couples')
+    .select('source_wedding_id')
     .eq('venue_id', venue.id)
-    .in('status', ['booked', 'completed'])
+    .eq('lifecycle_state', 'booked')
+    .is('merged_into_id', null)
     .order('wedding_date', { ascending: true })
     .limit(1)
-    .maybeSingle()
+    .maybeSingle<{ source_wedding_id: string | null }>()
 
   let clientCode: string | null = null
-  if (demoWedding?.id) {
+  let weddingDate: string | null = null
+  if (demoCouple?.source_wedding_id) {
+    const record = await getWeddingRecord(demoCouple.source_wedding_id, venue.id, supabase)
+    weddingDate = record.weddingDate
     const { data: codeRow } = await supabase
       .from('client_codes')
       .select('code')
       .eq('venue_id', venue.id)
-      .eq('wedding_id', demoWedding.id)
+      .eq('wedding_id', demoCouple.source_wedding_id)
       .maybeSingle()
     const baseCode = codeRow?.code ?? null
-    clientCode = baseCode
-      ? formatBloomNumber(baseCode, demoWedding.code_extension)
-      : null
+    clientCode = baseCode ? formatBloomNumber(baseCode, record.codeExtension) : null
   }
-
-  // Fetch wedding date for the Final Review sidebar badge
-  const { data: weddingDateRow } = await supabase
-    .from('weddings')
-    .select('wedding_date')
-    .eq('venue_id', venue.id)
-    .in('status', ['booked', 'completed'])
-    .order('wedding_date', { ascending: true })
-    .limit(1)
-    .maybeSingle()
 
   return {
     venueId: venue.id,
@@ -109,7 +108,7 @@ async function getVenueBranding(slug: string) {
     logoUrl: config?.logo_url || null,
     portalTagline: config?.portal_tagline || null,
     clientCode,
-    weddingDate: weddingDateRow?.wedding_date || null,
+    weddingDate: weddingDate || null,
     aiName: (aiConfig?.ai_name as string | null | undefined)?.trim() || null,
   }
 }

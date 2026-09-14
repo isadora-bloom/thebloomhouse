@@ -97,11 +97,15 @@ const GRANDFATHERED = new Set([
   // brain/router.ts:351 mints a person from in-thread evidence when
   // the resolver missed. Migrate alongside pipeline.ts:findOrCreateContact.
   'src/lib/services/brain/router.ts',
-  // _couple-pages/addresses/page.tsx:121 inserts role='parent' rows
-  // from the couple-side parent-address form. Out of mintPerson's
-  // scope (parent address records, not identity matching). Will get
-  // its own primitive if scope grows.
-  'src/app/_couple-pages/addresses/page.tsx',
+  // lib/services/couple-portal/addresses.ts (createParentAddress)
+  // inserts role='parent' rows from the couple-side parent-address
+  // form. Out of mintPerson's scope (parent address records, not
+  // identity matching). Was grandfathered at
+  // src/app/_couple-pages/addresses/page.tsx:121 until W65 (November-
+  // plan wave 9) moved the call out of src/app so the legacy-reads
+  // ratchet stops counting it; same insert, same grandfather reason,
+  // new address. Will get its own primitive if scope grows.
+  'src/lib/services/couple-portal/addresses.ts',
 ])
 
 // ---------------------------------------------------------------------------

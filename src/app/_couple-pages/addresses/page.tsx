@@ -23,20 +23,16 @@ import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { ArrowLeft, Loader2, MapPin, Plus, Pencil, Heart, User } from 'lucide-react'
 import { AddressForm, type AddressFormValues } from '@/components/couple/address-form'
+import {
+  loadCoupleAddresses,
+  saveCoupleAddress,
+  createParentAddress,
+  removeParentAddress,
+  clearCoupleAddress,
+  type CoupleAddressRow,
+} from '@/lib/services/couple-portal/addresses'
 
-interface PersonRow {
-  id: string
-  role: string
-  first_name: string | null
-  last_name: string | null
-  address_label: string | null
-  street_line_1: string | null
-  street_line_2: string | null
-  city: string | null
-  region: string | null
-  postal_code: string | null
-  country: string | null
-}
+type PersonRow = CoupleAddressRow
 
 function hasAddress(p: PersonRow): boolean {
   return Boolean(p.street_line_1 || p.city || p.postal_code)
@@ -70,16 +66,11 @@ export default function AddressesPage() {
     setLoading(true)
     setErr(null)
     const supabase = createClient()
-    const { data, error } = await supabase
-      .from('people')
-      .select('id, role, first_name, last_name, address_label, street_line_1, street_line_2, city, region, postal_code, country')
-      .eq('wedding_id', ctx.weddingId)
-      .in('role', ['partner1', 'partner2', 'parent'])
-      .order('role')
+    const { data, error } = await loadCoupleAddresses(supabase, ctx.weddingId)
     if (error) {
-      setErr(error.message)
+      setErr(error)
     } else {
-      setPeople((data ?? []) as PersonRow[])
+      setPeople(data)
     }
     setLoading(false)
   }
@@ -92,21 +83,18 @@ export default function AddressesPage() {
   async function saveAddress(personId: string, values: AddressFormValues) {
     setSaving(true)
     const supabase = createClient()
-    const { error } = await supabase
-      .from('people')
-      .update({
-        street_line_1: values.street_line_1,
-        street_line_2: values.street_line_2,
-        city: values.city,
-        region: values.region,
-        postal_code: values.postal_code,
-        country: values.country,
-        address_label: values.address_label,
-      })
-      .eq('id', personId)
+    const { error } = await saveCoupleAddress(supabase, personId, {
+      street_line_1: values.street_line_1,
+      street_line_2: values.street_line_2,
+      city: values.city,
+      region: values.region,
+      postal_code: values.postal_code,
+      country: values.country,
+      address_label: values.address_label,
+    })
     setSaving(false)
     if (error) {
-      alert(error.message)
+      alert(error)
       return
     }
     setEditingId(null)
@@ -117,13 +105,10 @@ export default function AddressesPage() {
     if (!ctx.weddingId || !ctx.venueId) return
     setSaving(true)
     const supabase = createClient()
-    const { error } = await supabase
-      .from('people')
-      .insert({
-        venue_id: ctx.venueId,
-        wedding_id: ctx.weddingId,
-        role: 'parent',
-        first_name: values.address_label, // mirror label into first_name so it shows in lists
+    const { error } = await createParentAddress(supabase, {
+      venueId: ctx.venueId,
+      weddingId: ctx.weddingId,
+      values: {
         street_line_1: values.street_line_1,
         street_line_2: values.street_line_2,
         city: values.city,
@@ -131,10 +116,11 @@ export default function AddressesPage() {
         postal_code: values.postal_code,
         country: values.country,
         address_label: values.address_label,
-      })
+      },
+    })
     setSaving(false)
     if (error) {
-      alert(error.message)
+      alert(error)
       return
     }
     setShowNewParent(false)
@@ -144,31 +130,20 @@ export default function AddressesPage() {
   async function removeParent(personId: string) {
     if (!confirm('Remove this address?')) return
     const supabase = createClient()
-    const { error } = await supabase.from('people').delete().eq('id', personId)
+    const { error } = await removeParentAddress(supabase, personId)
     if (error) {
-      alert(error.message)
+      alert(error)
       return
     }
     await load()
   }
 
-  async function clearCoupleAddress(personId: string) {
+  async function handleClearCoupleAddress(personId: string) {
     if (!confirm('Clear this address? The person stays; only the address fields are removed.')) return
     const supabase = createClient()
-    const { error } = await supabase
-      .from('people')
-      .update({
-        street_line_1: null,
-        street_line_2: null,
-        city: null,
-        region: null,
-        postal_code: null,
-        country: null,
-        address_label: null,
-      })
-      .eq('id', personId)
+    const { error } = await clearCoupleAddress(supabase, personId)
     if (error) {
-      alert(error.message)
+      alert(error)
       return
     }
     await load()
@@ -234,7 +209,7 @@ export default function AddressesPage() {
                   showLabel={false}
                   saveLabel="Save"
                   onCancel={() => setEditingId(null)}
-                  onDelete={hasAddress(p) ? () => clearCoupleAddress(p.id) : undefined}
+                  onDelete={hasAddress(p) ? () => handleClearCoupleAddress(p.id) : undefined}
                   onSave={(v) => saveAddress(p.id, { ...v, address_label: null })}
                   saving={saving}
                 />
