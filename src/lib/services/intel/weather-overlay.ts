@@ -94,6 +94,17 @@ export interface AnomalyEvent {
   tours_typical: number | null
 }
 
+/** W49 (wave 7): real NWS severe-weather alert, read from weather_alerts
+ *  (mig 404). Replaces guessing severity from a forecast condition string. */
+export interface ActiveWeatherAlert {
+  event: string | null
+  severity: string | null
+  headline: string | null
+  onset: string | null
+  ends: string | null
+  expires: string | null
+}
+
 export interface WeatherIntelOverlay {
   venue_id: string
   generated_at: string
@@ -105,6 +116,8 @@ export interface WeatherIntelOverlay {
   climate_months: ClimateMonthProfile[]
   /** Notable past events with operational impact. */
   anomaly_events: AnomalyEvent[]
+  /** Currently-active NWS alerts for this venue's coordinates. */
+  active_alerts: ActiveWeatherAlert[]
   history_available: boolean
   data_gated: boolean
   data_gated_reason: string | null
@@ -172,6 +185,7 @@ export async function computeWeatherIntelOverlay(
       latest_insight: null,
       climate_months: [],
       anomaly_events: [],
+      active_alerts: [],
       history_available: false,
       data_gated: true,
       data_gated_reason: 'no_venue_coordinates',
@@ -439,6 +453,25 @@ export async function computeWeatherIntelOverlay(
     }),
   )
 
+  // -----------------------------------------------------------------
+  // W49 (wave 7): currently-active NWS alerts for this venue.
+  // -----------------------------------------------------------------
+  const { data: alertRows } = await supabase
+    .from('weather_alerts')
+    .select('event, severity, headline, onset, ends, expires')
+    .eq('venue_id', venueId)
+    .eq('is_active', true)
+    .order('onset', { ascending: false })
+
+  const active_alerts: ActiveWeatherAlert[] = ((alertRows ?? []) as ActiveWeatherAlert[]).map((r) => ({
+    event: r.event,
+    severity: r.severity,
+    headline: r.headline,
+    onset: r.onset,
+    ends: r.ends,
+    expires: r.expires,
+  }))
+
   return {
     venue_id: venueId,
     generated_at: generatedAt,
@@ -448,6 +481,7 @@ export async function computeWeatherIntelOverlay(
     latest_insight,
     climate_months,
     anomaly_events,
+    active_alerts,
     history_available: climate_months.length > 0,
     data_gated: false,
     data_gated_reason: null,

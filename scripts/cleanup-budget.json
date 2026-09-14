@@ -5,7 +5,7 @@
   "resolver_reassign_calls": 35,
   "resolver_reassign_calls_justification": "couple_notifications table (mig 389) added to mergeWeddings reassign list",
   "grandfather_entries": 28,
-  "migration_files": 400,
-  "migration_files_justification": "wave 3 2026-09-11: 398 handles contract, 399 social_engagements.couple_id (W23), 400 tangential pool deprecations (W24), 401 instagram_connections (W28), 402 merge_couples carries handles (W22, renumbered from a duplicate 399); wave 5 2026-09-12: 403 venue_config.social_handles (W36); 395/397 pending prod; flatten to tracked baseline still owed post-reimport",
+  "migration_files": 401,
+  "migration_files_justification": "wave 3 2026-09-11: 398 handles contract, 399 social_engagements.couple_id (W23), 400 tangential pool deprecations (W24), 401 instagram_connections (W28), 402 merge_couples carries handles (W22, renumbered from a duplicate 399); wave 5 2026-09-12: 403 venue_config.social_handles (W36); wave 7 2026-09-14: 404 weather_alerts + weather_climate_annual (W49); 395/397 pending prod; flatten to tracked baseline still owed post-reimport",
   "duplicate_identity_modules_justification": "Wave 3 W26 (2026-09-09): backtrack.ts deleted (duplicate identity module, retired alongside the Backwards Tracer per HANDLE-IDENTITY-SPEC.md §5). Remaining 4: resolver.ts, resolution.ts, matcher.ts, candidate-resolver.ts."
 }

@@ -4842,3 +4842,35 @@ VALUES
   ('33333333-8888-0004-0000-00000000000c', '22222222-2222-2222-2222-222222222204', 'the_knot', '2025-01-01', '2025-01-31', 300, 2, 0, 0, 0, 150, 0, 0, -1),
   ('33333333-8888-0004-0000-00000000000d', '22222222-2222-2222-2222-222222222204', 'weddingwire', '2026-02-01', '2026-02-28', 0, 1, 0, 0, 0, 0, 0, 0, NULL)
 ON CONFLICT (venue_id, source, period_start) DO NOTHING;
+
+-- ======================================================================
+-- 10. WEATHER — NWS alert + climate norms/annual (Crestwood Farm)
+-- ======================================================================
+
+INSERT INTO public.weather_alerts
+  (id, venue_id, nws_id, event, severity, certainty, urgency, headline,
+   description, instruction, area_desc, status, message_type, onset, ends,
+   expires, is_active, fetched_at)
+VALUES
+  ('33333333-aaaa-0002-0001-000000000001', '22222222-2222-2222-2222-222222222202', 'urn:oid:2.49.0.1.840.0.demo-crestwood-severe-tstorm-001', 'Severe Thunderstorm Warning', 'Severe', 'Observed', 'Immediate', 'Severe Thunderstorm Warning issued for Albemarle County', 'A severe thunderstorm capable of producing damaging winds and quarter-size hail was located near Crestwood Farm, moving northeast at 30 mph.', 'Move to an interior room on the lowest floor. Avoid windows.', 'Albemarle County, VA', 'Actual', 'Alert', '2026-05-02T12:00:00.000Z', '2026-05-04T12:00:00.000Z', '2026-05-04T12:00:00.000Z', true, '2026-05-03T12:00:00.000Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.weather_climate_norms
+  (venue_id, month_num, hour_local, recent_temp_avg_f, recent_temp_p10_f,
+   recent_temp_p90_f, recent_precip_avg_in, recent_precip_prob_pct,
+   recent_sample_count, prior_temp_avg_f, prior_precip_avg_in,
+   prior_precip_prob_pct, prior_sample_count, recent_window_start,
+   recent_window_end, prior_window_start, prior_window_end, refreshed_at)
+VALUES
+  ('22222222-2222-2222-2222-222222222202', 5, 10, 71, 63, 79, 0.08, 28, 120, 68.9, 0.06, 22, 120, '2016-01-01', '2025-12-31', '2006-01-01', '2015-12-31', '2026-05-03T12:00:00.000Z'),
+  ('22222222-2222-2222-2222-222222222202', 5, 14, 72.2, 64.2, 80.2, 0.08, 28, 120, 70.1, 0.06, 22, 120, '2016-01-01', '2025-12-31', '2006-01-01', '2015-12-31', '2026-05-03T12:00:00.000Z'),
+  ('22222222-2222-2222-2222-222222222202', 5, 18, 73.4, 65.4, 81.4, 0.08, 28, 120, 71.3, 0.06, 22, 120, '2016-01-01', '2025-12-31', '2006-01-01', '2015-12-31', '2026-05-03T12:00:00.000Z')
+ON CONFLICT (venue_id, month_num, hour_local) DO NOTHING;
+INSERT INTO public.weather_climate_annual
+  (venue_id, year, month_num, mean_high_f, total_precip_in, sample_days, refreshed_at)
+VALUES
+  ('22222222-2222-2222-2222-222222222202', 2021, 5, 74, 3.6, 31, '2026-05-03T12:00:00.000Z'),
+  ('22222222-2222-2222-2222-222222222202', 2022, 5, 74.4, 3.55, 31, '2026-05-03T12:00:00.000Z'),
+  ('22222222-2222-2222-2222-222222222202', 2023, 5, 74.8, 3.5, 31, '2026-05-03T12:00:00.000Z'),
+  ('22222222-2222-2222-2222-222222222202', 2024, 5, 75.2, 3.45, 31, '2026-05-03T12:00:00.000Z'),
+  ('22222222-2222-2222-2222-222222222202', 2025, 5, 75.6, 3.4, 31, '2026-05-03T12:00:00.000Z')
+ON CONFLICT (venue_id, year, month_num) DO NOTHING;

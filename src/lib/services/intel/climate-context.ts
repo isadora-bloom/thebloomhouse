@@ -51,6 +51,18 @@ export interface ClimateContext {
     tempTrendF: number | null
     precipTrendPct: number | null
     hourSpecific?: { hour: number; tempF: number | null; precipProbPct: number | null }
+    /** Real year-over-year trend from weather_climate_annual (mig 404),
+     *  a least-squares slope across every year on file — not just the
+     *  two decade buckets above. Null when fewer than 2 years exist. */
+    yearOverYear: {
+      yearsOfData: number
+      firstYear: number | null
+      lastYear: number | null
+      /** °F change per year, from the linear-regression slope. */
+      tempSlopeFPerYear: number | null
+      /** Inches of total-month precipitation change per year. */
+      precipSlopeInPerYear: number | null
+    } | null
   } | null
   recentAnomalies: Array<{
     description: string
@@ -66,6 +78,29 @@ export interface ClimateContext {
 
 function monthLabel(m: number): string {
   return new Date(2000, m - 1, 1).toLocaleString('en-US', { month: 'long' })
+}
+
+/**
+ * Ordinary least-squares slope of y over x. Pure function, exported for
+ * unit testing. Returns null when there are fewer than two distinct x
+ * values (a slope isn't defined from one point) — this is the "real"
+ * trend the W49 brief asks for, replacing the two-point decade
+ * comparison that's still kept alongside it below.
+ */
+export function leastSquaresSlope(points: Array<{ x: number; y: number }>): number | null {
+  const valid = points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+  const distinctX = new Set(valid.map((p) => p.x))
+  if (distinctX.size < 2) return null
+
+  const n = valid.length
+  const sumX = valid.reduce((s, p) => s + p.x, 0)
+  const sumY = valid.reduce((s, p) => s + p.y, 0)
+  const sumXY = valid.reduce((s, p) => s + p.x * p.y, 0)
+  const sumXX = valid.reduce((s, p) => s + p.x * p.x, 0)
+
+  const denom = n * sumXX - sumX * sumX
+  if (denom === 0) return null
+  return (n * sumXY - sumX * sumY) / denom
 }
 
 function direction(delta: number): string {
@@ -166,6 +201,40 @@ export async function getVenueClimateContext(
     }
   }
 
+  // W49 (wave 7). Real year-over-year trend: least-squares slope across
+  // every year weather_climate_annual (mig 404) has for this month, not
+  // just the recent-vs-prior-decade two-point delta above.
+  const { data: annualRowsRaw } = await supabase
+    .from('weather_climate_annual')
+    .select('year, mean_high_f, total_precip_in')
+    .eq('venue_id', venueId)
+    .eq('month_num', monthNum)
+    .order('year', { ascending: true })
+
+  const annualRows = (annualRowsRaw ?? []) as Array<{
+    year: number
+    mean_high_f: number | null
+    total_precip_in: number | null
+  }>
+
+  let yearOverYear: NonNullable<ClimateContext['monthProfile']>['yearOverYear'] = null
+  if (annualRows.length > 0) {
+    const years = annualRows.map((r) => r.year)
+    const tempPoints = annualRows
+      .filter((r) => r.mean_high_f !== null)
+      .map((r) => ({ x: r.year, y: r.mean_high_f as number }))
+    const precipPoints = annualRows
+      .filter((r) => r.total_precip_in !== null)
+      .map((r) => ({ x: r.year, y: r.total_precip_in as number }))
+    yearOverYear = {
+      yearsOfData: annualRows.length,
+      firstYear: Math.min(...years),
+      lastYear: Math.max(...years),
+      tempSlopeFPerYear: leastSquaresSlope(tempPoints),
+      precipSlopeInPerYear: leastSquaresSlope(precipPoints),
+    }
+  }
+
   // Relevant past anomalies for this month. Order by recency so the
   // brain sees "last X" first.
   const { data: anomalyRows } = await supabase
@@ -230,6 +299,28 @@ export async function getVenueClimateContext(
       `- Trend: ${Math.abs(Math.round(precipDelta))} percentage points ${precipDirection(precipDelta)} than the prior decade`,
     )
   }
+  // W49: real year-over-year slope, on top of the two-point decade
+  // comparison above. Only surfaced once there's enough of a series to
+  // mean something (>=3 years) and the slope is non-trivial per decade.
+  if (yearOverYear && yearOverYear.yearsOfData >= 3) {
+    if (yearOverYear.tempSlopeFPerYear !== null && Math.abs(yearOverYear.tempSlopeFPerYear) * 10 >= 0.5) {
+      const perDecade = yearOverYear.tempSlopeFPerYear * 10
+      lines.push(
+        `- Long-term trend (${yearOverYear.yearsOfData} years, ${yearOverYear.firstYear}-${yearOverYear.lastYear}): `
+          + `${Math.abs(perDecade).toFixed(1)}°F ${direction(perDecade)} per decade`,
+      )
+    }
+    if (
+      yearOverYear.precipSlopeInPerYear !== null &&
+      Math.abs(yearOverYear.precipSlopeInPerYear) * 10 >= 0.5
+    ) {
+      const perDecadeIn = yearOverYear.precipSlopeInPerYear * 10
+      lines.push(
+        `- Long-term trend (${yearOverYear.yearsOfData} years, ${yearOverYear.firstYear}-${yearOverYear.lastYear}): `
+          + `${Math.abs(perDecadeIn).toFixed(1)}" ${precipDirection(perDecadeIn)} rainfall per decade`,
+      )
+    }
+  }
 
   if (top.length > 0) {
     lines.push(``)
@@ -268,6 +359,7 @@ export async function getVenueClimateContext(
       tempTrendF: tempDelta,
       precipTrendPct: precipDelta,
       hourSpecific,
+      yearOverYear,
     },
     recentAnomalies,
   }
