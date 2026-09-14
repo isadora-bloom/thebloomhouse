@@ -130,11 +130,13 @@ const AI_MAPPABLE_FIELDS = [
 
 export function CrmImportForm() {
   const [adapters, setAdapters] = useState<AdapterManifest[]>([])
-  // T5-W5: scaffold (ready:false) adapters — Dubsado, Aisle Planner —
-  // used to sit in the picker looking exactly as clickable as
-  // HoneyBook, disabled only by a greyed-out style a coordinator could
-  // easily miss. Hidden by default now; a toggle reveals them for
-  // anyone who wants to see what's planned.
+  // T5-W5: scaffold (ready:false) adapters used to sit in the picker
+  // looking exactly as clickable as a real one, disabled only by a
+  // greyed-out style a coordinator could easily miss. Hidden by
+  // default now; a toggle reveals any that remain for anyone who
+  // wants to see what's planned. Dubsado and Aisle Planner shipped
+  // real implementations in W53 (NOVEMBER-PLAN.md wave 8) and no
+  // longer need the toggle to appear.
   const [showPlanned, setShowPlanned] = useState(false)
   const [selectedAdapter, setSelectedAdapter] = useState<string>('generic_csv')
   const [csv, setCsv] = useState('')

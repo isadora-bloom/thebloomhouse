@@ -10,10 +10,36 @@
  *   - generic-csv     full implementation. Coordinator supplies a
  *                     column-mapping JSON so any export's headers can be
  *                     remapped to Bloom's schema.
- *   - honeybook       SCAFFOLD ONLY. Throws "not yet implemented" until
- *                     a dev sees a real export and fills in the mapper.
- *   - dubsado         SCAFFOLD ONLY.
- *   - aisleplanner    SCAFFOLD ONLY.
+ *   - honeybook       full implementation (T5-Rixey).
+ *   - dubsado         full implementation (W53, NOVEMBER-PLAN.md wave 8).
+ *   - aisleplanner    full implementation (W53, NOVEMBER-PLAN.md wave 8).
+ *
+ * Picking an adapter from a header row (source detection)
+ * ---------------------------------------------------------------------
+ * A coordinator can pick an adapter explicitly from the onboarding /
+ * admin-imports picker (`CrmImportForm.tsx`), which lists every entry
+ * in `ADAPTERS` below whose `ready` is true. Uploads that arrive
+ * without an explicit pick -- brain-dump drops and admin-imports
+ * reprocessing -- go through `detectCsvShape()` in
+ * `src/lib/services/brain-dump/csv-shape.ts` instead: a pure,
+ * header-signature detector (no AI, no DB) that recognises each
+ * adapter's canonical export shape (honeybook / dubsado / aisleplanner
+ * / tour_scheduler / web_form) BEFORE falling through to the generic
+ * brain-dump shapes, specifically so an adapter-shaped CSV can't get
+ * misrouted into the wrong importer (see that file's own header for
+ * the incident this fixed). `src/lib/services/import-router/
+ * route-and-process.ts` is what actually dispatches a detected shape
+ * to the matching adapter here via `findAdapter()`.
+ *
+ * Dubsado and Aisle Planner disambiguate from HoneyBook and from a
+ * generic leads CSV by requiring several of their own canonical
+ * columns together (Dubsado: split "Client First Name" / "Client Last
+ * Name"; Aisle Planner: a combined "Couple" cell) rather than any
+ * single column, since HoneyBook alone already accepts a wide set of
+ * header spellings. See `detectCsvShape`'s own dubsado/aisleplanner
+ * branches, and their tests under
+ * `src/lib/services/brain-dump/__tests__/`, for the exact signatures
+ * and the ambiguity cases those tests cover.
  *
  * Mapped tables (per spec):
  *   Lead → weddings (confidence_flag='imported_medium', crm_source=<provider>)

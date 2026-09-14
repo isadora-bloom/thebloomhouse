@@ -632,6 +632,8 @@ const CHANNEL_LABEL: Record<string, string> = {
   zola: 'Zola',
   calendly: 'your booking calendar',
   honeybook: 'HoneyBook',
+  dubsado: 'Dubsado',
+  aisle_planner: 'Aisle Planner',
   portal: 'their planning portal',
   website: 'your website',
   sms: 'text message',

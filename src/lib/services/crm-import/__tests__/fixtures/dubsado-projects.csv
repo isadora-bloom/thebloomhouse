@@ -1,0 +1,18 @@
+# RECONSTRUCTED, NOT CAPTURED. Built from Dubsado's documented field
+# names (Reports -> Project Reports -> "Export All", the report shape
+# that joins the client's contact details onto the project row) and
+# the column signature src/lib/services/brain-dump/csv-shape.ts already
+# expects for a Dubsado export: split Client First Name / Client Last
+# Name, Project Name, Project Date, Total Invoiced, Project Status,
+# Lead Source, Date Created, Date Booked, Internal Notes. No real
+# Dubsado account, client or figure appears below — every row is
+# invented for this test suite. Tests strip these leading '#' lines
+# (see loadFixtureCsv in the adapter test files) before parsing, since
+# the shared CSV parser does not treat '#' as a comment marker.
+Project Name,Client First Name,Client Last Name,Client Email,Client Phone,Project Date,Total Invoiced,Project Status,Lead Source,Date Created,Date Booked,Internal Notes
+Rosalind & Tom Wedding,Rosalind,Fairweather,rosalind.fairweather@example.com,555-0142,2027-05-15,"18,500.00",Active,Instagram,2026-08-01,2026-08-20,"Wants a marquee on the east lawn."
+Priya Nair Wedding,Priya,Nair,priya.nair@example.com,555-0198,2027-09-04,,Lead,Referral,2026-08-10,,
+Deja & Marcus,Deja,Okafor,deja.okafor@example.com,,2026-11-22,"9,750.00",Archived,Google Search,2026-06-01,,"Booked with a competitor venue."
+Holly Vance Wedding,Holly,Vance,holly.vance@example.com,555-0177,2026-04-18,"12,000.00",Completed,Word of mouth,2026-01-05,2026-01-15,"Ran smoothly, no issues."
+Grace & Iain Wedding,Grace,Pemberton,grace.pemberton@example.com,555-0111,2027-02-14,,Lost,Unknown,2026-07-19,,"Went quiet after the tour."
+Test Client Wedding,Test,Client,test.client@example.com,555-0100,2027-06-01,"5,000.00",Won,The Knot,2026-09-01,2026-09-05,
