@@ -373,41 +373,57 @@ export async function buildSageIntelligenceContext(
     }
   }
 
-  // --- Demand outlook ---
-  try {
-    const indicators = await getLatestIndicators()
-    if (Object.keys(indicators).length > 0) {
-      const { score, outlook } = calculateDemandScore(indicators)
+  // --- Demand outlook (operator-side only) ---
+  //
+  // 2026-09-14 security review, item 3. The three blocks gated on personId
+  // here are the venue's commercial position: how the market is moving,
+  // which search terms are running hot or cold, and what the anomaly
+  // detector has flagged and nobody has acknowledged yet. None of that is
+  // the couple's to see. It was reaching them anyway, because couple chat
+  // calls this function with no personId and the only thing standing
+  // between "market may be cooling slightly" and a couple asking about
+  // availability was the sentence "use naturally, never quote raw numbers
+  // to couples" at the top of the block.
+  //
+  // A sentence in a prompt is a preference, not a boundary. These now use
+  // the same personId gate as the journey narrative above: an email draft
+  // to a known person gets them, the couple portal never assembles them.
+  if (personId) {
+    try {
+      const indicators = await getLatestIndicators()
+      if (Object.keys(indicators).length > 0) {
+        const { score, outlook } = calculateDemandScore(indicators)
 
-      const outlookDescriptions = {
-        positive: 'Wedding demand signals are strong right now — couples are actively searching and booking.',
-        neutral: 'Wedding demand is steady — the market is tracking at normal levels.',
-        caution: 'Wedding demand signals are softer than usual — the market may be cooling slightly.',
+        const outlookDescriptions = {
+          positive: 'Wedding demand signals are strong right now — couples are actively searching and booking.',
+          neutral: 'Wedding demand is steady — the market is tracking at normal levels.',
+          caution: 'Wedding demand signals are softer than usual — the market may be cooling slightly.',
+        }
+
+        sections.push(
+          `DEMAND OUTLOOK (score: ${score}/100, trend: ${outlook}):\n` +
+            outlookDescriptions[outlook]
+        )
       }
-
-      sections.push(
-        `DEMAND OUTLOOK (score: ${score}/100, trend: ${outlook}):\n` +
-          outlookDescriptions[outlook]
-      )
+    } catch (err) {
+      console.warn('[sage-intel] Failed to fetch demand outlook:', err)
     }
-  } catch (err) {
-    console.warn('[sage-intel] Failed to fetch demand outlook:', err)
-  }
 
-  // --- Trend highlights (top 3 most significant deviations) ---
-  try {
-    const deviations = await detectTrendDeviations(venueId)
+    // --- Trend highlights (top 3 most significant deviations) ---
+    try {
+      const deviations = await detectTrendDeviations(venueId)
 
-    if (deviations.length > 0) {
-      const topThree = deviations.slice(0, 3)
-      const trendLines = topThree.map((d) => {
-        const arrow = d.direction === 'up' ? 'rising' : 'falling'
-        return `- "${d.term}" is ${arrow} ${Math.abs(d.changePercent)}% (${d.category} indicator)`
-      })
-      sections.push(`TREND HIGHLIGHTS:\n${trendLines.join('\n')}`)
+      if (deviations.length > 0) {
+        const topThree = deviations.slice(0, 3)
+        const trendLines = topThree.map((d) => {
+          const arrow = d.direction === 'up' ? 'rising' : 'falling'
+          return `- "${d.term}" is ${arrow} ${Math.abs(d.changePercent)}% (${d.category} indicator)`
+        })
+        sections.push(`TREND HIGHLIGHTS:\n${trendLines.join('\n')}`)
+      }
+    } catch (err) {
+      console.warn('[sage-intel] Failed to fetch trend deviations:', err)
     }
-  } catch (err) {
-    console.warn('[sage-intel] Failed to fetch trend deviations:', err)
   }
 
   // --- Weather summary (next 14 days) ---
@@ -528,35 +544,43 @@ export async function buildSageIntelligenceContext(
     console.warn('[sage-intel] Failed to fetch seasonal context:', err)
   }
 
-  // --- Active anomaly alerts ---
-  try {
-    const { data: alerts } = await supabase
-      .from('anomaly_alerts')
-      .select('alert_type, metric_name, severity, ai_explanation')
-      .eq('venue_id', venueId)
-      .eq('acknowledged', false)
-      .in('severity', ['warning', 'critical'])
-      .order('created_at', { ascending: false })
-      .limit(3)
+  // --- Active anomaly alerts (operator-side only) ---
+  //
+  // Same personId gate as the demand and trend blocks above. An
+  // unacknowledged critical alert carries the venue's own ai_explanation
+  // of what went wrong — the old header even said "context if a couple
+  // asks about availability or demand", which is precisely the read that
+  // should never have been available. See the note on the demand block.
+  if (personId) {
+    try {
+      const { data: alerts } = await supabase
+        .from('anomaly_alerts')
+        .select('alert_type, metric_name, severity, ai_explanation')
+        .eq('venue_id', venueId)
+        .eq('acknowledged', false)
+        .in('severity', ['warning', 'critical'])
+        .order('created_at', { ascending: false })
+        .limit(3)
 
-    if (alerts && alerts.length > 0) {
-      const alertLines = alerts.map((a) => {
-        const explanation = a.ai_explanation as string | null
-        const metric = (a.metric_name as string).replace(/_/g, ' ')
-        const sev = a.severity as string
-        if (explanation) {
-          return `- [${sev}] ${metric}: ${explanation}`
-        }
-        return `- [${sev}] Unusual activity in ${metric}`
-      })
+      if (alerts && alerts.length > 0) {
+        const alertLines = alerts.map((a) => {
+          const explanation = a.ai_explanation as string | null
+          const metric = (a.metric_name as string).replace(/_/g, ' ')
+          const sev = a.severity as string
+          if (explanation) {
+            return `- [${sev}] ${metric}: ${explanation}`
+          }
+          return `- [${sev}] Unusual activity in ${metric}`
+        })
 
-      sections.push(
-        `ACTIVE ALERTS (context if a couple asks about availability or demand):\n` +
-          alertLines.join('\n')
-      )
+        sections.push(
+          `ACTIVE ALERTS (operator context — never repeat to a couple):\n` +
+            alertLines.join('\n')
+        )
+      }
+    } catch (err) {
+      console.warn('[sage-intel] Failed to fetch anomaly alerts:', err)
     }
-  } catch (err) {
-    console.warn('[sage-intel] Failed to fetch anomaly alerts:', err)
   }
 
   // --- Compose the final context block ---

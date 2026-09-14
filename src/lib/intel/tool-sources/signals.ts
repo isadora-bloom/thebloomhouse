@@ -329,5 +329,8 @@ export const signalsSource: IntelToolSource = {
     'whether mentioning a blog post, reel, pin or video goes with a better booking rate',
   ],
   batteryQuestions: ['25', '28'],
+  // The quote is 200 characters lifted straight out of an inbound email a
+  // couple wrote. See IntelToolSource.freeTextFields.
+  freeTextFields: ['quote'],
   run: runConversionSignals,
 }

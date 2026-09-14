@@ -294,6 +294,7 @@ export async function computeReviewsAnalytics(
     const { data: solicitations } = await supabase
       .from('review_solicit_requests')
       .select('wedding_id')
+      .eq('venue_id', venueId)
       .in('wedding_id', postEventIds)
     const solicited = new Set(
       ((solicitations ?? []) as Array<{ wedding_id: string }>).map((s) => s.wedding_id),

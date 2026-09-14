@@ -475,6 +475,12 @@ export const operatorPatternsSource: IntelToolSource = {
     'inquiries that were replied to and turned out to be a mismatch, by recorded loss reason',
   ],
   batteryQuestions: ['Q22', 'Q23', 'Q24'],
+  // `reason` here is weddings.lost_reason: free text an operator typed into
+  // a legacy column. The name is shared with HonestCount's own `reason`, so
+  // an insufficient-data explanation this product wrote gets wrapped too.
+  // That is noise on an edge case, and the alternative — renaming one of
+  // them — would change a published tool result shape to buy tidiness.
+  freeTextFields: ['reason'],
 
   async run(venueId, args, deps: ToolSourceDeps) {
     const raw = args.metric

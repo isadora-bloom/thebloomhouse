@@ -228,8 +228,13 @@ function baseFixtures(): Record<string, Row[]> {
         sent_at: '2026-09-06T15:00:00.000Z',
       },
     ],
+    // venue_id is NOT NULL on both of these tables (migrations 001 and 376),
+    // and loadFollowUpState now filters on it. The fixtures carried only a
+    // wedding_id, which made them the one shape the real database cannot
+    // hold. 2026-09-14 review, item 8.
     post_tour_sequence: [
       {
+        venue_id: VENUE,
         wedding_id: WEDDING_C,
         paused_at: null,
         sequence_completed_at: null,
@@ -240,9 +245,9 @@ function baseFixtures(): Record<string, Row[]> {
     ],
     interactions: [],
     people: [
-      { wedding_id: WEDDING_A, email: 'anya@example.com', first_name: 'Anya', last_name: 'Petrov' },
-      { wedding_id: WEDDING_B, email: 'caitlin@example.com', first_name: 'Caitlin', last_name: 'Reed' },
-      { wedding_id: WEDDING_C, email: 'tara@example.com', first_name: 'Tara', last_name: 'Hill' },
+      { venue_id: VENUE, wedding_id: WEDDING_A, email: 'anya@example.com', first_name: 'Anya', last_name: 'Petrov' },
+      { venue_id: VENUE, wedding_id: WEDDING_B, email: 'caitlin@example.com', first_name: 'Caitlin', last_name: 'Reed' },
+      { venue_id: VENUE, wedding_id: WEDDING_C, email: 'tara@example.com', first_name: 'Tara', last_name: 'Hill' },
     ],
   }
 }

@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
-import { checkRateLimit } from '@/lib/rate-limit'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { buildChatSignoff, withChatSignoff } from '@/lib/services/brain/sage'
 
 // ---------------------------------------------------------------------------
 // POST /api/public/sage-preview — Public Sage preview chat (no auth)
@@ -11,25 +13,39 @@ import { clientIpForRateLimit } from '@/lib/security/client-ip'
 // Returns: { response, messageCount }
 // ---------------------------------------------------------------------------
 
+/** Per-IP limit. Unchanged from GAP-H3, but the key is now derived from a
+ *  header the caller cannot write — see lib/security/client-ip.ts. */
+const PREVIEW_IP_LIMIT = 30
+const PREVIEW_IP_WINDOW_SEC = 3600
+
+/**
+ * Per-venue limit. 2026-09-14 security review, item 6.
+ *
+ * The IP limit alone bounds one caller. It does nothing about a hundred
+ * callers, or one caller behind a rotating proxy pool, all pointed at the
+ * same venueSlug — and the bill for that lands on the venue whose slug was
+ * used, not on whoever made the calls. 300 messages an hour is far more
+ * preview traffic than a marketing page has ever produced and still puts a
+ * ceiling on what a single venue can be made to spend in a day.
+ */
+const PREVIEW_VENUE_LIMIT = 300
+const PREVIEW_VENUE_WINDOW_SEC = 3600
+
 export async function POST(request: NextRequest) {
   // GAP-H3: IP-based rate limit — 30 requests per hour per IP. This endpoint
   // is unauthenticated; without a limit, scripted abuse can drain AI budget.
   const ip = clientIpForRateLimit(request)
   const rl = await checkRateLimit({
     key: `sage-preview:${ip}`,
-    limit: 30,
-    windowSec: 3600,
+    limit: PREVIEW_IP_LIMIT,
+    windowSec: PREVIEW_IP_WINDOW_SEC,
   })
   if (!rl.ok) {
     return NextResponse.json(
       { error: 'Rate limit exceeded' },
       {
         status: 429,
-        headers: {
-          'Retry-After': String(
-            Math.ceil((rl.resetAt.getTime() - Date.now()) / 1000),
-          ),
-        },
+        headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
       },
     )
   }
@@ -67,12 +83,71 @@ export async function POST(request: NextRequest) {
 
     const { data: venue } = await supabase
       .from('venues')
-      .select('id, name, slug')
+      .select('id, name, slug, is_demo')
       .eq('slug', venueSlug)
       .single()
 
     if (!venue) {
       return NextResponse.json({ error: 'Venue not found' }, { status: 404 })
+    }
+
+    // -----------------------------------------------------------------------
+    // 1a. Published-preview gate. 2026-09-14 review, item 6.
+    //
+    // Any slug in the venues table would previously answer here, which
+    // meant a venue that had signed up an hour ago and typed nothing yet
+    // had a public chat endpoint spending money in its name, answering in
+    // a half-configured voice. "Published" is defined from the flag that
+    // already exists rather than a new one: a demo venue (migration 048's
+    // venues.is_demo, which is what the marketing site's preview points
+    // at) or a venue that has finished onboarding
+    // (venue_config.onboarding_completed, same migration). Anything else
+    // is a 404, the same answer an unknown slug gets, because whether a
+    // given venue exists is not a public fact either.
+    // -----------------------------------------------------------------------
+
+    const { data: venueConfig } = await supabase
+      .from('venue_config')
+      .select('onboarding_completed')
+      .eq('venue_id', venue.id)
+      .maybeSingle()
+
+    const published =
+      venue.is_demo === true || venueConfig?.onboarding_completed === true
+    if (!published) {
+      return NextResponse.json({ error: 'Venue not found' }, { status: 404 })
+    }
+
+    // -----------------------------------------------------------------------
+    // 1b. Per-venue rate limit + cost ceiling. Both are about the venue's
+    // bill rather than the caller's manners, so both key on the venue and
+    // both run after the slug resolves.
+    // -----------------------------------------------------------------------
+
+    const venueRl = await checkRateLimit({
+      key: `sage-preview-venue:${venue.id}`,
+      limit: PREVIEW_VENUE_LIMIT,
+      windowSec: PREVIEW_VENUE_WINDOW_SEC,
+    })
+    if (!venueRl.ok) {
+      return NextResponse.json(
+        { error: 'This venue’s preview is busy. Try again shortly.' },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(secondsUntil(venueRl.resetAt)) },
+        },
+      )
+    }
+
+    const gate = await gateForBrainCall(venue.id)
+    if (!gate.ok) {
+      return NextResponse.json(
+        {
+          error:
+            'The preview is paused for this venue right now. Book a tour or get in touch and a person will answer.',
+        },
+        { status: 429 },
+      )
     }
 
     // -----------------------------------------------------------------------
@@ -84,7 +159,7 @@ export async function POST(request: NextRequest) {
 
     const { data: aiConfigCheck } = await supabase
       .from('venue_ai_config')
-      .select('ai_name')
+      .select('ai_name, ai_role')
       .eq('venue_id', venue.id)
       .single()
     const resolvedAiName = (aiConfigCheck?.ai_name as string | null | undefined)?.trim()
@@ -133,11 +208,27 @@ export async function POST(request: NextRequest) {
     })
 
     // -----------------------------------------------------------------------
-    // 5. Return response (no DB save — preview only)
+    // 5. Sign-off, then return (no DB save — preview only).
+    //
+    // 2026-09-14 review, item 4: this returned bare model text. A
+    // prospective couple on a public marketing page had no indication they
+    // were talking to an AI and no route to a person — the one surface
+    // where the first is a legal requirement (EU AI Act Art. 50, CA SB
+    // 1001) and the second is the point of the page. No coordinator name
+    // is available pre-signup, so the sign-off degrades to "the team",
+    // which buildChatSignoff already handles.
     // -----------------------------------------------------------------------
 
+    const signoff = buildChatSignoff({
+      aiName: resolvedAiName,
+      venueName: (venue.name as string | null)?.trim() || 'the venue',
+      aiRole: (aiConfigCheck?.ai_role as string | null | undefined) ?? null,
+      coordinatorName: null,
+    })
+    const response = withChatSignoff(aiResult.text, signoff)
+
     return NextResponse.json({
-      response: aiResult.text,
+      response,
       messageCount: 1, // Client tracks total count
     })
   } catch (err) {

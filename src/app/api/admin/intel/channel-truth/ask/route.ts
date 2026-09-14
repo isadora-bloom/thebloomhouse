@@ -20,9 +20,29 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { callAI } from '@/lib/ai/client'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { ALL_QUESTION_IDS, QUESTION_REGISTRY } from '@/lib/services/channel-truth/registry'
 
 export const maxDuration = 30
+
+// ---------------------------------------------------------------------------
+// Spend guards (2026-09-14 security review, item 9)
+// ---------------------------------------------------------------------------
+//
+// Authentication is not a spend control. Every one of these routes is a
+// signed-in coordinator away from an unbounded model bill: a held-down key,
+// a retry loop in a component, a script with a valid session. The couple
+// chat has had a rate limit since BUG-12 and the brain services have had
+// gateForBrainCall since OPS-21.4.3; these four had neither, so the only
+// thing between a stuck client and the monthly invoice was the client
+// behaving. Both guards go on: the limit bounds how often, the gate honours
+// the venue's own cost ceiling.
+//
+// This one is a Haiku judge, so each call is cheap. Cheap is not free and
+// unbounded cheap is still unbounded.
+const ASK_LIMIT = 60
+const ASK_WINDOW_SEC = 3600
 
 interface AskBody {
   question?: string
@@ -45,6 +65,27 @@ export async function POST(req: NextRequest) {
   const question = (body.question ?? '').trim()
   if (question.length < 4) return badRequest('question too short')
   if (question.length > 500) return badRequest('question too long (500 char max)')
+
+  const rl = await checkRateLimit({
+    key: `channel-truth-ask:${auth.venueId ?? auth.userId}`,
+    limit: ASK_LIMIT,
+    windowSec: ASK_WINDOW_SEC,
+  })
+  if (!rl.ok) {
+    return NextResponse.json(
+      { ok: false, error: 'Too many questions in a short window. Try again shortly.' },
+      { status: 429, headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) } },
+    )
+  }
+  if (auth.venueId) {
+    const gate = await gateForBrainCall(auth.venueId)
+    if (!gate.ok) {
+      return NextResponse.json(
+        { ok: false, error: 'AI spending is paused for this venue today.' },
+        { status: 429 },
+      )
+    }
+  }
 
   const catalog = ALL_QUESTION_IDS.map(
     (id) => `  - ${id}: ${QUESTION_REGISTRY[id].question_text}`,

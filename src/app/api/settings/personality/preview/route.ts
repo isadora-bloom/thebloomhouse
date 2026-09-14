@@ -11,8 +11,27 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { buildPersonalityPrompt, buildSignoffBlock, type PersonalityData } from '@/lib/ai/personality-builder'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { callAI } from '@/lib/ai/client'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 
 export const maxDuration = 60
+
+// ---------------------------------------------------------------------------
+// Spend guards (2026-09-14 security review, item 9)
+// ---------------------------------------------------------------------------
+//
+// Authentication is not a spend control. Every one of these routes is a
+// signed-in coordinator away from an unbounded model bill: a held-down key,
+// a retry loop in a component, a script with a valid session. The couple
+// chat has had a rate limit since BUG-12 and the brain services have had
+// gateForBrainCall since OPS-21.4.3; these four had neither, so the only
+// thing between a stuck client and the monthly invoice was the client
+// behaving. Both guards go on: the limit bounds how often, the gate honours
+// the venue's own cost ceiling.
+//
+// The personality page POSTs on every (debounced) slider drag, so this is
+// the most naturally chatty of the four. 60 an hour is a long editing
+// session and still a bounded one.
 
 const PREVIEW_PROMPT_VERSION = 'personality-preview.prompt.v1'
 
@@ -57,6 +76,9 @@ const DEFAULT_SAMPLE = {
   body: `Hi! My fiance and I are getting married next June and we love what we've seen of your venue online. We're hoping for around 120 guests, an outdoor ceremony, and a more relaxed, garden-party feel. Could you share availability and pricing? Looking forward to hearing back.`,
 }
 
+const PREVIEW_LIMIT = 60
+const PREVIEW_WINDOW_SEC = 3600
+
 export async function POST(req: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
@@ -73,6 +95,25 @@ export async function POST(req: NextRequest) {
 
   const body = (await req.json().catch(() => ({}))) as PreviewBody
   const venueId = auth.venueId
+
+  const rl = await checkRateLimit({
+    key: `personality-preview:${venueId}`,
+    limit: PREVIEW_LIMIT,
+    windowSec: PREVIEW_WINDOW_SEC,
+  })
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'Too many previews. Give it a minute and try again.' },
+      { status: 429, headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) } },
+    )
+  }
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: 'AI spending is paused for this venue today. The preview will come back tomorrow.' },
+      { status: 429 },
+    )
+  }
 
   const supabase = createServiceClient()
 

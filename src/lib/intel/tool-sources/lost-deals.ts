@@ -161,5 +161,10 @@ export const lostDealsToolSource: IntelToolSource = {
     'reasons deals fall through after touring',
   ],
   batteryQuestions: ['40'],
+  // `example` is lost_deals.reason_detail: free text an operator typed,
+  // anonymised but still somebody's sentence. `reason` is not listed: it is
+  // a REASON_LABELS value mapped off a CHECK-constrained enum, so it is this
+  // product's own vocabulary, not ingested prose.
+  freeTextFields: ['example'],
   run,
 }

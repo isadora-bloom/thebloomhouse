@@ -6,6 +6,8 @@ import {
   serverError,
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { createServiceClient } from '@/lib/supabase/service'
 import { parseInstagramFollowersText } from '@/lib/services/social/parsers/instagram-followers'
 import { linkSocialEngagements } from '@/lib/services/identity/replay/social'
@@ -78,6 +80,12 @@ import {
  *     visionInvalid?: { count, samples: [{index, reason, handle_hint}] },
  *   }
  */
+/** Screenshot captures per venue per hour. Each one can carry up to
+ *  MAX_IMAGES_PER_CAPTURE images and each image is its own vision call, so
+ *  20 is already a generous ceiling on a manual workflow. */
+const CAPTURE_VISION_LIMIT = 20
+const CAPTURE_VISION_WINDOW_SEC = 3600
+
 export async function POST(request: NextRequest) {
   const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
@@ -87,6 +95,33 @@ export async function POST(request: NextRequest) {
 
   const contentType = request.headers.get('content-type') ?? ''
   if (contentType.includes('multipart/form-data')) {
+    // Spend guards (2026-09-14 security review, item 9). Screenshot mode is
+    // the branch that costs money: one callAIVision per image, up to
+    // MAX_IMAGES_PER_CAPTURE per request, and nothing bounded how often a
+    // signed-in coordinator could fire it. The text-paste branch below is a
+    // pure parse and is deliberately left alone — gating it on the cost
+    // ceiling would stop a capture that spends nothing.
+    const rl = await checkRateLimit({
+      key: `social-capture-vision:${auth.venueId}`,
+      limit: CAPTURE_VISION_LIMIT,
+      windowSec: CAPTURE_VISION_WINDOW_SEC,
+    })
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Too many screenshot captures in a short window. Try again shortly.' },
+        { status: 429, headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) } },
+      )
+    }
+    const gate = await gateForBrainCall(auth.venueId)
+    if (!gate.ok) {
+      return NextResponse.json(
+        {
+          error:
+            'AI spending is paused for this venue today. Screenshot capture resumes tomorrow; text paste still works.',
+        },
+        { status: 429 },
+      )
+    }
     return handleScreenshotCapture(request, auth.venueId, auth.isDemo ? null : auth.userId)
   }
   return handleTextPasteCapture(request, auth.venueId, auth.isDemo ? null : auth.userId)

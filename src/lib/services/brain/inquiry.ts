@@ -1297,6 +1297,12 @@ export async function generateFollowUp(
     .from('weddings')
     .select('wedding_date, wedding_date_locked_by_operator, guest_count_estimate, source, source_evidence, source_locked_by_operator, status, sage_context_notes, has_toured_in_person, lost_locked_by_operator')
     .eq('id', weddingId)
+    // Venue predicate on an id-keyed read (2026-09-14 review, item 8). The
+    // weddingId reaching this function has been checked upstream, but the
+    // row it selects carries coordinator notes straight into a draft, so
+    // the query says which venue's wedding it will accept rather than
+    // trusting that the caller already asked.
+    .eq('venue_id', venueId)
     .single()
 
   // Pattern: evidence-projection picker (mig 317). Read source via the
@@ -1320,6 +1326,7 @@ export async function generateFollowUp(
   const { data: lastInteraction } = await supabase
     .from('interactions')
     .select('subject, body_preview, direction')
+    .eq('venue_id', venueId)
     .eq('wedding_id', weddingId)
     .order('timestamp', { ascending: false })
     .limit(1)
@@ -1333,6 +1340,7 @@ export async function generateFollowUp(
   const { data: latestInbound } = await supabase
     .from('interactions')
     .select('sentiment, urgency, family_mentioned, haiku_classified_at')
+    .eq('venue_id', venueId)
     .eq('wedding_id', weddingId)
     .eq('direction', 'inbound')
     .not('haiku_classified_at', 'is', null)

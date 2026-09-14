@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { callAIJson } from '@/lib/ai/client'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 
 /**
  * POST /api/intel/reviews/extract-from-text
@@ -21,6 +23,25 @@ import { callAIJson } from '@/lib/ai/client'
  */
 
 export const maxDuration = 120
+
+// ---------------------------------------------------------------------------
+// Spend guards (2026-09-14 security review, item 9)
+// ---------------------------------------------------------------------------
+//
+// Authentication is not a spend control. Every one of these routes is a
+// signed-in coordinator away from an unbounded model bill: a held-down key,
+// a retry loop in a component, a script with a valid session. The couple
+// chat has had a rate limit since BUG-12 and the brain services have had
+// gateForBrainCall since OPS-21.4.3; these four had neither, so the only
+// thing between a stuck client and the monthly invoice was the client
+// behaving. Both guards go on: the limit bounds how often, the gate honours
+// the venue's own cost ceiling.
+//
+// 200 KB of Sonnet per call makes this the most expensive of the four by
+// some distance, so the limit is the tightest: 10 pastes an hour is more
+// bulk-import than anyone does in a sitting.
+const EXTRACT_LIMIT = 10
+const EXTRACT_WINDOW_SEC = 3600
 
 const PROMPT = `You are extracting wedding venue reviews from a coordinator's pasted text. The text was copied from a venue listing platform (The Knot, WeddingWire, Google Business, Zola, Yelp, etc.) so reviews are concatenated together with reviewer names, dates, ratings, and bodies in some order.
 
@@ -91,6 +112,25 @@ export async function POST(req: NextRequest) {
   }
   if (text.length > 200_000) {
     return badRequest('paste exceeds 200 KB cap; split into smaller chunks')
+  }
+
+  const rl = await checkRateLimit({
+    key: `reviews-extract:${auth.venueId}`,
+    limit: EXTRACT_LIMIT,
+    windowSec: EXTRACT_WINDOW_SEC,
+  })
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'Too many bulk extractions in a short window. Try again shortly.' },
+      { status: 429, headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) } },
+    )
+  }
+  const gate = await gateForBrainCall(auth.venueId)
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: 'AI spending is paused for this venue today. Bulk extraction resumes tomorrow.' },
+      { status: 429 },
+    )
   }
 
   try {

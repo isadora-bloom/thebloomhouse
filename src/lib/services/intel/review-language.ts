@@ -250,28 +250,53 @@ export async function getTopPhrases(
 
 /**
  * Approve a phrase for use by the Sage AI assistant.
+ *
+ * 2026-09-14 security review, item 8. Both approvals took a bare phrase id
+ * and updated on it alone. The route that calls them authenticates the
+ * coordinator and knows their venue, but passed neither, so any signed-in
+ * coordinator who held a phrase id could flip `approved_for_sage` on
+ * another venue's review language — and an approved phrase is not an inert
+ * row: `getReviewVocabulary` feeds it straight into that venue's Sage
+ * prompt as language to weave into replies. The venue is now a predicate
+ * on the update, so a mismatched id matches zero rows and the caller is
+ * told, rather than the write landing somewhere else.
  */
-export async function approvePhraseForSage(phraseId: string): Promise<void> {
-  const supabase = createServiceClient()
-
-  const { error } = await supabase
-    .from('review_language')
-    .update({ approved_for_sage: true })
-    .eq('id', phraseId)
-
-  if (error) throw error
+export async function approvePhraseForSage(
+  venueId: string,
+  phraseId: string,
+): Promise<void> {
+  await approvePhrase(venueId, phraseId, 'approved_for_sage')
 }
 
 /**
  * Approve a phrase for use in marketing materials.
  */
-export async function approvePhraseForMarketing(phraseId: string): Promise<void> {
+export async function approvePhraseForMarketing(
+  venueId: string,
+  phraseId: string,
+): Promise<void> {
+  await approvePhrase(venueId, phraseId, 'approved_for_marketing')
+}
+
+async function approvePhrase(
+  venueId: string,
+  phraseId: string,
+  column: 'approved_for_sage' | 'approved_for_marketing',
+): Promise<void> {
   const supabase = createServiceClient()
 
-  const { error } = await supabase
+  // .select() so a no-match is visible. A PostgREST update that matches
+  // nothing returns success with no rows, which is how a silently wrong
+  // venue id would have looked identical to a successful approval.
+  const { data, error } = await supabase
     .from('review_language')
-    .update({ approved_for_marketing: true })
+    .update({ [column]: true })
     .eq('id', phraseId)
+    .eq('venue_id', venueId)
+    .select('id')
 
   if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error('Phrase not found for this venue.')
+  }
 }
