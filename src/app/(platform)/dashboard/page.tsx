@@ -8,20 +8,30 @@
  * and the group/company venue breakdown all still live here, and /today
  * links to it as "Open the full dashboard".
  *
- * Its numbers still come from the legacy `weddings` / `interactions`
- * tables rather than the canonical readers, which is why they can differ
- * from what /today shows. See UX-AUDIT-NON-TECHNICAL.md finding 1.
+ * W63: every count on this page used to come out of the legacy
+ * `weddings` / `interactions` tables, with its own idea of what an
+ * "active inquiry" was, which is why the dashboard and /today could
+ * disagree about the same venue on the same morning
+ * (UX-AUDIT-NON-TECHNICAL.md finding 1). The tiles and the activity feed
+ * now read the same canonical functions /today reads — `getDailyList`
+ * and `getVenueOverview`, through /api/intel/canonical/daily-list — and
+ * the per-venue table reads the spine directly. Two surfaces, one
+ * number.
+ *
+ * The one number that did NOT survive the move is booked revenue:
+ * `weddings.booking_value` has no spine column, so rather than keep one
+ * legacy read alive for it the tile says where revenue does live. See
+ * the note beside the tile.
  */
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { type Cents, sumCents, centsToDollars, asCents } from '@/lib/types/monetary'
 import {
   Mail, FileCheck, Newspaper, Heart,
   TrendingUp, ArrowRight, Building2, Layers, MapPin,
-  BarChart3, Upload,
+  BarChart3, Upload, MessageCircle, Users,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { MarketContextCard } from '@/components/intel/market-context-card'
@@ -30,37 +40,37 @@ import { BrainDumpQueue } from '@/components/portal/brain-dump-queue'
 import { UpcomingMeetings } from '@/components/platform/upcoming-meetings'
 import { PostOnboardingChecklist } from '@/components/shell/post-onboarding-checklist'
 import { HoneybookStaleBanner } from '@/components/shell/honeybook-stale-banner'
-import { htmlToText } from '@/lib/utils/html-text'
+import { useCanonicalDaily } from '../intel/_canonical/triage-rail'
+import {
+  loadUpcomingWeddings,
+  loadVenueCoupleCounts,
+} from '@/lib/intel/readers/venue-spine-counts'
+import { agoPhrase } from '@/lib/copy/client-terms'
+import { useNow } from '@/lib/hooks/use-now'
 
 interface Stats {
-  activeInquiries: number
   upcomingWeddings: number
   pendingDrafts: number
-  bookedRevenue: number
   aiCost: number
   totalVenues: number
-}
-
-interface Activity {
-  id: string
-  type: string
-  body_preview: string | null
-  subject: string | null
-  created_at: string
-  venue_id: string
 }
 
 interface VenueRow {
   id: string
   name: string
-  inquiries: number
+  newEnquiries: number
+  inConversation: number
   booked: number
-  revenue: number
+  goneQuiet: number
 }
 
 export default function DashboardPage() {
   const scope = useScope()
   const router = useRouter()
+  // One clock for the activity feed's "ago" labels, ticking while the
+  // tab is open. Read through the hook because a bare Date.now() in the
+  // render body is an impure read the compiler rejects.
+  const now = useNow()
 
   // ---- Redirect to setup/onboarding based on user state ----
   useEffect(() => {
@@ -101,16 +111,24 @@ export default function DashboardPage() {
   }, [scope.venueId, scope.loading, router])
 
   const [stats, setStats] = useState<Stats>({
-    activeInquiries: 0,
     upcomingWeddings: 0,
     pendingDrafts: 0,
-    bookedRevenue: 0,
     aiCost: 0,
     totalVenues: 0,
   })
-  const [activities, setActivities] = useState<Activity[]>([])
   const [venueBreakdown, setVenueBreakdown] = useState<VenueRow[]>([])
   const [loading, setLoading] = useState(true)
+
+  // The canonical readers, scope-resolved server-side. Same call
+  // /agent/leads and /agent/pipeline make, and the same two functions
+  // /today calls — so "needs a reply" is one number with one definition
+  // across all four surfaces.
+  const {
+    daily,
+    overview,
+    loading: canonicalLoading,
+    error: canonicalError,
+  } = useCanonicalDaily()
 
   useEffect(() => {
     // Wait for scope to resolve before querying — prevents aborted queries
@@ -148,22 +166,7 @@ export default function DashboardPage() {
         return q
       }
 
-      // ---- Active inquiries ----
-      const inquiryQ = supabase
-        .from('weddings')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'inquiry')
-      const { count: inquiryCount } = await withVenueFilter(inquiryQ as never)
-
-      // ---- Upcoming weddings (next 30 days) ----
       const now = new Date()
-      const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-      const upcomingQ = supabase
-        .from('weddings')
-        .select('id', { count: 'exact', head: true })
-        .gte('wedding_date', now.toISOString().split('T')[0])
-        .lte('wedding_date', thirtyDays.toISOString().split('T')[0])
-      const { count: upcomingCount } = await withVenueFilter(upcomingQ as never)
 
       // ---- Pending drafts ----
       const draftsQ = supabase
@@ -172,21 +175,8 @@ export default function DashboardPage() {
         .eq('status', 'pending')
       const { count: draftCount } = await withVenueFilter(draftsQ as never)
 
-      // ---- Booked revenue (next 12 months) ----
-      const oneYear = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate())
-      const revQ = supabase
-        .from('weddings')
-        .select('booking_value')
-        .eq('status', 'booked')
-        .gte('wedding_date', now.toISOString().split('T')[0])
-        .lte('wedding_date', oneYear.toISOString().split('T')[0])
-      const { data: revData } = await withVenueFilter(revQ as never) as { data: Array<{ booking_value: Cents | number | null }> | null }
-      // booking_value is branded Cents (T5-Rixey-RR fix #5; previously
-      // T5-Rixey-NN bug #8). Sum cents → convert to dollars at the boundary.
-      const bookedRevenueCents = sumCents((revData ?? []).map((r) => r.booking_value))
-      const bookedRevenue = centsToDollars(bookedRevenueCents)
-
       // ---- AI cost this month ----
+      // api_costs is telemetry, so created_at IS the event column here.
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
       const costQ = supabase
         .from('api_costs')
@@ -195,17 +185,9 @@ export default function DashboardPage() {
       const { data: costData } = await withVenueFilter(costQ as never) as { data: Array<{ cost: number | null }> | null }
       const totalCost = (costData ?? []).reduce((sum, r) => sum + (r.cost ?? 0), 0)
 
-      // ---- Recent activity (interactions across all in-scope venues) ----
-      const actQ = supabase
-        .from('interactions')
-        .select('id, type, body_preview, subject, created_at, venue_id')
-        .order('created_at', { ascending: false })
-        .limit(8)
-      const { data: activityData } = await withVenueFilter(actQ as never) as { data: Activity[] | null }
-
-      // ---- Per-venue breakdown (only at group/company scope) ----
-      let breakdown: VenueRow[] = []
-      let venueCount = 1
+      // ---- The venues in scope ----
+      let resolvedVenueIds = venueIds ?? []
+      let venuesData: Array<{ id: string; name: string }> = []
       if (scope.level !== 'venue') {
         let venuesQ = supabase.from('venues').select('id, name')
         if (venueIds && venueIds.length > 0) {
@@ -213,48 +195,65 @@ export default function DashboardPage() {
         } else if (scope.orgId) {
           venuesQ = venuesQ.eq('org_id', scope.orgId)
         }
-        const { data: venuesData } = await venuesQ as { data: Array<{ id: string; name: string }> | null }
+        const { data } = await venuesQ as { data: Array<{ id: string; name: string }> | null }
+        venuesData = data ?? []
+        resolvedVenueIds = venuesData.map((v) => v.id)
+      }
 
-        venueCount = venuesData?.length ?? 0
+      // ---- Weddings coming up, off the spine ----
+      // couples.wedding_date, not weddings.wedding_date. Same question,
+      // asked of the table that now receives every channel.
+      const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+      let upcomingCount = 0
+      if (resolvedVenueIds.length > 0) {
+        try {
+          const upcoming = await loadUpcomingWeddings(
+            supabase,
+            resolvedVenueIds,
+            now.toISOString().split('T')[0],
+            thirtyDays.toISOString().split('T')[0],
+          )
+          upcomingCount = upcoming.count
+        } catch (err) {
+          console.error('[dashboard] upcoming weddings failed:', err)
+        }
+      }
 
-        if (venuesData && venuesData.length > 0) {
-          // Fetch wedding aggregates per venue
-          const venueWeddings = await supabase
-            .from('weddings')
-            .select('venue_id, status, booking_value')
-            .in('venue_id', venuesData.map((v) => v.id))
-
-          const aggregates = new Map<string, { inquiries: number; booked: number; revenue: number }>()
-          for (const w of (venueWeddings.data ?? []) as Array<{ venue_id: string; status: string; booking_value: Cents | number | null }>) {
-            const a = aggregates.get(w.venue_id) ?? { inquiries: 0, booked: 0, revenue: 0 }
-            if (w.status === 'inquiry') a.inquiries += 1
-            if (w.status === 'booked') {
-              a.booked += 1
-              // booking_value is branded Cents (T5-Rixey-RR fix #5).
-              a.revenue += centsToDollars(asCents(Number(w.booking_value ?? 0)))
-            }
-            aggregates.set(w.venue_id, a)
-          }
-
-          breakdown = venuesData.map((v) => ({
-            id: v.id,
-            name: v.name,
-            inquiries: aggregates.get(v.id)?.inquiries ?? 0,
-            booked: aggregates.get(v.id)?.booked ?? 0,
-            revenue: aggregates.get(v.id)?.revenue ?? 0,
-          })).sort((a, b) => b.revenue - a.revenue)
+      // ---- Per-venue breakdown (only at group/company scope) ----
+      // Couples by lifecycle, the same vocabulary the tiles and /today
+      // use. Revenue per venue is deliberately absent: booking value
+      // lives only on the legacy `weddings` row and has no spine column,
+      // so there is nothing honest to put in that column yet.
+      let breakdown: VenueRow[] = []
+      const venueCount = scope.level === 'venue' ? 1 : venuesData.length
+      if (scope.level !== 'venue' && venuesData.length > 0) {
+        try {
+          const counts = await loadVenueCoupleCounts(supabase, resolvedVenueIds)
+          const byId = new Map(counts.byVenue.map((v) => [v.venueId, v]))
+          breakdown = venuesData
+            .map((v) => {
+              const c = byId.get(v.id)
+              return {
+                id: v.id,
+                name: v.name,
+                newEnquiries: c?.byLifecycle.channel_scoped ?? 0,
+                inConversation: c?.byLifecycle.resolved ?? 0,
+                booked: c?.byLifecycle.booked ?? 0,
+                goneQuiet: c?.byLifecycle.ghost ?? 0,
+              }
+            })
+            .sort((a, b) => b.booked - a.booked || b.inConversation - a.inConversation)
+        } catch (err) {
+          console.error('[dashboard] venue breakdown failed:', err)
         }
       }
 
       setStats({
-        activeInquiries: inquiryCount ?? 0,
-        upcomingWeddings: upcomingCount ?? 0,
+        upcomingWeddings: upcomingCount,
         pendingDrafts: draftCount ?? 0,
-        bookedRevenue,
         aiCost: totalCost,
         totalVenues: venueCount,
       })
-      setActivities(activityData ?? [])
       setVenueBreakdown(breakdown)
       setLoading(false)
     }
@@ -277,38 +276,60 @@ export default function DashboardPage() {
       : `Daily activity at ${scopeName}`
 
   // ---- Stat cards (reused across all scopes) ----
-  const statCards = [
+  //
+  // Everything on this row that is about couples comes from the two
+  // canonical readers. "Needs a reply" is `daily.needsReply`, which is
+  // the same array /today counts in its first block — not a second count
+  // of the same thing with a different rule.
+  const lifecycle = overview?.couples.byLifecycle
+  const statCards: Array<{
+    label: string
+    value: React.ReactNode
+    icon: typeof Mail
+    color: string
+    bg: string
+  }> = [
     {
-      label: 'Active Inquiries',
-      value: stats.activeInquiries,
-      icon: Mail,
+      label: 'Needs a reply',
+      value: daily?.needsReply.length ?? 0,
+      icon: MessageCircle,
+      color: 'text-sky-600',
+      bg: 'bg-sky-50',
+    },
+    {
+      label: 'In conversation',
+      value: lifecycle?.resolved ?? 0,
+      icon: Users,
       color: 'text-sage-600',
       bg: 'bg-sage-50',
     },
     {
-      label: 'Upcoming (30d)',
+      label: 'New enquiries',
+      value: lifecycle?.channel_scoped ?? 0,
+      icon: Mail,
+      color: 'text-teal-600',
+      bg: 'bg-teal-50',
+    },
+    {
+      label: 'Booked',
+      value: lifecycle?.booked ?? 0,
+      icon: TrendingUp,
+      color: 'text-emerald-600',
+      bg: 'bg-emerald-50',
+    },
+    {
+      label: 'Weddings (30d)',
       value: stats.upcomingWeddings,
       icon: Heart,
       color: 'text-rose-600',
       bg: 'bg-rose-50',
     },
     {
-      label: 'Pending Drafts',
+      label: 'Drafts waiting',
       value: stats.pendingDrafts,
       icon: FileCheck,
-      color: 'text-teal-600',
-      bg: 'bg-teal-50',
-    },
-    {
-      label: 'Booked Revenue (12mo)',
-      value: (
-        <span title={`$${stats.bookedRevenue.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}>
-          ${(stats.bookedRevenue / 1000).toFixed(0)}k
-        </span>
-      ),
-      icon: TrendingUp,
-      color: 'text-emerald-600',
-      bg: 'bg-emerald-50',
+      color: 'text-gold-600',
+      bg: 'bg-amber-50',
     },
   ]
 
@@ -322,6 +343,15 @@ export default function DashboardPage() {
       bg: 'bg-purple-50',
     })
   }
+
+  // The couple tiles wait on the canonical read, the rest on the local
+  // one. Showing a real 0 while the reader is still in flight would be a
+  // lie that lasts half a second and gets believed.
+  const tilesLoading = loading || canonicalLoading
+
+  /** Eight most recent touchpoints. The reader returns twelve; the panel
+   *  has always shown eight. */
+  const recentActivity = (overview?.recentActivity ?? []).slice(0, 8)
 
   const quickActions = scope.level === 'venue'
     ? [
@@ -387,7 +417,7 @@ export default function DashboardPage() {
             <div className="min-w-0">
               <p className="text-xs text-muted truncate">{card.label}</p>
               <p className="text-xl font-bold text-sage-900 mt-0.5">
-                {loading ? (
+                {tilesLoading ? (
                   <span className="inline-block w-10 h-6 bg-sage-100 rounded animate-pulse" />
                 ) : (
                   card.value
@@ -397,6 +427,36 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* The canonical read is what four of these tiles stand on. If it
+          failed, say so instead of leaving zeroes on the screen looking
+          like a quiet week. */}
+      {canonicalError && !canonicalLoading && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">Your couple counts would not load just now.</p>
+          <p className="mt-1 text-amber-800">
+            The tiles above that count couples are showing zero because nothing came back, not
+            because nothing is there. Refresh the page, and if it keeps happening the alerts page
+            will say what broke.
+          </p>
+          <Link href="/pulse" className="mt-2 inline-block font-medium underline">
+            Open the alerts page
+          </Link>
+        </div>
+      )}
+
+      {/* Where booked revenue went. Named rather than quietly dropped:
+          booking value lives on the legacy wedding row and has no column
+          on the identity spine, so this page cannot answer it without
+          reintroducing the read the rest of the tiles just retired. */}
+      <p className="text-xs text-muted">
+        Revenue is not on this page. It is the one figure the identity spine cannot answer yet, so
+        it lives on{' '}
+        <Link href="/intel/roi" className="underline hover:text-sage-700">
+          Your Impact
+        </Link>{' '}
+        until it does.
+      </p>
 
       {/* Brain-dump queue — Task 29. Hidden when empty. */}
       <BrainDumpQueue />
@@ -426,20 +486,20 @@ export default function DashboardPage() {
               <thead>
                 <tr className="text-left text-xs text-muted uppercase tracking-wider">
                   <th className="py-2 pr-4">Venue</th>
-                  <th className="py-2 px-4 text-right">Inquiries</th>
+                  <th className="py-2 px-4 text-right">New enquiries</th>
+                  <th className="py-2 px-4 text-right">In conversation</th>
                   <th className="py-2 px-4 text-right">Booked</th>
-                  <th className="py-2 pl-4 text-right">Revenue</th>
+                  <th className="py-2 pl-4 text-right">Gone quiet</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {venueBreakdown.map((v) => (
                   <tr key={v.id} className="hover:bg-sage-50/40">
                     <td className="py-3 pr-4 font-medium text-sage-800">{v.name}</td>
-                    <td className="py-3 px-4 text-right tabular-nums text-sage-700">{v.inquiries}</td>
-                    <td className="py-3 px-4 text-right tabular-nums text-sage-700">{v.booked}</td>
-                    <td className="py-3 pl-4 text-right tabular-nums font-semibold text-sage-900">
-                      ${(v.revenue / 1000).toFixed(0)}k
-                    </td>
+                    <td className="py-3 px-4 text-right tabular-nums text-sage-700">{v.newEnquiries}</td>
+                    <td className="py-3 px-4 text-right tabular-nums text-sage-700">{v.inConversation}</td>
+                    <td className="py-3 px-4 text-right tabular-nums font-semibold text-sage-900">{v.booked}</td>
+                    <td className="py-3 pl-4 text-right tabular-nums text-sage-600">{v.goneQuiet}</td>
                   </tr>
                 ))}
               </tbody>
@@ -457,41 +517,42 @@ export default function DashboardPage() {
             </h2>
             <TrendingUp className="w-4 h-4 text-sage-400" />
           </div>
-          {loading ? (
+          {/* The feed is `overview.recentActivity` — the latest
+              touchpoints, summarised by the canonical reader. It used to
+              be the latest `interactions` rows ordered by `created_at`,
+              which put a six-month backfill at the top of the list the
+              morning after an import. */}
+          {canonicalLoading ? (
             <div className="space-y-3">
               {[1, 2, 3].map((i) => (
                 <div key={i} className="h-12 bg-sage-50 rounded-lg animate-pulse" />
               ))}
             </div>
-          ) : activities.length === 0 ? (
+          ) : canonicalError ? (
+            <p className="text-sm text-amber-800 py-8 text-center">
+              This feed would not load just now. Nothing is lost; refresh the page.
+            </p>
+          ) : recentActivity.length === 0 ? (
             <p className="text-sm text-muted py-8 text-center">
-              No recent activity. Interactions will appear here as they come in.
+              Nothing has come in yet. Messages, tours and form submissions will appear here as
+              they land.
             </p>
           ) : (
             <ul className="space-y-3">
-              {activities.map((a) => (
+              {recentActivity.map((a) => (
                 <li
                   key={a.id}
                   className="flex items-start gap-3 p-3 rounded-lg bg-sage-50/50"
                 >
                   <div className="w-2 h-2 mt-2 rounded-full bg-sage-400 shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-sage-800 line-clamp-1">
-                      {/* T5-Rixey-EEE Bug 2: HTML strip body_preview
-                          fallback (subject is plain text already). */}
-                      {a.subject || htmlToText(a.body_preview) || a.type}
-                    </p>
+                    <p className="text-sm text-sage-800 line-clamp-1">{a.summary}</p>
                     <p className="text-xs text-muted mt-0.5">
-                      {new Date(a.created_at).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: 'numeric',
-                        minute: '2-digit',
-                      })}
+                      {agoPhrase(a.occurredAt, now) ?? 'time not recorded'}
                     </p>
                   </div>
                   <span className="text-[10px] uppercase tracking-wider font-semibold text-sage-500 bg-sage-100 px-2 py-0.5 rounded-full shrink-0">
-                    {a.type}
+                    {a.kind}
                   </span>
                 </li>
               ))}

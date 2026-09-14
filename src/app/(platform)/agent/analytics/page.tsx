@@ -1,8 +1,32 @@
 'use client'
 
+/**
+ * /agent/analytics — how the email agent is doing.
+ *
+ * W63: four of the numbers on this page were derived here, in the page
+ * body, out of `interactions` and `weddings`. Mail volume, median reply
+ * time, whether the first reply landed, and how long a couple takes to
+ * decide. Each had its own arithmetic and its own idea of what counted,
+ * and none of them matched what /today or /intel said about the same
+ * venue.
+ *
+ * They now come from the spine: `loadMessageVolume`,
+ * `loadFollowThrough` and `loadDecisionTimeline` under
+ * `src/lib/intel/readers/`, plus `getCohortFunnel` (the canonical
+ * reader) for reply time, through /api/intel/canonical/cohort-funnel.
+ * Drafts, temperature and AI cost are unchanged: none of those lives on
+ * the legacy stack.
+ */
+
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import type { CohortFunnel } from '@/lib/intel/canonical'
+import {
+  loadDecisionTimeline,
+  loadFollowThrough,
+  loadMessageVolume,
+} from '@/lib/intel/readers/agent-activity'
 import {
   BarChart3,
   Mail,
@@ -232,7 +256,12 @@ export default function AgentAnalyticsPage() {
   const [totalOutbound, setTotalOutbound] = useState(0)
   const [autoSentCount, setAutoSentCount] = useState(0)
   const [manualCount, setManualCount] = useState(0)
-  const [avgResponseHours, setAvgResponseHours] = useState(0)
+  /** The canonical cohort funnel for the venue in scope. Null at group
+   *  or company scope, and null when the read failed. */
+  const [cohort, setCohort] = useState<CohortFunnel | null>(null)
+  /** Messages in the window whose direction was never stamped. Shown
+   *  rather than folded into a side of the chart. */
+  const [unstampedMessages, setUnstampedMessages] = useState(0)
 
   // Engagement intelligence — computed from real interactions/weddings
   // for the venue scope. nulls render as "not enough data yet" in the UI.
@@ -246,6 +275,9 @@ export default function AgentAnalyticsPage() {
   const [decisionTypicalPct, setDecisionTypicalPct] = useState(0)
   const [decisionSlowPct, setDecisionSlowPct] = useState(0)
   const [decisionBookedSample, setDecisionBookedSample] = useState(0)
+  /** Couples with a contract but no first sight recorded, so no span
+   *  could be measured. Said out loud rather than dropped. */
+  const [decisionUnmeasurable, setDecisionUnmeasurable] = useState(0)
 
   const supabase = createClient()
 
@@ -281,50 +313,30 @@ export default function AgentAnalyticsPage() {
         setTotalOutbound(0)
         setAutoSentCount(0)
         setManualCount(0)
-        setAvgResponseHours(0)
+        setUnstampedMessages(0)
+        setCohort(null)
         setLoading(false)
         return
       }
 
-      // 1. Email volume
-      const { data: interactions } = await supabase
-        .from('interactions')
-        .select('direction, timestamp')
-        .in('venue_id', venueIds)
-        .eq('type', 'email')
-        .gte('timestamp', start)
-        .lt('timestamp', end)
-        .order('timestamp', { ascending: true })
-
-      // Group by date
-      const volumeMap: Record<string, { inbound: number; outbound: number }> = {}
-      let inCount = 0
-      let outCount = 0
-
-      for (const row of interactions ?? []) {
-        const dateKey = new Date(row.timestamp).toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-        })
-        if (!volumeMap[dateKey]) volumeMap[dateKey] = { inbound: 0, outbound: 0 }
-        if (row.direction === 'inbound') {
-          volumeMap[dateKey].inbound++
-          inCount++
-        } else {
-          volumeMap[dateKey].outbound++
-          outCount++
-        }
-      }
-
+      // 1. Message volume, off the spine. Inbound and outbound come from
+      //    `touchpoints.direction`, stamped at write time by migration
+      //    381 — the page does not infer a direction from anything.
+      const volume = await loadMessageVolume(supabase, venueIds, start, end)
       setEmailVolume(
-        Object.entries(volumeMap).map(([date, v]) => ({
-          date,
-          inbound: v.inbound,
-          outbound: v.outbound,
+        volume.days.map((d) => ({
+          // The chart labels a day; the reader hands back the date.
+          date: new Date(`${d.date}T12:00:00Z`).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+          }),
+          inbound: d.inbound,
+          outbound: d.outbound,
         }))
       )
-      setTotalInbound(inCount)
-      setTotalOutbound(outCount)
+      setTotalInbound(volume.totalInbound)
+      setTotalOutbound(volume.totalOutbound)
+      setUnstampedMessages(volume.totalUnknown)
 
       // 2. Draft performance
       const { data: drafts } = await supabase
@@ -400,110 +412,43 @@ export default function AgentAnalyticsPage() {
       setAiCostTotal(aiCostTotal)
       setAiCostBreakdown(aiCostBreakdownLocal)
 
-      // 6. Avg response time — REAL: median time from inbound email to
-      // the next outbound on the same Gmail thread, in hours. Looks at
-      // the same period as the rest of the dashboard.
-      const { data: threadInts } = await supabase
-        .from('interactions')
-        .select('gmail_thread_id, direction, timestamp')
-        .in('venue_id', venueIds)
-        .eq('type', 'email')
-        .gte('timestamp', start)
-        .lt('timestamp', end)
-        .order('timestamp', { ascending: true })
-        .not('gmail_thread_id', 'is', null)
-      const threads: Record<string, Array<{ direction: string; t: number }>> = {}
-      for (const i of (threadInts ?? []) as Array<{ gmail_thread_id: string; direction: string; timestamp: string }>) {
-        if (!threads[i.gmail_thread_id]) threads[i.gmail_thread_id] = []
-        threads[i.gmail_thread_id].push({ direction: i.direction, t: new Date(i.timestamp).getTime() })
-      }
-      const responseDeltasMs: number[] = []
-      for (const events of Object.values(threads)) {
-        for (let idx = 0; idx < events.length - 1; idx++) {
-          if (events[idx].direction === 'inbound' && events[idx + 1].direction === 'outbound') {
-            responseDeltasMs.push(events[idx + 1].t - events[idx].t)
-          }
+      // 6. Median reply time — the canonical reader, not a second
+      //    calculation of the same thing. Venue-scoped on purpose: a
+      //    median of medians is not a median, which is the same reason
+      //    src/lib/intel/adapters/scope-merge.ts refuses to merge
+      //    ratios. At group or company scope the tile says so.
+      if (scope.level === 'venue' && scope.venueId) {
+        try {
+          const res = await fetch(
+            `/api/intel/canonical/cohort-funnel?venueId=${encodeURIComponent(scope.venueId)}&sinceDays=365`,
+            { cache: 'no-store' },
+          )
+          const body = (await res.json()) as { ok: boolean; funnel?: CohortFunnel }
+          setCohort(body.ok && body.funnel ? body.funnel : null)
+        } catch {
+          setCohort(null)
         }
+      } else {
+        setCohort(null)
       }
-      // Use median, not mean — outliers (replies the next week) skew the
-      // mean upward and don't represent typical responsiveness.
-      const median = (xs: number[]) => {
-        if (xs.length === 0) return 0
-        const sorted = [...xs].sort((a, b) => a - b)
-        const mid = Math.floor(sorted.length / 2)
-        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
-      }
-      const medianMs = median(responseDeltasMs)
-      const responseHours = medianMs > 0 ? Math.round((medianMs / 3_600_000) * 10) / 10 : 0
-      setAvgResponseHours(responseHours)
 
-      // 7. First-email action rate — % of weddings (last 90 days) whose
-      // couple sent more than one inbound email. Proxy for "did the
-      // venue's first reply land?" — a couple that engaged once and
-      // ghosted didn't take action.
+      // 7. Did the first reply land — of the couples first seen in the
+      //    last ninety days, how many wrote in more than once.
       const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString()
-      const { data: recentWeddings } = await supabase
-        .from('weddings')
-        .select('id')
-        .in('venue_id', venueIds)
-        .gte('inquiry_date', ninetyDaysAgo)
-      const recentIds = (recentWeddings ?? []).map((w: { id: string }) => w.id)
-      if (recentIds.length === 0) {
-        setFirstEmailActionRate(null)
-        setFirstEmailActionSample(0)
-      } else {
-        const { data: inboundOnRecent } = await supabase
-          .from('interactions')
-          .select('wedding_id')
-          .in('wedding_id', recentIds)
-          .eq('direction', 'inbound')
-          .eq('type', 'email')
-        const inboundCounts: Record<string, number> = {}
-        for (const r of (inboundOnRecent ?? []) as { wedding_id: string }[]) {
-          inboundCounts[r.wedding_id] = (inboundCounts[r.wedding_id] ?? 0) + 1
-        }
-        const withAtLeastOne = recentIds.filter((id) => (inboundCounts[id] ?? 0) >= 1).length
-        const withMultiple = recentIds.filter((id) => (inboundCounts[id] ?? 0) >= 2).length
-        setFirstEmailActionRate(withAtLeastOne > 0 ? Math.round((withMultiple / withAtLeastOne) * 100) : null)
-        setFirstEmailActionSample(withAtLeastOne)
-      }
+      const follow = await loadFollowThrough(supabase, venueIds, ninetyDaysAgo)
+      setFirstEmailActionRate(follow.rate)
+      setFirstEmailActionSample(follow.sample)
 
-      // 8. Decision timeline — for booked weddings (last 180 days),
-      // average days from inquiry_date to booking. Buckets the same
-      // population by <7d / 7-30d / 30d+ for the distribution bar.
+      // 8. Decision timeline — first sight to contract, for couples who
+      //    signed in the last hundred and eighty days.
       const oneEightyAgo = new Date(Date.now() - 180 * 86400000).toISOString()
-      const { data: bookedWeddings } = await supabase
-        .from('weddings')
-        .select('id, inquiry_date, updated_at, status')
-        .in('venue_id', venueIds)
-        .eq('status', 'booked')
-        .gte('inquiry_date', oneEightyAgo)
-      const decisionDaysList: number[] = []
-      for (const w of (bookedWeddings ?? []) as Array<{ inquiry_date: string; updated_at: string }>) {
-        const inquiry = new Date(w.inquiry_date).getTime()
-        const booked = new Date(w.updated_at).getTime()
-        if (Number.isFinite(inquiry) && Number.isFinite(booked) && booked > inquiry) {
-          decisionDaysList.push((booked - inquiry) / 86400000)
-        }
-      }
-      if (decisionDaysList.length === 0) {
-        setDecisionDays(null)
-        setDecisionFastPct(0)
-        setDecisionTypicalPct(0)
-        setDecisionSlowPct(0)
-        setDecisionBookedSample(0)
-      } else {
-        const avg = decisionDaysList.reduce((s, d) => s + d, 0) / decisionDaysList.length
-        const fast = decisionDaysList.filter((d) => d < 7).length
-        const typical = decisionDaysList.filter((d) => d >= 7 && d <= 30).length
-        const slow = decisionDaysList.filter((d) => d > 30).length
-        const total = decisionDaysList.length
-        setDecisionDays(Math.round(avg))
-        setDecisionFastPct(Math.round((fast / total) * 100))
-        setDecisionTypicalPct(Math.round((typical / total) * 100))
-        setDecisionSlowPct(Math.round((slow / total) * 100))
-        setDecisionBookedSample(total)
-      }
+      const decision = await loadDecisionTimeline(supabase, venueIds, oneEightyAgo)
+      setDecisionDays(decision.averageDays)
+      setDecisionFastPct(decision.fastPct)
+      setDecisionTypicalPct(decision.typicalPct)
+      setDecisionSlowPct(decision.slowPct)
+      setDecisionBookedSample(decision.sample)
+      setDecisionUnmeasurable(decision.unmeasurable)
 
       setError(null)
     } catch (err) {
@@ -520,6 +465,26 @@ export default function AgentAnalyticsPage() {
   }, [fetchAnalytics, scope.loading])
 
   const totalDrafts = draftPerformance.reduce((sum, d) => sum + d.count, 0)
+
+  // Reply time, straight off the canonical reader's Distribution. The
+  // value is already a median in hours; the honesty flags ride with it,
+  // so a thin sample says it is thin instead of printing a confident
+  // number nobody should act on.
+  const responseDist = cohort?.responseTime ?? null
+  const responseHours =
+    responseDist && responseDist.value !== null
+      ? Math.round(responseDist.value * 10) / 10
+      : null
+  const responseNote =
+    scope.level !== 'venue'
+      ? 'Pick a single venue to see this. A median across venues is not a median of anything.'
+      : responseDist === null
+        ? 'This one would not load just now.'
+        : responseHours === null
+          ? 'No couple has both written in and had a reply back yet.'
+          : responseDist.enoughData
+            ? `Across ${responseDist.n} couples.`
+            : `Across ${responseDist.n} couples, which is still a small number to read much into.`
 
   // Scope label. Show what the operator is actually looking at so a
   // confused "wait, which venue is this for?" never happens. Mirrors the
@@ -598,14 +563,14 @@ export default function AgentAnalyticsPage() {
             icon={Mail}
             iconBg="bg-teal-50"
             iconColor="text-teal-600"
-            label="Inbound Emails"
+            label="Messages In"
             value={totalInbound}
           />
           <StatCard
             icon={Send}
             iconBg="bg-sage-50"
             iconColor="text-sage-600"
-            label="Outbound Emails"
+            label="Messages Out"
             value={totalOutbound}
           />
           <StatCard
@@ -627,14 +592,14 @@ export default function AgentAnalyticsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Email Volume */}
+          {/* Message Volume */}
           <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
             <h2 className="font-heading text-base font-semibold text-sage-900 mb-4">
-              Email Volume
+              Message Volume
             </h2>
             {emailVolume.length === 0 ? (
               <div className="h-64 flex items-center justify-center">
-                <p className="text-sm text-sage-400">No email data for this period</p>
+                <p className="text-sm text-sage-400">Nothing came in or went out in this period</p>
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
@@ -668,6 +633,13 @@ export default function AgentAnalyticsPage() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            )}
+            {unstampedMessages > 0 && (
+              <p className="mt-3 text-[11px] text-sage-500">
+                {unstampedMessages} message{unstampedMessages === 1 ? '' : 's'} in this period
+                carry no direction, so they are in neither line. They are older than the change
+                that started recording which way a message went.
+              </p>
             )}
           </div>
 
@@ -769,32 +741,30 @@ export default function AgentAnalyticsPage() {
               </p>
               <p className="mt-3 text-[10px] text-sage-400">
                 {firstEmailActionSample > 0
-                  ? `Based on ${firstEmailActionSample} inquiries in the last 90 days`
-                  : 'Not enough data — needs at least 1 inquiry in the last 90 days'}
+                  ? `Based on ${firstEmailActionSample} couple${firstEmailActionSample === 1 ? '' : 's'} first seen in the last 90 days`
+                  : 'Nobody new has written in over the last 90 days, so there is nothing to measure'}
               </p>
             </div>
 
-            {/* Metric 2: Average lead response time (REAL — median ms→h) */}
+            {/* Metric 2: Median reply time — getCohortFunnel, the
+                canonical reader. One venue at a time, because a median
+                across venues is not a median of anything. */}
             <div className="border border-border rounded-xl p-5 bg-warm-white">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-lg bg-sage-50 flex items-center justify-center">
                   <Clock className="w-5 h-5 text-sage-600" />
                 </div>
                 <span className="text-xs font-medium uppercase tracking-wider text-sage-500">
-                  Average Lead Response Time
+                  Median Reply Time
                 </span>
               </div>
               <p className="mt-4 text-4xl font-bold text-sage-900">
-                {avgResponseHours > 0 ? `${avgResponseHours} hours` : '—'}
+                {responseHours === null ? '—' : `${responseHours} hours`}
               </p>
               <p className="mt-1 text-sm text-sage-600">
-                Median time from couple&apos;s email to your reply
+                Typical time from a couple&apos;s message to your reply
               </p>
-              <p className="mt-3 text-[10px] text-sage-400">
-                {avgResponseHours > 0
-                  ? `Calculated across every inbound→outbound pair in this period`
-                  : 'No inbound→outbound thread pairs in this period'}
-              </p>
+              <p className="mt-3 text-[10px] text-sage-400">{responseNote}</p>
             </div>
 
             {/* Metric 3: Decision timeline (REAL — booked weddings, last 180d) */}
@@ -845,6 +815,9 @@ export default function AgentAnalyticsPage() {
                   </div>
                   <p className="mt-3 text-[10px] text-sage-400">
                     Based on {decisionBookedSample} booking{decisionBookedSample === 1 ? '' : 's'} in the last 180 days
+                    {decisionUnmeasurable > 0
+                      ? `. ${decisionUnmeasurable} more signed but have no first contact on record, so they are left out.`
+                      : ''}
                   </p>
                 </>
               )}
