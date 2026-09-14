@@ -390,3 +390,23 @@ exists), Instagram versus TikTok comparison (no TikTok connector), investor numb
 
 Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. No spine writes
 outside linkSignal. No database writes. Migrations wait for `npm run migrate:pending`.
+
+## Wave 7 candidates (from the CEO scenario audit, 2026-09-14; launch after wave 6 lands)
+
+The pattern the audit named: built, tested, then never wired to live data or never given a
+door. Dry work, no reimport needed.
+- Review sentiment is never populated: `reviews.sentiment_score` exists and the six-month trend
+  reads it, but neither the Google import nor the paste tool fills it. Wire the existing review
+  language pass to score each review on ingest; backfill on replay.
+- Social to tours: the correlation engine has no `tours` channel and the follower capture never
+  feeds it. Add tours (from spine touchpoints) as a series and social engagement volume as
+  another, so "does posting more lead to more tours" has a wire, then an honest answer.
+- The groom's cake: four gaps in a row. (1) The loose-detail extractor exists but is switched
+  off for inbox speed; run it out of band after classification. (2) A stated intention is not
+  a question, so the fixed-list extractor drops it; add an `intentions` field. (3) Planning
+  notes fill only from the chatbot and contract PDFs; venue conversations must write there
+  too. (4) Nothing reconciles notes against the day-of timeline; a nightly pass that lists
+  intentions with no timeline item, shown on the wedding page.
+- Google Ads and TikTok connectors are stubs; the reallocation analyst runs on typed-in spend.
+  Say so on the page until a connector exists.
+- Weather severity has no source; a warning feed is an external dependency, parked.
