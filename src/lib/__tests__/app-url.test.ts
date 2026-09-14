@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { appUrl } from '../app-url'
 
 const originalEnv = process.env
@@ -6,7 +6,7 @@ const originalEnv = process.env
 describe('appUrl', () => {
   beforeEach(() => {
     process.env = { ...originalEnv }
-    process.env.NODE_ENV = 'production'
+    vi.stubEnv('NODE_ENV', 'production')
     // Clear all the app URL env vars
     delete process.env.APP_CANONICAL_HOST
     delete process.env.NEXT_PUBLIC_APP_URL
@@ -14,6 +14,7 @@ describe('appUrl', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllEnvs()
     process.env = originalEnv
   })
 
@@ -36,7 +37,7 @@ describe('appUrl', () => {
 
   it('falls back to VERCEL_URL in production when others not set', () => {
     process.env.VERCEL_URL = 'my-deployment.vercel.app'
-    process.env.NODE_ENV = 'production'
+    vi.stubEnv('NODE_ENV', 'production')
 
     expect(appUrl('/billing/success')).toBe(
       'https://my-deployment.vercel.app/billing/success'
@@ -44,7 +45,7 @@ describe('appUrl', () => {
   })
 
   it('uses http in development, https in production', () => {
-    process.env.NODE_ENV = 'development'
+    vi.stubEnv('NODE_ENV', 'development')
     delete process.env.APP_CANONICAL_HOST
     delete process.env.NEXT_PUBLIC_APP_URL
     delete process.env.VERCEL_URL
@@ -53,7 +54,7 @@ describe('appUrl', () => {
   })
 
   it('uses https in production with fallback', () => {
-    process.env.NODE_ENV = 'production'
+    vi.stubEnv('NODE_ENV', 'production')
     delete process.env.APP_CANONICAL_HOST
     delete process.env.NEXT_PUBLIC_APP_URL
     delete process.env.VERCEL_URL
