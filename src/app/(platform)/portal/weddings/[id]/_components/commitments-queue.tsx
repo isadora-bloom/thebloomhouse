@@ -168,8 +168,10 @@ export function CommitmentsQueue({
     const newEvent: TimelineCustomEvent = {
       // Same id shape and same default phase as the builder's own
       // "add custom event" path, so the event is indistinguishable from
-      // one added in the builder itself.
-      id: `custom_${Date.now()}`,
+      // one added in the builder itself. Keyed by the reconciliation row
+      // rather than the clock: stable across renders (the React Compiler
+      // rule) and it makes a second click on the same row a no-op id-wise.
+      id: `custom_${row.id}`,
       name: row.quote.length > 80 ? `${row.quote.slice(0, 77)}...` : row.quote,
       time: '',
       duration: 15,
