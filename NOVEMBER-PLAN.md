@@ -602,6 +602,29 @@ while the plan talks about Crestwood; both are demo venues, but the public snaps
 Hawthorne. Tokens on the three ad connection tables and Instagram are still plaintext (the
 pgsodium HARDENING TODO carried forward on 407); do that before a second venue connects.
 
+## Wave 9 (launched 2026-09-14, night): finish W2, the canonical wiring
+
+The verification found the plan's headline goal unmet: 255 legacy-table reads under `src/app`
+(weddings 131, interactions 62, people 46, attribution_events 25, wedding_touchpoints 1), most of
+them in API routes rather than pages, and two daily surfaces still reading `weddings` under a
+tag that named W37 as the blocker. W37 has shipped. Rules for the wave: no new reads of the five
+tables; new readers go under `src/lib/intel/readers/` and adapters under `src/lib/intel/adapters/`
+(nobody edits `canonical.ts`, so seven worktrees cannot collide on it); nobody edits the ratchet
+baseline, the integrator lowers it once with `--write` at the end; a `legacy-read-ok` tag is a
+documented decision on a mirror-maintenance route, never a way past the ratchet for a page.
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W62 | `/agent/leads` and `/agent/pipeline` off `weddings` and `wedding_heat`: stages through the W37 vocabulary from spine rows, heat through the canonical heat path, the obsolete tags removed | Opus | the two pages, new `readers/lead-board.ts`, an adapter, tests |
+| W63 | `/dashboard`, `/agent/inbox`, `/agent/analytics`, `/super-admin/pipeline-health` off the legacy tables; the inbox gets a spine thread reader; the dashboard shows `/today`'s figures from the same functions | Opus | the four pages, new readers, tests |
+| W64 | `/intel/roi`, `/intel/sources`, `/intel/clients/[id]` and the intel APIs behind them (attribution, name-evidence, journey-narrative, prior-touches, agency leads) on the canonical readers; a sweep of every other `/intel` page rendering a spine fact without the canonical layer | Opus | those files, new readers, tests |
+| W65 | The couple and wedding-record pages through one `getWeddingRecord` reader (the only place the legacy row is read, tagged there and nowhere else) | Sonnet | `_couple-pages/{page,addresses,couple-photo}`, `couple/[slug]/layout`, `portal/weddings/[id]/{page,portal,print}`, new `readers/wedding-record.ts` |
+| W66 | Every other API route with a legacy read, classified: visible-figure reads converted; mirror-maintenance reads tagged with the doctrine's class and listed in `REPAIR-ENDPOINTS.md`; `cleanup-ghost-weddings` stops hard-deleting weddings (tombstone via `non_couple_at`) | Opus | those routes, `api/cron/route.ts` job bodies, `REPAIR-ENDPOINTS.md` |
+| W67 | Test and guard gaps from the verification: four guards scan the directories the waves added; the raw-`error.message` guard covers API routes with an `apiError` helper; weather-cancellation tests; the monthly-story mock and GC-1 budgets; battery probes for W46 and W47; the cascade-only-writer ratchet covers update and delete | Sonnet | guard scripts, tests, `battery-expected.ts`, vitest config, `src/lib/api/api-error.ts` |
+| W68 | Ingestion leftovers: the three CSV writers still filling `tangential_signals` go through `linkSignal` with a guard and a truthful migration 412 comment; loose-detail capture and venue-conversation notes run on the SMS and DM chokepoint too; `tracer.ts` renamed to what it is | Opus | `crm-import/{site-visitors,storefront-activity,web-form}.ts`, `ingestion/openphone.ts` (one call site), `identity/tracer.ts` rename, migration 412 |
+
+Launched from d2dad192 after the security remediation; every worktree verified on that head.
+
 ## Wave 8 (launch after wave 7 lands): the rest, built or triggered, not parked
 
 Everything that used to sit under "Parked until after November" gets a real workstream. Two
