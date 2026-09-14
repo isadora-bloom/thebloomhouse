@@ -1,5 +1,17 @@
 # Scenario audit and wave 6/7 plan
 
+> **Numbering note (integrator, 2026-09-14).** The W-numbers in this document are the audit
+> agent's own and do not match NOVEMBER-PLAN.md, which is the plan of record. In the plan,
+> wave 6 = W41 screenshot capture, W42 Monday admin (file import reachable + "since you were
+> last here" strip), W43 coordinator wedding page (story, contracts, timeline as shared
+> components), W44 table map and guest list joined, W45 housekeeping; all launched 2026-09-14.
+> This document's "wave 6" items map as: reallocation page reachable (done, commit 4ca178b7),
+> screenshot capture (plan W41), review sentiment / tours channel / weather severity (plan
+> "Wave 7 candidates"). This document's "wave 7" parity and reconciliation items are partly in
+> flight as plan W43 and W44; the rest, and its "wave 8" surfacing items, are sequenced into the
+> plan after wave 6 lands. The Rixey-reference architecture note (one shared component per
+> feature, role prop, same rows) is the approach W43 and W44 were briefed with.
+
 Date: 2026-09-14. Method: two hypothetical Mondays were role-played against the
 live code (a venue coordinator's admin catch-up plus a final walkthrough; a CEO's
 team meeting) and every claim checked against the actual repo, file and line, not
