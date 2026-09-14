@@ -157,6 +157,10 @@ export const STREAM_TAGS = {
   SPEND: 0x7777,
   ATTRIBUTION: 0x8888,
   LOST_DEAL: 0x9999,
+  // W49 (wave 7): weather_alerts is the only new table with its own
+  // uuid `id` column (weather_climate_norms / weather_climate_annual
+  // use composite PKs, no seedUuid needed for them).
+  WEATHER_ALERT: 0xaaaa,
 } as const
 
 // ---------------------------------------------------------------------------

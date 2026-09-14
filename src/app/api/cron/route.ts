@@ -1666,10 +1666,14 @@ async function runPruneMaintenance(): Promise<{
 
 /**
  * Tier-D #164 (2026-05-08). Wraps the weather_forecast cron handler
- * with a per-tour weather-snapshot stamp pass. Same cron entry, two
- * sub-jobs: (a) refresh forecasts for every venue (existing), then
+ * with a per-tour weather-snapshot stamp pass. Same cron entry, now
+ * three sub-jobs: (a) refresh forecasts for every venue (existing),
  * (b) stamp upcoming + recently-completed tours from the freshly-
- * refreshed weather_data table. Zero added API cost — pure DB join.
+ * refreshed weather_data table (existing, zero added API cost — pure
+ * DB join), and (c) W49 (wave 7): refresh the real NWS severe-alert
+ * feed for every venue with coordinates. (c) rides this same cron
+ * entry rather than registering a new one — cron_count is ratcheted
+ * at 49 in scripts/cleanup-budget.json.
  */
 async function runWeatherForecastWithTourStamp() {
   const forecastResult = await fetchWeatherForAllVenues()
@@ -1681,7 +1685,15 @@ async function runWeatherForecastWithTourStamp() {
     console.error('[weather_forecast] tour stamp failed:', err)
     tourStamp.errors.push(err instanceof Error ? err.message : String(err))
   }
-  return { forecast: forecastResult, tour_stamp: tourStamp }
+  let alertsRefresh: Record<string, unknown> = {}
+  try {
+    const { refreshAllVenueAlerts } = await import('@/lib/services/intel/nws-alerts')
+    alertsRefresh = await refreshAllVenueAlerts(createServiceClient())
+  } catch (err) {
+    console.error('[weather_forecast] NWS alerts refresh failed:', err)
+    alertsRefresh = { error: err instanceof Error ? err.message : String(err) }
+  }
+  return { forecast: forecastResult, tour_stamp: tourStamp, alerts_refresh: alertsRefresh }
 }
 
 /**

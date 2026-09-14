@@ -942,6 +942,134 @@ function buildSourceAttribution(b: SqlBuilder, weddings: SeedWedding[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Weather (W49, wave 7 / November plan). Crestwood Farm (Charlottesville,
+// VA — lat 38.0293 / lon -78.4767 per supabase/seed.sql) gets:
+//   - one currently-active NWS-shaped severe alert, so the demo shows the
+//     real severity feed (weather_alerts, mig 404) instead of an empty
+//     surface.
+//   - a handful of weather_climate_norms rows (mig 340) for May, the
+//     seed's anchor month (SEED_NOW), so climate-context.ts has a
+//     recent/prior decade comparison to read.
+//   - five years of weather_climate_annual rows (mig 404) for May, with
+//     a deliberate +0.4°F/year warming slope so the least-squares trend
+//     in climate-context.ts has something real to compute and the demo
+//     shows a non-null "Long-term trend" line.
+//
+// Deterministic — SEED_NOW-anchored, no RNG, so ON CONFLICT DO NOTHING
+// re-runs are true no-ops.
+// ---------------------------------------------------------------------------
+
+function buildWeatherSeed(b: SqlBuilder): void {
+  b.section('10. WEATHER — NWS alert + climate norms/annual (Crestwood Farm)')
+
+  const venue = DEMO_VENUES.find((v) => v.slug === 'crestwood-farm')
+  if (!venue) return
+
+  // --- one active severe alert -------------------------------------
+  const alertId = seedUuid(STREAM_TAGS.WEATHER_ALERT, venue.index, 1, 1)
+  const onset = addDays(SEED_NOW, -1)
+  const ends = addDays(SEED_NOW, 1)
+  const alertCols = [
+    sqlStr(alertId),
+    sqlStr(venue.id),
+    sqlStr('urn:oid:2.49.0.1.840.0.demo-crestwood-severe-tstorm-001'),
+    sqlStr('Severe Thunderstorm Warning'),
+    sqlStr('Severe'),
+    sqlStr('Observed'),
+    sqlStr('Immediate'),
+    sqlStr('Severe Thunderstorm Warning issued for Albemarle County'),
+    sqlStr(
+      'A severe thunderstorm capable of producing damaging winds and quarter-size hail was ' +
+        'located near Crestwood Farm, moving northeast at 30 mph.',
+    ),
+    sqlStr('Move to an interior room on the lowest floor. Avoid windows.'),
+    sqlStr('Albemarle County, VA'),
+    sqlStr('Actual'),
+    sqlStr('Alert'),
+    sqlTimestamptz(onset),
+    sqlTimestamptz(ends),
+    sqlTimestamptz(ends),
+    'true',
+    sqlTimestamptz(SEED_NOW),
+  ].join(', ')
+  b.raw(
+    `INSERT INTO public.weather_alerts\n` +
+      `  (id, venue_id, nws_id, event, severity, certainty, urgency, headline,\n` +
+      `   description, instruction, area_desc, status, message_type, onset, ends,\n` +
+      `   expires, is_active, fetched_at)\n` +
+      `VALUES\n  (${alertCols})\nON CONFLICT (id) DO NOTHING;`,
+  )
+  b.count('weather_alerts', 1)
+
+  // --- a few weather_climate_norms rows (May, a handful of daytime hours) --
+  const normHours = [10, 14, 18]
+  const normRows: string[] = []
+  for (const hour of normHours) {
+    const recentTemp = 68 + hour * 0.3
+    const priorTemp = recentTemp - 2.1
+    const cols = [
+      sqlStr(venue.id),
+      sqlNum(5), // May
+      sqlNum(hour),
+      sqlNum(Number(recentTemp.toFixed(1))),
+      sqlNum(Number((recentTemp - 8).toFixed(1))),
+      sqlNum(Number((recentTemp + 8).toFixed(1))),
+      sqlNum(0.08),
+      sqlNum(28),
+      sqlNum(120),
+      sqlNum(Number(priorTemp.toFixed(1))),
+      sqlNum(0.06),
+      sqlNum(22),
+      sqlNum(120),
+      sqlDate(new Date(Date.UTC(2016, 0, 1))),
+      sqlDate(new Date(Date.UTC(2025, 11, 31))),
+      sqlDate(new Date(Date.UTC(2006, 0, 1))),
+      sqlDate(new Date(Date.UTC(2015, 11, 31))),
+      sqlTimestamptz(SEED_NOW),
+    ].join(', ')
+    normRows.push(`  (${cols})`)
+  }
+  b.raw(
+    `INSERT INTO public.weather_climate_norms\n` +
+      `  (venue_id, month_num, hour_local, recent_temp_avg_f, recent_temp_p10_f,\n` +
+      `   recent_temp_p90_f, recent_precip_avg_in, recent_precip_prob_pct,\n` +
+      `   recent_sample_count, prior_temp_avg_f, prior_precip_avg_in,\n` +
+      `   prior_precip_prob_pct, prior_sample_count, recent_window_start,\n` +
+      `   recent_window_end, prior_window_start, prior_window_end, refreshed_at)\n` +
+      `VALUES\n${normRows.join(',\n')}\n` +
+      `ON CONFLICT (venue_id, month_num, hour_local) DO NOTHING;`,
+  )
+  b.count('weather_climate_norms', normRows.length)
+
+  // --- five years of weather_climate_annual rows (May), warming trend --
+  const annualRows: string[] = []
+  const years = [2021, 2022, 2023, 2024, 2025]
+  const baseHighF = 74.0
+  const baseTotalPrecipIn = 3.6
+  years.forEach((year, i) => {
+    const meanHighF = baseHighF + i * 0.4 // deliberate warming slope for the demo
+    const totalPrecipIn = baseTotalPrecipIn - i * 0.05
+    const cols = [
+      sqlStr(venue.id),
+      sqlNum(year),
+      sqlNum(5), // May
+      sqlNum(Number(meanHighF.toFixed(1))),
+      sqlNum(Number(totalPrecipIn.toFixed(2))),
+      sqlNum(31),
+      sqlTimestamptz(SEED_NOW),
+    ].join(', ')
+    annualRows.push(`  (${cols})`)
+  })
+  b.raw(
+    `INSERT INTO public.weather_climate_annual\n` +
+      `  (venue_id, year, month_num, mean_high_f, total_precip_in, sample_days, refreshed_at)\n` +
+      `VALUES\n${annualRows.join(',\n')}\n` +
+      `ON CONFLICT (venue_id, year, month_num) DO NOTHING;`,
+  )
+  b.count('weather_climate_annual', annualRows.length)
+}
+
+// ---------------------------------------------------------------------------
 // Top-level builder — call each section in order.
 // ---------------------------------------------------------------------------
 
@@ -966,6 +1094,7 @@ function buildSql(): { sql: string; counts: Record<string, number>; weddings: Se
   buildEngagementEvents(b, weddings)
   buildLostDeals(b, weddings)
   buildSourceAttribution(b, weddings)
+  buildWeatherSeed(b)
 
   return { sql: b.toString(), counts: b.counts, weddings }
 }

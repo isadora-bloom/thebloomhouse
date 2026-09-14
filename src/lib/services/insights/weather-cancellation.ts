@@ -53,6 +53,7 @@ import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import { getAlertDayMap, isSevereAlert, type AlertForDay } from '@/lib/services/intel/nws-alerts'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -108,11 +109,27 @@ const MIN_BUCKET_TOURS = 5
 /** Multiplier above baseline that triggers the insight. */
 const TRIGGER_MULTIPLIER = 1.5
 
-/** Bucket the weather conditions for a single day. */
-function bucketWeather(w: WeatherRow): string {
+/**
+ * Bucket the weather conditions for a single day. `alert`, when
+ * present, is the most-severe real NWS alert covering that day
+ * (src/lib/services/intel/nws-alerts.ts `getAlertDayMap`).
+ *
+ * W49 (wave 7): this used to string-match Open-Meteo's `conditions`
+ * text for "tornado" / "hurricane" — dead code, because Open-Meteo's
+ * weathercode mapping (weather.ts `weatherCodeToCondition`) only ever
+ * emits Clear sky / Partly cloudy / Fog / Drizzle / Rain / Snow / Rain
+ * showers / Snow showers / Thunderstorm / Unknown. Those two literals
+ * could never match. Real severity now comes from the NWS alerts feed,
+ * which does cover tornado/hurricane/blizzard/etc; the Open-Meteo
+ * "Thunderstorm" code check stays as a fallback for storm days that
+ * never reached NWS-alert thresholds.
+ */
+function bucketWeather(w: WeatherRow, alert?: AlertForDay | null): string {
+  if (alert && isSevereAlert(alert)) return 'severe_weather'
+
   // Severe-weather wins over precipitation.
   const cond = (w.conditions ?? '').toLowerCase()
-  if (cond.includes('thunderstorm') || cond.includes('tornado') || cond.includes('hurricane')) {
+  if (cond.includes('thunderstorm')) {
     return 'severe_weather'
   }
   if (cond.includes('snow')) return 'snow'
@@ -342,6 +359,16 @@ export async function analyzeWeatherCancellations(
     return { ok: true, dataGated: true, gatedReason: 'insufficient_tours' }
   }
 
+  // W49 (wave 7): real NWS severity for the window, keyed by day. Best
+  // effort — getAlertDayMap only ever reads persisted weather_alerts
+  // rows (never calls the network itself), so a gap here just means
+  // fewer days get the severe_weather override; it never blocks the
+  // rest of the analysis.
+  const alertByDate = await getAlertDayMap(supabase, venueId, startIso, endIso).catch((err) => {
+    console.warn('[weather-cancellation] alert day-map read failed:', redactError(err))
+    return new Map<string, AlertForDay>()
+  })
+
   // Bucketize each tour by the weather of its scheduled_at::date.
   const buckets: Record<string, { tours: number; cancellations: number; rate: number }> = {}
   let totalTours = 0
@@ -351,7 +378,7 @@ export async function analyzeWeatherCancellations(
     const day = t.scheduled_at.slice(0, 10)
     const w = weatherByDate.get(day)
     if (!w) continue // tour day with no weather observation: skip
-    const bucket = bucketWeather(w)
+    const bucket = bucketWeather(w, alertByDate.get(day) ?? null)
     if (!buckets[bucket]) buckets[bucket] = { tours: 0, cancellations: 0, rate: 0 }
     buckets[bucket].tours++
     totalTours++

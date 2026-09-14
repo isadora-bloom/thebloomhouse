@@ -430,6 +430,36 @@ export async function backfillVenueClimateNorms(
     }
   }
 
+  // ---------------------------------------------------------------
+  // W49 (wave 7). Persist the per-year monthly aggregates themselves
+  // (not just the norm) so climate-context.ts can compute a real
+  // least-squares trend across every available year, instead of the
+  // two-decade-bucket comparison the recent/prior columns above give.
+  // `monthly` already holds exactly this — one row per (year, month)
+  // with days>=1; only keep months with a real sample (>=25 days,
+  // matching the norm's own completeness bar below) so a partial
+  // first/last month at the archive boundary doesn't skew the slope.
+  // ---------------------------------------------------------------
+  const annualRows = Array.from(monthly.values())
+    .filter((m) => m.days >= 25)
+    .map((m) => ({
+      venue_id: venueId,
+      year: m.year,
+      month_num: m.month,
+      mean_high_f: m.meanHighF,
+      total_precip_in: m.totalPrecipIn,
+      sample_days: m.days,
+      refreshed_at: refreshedAt,
+    }))
+  if (annualRows.length > 0) {
+    const { error: annualErr } = await supabase
+      .from('weather_climate_annual')
+      .upsert(annualRows, { onConflict: 'venue_id,year,month_num' })
+    if (annualErr) {
+      console.error(`[weather-climate-norms] annual upsert failed for ${venueId}:`, annualErr.message)
+    }
+  }
+
   // Per-month norm across the full 20-year window: mean of mean-high
   // and mean of total-precip. Used as the comparison baseline.
   const monthNorms = new Map<number, { meanHighF: number; meanPrecipIn: number; sampleYears: number }>()
