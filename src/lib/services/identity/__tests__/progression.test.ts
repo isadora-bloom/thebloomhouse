@@ -12,7 +12,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
   describe('HoneyBook channel (existing)', () => {
     it('maps crm_imported_inquiry to crm_inquiry', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'honeybook',
         action_type: 'crm_imported_inquiry',
         venue_id: 'test-venue',
@@ -27,7 +27,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
 
     it('maps crm_imported_booked to contract_signed', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'honeybook',
         action_type: 'crm_imported_booked',
         venue_id: 'test-venue',
@@ -42,7 +42,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
 
     it('maps crm_imported_lost to null (regression, not progression)', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'honeybook',
         action_type: 'crm_imported_lost',
         venue_id: 'test-venue',
@@ -59,7 +59,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
   describe('web_form channel (new)', () => {
     it('maps crm_imported_inquiry to crm_inquiry', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'web',
         action_type: 'crm_imported_inquiry',
         venue_id: 'test-venue',
@@ -74,7 +74,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
 
     it('maps crm_imported_booked to contract_signed', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'web',
         action_type: 'crm_imported_booked',
         venue_id: 'test-venue',
@@ -91,7 +91,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
   describe('generic csv_import channel (new)', () => {
     it('maps crm_imported_inquiry to crm_inquiry', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'csv_import',
         action_type: 'crm_imported_inquiry',
         venue_id: 'test-venue',
@@ -106,7 +106,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
 
     it('maps crm_imported_booked to contract_signed', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'csv_import',
         action_type: 'crm_imported_booked',
         venue_id: 'test-venue',
@@ -123,7 +123,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
   describe('dubsado channel (new)', () => {
     it('maps crm_imported_inquiry to crm_inquiry', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'dubsado',
         action_type: 'crm_imported_inquiry',
         venue_id: 'test-venue',
@@ -138,7 +138,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
 
     it('maps crm_imported_booked to contract_signed', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'dubsado',
         action_type: 'crm_imported_booked',
         venue_id: 'test-venue',
@@ -155,7 +155,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
   describe('aisle_planner channel (new)', () => {
     it('maps crm_imported_inquiry to crm_inquiry', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'aisle_planner',
         action_type: 'crm_imported_inquiry',
         venue_id: 'test-venue',
@@ -170,7 +170,7 @@ describe('progressionEventTypeFor — CSV anchor progression (Wave 6 W45)', () =
 
     it('maps crm_imported_booked to contract_signed', () => {
       const signal: NormalizedSignal = {
-        occurred_at: new Date('2026-01-01'),
+        occurred_at: '2026-01-01T00:00:00.000Z',
         channel: 'aisle_planner',
         action_type: 'crm_imported_booked',
         venue_id: 'test-venue',
