@@ -216,11 +216,6 @@ export async function sendContract(input: {
   }
 
   const doc = frozen.template
-  const envelopeAddress =
-    process.env.EMAIL_FROM?.match(/<([^>]+)>/)?.[1] ||
-    process.env.EMAIL_FROM ||
-    'hello@thebloomhouse.ai'
-
   const html = buildEmailHtml({
     businessName,
     primaryColor,
@@ -239,7 +234,10 @@ export async function sendContract(input: {
     to: recipients,
     subject: `Your ${doc.title.toLowerCase()} with ${businessName}`,
     html,
-    from: `${businessName} <${envelopeAddress}>`,
+    // W55: the From address is the venue's own verified sending domain,
+    // resolved inside the transport; here we only name who it is from.
+    venueId: input.venueId,
+    fromName: businessName,
     replyTo: coordinatorEmail,
   })
 

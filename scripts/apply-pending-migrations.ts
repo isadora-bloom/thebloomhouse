@@ -113,6 +113,11 @@ const WAVE_MIGRATIONS: Pending[] = [
     why: 'W55: per-venue Resend sending domain and its verification status on venue_config',
     probe: columnExists('venue_config', 'sending_domain'),
   },
+  {
+    file: '409_contract_generation.sql',
+    why: 'W57: generated contracts on the contracts table (kind, status trail, sign token hash, generated_from snapshot)',
+    probe: columnExists('contracts', 'sign_token'),
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */
