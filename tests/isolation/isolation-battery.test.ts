@@ -11,10 +11,21 @@
  *   3. guardReadOnly() refuses every write verb (insert/update/upsert/
  *      delete/rpc) and still lets ordinary reads through — the property
  *      the real script leans on to guarantee it never writes.
+ *   4. toursIsolationVerdict() catches a leak the walker cannot see: the
+ *      correlation engine's `tours` channel is a count per day with no
+ *      uuid in it, so a venue B tour landing in venue A's series has to be
+ *      caught by comparing days (NOVEMBER-PLAN.md wave 7, W47).
  */
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { walk, checkSurface, findForeignIds, guardReadOnly, ReadOnlyViolation } from '../../scripts/isolation-battery'
+import {
+  walk,
+  checkSurface,
+  findForeignIds,
+  guardReadOnly,
+  ReadOnlyViolation,
+  toursIsolationVerdict,
+} from '../../scripts/isolation-battery'
 
 const VENUE_A = '11111111-1111-1111-1111-111111111101'
 const VENUE_B = '11111111-1111-1111-1111-111111111102'
@@ -250,5 +261,54 @@ describe('guardReadOnly', () => {
     }
     expect(() => builder.select().insert({})).toThrow(ReadOnlyViolation)
     expect(wrote()).toBe(false)
+  })
+})
+
+/**
+ * The correlation engine's `tours` channel (NOVEMBER-PLAN.md wave 7, W47).
+ * A daily count carries no uuid, so the walker above is blind to a leak in
+ * it, and one venue's counts compared against the other's prove nothing —
+ * a leaked count and a legitimate one look identical. What separates them
+ * is whose couples produced them, which is what this verdict reads.
+ */
+describe('toursIsolationVerdict', () => {
+  const days = { mon: '2026-09-07', tue: '2026-09-08', wed: '2026-09-09' }
+  const OWN_COUPLE = '55555555-5555-5555-5555-555555555501'
+  const FOREIGN_COUPLE = '55555555-5555-5555-5555-555555555502'
+
+  it('passes when every couple behind the series belongs to the venue queried', () => {
+    const verdict = toursIsolationVerdict({
+      venue: 'A',
+      venueId: VENUE_A,
+      held: new Map([[days.mon, 2], [days.tue, 1]]),
+      coupleIds: [OWN_COUPLE],
+      foreignIds: [],
+    })
+    expect(verdict.status).toBe('PASS')
+    expect(verdict.note).toContain('3 tour(s)')
+  })
+
+  it("fails when a couple behind the series belongs to the other venue", () => {
+    const verdict = toursIsolationVerdict({
+      venue: 'A',
+      venueId: VENUE_A,
+      held: new Map([[days.mon, 2], [days.wed, 3]]),
+      coupleIds: [OWN_COUPLE, FOREIGN_COUPLE],
+      foreignIds: [{ table: 'couples', id: FOREIGN_COUPLE }],
+    })
+    expect(verdict.status).toBe('FAIL')
+    expect(verdict.foreignIds).toEqual([{ table: 'couples', id: FOREIGN_COUPLE }])
+  })
+
+  it('skips rather than claiming a pass when the venue held no tours', () => {
+    const verdict = toursIsolationVerdict({
+      venue: 'B',
+      venueId: VENUE_B,
+      held: new Map(),
+      coupleIds: [],
+      foreignIds: [],
+    })
+    expect(verdict.status).toBe('SKIP')
+    expect(verdict.note).toContain('no tour touchpoints')
   })
 })

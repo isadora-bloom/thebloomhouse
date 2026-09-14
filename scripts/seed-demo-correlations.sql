@@ -9,8 +9,11 @@
 --      cron will populate, but not before the investor demo).
 --
 -- This script seeds:
---   A. 5 correlation_narration rows + 5 underlying correlation engine
---      rows for Hawthorne Manor (the headline demo venue).
+--   A. 6 correlation_narration rows + 6 underlying correlation engine
+--      rows for Hawthorne Manor (the headline demo venue). Story 6 is the
+--      wave 7 (W47) tours pair: before the `tours` channel existed, every
+--      macro story in the demo ended at the top of the funnel because
+--      inquiries was the only venue channel there was to pair against.
 --   B. ~45 external_calendar_events covering 2026 (full year) + early
 --      2027 — matches Stream V's calendar-writer.ts category enum and
 --      writer fingerprint exactly.
@@ -117,6 +120,25 @@ INSERT INTO intelligence_insights (
  '{"channel_a":"cultural_moments","channel_b":"the_knot_attribution","lag_days":0,"r":-0.78,"window_days":90}'::jsonb,
  'new', 'cd000010-0000-0000-0000-000000000005', 'on_demand', 78,
  'demo0005', '{}'::jsonb,
+ 'demo-seed', 'demo-seed.v1',
+ '2026-04-25 12:00:00+00', '2026-04-25 12:00:00+00'),
+
+-- Story 6: Government shutdown -> tours held (engine row).
+-- NOVEMBER-PLAN.md wave 7, W47. Until the `tours` channel existed, every
+-- External Context channel could only ever pair against inquiries, so the
+-- demo had five macro stories and all five ended at the top of the funnel.
+-- This is the one that ends where a coordinator's week actually is: the
+-- tours that did or did not happen. surface_priority is |r| * 100 * 1.5,
+-- the macro x venue multiplier, same as the engine computes.
+('cd000001-0000-0000-0000-000000000006',
+ '22222222-2222-2222-2222-222222222201',
+ 'correlation', 'market',
+ 'government_signals and tours are inversely correlated (r=-0.74, lag 7d)',
+ 'Federal shutdown days were followed about a week later by fewer tours held at Hawthorne (Pearson r=-0.74, n=90 days).',
+ NULL, 'high', 0.74,
+ '{"channel_a":"government_signals","channel_b":"tours","lag_days":7,"r":-0.74,"window_days":90,"signal_class":"macro_x_venue","class_a":"macro","class_b":"venue","rank_multiplier":1.5,"rank_score":111}'::jsonb,
+ 'new', 'cd000010-0000-0000-0000-000000000006', 'on_demand', 111,
+ 'demo0006', '{}'::jsonb,
  'demo-seed', 'demo-seed.v1',
  '2026-04-25 12:00:00+00', '2026-04-25 12:00:00+00')
 ON CONFLICT (venue_id, insight_type, context_id, cache_key) WHERE cache_key IS NOT NULL DO NOTHING;
@@ -256,6 +278,32 @@ INSERT INTO intelligence_insights (
  )::jsonb,
  'new', 'cd000001-0000-0000-0000-000000000005', 'on_demand', 78,
  'demonarr05', '{}'::jsonb,
+ 'demo-seed', 'correlation-narration.prompt.v1.0',
+ '2026-04-25 12:05:00+00', '2026-04-25 12:05:00+00'),
+
+-- Story 6 narration: Government shutdown -> tours held (wave 7, W47).
+-- channelBLabel is 'Tours Held' rather than 'Tours', because a cancelled
+-- tour is not in the count and the card should not make a coordinator
+-- guess that. Matches formatSeriesLabel('tours') exactly.
+('cd000002-0000-0000-0000-000000000006',
+ '22222222-2222-2222-2222-222222222201',
+ 'correlation_narration', 'market',
+ 'Shutdown weeks cost Hawthorne tours about seven days later, not inquiries on the day',
+ 'The federal shutdown days in this window were followed, about a week later, by fewer tours actually held at Hawthorne (Pearson r=-0.74 over a 90-day window). Inquiries held up through the same days. The gap between the two is the point: couples still asked, they just stopped coming out to see the place.',
+ 'Shutdown weeks are the weeks to protect the tour diary in. Offer a reschedule before the couple has to ask for one, and keep the following week light enough to absorb the moves.',
+ 'high', 0.74,
+ ('{"channelA":"government_signals","channelB":"tours",'
+  || '"channelALabel":"Government Shutdowns / Political Events","channelBLabel":"Tours Held",'
+  || '"lagDays":7,"r":-0.74,"pValue":0.001,"windowDays":90,'
+  || '"weakSignal":false,'
+  || '"correlationId":"cd000001-0000-0000-0000-000000000006",'
+  || '"seriesASummary":{"nonZeroDays":21,"min":0,"max":1,"earliest":0,"latest":0},'
+  || '"seriesBSummary":{"nonZeroDays":38,"min":0,"max":4,"earliest":3,"latest":1},'
+  || '"seriesA":[{"dayKey":"2026-02-02","value":1},{"dayKey":"2026-02-16","value":1},{"dayKey":"2026-03-02","value":1},{"dayKey":"2026-04-01","value":0}],'
+  || '"seriesB":[{"dayKey":"2026-02-09","value":1},{"dayKey":"2026-02-23","value":1},{"dayKey":"2026-03-09","value":0},{"dayKey":"2026-04-08","value":3}]}'
+ )::jsonb,
+ 'new', 'cd000001-0000-0000-0000-000000000006', 'on_demand', 111,
+ 'demonarr06', '{}'::jsonb,
  'demo-seed', 'correlation-narration.prompt.v1.0',
  '2026-04-25 12:05:00+00', '2026-04-25 12:05:00+00')
 ON CONFLICT (venue_id, insight_type, context_id, cache_key) WHERE cache_key IS NOT NULL DO NOTHING;
