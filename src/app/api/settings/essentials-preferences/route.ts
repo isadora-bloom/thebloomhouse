@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { ESSENTIALS_LEVELS, type EssentialsLevel } from '@/lib/hooks/use-essentials-level'
+import { apiError } from '@/lib/api/api-error'
 
 interface PrefsRow {
   id: string
@@ -102,7 +103,7 @@ export async function GET() {
     const response: PrefsResponse = { ...prefs, org_default_level: orgDefault }
     return NextResponse.json(response)
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'load_failed' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -159,6 +160,6 @@ export async function PATCH(request: NextRequest) {
     if (error || !data) throw new Error(error?.message ?? 'update_failed')
     return NextResponse.json(data)
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'update_failed' }, { status: 500 })
+    return apiError(err)
   }
 }

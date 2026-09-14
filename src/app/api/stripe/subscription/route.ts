@@ -4,6 +4,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { planTierForPriceId } from '@/lib/billing/plans'
 import type Stripe from 'stripe'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET /api/stripe/subscription
@@ -91,8 +92,7 @@ export async function GET(_request: NextRequest) {
         expand: ['items.data.price'],
       })
     } catch (err) {
-      console.warn('[stripe/subscription] retrieve failed:', err)
-      return NextResponse.json(base)
+      return apiError(err)
     }
 
     const item = subscription.items.data[0]
@@ -126,10 +126,6 @@ export async function GET(_request: NextRequest) {
       currency,
     })
   } catch (err) {
-    console.error('[stripe/subscription] error:', err)
-    return NextResponse.json(
-      { error: 'Failed to load subscription.' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

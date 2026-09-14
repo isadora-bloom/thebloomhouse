@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // Historical Gmail backfill — enqueue + status.
@@ -48,7 +49,7 @@ export async function POST() {
       gmail_backfill_updated_at: new Date().toISOString(),
     })
     .eq('id', venueId)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   return NextResponse.json({ ok: true, status: 'pending' })
 }

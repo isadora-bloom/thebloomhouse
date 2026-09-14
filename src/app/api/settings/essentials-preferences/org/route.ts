@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { ESSENTIALS_LEVELS, type EssentialsLevel } from '@/lib/hooks/use-essentials-level'
+import { apiError } from '@/lib/api/api-error'
 
 interface OrgPrefsRow {
   id: string
@@ -39,7 +40,7 @@ export async function GET() {
     .eq('org_id', auth.orgId)
     .maybeSingle()
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({
     org_id: auth.orgId,
@@ -113,7 +114,7 @@ export async function DELETE() {
     .delete()
     .eq('org_id', auth.orgId)
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ ok: true })
 }

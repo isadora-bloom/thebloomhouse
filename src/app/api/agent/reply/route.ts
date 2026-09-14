@@ -6,6 +6,7 @@ import { writeOrLog } from '@/lib/db/write-or-log'
 import { appendAIDisclosureWithVersion, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
 import { isUnsendableAddress } from '@/lib/services/identity/body-extract'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST — Reply to an existing email thread
@@ -169,7 +170,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, messageId: sentMessageId })
   } catch (err) {
-    console.error('[api/agent/reply] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

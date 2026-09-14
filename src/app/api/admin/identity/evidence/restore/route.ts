@@ -18,6 +18,7 @@ import {
   badRequest,
   notFound,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 export async function POST(req: NextRequest) {
   const auth = await getPlatformAuth()
@@ -51,11 +52,6 @@ export async function POST(req: NextRequest) {
     .from('evidence_overrides')
     .update({ active: false })
     .eq('id', overrideId)
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: `restore failed: ${error.message}` },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
   return NextResponse.json({ ok: true, overrideId })
 }

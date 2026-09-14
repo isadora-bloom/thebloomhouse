@@ -229,6 +229,7 @@ export default function CoordinatorPrivacyPage() {
                     {r.request_type === 'portability' ? 'Data download' : r.request_type}
                   </div>
                   <div className="text-xs text-sage-500">
+                    {/* created-at-ok: request created_at is the submission time, the real event */}
                     Submitted {new Date(r.created_at).toLocaleDateString()}
                     {r.resolution_notes && r.status !== 'completed' ? ` · ${r.resolution_notes}` : ''}
                   </div>

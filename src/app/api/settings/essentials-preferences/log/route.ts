@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { ESSENTIALS_LEVELS, type EssentialsLevel } from '@/lib/hooks/use-essentials-level'
+import { apiError } from '@/lib/api/api-error'
 
 const VALID_ACTIONS = new Set(['dismissed_card', 'expanded_card', 'changed_level', 'reset_to_default'])
 
@@ -46,6 +47,6 @@ export async function POST(request: NextRequest) {
     action: body.action,
     metadata: body.metadata ?? {},
   })
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ ok: true })
 }

@@ -27,6 +27,7 @@ import {
 } from '@/lib/services/channel-truth/compute-all'
 import { createServiceClient } from '@/lib/supabase/service'
 import type { ChannelTruthQuestionId, NarratedAnswer } from '@/lib/services/channel-truth/types'
+import { redactError } from '@/lib/observability/redact'
 
 export const maxDuration = 120
 
@@ -103,7 +104,7 @@ export async function POST(req: NextRequest) {
     }
   } catch (err) {
      
-    console.warn('[channel-truth] share audit write failed:', err)
+    console.warn('[channel-truth] share audit write failed:', redactError(err))
   }
 
   if (format === 'csv') {

@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getReEngagementQueue, setReEngagementEnabled } from '@/lib/services/re-engagement'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/reengagement
@@ -25,8 +26,7 @@ export async function GET(req: NextRequest) {
     const queue = await getReEngagementQueue(sb, auth.venueId)
     return NextResponse.json(queue)
   } catch (err) {
-    console.error('[api/intel/reengagement GET]', err)
-    return NextResponse.json({ error: 'Failed to load queue' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -48,7 +48,6 @@ export async function POST(req: NextRequest) {
     await setReEngagementEnabled(sb, auth.venueId, enabled)
     return NextResponse.json({ enabled })
   } catch (err) {
-    console.error('[api/intel/reengagement POST]', err)
-    return NextResponse.json({ error: 'Failed to update setting' }, { status: 500 })
+    return apiError(err)
   }
 }

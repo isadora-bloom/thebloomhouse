@@ -10,6 +10,7 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { requireAgencyScope } from '@/lib/services/intel/agency-access'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createDocument } from '@/lib/services/intel/marketing-agency-profile'
+import { apiError } from '@/lib/api/api-error'
 
 interface RouteContext {
   params: Promise<{ id: string }>
@@ -144,12 +145,7 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
       contentType: mime,
       upsert: false,
     })
-  if (uploadResp.error) {
-    return NextResponse.json(
-      { error: `upload failed: ${uploadResp.error.message}` },
-      { status: 500 },
-    )
-  }
+  if (uploadResp.error) return apiError(uploadResp.error)
 
   try {
     const document = await createDocument({

@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { computeReviewsAnalytics } from '@/lib/services/intel/reviews-analytics'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET(req: NextRequest) {
   const plan = await requirePlan(req, 'pre_opening')
@@ -22,10 +23,6 @@ export async function GET(req: NextRequest) {
     const rollup = await computeReviewsAnalytics(auth.venueId)
     return NextResponse.json({ rollup })
   } catch (err) {
-    console.error('[reviews/analytics]', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to compute analytics' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

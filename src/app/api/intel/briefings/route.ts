@@ -7,6 +7,7 @@ import {
 } from '@/lib/services/intel/briefings'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET — Latest briefing(s)
@@ -36,8 +37,7 @@ export async function GET(request: NextRequest) {
     const briefing = await getLatestBriefing(auth.venueId, type)
     return NextResponse.json({ briefing })
   } catch (err) {
-    console.error('[api/intel/briefings] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -76,7 +76,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ briefing })
   } catch (err) {
-    console.error('[api/intel/briefings] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

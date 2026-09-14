@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getReEngagementMetrics } from '@/lib/services/re-engagement'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/reengagement/metrics
@@ -22,7 +23,6 @@ export async function GET(req: NextRequest) {
     const metrics = await getReEngagementMetrics(sb, auth.venueId)
     return NextResponse.json(metrics)
   } catch (err) {
-    console.error('[api/intel/reengagement/metrics]', err)
-    return NextResponse.json({ error: 'Failed to load metrics' }, { status: 500 })
+    return apiError(err)
   }
 }

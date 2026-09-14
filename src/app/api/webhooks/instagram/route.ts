@@ -44,6 +44,7 @@ import {
   parseInstagramWebhook,
   type InstagramInboundMessage,
 } from '@/lib/services/ingestion/instagram-dm'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * Ceiling on one delivery. Meta batches, and an unbounded loop inside a
@@ -105,8 +106,7 @@ export async function POST(request: NextRequest) {
   try {
     rawBody = await request.text()
   } catch (err) {
-    console.error('[webhook/instagram] body read failed:', err)
-    return NextResponse.json({ error: 'bad_payload' }, { status: 400 })
+    return apiError(err, undefined, 400)
   }
 
   const signature = request.headers.get('x-hub-signature-256')

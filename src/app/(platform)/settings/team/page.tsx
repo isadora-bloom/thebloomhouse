@@ -542,6 +542,7 @@ export default function TeamPage() {
                   {/* Last active */}
                   <div className="hidden md:flex items-center gap-1 text-xs text-sage-400 w-20 justify-end">
                     <Clock className="w-3 h-3" />
+                    {/* created-at-ok: fallback only — last_sign_in_at is preferred; created_at (account creation) stands in only when the member has never signed in */}
                     {formatTimeAgo(member.last_sign_in_at ?? member.created_at)}
                   </div>
 

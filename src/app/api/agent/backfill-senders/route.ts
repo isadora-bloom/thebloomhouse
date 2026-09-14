@@ -7,6 +7,7 @@ import {
   extractName,
   findOrCreateContact,
 } from '@/lib/services/email/pipeline'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/backfill-senders
@@ -130,7 +131,7 @@ export async function POST(req: Request) {
           continue
         }
         // Other errors (rate limit, network) bubble up as a failure.
-        console.error(`[backfill-senders] gmail fetch failed for ${messageId}:`, err)
+        console.error(`[backfill-senders] gmail fetch failed for ${messageId}:`, redactError(err))
         break
       }
     }

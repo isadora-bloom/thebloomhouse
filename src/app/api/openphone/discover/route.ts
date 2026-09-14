@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { discoverPhoneNumbers } from '@/lib/services/ingestion/openphone'
+import { apiError } from '@/lib/api/api-error'
 
 export async function POST() {
   const auth = await getPlatformAuth()
@@ -29,7 +30,6 @@ export async function POST() {
     return NextResponse.json({ success: true, phoneNumbers })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Internal server error'
-    console.error('[api/openphone/discover] error:', err)
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    return apiError(err)
   }
 }

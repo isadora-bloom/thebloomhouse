@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { clearFilterCache } from '@/lib/services/email/inbox-filters'
+import { apiError } from '@/lib/api/api-error'
 
 const VALID_PATTERN_TYPES = ['sender_exact', 'sender_domain', 'gmail_label'] as const
 const VALID_ACTIONS = ['ignore', 'no_draft'] as const
@@ -30,7 +31,7 @@ export async function GET() {
     .eq('venue_id', auth.venueId)
     .order('created_at', { ascending: false })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ filters: data ?? [] })
 }
 
@@ -85,7 +86,7 @@ export async function POST(request: NextRequest) {
     .select('*')
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   clearFilterCache(auth.venueId)
   return NextResponse.json({ filter: data })
@@ -111,7 +112,7 @@ export async function DELETE(request: NextRequest) {
     .eq('id', id)
     .eq('venue_id', auth.venueId)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   clearFilterCache(auth.venueId)
   return NextResponse.json({ success: true })

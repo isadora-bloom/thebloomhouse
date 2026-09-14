@@ -26,6 +26,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 interface SkippedRow {
   id: string
@@ -138,7 +140,7 @@ async function buildRecap(): Promise<RecapResult> {
         })
         notified = true
       } catch (err) {
-        console.warn(`[replay-paused-skipped] notification failed for ${venueId}:`, err)
+        console.warn(`[replay-paused-skipped] notification failed for ${venueId}:`, redactError(err))
       }
     }
 
@@ -180,10 +182,6 @@ export async function GET(request: NextRequest) {
     const result = await buildRecap()
     return NextResponse.json({ ok: true, ...result })
   } catch (err) {
-    console.error('[replay-paused-skipped] failed:', err)
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : 'unknown' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

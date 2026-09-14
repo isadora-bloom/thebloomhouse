@@ -23,6 +23,7 @@
 import { NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 interface ReplayResult {
   venueId: string
@@ -104,7 +105,7 @@ export async function POST(): Promise<NextResponse> {
     .eq('venue_id', venueId)
     .eq('status', 'pending')
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   const pending = (rows ?? []) as Array<{ id: string; work_type: string }>

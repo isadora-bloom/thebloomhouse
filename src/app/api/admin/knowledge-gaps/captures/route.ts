@@ -17,6 +17,7 @@ import {
   badRequest,
   assertCanAccessVenue,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET(req: NextRequest) {
   const auth = await getPlatformAuth()
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error, count } = await q
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({
     ok: true,

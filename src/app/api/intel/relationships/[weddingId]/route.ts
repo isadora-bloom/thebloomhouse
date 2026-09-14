@@ -31,6 +31,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { logEvent } from '@/lib/observability/logger'
+import { apiError } from '@/lib/api/api-error'
 
 const ALLOWED_ROLES = new Set([
   'mother',
@@ -182,7 +183,7 @@ export async function POST(
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   logEvent({
@@ -268,6 +269,6 @@ export async function PATCH(
     .update(patch)
     .eq('id', body.id)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ ok: true })
 }

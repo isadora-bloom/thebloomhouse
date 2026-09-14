@@ -41,6 +41,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 30
 
@@ -111,12 +112,7 @@ export async function GET(req: NextRequest) {
     .order('computed_at', { ascending: false })
     .limit(2000)
 
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   const allRows = (data ?? []) as RollupRow[]
   const windowMatches = allRows.filter((r) => {

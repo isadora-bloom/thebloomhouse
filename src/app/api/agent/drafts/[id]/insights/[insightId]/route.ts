@@ -24,6 +24,7 @@ import {
   refuseDemo,
 } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { redactError } from '@/lib/observability/redact'
 
 export async function PATCH(
   request: NextRequest,
@@ -110,7 +111,7 @@ export async function PATCH(
           .eq('id', persistedRef)
       }
     } catch (err) {
-      console.warn('[api/agent/drafts/insights] unwind threw:', err)
+      console.warn('[api/agent/drafts/insights] unwind threw:', redactError(err))
       // Continue - we still want the correction stamp written.
     }
   }

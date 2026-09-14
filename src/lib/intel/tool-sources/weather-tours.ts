@@ -171,6 +171,10 @@ export const weatherToursToolSource: IntelToolSource = {
     'bad weather effect on tours',
     'does rain hurt tour conversion',
   ],
-  batteryQuestions: ['10'],
+  // '45' (W67, wave 9): the weather leg of "tours against external
+  // context" (W47 added the tours channel to buildSeries for the other
+  // seven channels — this source is the one that already joins tours to
+  // weather directly).
+  batteryQuestions: ['10', '45'],
   run,
 }

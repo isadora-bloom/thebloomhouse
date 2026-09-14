@@ -195,6 +195,7 @@ export function NotificationBell({ venueId }: { venueId: string }) {
                       <p className="text-xs text-sage-500 mt-0.5 line-clamp-2">{n.body}</p>
                     )}
                     <p className="text-[11px] text-sage-400 mt-1">
+                      {/* created-at-ok: notification created_at is when it fired, the real event */}
                       {formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}
                     </p>
                   </>

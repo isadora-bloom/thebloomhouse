@@ -37,6 +37,7 @@ import {
   unauthorized,
   forbidden,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 interface PartnerInput {
   firstName?: string | null
@@ -227,10 +228,6 @@ export async function POST(request: Request) {
       eventCode: finalEventCode,
     })
   } catch (err) {
-    console.error('[/api/portal/mint-wedding] error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

@@ -4,6 +4,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, callAIVision, AIUnavailableError, COUPLE_AI_UNAVAILABLE_MESSAGE } from '@/lib/ai/client'
 import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // /api/couple/contracts
@@ -84,11 +86,7 @@ export async function POST(request: NextRequest) {
     // so the client's error path renders the copy (contract analyze/ask is
     // a one-shot action, not a chat turn we persist).
     if (error instanceof AIUnavailableError) {
-      console.error('[api/couple/contracts] AI unavailable:', error.stage, error.message)
-      return NextResponse.json(
-        { error: COUPLE_AI_UNAVAILABLE_MESSAGE, aiUnavailable: true },
-        { status: 503 },
-      )
+      return apiError(error, undefined, 503)
     }
     return serverError(error)
   }
@@ -405,7 +403,7 @@ Return 5-15 items. Be specific and factual.`,
       promptVersion: planningBuilt.promptVersion,
     })
   } catch (err) {
-    console.warn('[contracts/analyze] Planning notes extraction failed:', err)
+    console.warn('[contracts/analyze] Planning notes extraction failed:', redactError(err))
     planningNotes = []
   }
 
@@ -574,7 +572,7 @@ Return ONLY the JSON array, no commentary.`,
       }
     }
   } catch (err) {
-    console.warn('[contracts/analyze] budget extraction failed (non-fatal):', err)
+    console.warn('[contracts/analyze] budget extraction failed (non-fatal):', redactError(err))
   }
 
   return NextResponse.json({

@@ -7,6 +7,7 @@ import {
   unauthorized,
   forbidden,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // Auto-Send Cancel API
@@ -134,10 +135,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, cancelled: true })
   } catch (err) {
-    console.error('[auto-send-cancel] POST failed:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

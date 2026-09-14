@@ -3,6 +3,7 @@ import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { applyBacktrace } from '@/lib/services/attribution/source-backtrace'
 import { CANONICAL_SOURCES, type CanonicalSource } from '@/lib/services/normalize-source'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * Sources a coordinator should NEVER pick as a manual override —
@@ -152,10 +153,6 @@ export async function POST(
     }
     return NextResponse.json({ ok: true, oldSource: result.oldSource, newSource })
   } catch (err) {
-    console.error('[api/agent/leads/[id]/source]', err)
-    return NextResponse.json(
-      { error: 'Failed to apply source override' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

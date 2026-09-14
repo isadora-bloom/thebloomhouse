@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, assertCanAccessVenue, forbidden } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { computeWeeklyLearned } from '@/lib/services/intel/weekly-learned'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/weekly-learned
@@ -42,7 +43,6 @@ export async function GET(request: NextRequest) {
     const data = await computeWeeklyLearned(venueId)
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[api/intel/weekly-learned] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

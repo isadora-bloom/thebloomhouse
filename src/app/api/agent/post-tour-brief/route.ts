@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchCachedTourBrief, generatePostTourBrief } from '@/lib/services/brain/post-tour-brief'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST { tourId }
@@ -39,8 +40,7 @@ export async function GET(request: NextRequest) {
     const brief = await fetchCachedTourBrief(tourId)
     return NextResponse.json({ brief })
   } catch (err) {
-    console.error('[api/agent/post-tour-brief] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -94,10 +94,6 @@ export async function POST(request: NextRequest) {
     const brief = await generatePostTourBrief(tourId)
     return NextResponse.json({ brief })
   } catch (err) {
-    console.error('[api/agent/post-tour-brief] POST error:', err)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

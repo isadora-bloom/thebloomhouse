@@ -559,16 +559,59 @@ export const EXPECTED_SHAPES: ExpectedShape[] = [
     note:
       'get_venue_benchmark refuses below three peers and says the count. Flip this to kind "ground-truth" with a shape matching a percentile once a third real venue finishes onboarding - that is the same condition that turns /intel/benchmark on.',
   },
+  // ----- Tier 15 - Review sentiment, actually populated (added
+  // 2026-09-14, wave 9 / W46). Before W46, reviews.sentiment_score and
+  // reviews.themes were left null on most ingest paths (Google Places
+  // poll, CSV/paste import, the brain-dump screenshot case never called
+  // the scoring pass), so computeReviewsAnalytics's sentiment_trend
+  // field always came back as direction:'unknown'. get_reviews_summary
+  // (reviews.ts) already read that rollup for its rating-based
+  // trendingWorse; this question is the sentiment-based half of the
+  // same surface, and only becomes truthfully answerable once ingest
+  // stops leaving the column null.
+  {
+    id: '44',
+    tier: 15,
+    question:
+      'Is our review sentiment trending better or worse over the last six months — using the actual sentiment score, not just the star rating?',
+    kind: 'ground-truth',
+    expectShape:
+      /(sentiment)[\s\S]*(trend|improv|declin|worse|better|stable|no (data|sentiment|scored))/i,
+    operatorVerifies: true,
+    note:
+      'W46 wires the existing review-language scoring pass into every ingest path so sentiment_score/themes stop being null, and backfills existing rows. Honest "not enough scored reviews yet" beats quietly substituting the star-rating trend for it.',
+  },
+  // ----- Tier 16 - Tours against external context (added 2026-09-14,
+  // wave 9 / W47). Before W47, buildSeries only ever paired the eight
+  // external-context channels (weather, FRED, cultural moments, holiday
+  // calendar including election days, census, government shutdown,
+  // Google Trends, social engagement) against inquiries — a tour-volume
+  // version of any of those questions was an automatic, correct-but-
+  // incomplete refusal. W47 adds a tours channel so the same channels
+  // can be tested against tour volume too.
+  {
+    id: '45',
+    tier: 16,
+    question:
+      'Which external factors — weather, local holidays, cultural moments, search trends — actually move tour volume, not just inquiry volume?',
+    kind: 'ground-truth',
+    expectShape:
+      /(tour)[\s\S]*(weather|holiday|cultural|trend|correlat|no (data|channel)|doesn.?t (move|affect|correlate))/i,
+    operatorVerifies: true,
+    note:
+      'W47 gave buildSeries a tours channel (from spine touchpoints) so every existing external-context channel can pair against it. Requires SERPAPI_API_KEY + google_trends_metro configured for the Trends leg specifically; honest "not enough tour history" or "no channel crosses significance" beats inventing a correlation.',
+  },
 ]
 
-// 45 = questions 1-37 in BLOOM-TEST-QUESTIONS.md (31/32 in the "**31.
+// 47 = questions 1-37 in BLOOM-TEST-QUESTIONS.md (31/32 in the "**31.
 // (NEW)...**" form, Q37 added to the runner 2026-07-07) + the 32a/32b
 // false-premise variants + Tier-12 Q38-41 (added 2026-07-07, R2) +
 // Tier-13 Q42 (added 2026-09-14, wave 7 / W48) + Tier-14 Q43 (added
-// 2026-09-14, wave 8 / W56).
-if (EXPECTED_SHAPES.length !== 45) {
+// 2026-09-14, wave 8 / W56) + Tier-15 Q44 (wave 9 / W46) + Tier-16 Q45
+// (wave 9 / W47).
+if (EXPECTED_SHAPES.length !== 47) {
   // Sanity guard — keeps this file honest if a question is added/removed.
   throw new Error(
-    `battery-expected.ts: expected 45 question shapes, found ${EXPECTED_SHAPES.length}`
+    `battery-expected.ts: expected 47 question shapes, found ${EXPECTED_SHAPES.length}`
   )
 }

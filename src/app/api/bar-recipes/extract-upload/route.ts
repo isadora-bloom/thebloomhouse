@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
 import { extractRecipeFromBuffer, RecipeValidationError } from '@/lib/services/bar-recipe-extract'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST /api/bar-recipes/extract-upload
@@ -52,7 +53,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ recipe })
   } catch (error) {
     if (error instanceof RecipeValidationError) {
-      return NextResponse.json({ error: error.message }, { status: 422 })
+      return apiError(error, undefined, 422)
     }
     return serverError(error)
   }

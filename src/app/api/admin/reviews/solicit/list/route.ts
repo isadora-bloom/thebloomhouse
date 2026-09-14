@@ -21,6 +21,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 const VALID_STATUSES = new Set([
   'queued',
@@ -75,12 +76,7 @@ export async function GET(req: NextRequest) {
   }
 
   const { data, count, error } = await q
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   return NextResponse.json({
     ok: true,

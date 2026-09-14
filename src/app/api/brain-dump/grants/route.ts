@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { revokePatternGrant, grantPattern } from '@/lib/services/brain-dump/graduation'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET() {
   const auth = await getPlatformAuth()
@@ -21,7 +22,7 @@ export async function GET() {
     .select('id, pattern_signature, description, intent, routed_table, routed_action, granted_at, granted_by, hit_count, last_used_at, revoked_at, is_active')
     .eq('venue_id', auth.venueId)
     .order('granted_at', { ascending: false })
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ grants: data ?? [] })
 }
 

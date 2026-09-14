@@ -767,7 +767,10 @@ export const timeSeriesSource: IntelToolSource = {
     'inquiry volume for a calendar month year over year',
     'inquiry-to-tour ratio by the season of the wedding date',
   ],
-  batteryQuestions: ['Q1', 'Q7', 'Q11', 'Q12', 'Q14'],
+  // 'Q45' (W67, wave 9): the holiday/seasonal leg of "tours against
+  // external context" (W47) — this source already answers the calendar-
+  // effect questions (Q7/Q12/Q14) on the inquiry side.
+  batteryQuestions: ['Q1', 'Q7', 'Q11', 'Q12', 'Q14', 'Q45'],
 
   async run(venueId, args, deps: ToolSourceDeps) {
     const metric = readMetric(args)

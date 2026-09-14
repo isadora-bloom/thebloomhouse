@@ -254,6 +254,7 @@ function OverrideCard({
             </span>
           )}
           <span className="ml-auto text-[10px] text-sage-500">
+            {/* created-at-ok: override audit row — created_at is when the override was applied, the real event */}
             {relativeTime(row.created_at)}
           </span>
         </div>

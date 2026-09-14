@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, unauthorized, forbidden } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/admin/consumer-requests — list consumer-rights requests
@@ -54,6 +55,6 @@ export async function GET(req: NextRequest) {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ data: data ?? [] })
 }

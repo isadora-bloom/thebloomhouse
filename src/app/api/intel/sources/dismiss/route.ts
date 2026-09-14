@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/intel/sources/dismiss
@@ -44,6 +45,6 @@ export async function POST(request: NextRequest) {
     .eq('source_key', sourceKey)
     .eq('graveyard', false)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ ok: true })
 }

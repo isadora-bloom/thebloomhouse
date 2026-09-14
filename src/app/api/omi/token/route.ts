@@ -24,6 +24,7 @@ import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import crypto from 'node:crypto'
+import { apiError } from '@/lib/api/api-error'
 
 const ALLOWED_ROLES = new Set([
   'coordinator',
@@ -47,8 +48,7 @@ export async function GET() {
     .maybeSingle()
 
   if (error) {
-    console.error('[api/omi/token] GET error:', error.message)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(error)
   }
 
   return NextResponse.json({

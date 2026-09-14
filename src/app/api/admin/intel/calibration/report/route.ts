@@ -24,6 +24,7 @@ import {
 import { analyzeCalibration } from '@/lib/services/calibration/analyze'
 import { narrateCalibration } from '@/lib/services/calibration/narrate'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 120
 
@@ -80,12 +81,6 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ ok: true, report })
   } catch (err) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

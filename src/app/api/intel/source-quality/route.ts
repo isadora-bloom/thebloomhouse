@@ -6,6 +6,7 @@ import {
   computeSourceQuality,
   type SourceQualityRow,
 } from '@/lib/services/intel/source-quality'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/source-quality
@@ -218,7 +219,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ rows, aggregate: 'cross_venue' })
   } catch (err) {
-    console.error('[api/intel/source-quality] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

@@ -6,6 +6,7 @@ import {
   getSourceRegistryEntry,
   SOURCE_REGISTRY,
 } from '@/config/source-registry'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/sources/track
@@ -51,7 +52,7 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: true })
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   return NextResponse.json({
@@ -109,7 +110,7 @@ export async function POST(request: NextRequest) {
         expected_cadence_days: cadence,
       })
       .eq('id', (existing as { id: string }).id)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return apiError(error)
     return NextResponse.json({ ok: true, action: 'updated', source_key: sourceKey })
   }
 
@@ -119,7 +120,7 @@ export async function POST(request: NextRequest) {
     expected_cadence_days: cadence,
     graveyard: false,
   })
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   return NextResponse.json({ ok: true, action: 'inserted', source_key: sourceKey })
 }
@@ -147,6 +148,6 @@ export async function DELETE(request: NextRequest) {
     .eq('venue_id', auth.venueId)
     .eq('source_key', sourceKey)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
   return NextResponse.json({ ok: true, action: 'untracked', source_key: sourceKey })
 }

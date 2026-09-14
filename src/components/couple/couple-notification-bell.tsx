@@ -143,7 +143,7 @@ export function CoupleNotificationBell({ base }: { base: string }) {
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-medium text-gray-800 leading-tight">{n.title}</span>
                     {n.body && <span className="block text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</span>}
-                    <span className="block text-[11px] text-gray-400 mt-0.5">{timeAgo(n.created_at)}</span>
+                    <span className="block text-[11px] text-gray-400 mt-0.5">{timeAgo(n.created_at)}{/* created-at-ok: notification created_at is when it fired, the real event */}</span>
                   </span>
                 </button>
               ))

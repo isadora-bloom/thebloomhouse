@@ -39,6 +39,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { promoteVendorDomain } from '@/lib/services/inbox/vendor-domains'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 60
 
@@ -78,7 +79,7 @@ export async function POST() {
     .limit(SCAN_LIMIT)
 
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   // Bucket by domain.

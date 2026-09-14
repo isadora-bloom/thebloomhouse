@@ -7,6 +7,7 @@ import {
   unauthorized,
   forbidden,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // Thread Lock API
@@ -101,11 +102,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[thread-lock] POST failed:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }
 
@@ -184,11 +181,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ locked: false })
   } catch (err) {
-    console.error('[thread-lock] GET failed:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }
 
@@ -246,10 +239,6 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[thread-lock] DELETE failed:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

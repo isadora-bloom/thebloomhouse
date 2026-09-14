@@ -29,6 +29,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { redact } from '@/lib/observability/redact'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 const MAX_BATCH = 100
 const UUID_RE = /^[0-9a-f-]{36}$/i
@@ -172,8 +173,7 @@ export async function POST(request: NextRequest) {
       rows = (res.data ?? []) as Row[]
     }
   } catch (err) {
-    console.error('[auto-context/batch-chips] unexpected error:', err)
-    return NextResponse.json({ chips: {} })
+    return apiError(err)
   }
 
   // Pick best chip per wedding: pinned first, then most-recent.

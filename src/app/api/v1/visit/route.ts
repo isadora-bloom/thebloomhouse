@@ -35,6 +35,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { createHash } from 'crypto'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
+import { redactError } from '@/lib/observability/redact'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -229,7 +230,7 @@ export async function POST(request: NextRequest) {
   })
 
   if (insert.error) {
-    console.warn('[api/v1/visit] insert failed', insert.error.message)
+    console.warn('[api/v1/visit] insert failed', redactError(insert.error))
     return new Response(null, { status: 500, headers: CORS_HEADERS })
   }
 

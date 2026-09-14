@@ -18,6 +18,7 @@ import {
   badRequest,
   notFound,
 } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 interface PatchBody {
   question?: string
@@ -89,7 +90,7 @@ export async function PATCH(
     .update(patch)
     .eq('id', id)
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ ok: true })
 }
@@ -124,7 +125,7 @@ export async function DELETE(
     .update({ active: false })
     .eq('id', id)
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ ok: true })
 }

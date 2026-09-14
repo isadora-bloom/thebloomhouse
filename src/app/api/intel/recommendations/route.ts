@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // GET — List recommendations for the authenticated venue
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ recommendations: data ?? [] })
   } catch (err) {
-    console.error('[api/intel/recommendations] GET error:', err)
+    console.error('[api/intel/recommendations] GET error:', redactError(err))
     return serverError(err)
   }
 }
@@ -107,7 +108,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[api/intel/recommendations] PATCH error:', err)
+    console.error('[api/intel/recommendations] PATCH error:', redactError(err))
     return serverError(err)
   }
 }

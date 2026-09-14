@@ -3,6 +3,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateOrFetch } from '@/lib/services/brain/journey-narrative'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * Journey narrative endpoint (Phase C / PC.3).
@@ -60,11 +61,7 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ narrative })
   } catch (err) {
-    console.error('[journey-narrative GET]', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to generate narrative' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }
 
@@ -114,7 +111,7 @@ export async function POST(req: NextRequest) {
       .from('wedding_journey_narratives')
       .update({ pinned: body.pin })
       .eq('wedding_id', body.wedding_id)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return apiError(error)
     return NextResponse.json({ ok: true, pinned: body.pin })
   }
 
@@ -122,10 +119,6 @@ export async function POST(req: NextRequest) {
     const narrative = await generateOrFetch(supabase, body.wedding_id, body.force === true)
     return NextResponse.json({ narrative })
   } catch (err) {
-    console.error('[journey-narrative POST]', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to generate narrative' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

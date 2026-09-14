@@ -6,6 +6,7 @@ import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { buildChatSignoff, withChatSignoff } from '@/lib/services/brain/sage'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST /api/public/sage-preview — Public Sage preview chat (no auth)
@@ -232,10 +233,6 @@ export async function POST(request: NextRequest) {
       messageCount: 1, // Client tracks total count
     })
   } catch (err) {
-    console.error('[api/public/sage-preview] POST error:', err)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

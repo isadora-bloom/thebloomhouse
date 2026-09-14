@@ -27,6 +27,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { clientIpForRateLimit } from '@/lib/security/client-ip'
 import { createHash } from 'crypto'
+import { apiError } from '@/lib/api/api-error'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * The roles a stranger may ask for. Everything else is refused before a
@@ -118,7 +120,7 @@ export async function POST(request: NextRequest) {
         // Worth shouting about: a survivor here is an account with no
         // profile, which is the state the invite-accept path used to
         // exploit.
-        console.error(`[signup] ROLLBACK FAILED for ${userId}: ${error.message}`)
+        console.error(`[signup] ROLLBACK FAILED for ${userId}: ${redactError(error)}`)
       }
     }
 
@@ -171,7 +173,6 @@ export async function POST(request: NextRequest) {
       confirmationRequired: true,
     })
   } catch (err) {
-    console.error('Signup error:', err)
-    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 })
+    return apiError(err)
   }
 }

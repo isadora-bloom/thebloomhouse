@@ -329,6 +329,7 @@ export default function BrainDumpLogPage() {
                       </div>
                       <div className="text-[11px] text-sage-500 flex items-center gap-2 shrink-0">
                         <Clock className="w-3 h-3" />
+                        {/* created-at-ok: single-item brain-dump ingest — created_at is the real event, not a batch-import stamp */}
                         {formatDateTime(e.created_at)}
                         {e.submitter_name && (
                           <span className="text-sage-400">· {e.submitter_name}</span>

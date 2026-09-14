@@ -35,6 +35,7 @@ import {
   type SendingDomainStatus,
   type DomainDnsRecord,
 } from '@/lib/services/email/sending-domain'
+import { apiError } from '@/lib/api/api-error'
 
 interface StoredConfig {
   sending_domain: string | null
@@ -62,7 +63,7 @@ export async function GET() {
     .maybeSingle()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   const config = (data as StoredConfig | null) ?? null

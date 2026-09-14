@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { getMarketContext, benchmarkVenue } from '@/lib/services/intel/market-context'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET — Market context + benchmarks for the authenticated user's venue
@@ -32,10 +33,6 @@ export async function GET(request: NextRequest) {
       seasonalLabel: context.seasonalLabel,
     })
   } catch (err) {
-    console.error('Market context error:', err)
-    return NextResponse.json(
-      { error: 'Failed to load market context' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

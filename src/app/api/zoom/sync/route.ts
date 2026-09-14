@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { syncMeetings } from '@/lib/services/ingestion/zoom'
+import { apiError } from '@/lib/api/api-error'
 
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
@@ -45,14 +46,6 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       )
     }
-    console.error('[zoom/sync] failed:', err)
-    return NextResponse.json(
-      {
-        ok: false,
-        reason: 'sync_failed',
-        message: err instanceof Error ? err.message : 'Unknown error',
-      },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

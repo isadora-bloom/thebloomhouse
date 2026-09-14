@@ -25,6 +25,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { redact } from '@/lib/observability/redact'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 const MAX_BATCH = 100
 
@@ -124,14 +125,7 @@ export async function POST(request: NextRequest) {
     .neq('status', 'dismissed')
     .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
 
-  if (error) {
-    // #86 (T5-followup-QQQ): redact error.message before stdout. Supabase
-    // PostgREST errors can echo filter values (the wedding UUIDs we
-    // passed) and table content from RLS messages. Defense-in-depth so
-    // we don't bypass the OPS-21.3.3 tier-1-never-in-logs invariant.
-    console.error('[insights/risk-flags] query failed:', redact(error.message))
-    return NextResponse.json({ error: 'query_failed' }, { status: 500 })
-  }
+  if (error) return apiError(error)
 
   const flags: Record<string, RiskSummary | null> = {}
   for (const wid of weddingIds) flags[wid] = null

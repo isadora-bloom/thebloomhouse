@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * Tier-B #64A — generic intel-insight acknowledgment endpoint.
@@ -77,8 +78,7 @@ export async function POST(req: NextRequest) {
     )
 
   if (error) {
-    console.error('[intel/acknowledge POST]', error)
-    return NextResponse.json({ error: 'Failed to acknowledge' }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ ok: true, suppressUntil })
 }
@@ -110,8 +110,7 @@ export async function DELETE(req: NextRequest) {
     .eq('insight_kind', body.kind)
     .eq('insight_key', body.key)
   if (error) {
-    console.error('[intel/acknowledge DELETE]', error)
-    return NextResponse.json({ error: 'Failed to clear' }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ ok: true })
 }
@@ -138,8 +137,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await query
   if (error) {
-    console.error('[intel/acknowledge GET]', error)
-    return NextResponse.json({ error: 'Failed to load' }, { status: 500 })
+    return apiError(error)
   }
   return NextResponse.json({ acknowledgments: data ?? [] })
 }

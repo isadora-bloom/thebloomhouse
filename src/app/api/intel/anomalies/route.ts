@@ -7,6 +7,7 @@ import {
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET /api/intel/anomalies
@@ -46,8 +47,7 @@ export async function GET(request: NextRequest) {
       const alerts = await getActiveAlerts(auth.venueId)
       return NextResponse.json({ alerts })
     } catch (err) {
-      console.error('[api/intel/anomalies] GET error:', err)
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+      return apiError(err)
     }
   }
 
@@ -118,8 +118,7 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await query
   if (error) {
-    console.error('[api/intel/anomalies] scoped GET error:', error.message)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(error)
   }
 
   return NextResponse.json({ alerts: data ?? [] })
@@ -146,8 +145,7 @@ export async function POST(request: NextRequest) {
     const alerts = await runAnomalyDetection(auth.venueId)
     return NextResponse.json({ alerts })
   } catch (err) {
-    console.error('[api/intel/anomalies] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -191,7 +189,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[api/intel/anomalies] PATCH error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

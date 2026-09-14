@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { summarizeDraftContext } from '@/lib/services/draft-context-summary'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET: Draft context summary for a venue
@@ -49,10 +50,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ summary })
   } catch (err) {
-    console.error('[api/agent/draft-context-summary] GET error:', err)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

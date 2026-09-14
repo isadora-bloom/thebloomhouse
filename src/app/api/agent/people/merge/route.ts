@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { mergePeople, undoMerge } from '@/lib/services/identity/merge-people'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * POST /api/agent/people/merge
@@ -71,7 +72,7 @@ export async function POST(request: NextRequest) {
     })
     return NextResponse.json({ ok: true, ...result })
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Merge failed' }, { status: 500 })
+    return apiError(err)
   }
 }
 

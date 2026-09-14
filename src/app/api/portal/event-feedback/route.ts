@@ -9,6 +9,7 @@ import {
   forbidden,
 } from '@/lib/api/auth-helpers'
 import { loadCoupleByWedding, coupleDisplayName } from '@/lib/intel/readers/couple-by-wedding'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // POST — Generate proactive review response draft
@@ -181,10 +182,6 @@ Write a warm, professional response the venue team could use if a review comes i
 
     return NextResponse.json({ draft: result.text })
   } catch (err) {
-    console.error('[event-feedback] Draft generation failed:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to generate draft' },
-      { status: 500 }
-    )
+    return apiError(err)
   }
 }

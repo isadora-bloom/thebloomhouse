@@ -176,6 +176,7 @@ export function LifecycleHistory({ weddingId, venueId }: Props) {
                       </span>
                     ) : null}
                     <span className="ml-auto text-xs text-sage-500">
+                      {/* created-at-ok: audit-log row — created_at is when the transition was recorded, the real event */}
                       {fmt(r.created_at)}
                     </span>
                   </div>

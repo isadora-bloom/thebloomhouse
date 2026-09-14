@@ -367,10 +367,39 @@ vi.mock('@/lib/services/cohort', () => ({
 vi.mock('@/lib/services/intel/reviews-analytics', () => ({
   computeReviewsAnalytics: vi.fn(),
 }))
-vi.mock('@/lib/intel/canonical', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/intel/canonical')>()
-  return { ...actual, getSourceAttribution: vi.fn() }
-})
+// W67 (2026-09-14): this used to be
+//   vi.mock('@/lib/intel/canonical', async (importOriginal) => {
+//     const actual = await importOriginal<typeof import('@/lib/intel/canonical')>()
+//     return { ...actual, getSourceAttribution: vi.fn() }
+//   })
+// `importOriginal()` pulls in the whole canonical module, which imports
+// `* as intelTools from '@/lib/intel/tools'` — the entire tool-source
+// registry and everything it in turn imports. Under `--maxWorkers` load
+// that heavy, mostly-unrelated import graph made this factory flaky
+// (`vi.mocked(...).mockResolvedValue is not a function`, i.e.
+// `getSourceAttribution` sometimes wasn't the vi.fn() by the time a test
+// reached it). `loadMonthlyStory` only reaches two exports off this
+// module (see monthly-story.ts's dynamic `import('@/lib/intel/canonical')`):
+// `getSourceAttribution` (mocked below) and `mapCohortIntelToFunnel`, and
+// of that function's output this file only ever asserts `.responseTime`.
+// So: mock the module directly, with a narrow stand-in for
+// `mapCohortIntelToFunnel` that reproduces canonical.ts's private
+// `distFromCohort()` mapping (n / enoughData / median -> Distribution)
+// rather than importing the real six-function module. Keep it in sync
+// with `distFromCohort` in canonical.ts if that mapping ever changes.
+vi.mock('@/lib/intel/canonical', () => ({
+  mapCohortIntelToFunnel: (intel: { responseTime: { overall: { n: number; enoughData: boolean; median: number | null } } }) => {
+    const d = intel.responseTime.overall
+    const responseTime =
+      d.median === null
+        ? { value: null, n: d.n, enoughData: false, reason: 'no_data' as const }
+        : !d.enoughData
+          ? { value: d.median, n: d.n, enoughData: false, reason: 'insufficient_sample' as const }
+          : { value: d.median, n: d.n, enoughData: true as const }
+    return { responseTime }
+  },
+  getSourceAttribution: vi.fn(),
+}))
 
 const fakeSupabase = {} as never
 

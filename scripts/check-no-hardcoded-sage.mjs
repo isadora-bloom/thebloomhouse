@@ -40,12 +40,19 @@ import { join } from 'node:path'
 //                     of every other venue's couples on first paint.
 //   - src/app/couple  is the path-based couple portal (layout, login,
 //                     register, the re-export stubs).
+// W67 (2026-09-14) expansion: src/lib/intel/adapters formats view models
+// that both the couple portal and the platform shell render directly, and
+// src/app/join is the couple-facing invite-acceptance flow. Neither was in
+// scope, so a hardcoded 'Sage' in a view-model label or on the join page
+// would have shipped invisibly to CI.
 const SCAN_DIRS = [
   'src/app/_couple-pages',
   'src/app/couple',
   'src/app/(platform)',
   'src/components',
   'src/lib/hooks',
+  'src/lib/intel/adapters',
+  'src/app/join',
 ]
 
 // Couple-facing code, where the strict rules apply. A couple must never
@@ -65,6 +72,8 @@ const STRICT_DIRS = [
   'src/app/(platform)',
   'src/components',
   'src/lib/hooks',
+  'src/lib/intel/adapters',
+  'src/app/join',
 ]
 
 function isStrict(file) {

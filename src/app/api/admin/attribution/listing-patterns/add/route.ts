@@ -39,6 +39,7 @@ import {
   notFound,
 } from '@/lib/api/auth-helpers'
 import { verifyCronAuth } from '@/lib/cron-auth'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 30
 
@@ -199,12 +200,7 @@ export async function POST(req: NextRequest) {
     .select('id, platform, pattern_type, pattern_value, weight, source, enabled, venue_id, created_at')
     .single()
 
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: `insert failed: ${error.message}` },
-      { status: 500 },
-    )
-  }
+  if (error) return apiError(error)
 
   return NextResponse.json({ ok: true, pattern: inserted })
 }

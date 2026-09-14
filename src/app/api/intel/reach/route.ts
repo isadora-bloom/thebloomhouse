@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/intel/reach
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
     .eq('event_type', 'marketing_metric')
     .order('created_at', { ascending: true })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return apiError(error)
 
   type Point = { label: string; value: number }
   type Group = { source: string; metric: string; points: Point[]; total: number; latest: number | null }

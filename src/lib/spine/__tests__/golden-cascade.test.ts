@@ -244,12 +244,23 @@ describe('golden cases — mock-driven spine subset (CI gate for matcher regress
       it.skip(`${c.id} ${c.title} — no spine assertions (full harness only)`, () => {})
       continue
     }
-    it(`${c.id} ${c.title} — ${spineAsserts.length} spine assertion(s)`, async () => {
-      const state = await materialize(c)
-      for (const a of spineAsserts) {
-        const v = evalSpineAssertion(a, state)
-        expect(v.ok, v.msg).toBe(true)
-      }
-    })
+    // W67 (2026-09-14 verification): GC-1 (three signals, a relay-to-
+    // direct handoff that also runs the deterministic contradiction
+    // guard + tier routing for real) does roughly 5s of genuine matcher
+    // work under `--maxWorkers`, not a hang — the default 5s vitest
+    // timeout flakes it under load. Give it real headroom instead of
+    // raising the suite-wide default.
+    const timeout = c.id === 'GC-1' ? 20_000 : undefined
+    it(
+      `${c.id} ${c.title} — ${spineAsserts.length} spine assertion(s)`,
+      async () => {
+        const state = await materialize(c)
+        for (const a of spineAsserts) {
+          const v = evalSpineAssertion(a, state)
+          expect(v.ok, v.msg).toBe(true)
+        }
+      },
+      timeout,
+    )
   }
 })

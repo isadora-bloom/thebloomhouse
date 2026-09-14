@@ -24,6 +24,7 @@ import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { redact } from '@/lib/observability/redact'
 import { loadCouplesByWeddings, partnerCount } from '@/lib/intel/readers/couple-by-wedding'
+import { apiError } from '@/lib/api/api-error'
 
 const MAX_BATCH = 200
 const UUID_RE = /^[0-9a-f-]{36}$/i
@@ -92,8 +93,7 @@ export async function POST(request: NextRequest) {
       if (partnerCount(couple) === 1) counts[weddingId] = 1
     }
   } catch (err) {
-    console.error('[partner-counts/batch] unexpected error:', err)
-    return NextResponse.json({ counts })
+    return apiError(err)
   }
 
   return NextResponse.json({ counts })

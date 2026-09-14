@@ -7,6 +7,7 @@ import {
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET — Recent trends + deviations for the authenticated user's venue
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
       .order('week', { ascending: false })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return apiError(error)
     }
 
     // Deviation detector is per-venue by design. At company/group
@@ -56,8 +57,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ trends: trends ?? [], deviations })
   } catch (err) {
-    console.error('[api/intel/trends] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -112,7 +112,6 @@ export async function POST(request: NextRequest) {
     const rowsUpserted = await fetchTrendsForVenue(auth.venueId)
     return NextResponse.json({ success: true, rowsUpserted })
   } catch (err) {
-    console.error('[api/intel/trends] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

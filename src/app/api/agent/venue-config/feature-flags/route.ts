@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET() {
   const auth = await getPlatformAuth()
@@ -30,9 +31,7 @@ export async function GET() {
     .eq('venue_id', auth.venueId)
     .maybeSingle()
 
-  if (error) {
-    return NextResponse.json({ flags: {}, error: error.message }, { status: 200 })
-  }
+  if (error) return apiError(error, undefined, 200)
 
   const raw = (data as { feature_flags?: Record<string, unknown> } | null)
     ?.feature_flags

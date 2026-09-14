@@ -19,6 +19,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
 
@@ -60,7 +61,7 @@ export async function GET() {
     .limit(2000) // hard ceiling; bigger venues with extreme volume just see the most recent slice
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return apiError(error)
   }
 
   // Pull every active grant signature so we can hide already-graduated

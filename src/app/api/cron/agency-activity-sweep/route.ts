@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronAuth } from '@/lib/cron-auth'
 import { runAgencyActivitySweep } from '@/lib/services/intel/marketing-agency-cron'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 120
 
@@ -23,13 +24,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     const result = await runAgencyActivitySweep()
     return NextResponse.json({ ok: true, ...result })
   } catch (err) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }
 

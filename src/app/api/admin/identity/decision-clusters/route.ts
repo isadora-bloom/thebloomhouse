@@ -39,6 +39,7 @@ import {
   type PersonCluster,
 } from '@/lib/services/identity/decision-clustering/cluster-proposals'
 import { crossPlatformHandleMerge } from '@/lib/services/identity/handle-convergence'
+import { apiError } from '@/lib/api/api-error'
 
 export const maxDuration = 60
 
@@ -161,9 +162,6 @@ export async function GET(req: Request) {
       },
     })
   } catch (err) {
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : 'unknown error' },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

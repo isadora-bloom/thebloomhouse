@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { loadRecentMerges } from '@/lib/services/identity/recent-merges'
+import { apiError } from '@/lib/api/api-error'
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const auth = await getPlatformAuth()
@@ -52,12 +53,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     })
     return NextResponse.json({ ok: true, page })
   } catch (err) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
-    )
+    return apiError(err)
   }
 }

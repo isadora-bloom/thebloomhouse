@@ -318,7 +318,7 @@ export function ContractCard({
                   {contract.vendor_name}
                 </span>
               )}
-              <span>{timeAgo(contract.created_at)}</span>
+              <span>{timeAgo(contract.created_at)}{/* created-at-ok: contract created_at is when it was generated, the real event */}</span>
               {/* W57. A contract the venue generated carries its own
                   lifecycle in the same status column, so it gets the
                   signing pill instead of the analysis pill. There is

@@ -6,6 +6,7 @@ import {
   applyDailyDecay,
 } from '@/lib/services/heat-mapping'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
+import { apiError } from '@/lib/api/api-error'
 
 // ---------------------------------------------------------------------------
 // GET — Heat leaderboard + distribution
@@ -25,8 +26,7 @@ export async function GET() {
 
     return NextResponse.json({ leaderboard, distribution })
   } catch (err) {
-    console.error('[api/agent/heat] GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -82,8 +82,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, result })
   } catch (err) {
-    console.error('[api/agent/heat] POST error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }
 
@@ -111,7 +110,6 @@ export async function PATCH() {
       autoLostCount: summary.autoLostCount,
     })
   } catch (err) {
-    console.error('[api/agent/heat] PATCH error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return apiError(err)
   }
 }

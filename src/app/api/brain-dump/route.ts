@@ -37,6 +37,7 @@ import {
   readParseResultKind,
   type BrainDumpParseResult,
 } from '@/lib/services/brain-dump/parse-result-schema'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * Derive the user-facing intent string for a parked brain-dump entry's
@@ -601,7 +602,7 @@ export async function POST(request: NextRequest) {
       contentHash = createHash('sha256').update(rawText).digest('hex')
     }
   } catch (err) {
-    console.warn('[brain-dump] hash compute failed; skipping dedup probe:', err)
+    console.warn('[brain-dump] hash compute failed; skipping dedup probe:', redactError(err))
     contentHash = null
   }
 
@@ -801,7 +802,7 @@ export async function POST(request: NextRequest) {
         .eq('id', entry.id)
         .is('parse_result', null)
     } catch (err) {
-      console.warn('[brain-dump] body-extract non-fatal:', err)
+      console.warn('[brain-dump] body-extract non-fatal:', redactError(err))
     }
   })()
 
@@ -1170,7 +1171,7 @@ export async function POST(request: NextRequest) {
             `scraper_json_imported:${parsed?.source ?? 'unknown'}`,
           )
         } catch (err) {
-          console.warn('[brain-dump] post-scraper cascade failed (non-fatal):', err)
+          console.warn('[brain-dump] post-scraper cascade failed (non-fatal):', redactError(err))
         }
       })()
 

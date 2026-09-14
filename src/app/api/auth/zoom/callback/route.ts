@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { verifyOAuthState } from '@/lib/services/integrations/oauth-state'
+import { redactError } from '@/lib/observability/redact'
 
 interface StatePayload {
   venueId: string
@@ -131,7 +132,7 @@ export async function GET(request: NextRequest) {
     }
     tokens = (await res.json()) as ZoomTokenResponse
   } catch (err) {
-    console.error('[zoom/callback] token exchange threw:', err)
+    console.error('[zoom/callback] token exchange threw:', redactError(err))
     return redirectBack(request, returnTo, {
       zoom: 'error',
       reason: 'token_exchange_failed',
@@ -160,7 +161,7 @@ export async function GET(request: NextRequest) {
       console.warn(`[zoom/callback] /users/me returned HTTP ${res.status}`)
     }
   } catch (err) {
-    console.error('[zoom/callback] /users/me fetch failed:', err)
+    console.error('[zoom/callback] /users/me fetch failed:', redactError(err))
   }
 
   if (!zoomUserId) {
