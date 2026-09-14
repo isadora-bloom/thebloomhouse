@@ -157,6 +157,10 @@ export const STREAM_TAGS = {
   SPEND: 0x7777,
   ATTRIBUTION: 0x8888,
   LOST_DEAL: 0x9999,
+  // W48 (NOVEMBER-PLAN.md wave 7): marketing_metric engagement_events,
+  // separate stream from ENGAGEMENT (0x5555) because these rows aren't
+  // keyed to a wedding slot — they're per-venue platform metrics.
+  MARKETING_METRIC: 0xaaaa,
 } as const
 
 // ---------------------------------------------------------------------------
