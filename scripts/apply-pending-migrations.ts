@@ -93,6 +93,16 @@ const WAVE_MIGRATIONS: Pending[] = [
     why: 'W36: the venue\x27s own social handles, excluded from stamping on couples',
     probe: columnExists('venue_config', 'social_handles'),
   },
+  {
+    file: '404_weather_alerts.sql',
+    why: 'W49: weather_alerts (NWS severity feed) and weather_climate_annual (per-year normals for the trend)',
+    probe: tableExists('weather_alerts'),
+  },
+  {
+    file: '406_commitment_reconciliation.sql',
+    why: 'W50: what a couple told the venue that has no event on their running order; planning_notes.source_interaction_id; timeline.config_json declared',
+    probe: tableExists('commitment_reconciliation'),
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */
