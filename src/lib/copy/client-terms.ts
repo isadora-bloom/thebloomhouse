@@ -172,7 +172,59 @@ export const CLIENT_TERMS: Readonly<Record<string, string>> = {
   'auto send': 'sent automatically',
   auto_send_pending: 'about to send',
   auto_send_failed: "didn't get sent",
+
+  // — things they told you (W50) —
+  // A coordinator does not have "unreconciled commitments". They have
+  // things the couple mentioned that nobody has planned for yet, which
+  // is a sentence anyone can act on.
+  //
+  // No `timeline` key here on purpose: the walkthrough block above
+  // already owns it as "running order for the day", and this queue uses
+  // that same wording rather than inventing a second phrase for the same
+  // thing.
+  commitment: 'something they told you',
+  commitments: 'things they told you',
+  'commitment reconciliation': 'things they told you that are not on the running order yet',
+  intention: 'something they said they are doing',
+  intentions: 'things they said they are doing',
+  'special request': 'something they asked for',
+  'special requests': 'things they asked for',
+  'planning note': 'note from a conversation',
+  'planning notes': 'notes from conversations',
+  unmatched: 'nothing planned for it yet',
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Things they told you (W50)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Headings for the commitments queue on the coordinator wedding page.
+ *
+ * Grouped here rather than written into the component so the words stay
+ * in one place with the rest of the coordinator vocabulary, and so the
+ * queue's framing stays reviewable: it reports what a couple said, not
+ * what the coordinator failed to do. "Not on the day yet" counts towards
+ * something; "you forgot the groom's cake" does not.
+ */
+export const COMMITMENTS_COPY = {
+  sectionTitle: 'Things they told you',
+  sectionSubtitle:
+    'Mentioned in a conversation, with nothing on the running order for it yet',
+  emptyTitle: 'Nothing outstanding',
+  emptyBody:
+    'Everything they have mentioned either has something on the running order, or has been dealt with here.',
+  neverRunBody:
+    'Nothing to show yet. This fills in overnight, once there is a conversation to read.',
+  addAction: 'Add to the running order',
+  addPending: 'Adding',
+  dismissAction: 'No event needed',
+  dismissPending: 'Noting',
+  addedLabel: 'Added',
+  dismissedLabel: 'No event needed',
+  sourceLink: 'See the message',
+  judgeReasonLabel: 'Why this is here',
+} as const
 
 /** Normalise a term for lookup: lower case, separators flattened. */
 function normaliseTerm(term: string): string {

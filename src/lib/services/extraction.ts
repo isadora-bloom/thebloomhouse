@@ -16,8 +16,12 @@ import { normalizeHandle, normalizeHandles } from './identity/handles'
  *
  * v1.1 (2026-09-11, HANDLE-IDENTITY-SPEC.md §4, wave 3): added the
  * `handles` field — see PROMPTS-CHANGELOG.md for the full entry.
+ *
+ * v1.2 (2026-09-14, wave 7 W50): added the `intentions` field. A stated
+ * plan is not a question and was falling through both — see
+ * PROMPTS-CHANGELOG.md.
  */
-export const EXTRACTION_PROMPT_VERSION = 'extraction.prompt.v1.1'
+export const EXTRACTION_PROMPT_VERSION = 'extraction.prompt.v1.2'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +36,17 @@ export interface ExtractedSignals {
   eventType: string | null
   budgetRange: { min: number; max: number } | null
   questions: string[]
+  /**
+   * Stated plans. "We are having a groom's cake", "we want sparklers at
+   * the send-off", "my uncle is officiating". Distinct from `questions`:
+   * a question asks us for something, an intention tells us something the
+   * couple has already decided and expects to happen on the day.
+   *
+   * Nobody was capturing these. They arrived in an email to the
+   * coordinator, were read once, and never reached the day-of timeline.
+   * `services/commitments/reconcile.ts` is what closes that loop.
+   */
+  intentions: string[]
   urgency: 'high' | 'medium' | 'low'
   sentiment: 'positive' | 'neutral' | 'cautious' | 'negative'
   stressSignals: string[]
@@ -413,6 +428,37 @@ export function detectUrgency(body: string): 'high' | 'medium' | 'low' {
 }
 
 // ---------------------------------------------------------------------------
+// Response coercion
+// ---------------------------------------------------------------------------
+
+/**
+ * The model is asked for a fixed schema and usually returns it. Usually is
+ * not always: a field can come back missing, null, or as a bare string
+ * instead of an array. Every list field on ExtractedSignals is typed
+ * `string[]` and callers index into it, so an `undefined` here becomes a
+ * TypeError two modules away from the cause.
+ *
+ * Coerce instead. A missing list is an empty list, a bare string is a
+ * one-item list, and non-string members are dropped. Entries are trimmed
+ * and blanks removed so a quote-per-line answer does not turn into a row
+ * of empty commitments on the coordinator's queue.
+ */
+export function coerceStringList(value: unknown): string[] {
+  if (typeof value === 'string') {
+    const single = value.trim()
+    return single.length > 0 ? [single] : []
+  }
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (trimmed.length > 0) out.push(trimmed)
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // Main extraction
 // ---------------------------------------------------------------------------
 
@@ -441,6 +487,7 @@ export async function extractSignals(
     eventType: string | null
     budgetRange: { min: number; max: number } | null
     questions: string[]
+    intentions: string[]
     sentiment: 'positive' | 'neutral' | 'cautious' | 'negative'
     stressSignals: string[]
     excitementSignals: string[]
@@ -474,6 +521,7 @@ Return a JSON object with these fields:
 - eventType: string | null — "wedding", "reception", "rehearsal dinner", "elopement", "corporate", etc.
 - budgetRange: { min: number, max: number } | null — dollar amounts if mentioned
 - questions: string[] — specific questions they asked
+- intentions: string[] — things they say they ARE doing or WANT on the day, stated as fact rather than asked as a question ("we're having a groom's cake", "my uncle is officiating", "we want sparklers at the send-off"). Quote or closely paraphrase each one. A sentence is an intention when nobody has to answer it but somebody has to plan for it. If it is phrased as a question it belongs in questions, not here.
 - sentiment: "positive" | "neutral" | "cautious" | "negative"
 - stressSignals: string[] — phrases indicating stress ("overwhelmed", "running out of time", etc.)
 - excitementSignals: string[] — phrases indicating excitement ("can't wait", "dream venue", etc.)
@@ -532,6 +580,19 @@ Be precise. Only extract what is explicitly stated or clearly implied. Do not gu
 
   return {
     ...signals,
+    // Every list field goes through the coercer, not just the new one. The
+    // model omitting `intentions` is the same failure as it omitting
+    // `questions`; both used to hand a caller `undefined` typed as string[].
+    questions: coerceStringList(signals.questions),
+    intentions: coerceStringList(signals.intentions),
+    stressSignals: coerceStringList(signals.stressSignals),
+    excitementSignals: coerceStringList(signals.excitementSignals),
+    mentionedVendors: coerceStringList(signals.mentionedVendors),
+    specialRequests: coerceStringList(signals.specialRequests),
+    painPoints: coerceStringList(signals.painPoints),
+    objectionSignals: coerceStringList(signals.objectionSignals),
+    keyPriorities: coerceStringList(signals.keyPriorities),
+    venuesTouring: coerceStringList(signals.venuesTouring),
     urgency,
     // Merge regex-extracted phone numbers (dedup with any the AI might return)
     phoneNumbers,

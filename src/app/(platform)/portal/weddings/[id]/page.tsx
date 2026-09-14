@@ -58,6 +58,8 @@ import {
   CoupleStorySection,
   WALKTHROUGH_HEADINGS,
 } from './_components/walkthrough-sections'
+import { CommitmentsQueue, COMMITMENTS_ICON } from './_components/commitments-queue'
+import { COMMITMENTS_COPY } from '@/lib/copy/client-terms'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -2393,6 +2395,25 @@ export default function WeddingProfilePage() {
               venueId={wedding.venue_id}
               role="coordinator"
               exportName={clientCode ?? weddingId}
+              onSaved={fetchData}
+            />
+          </CollapsibleSection>
+
+          {/* W50. The three sections above show what has been written    */}
+          {/* down. This one shows what the couple said and nobody wrote  */}
+          {/* down: sentences lifted out of their conversations that have */}
+          {/* no event on the running order yet. Sits last because it is  */}
+          {/* the exception list, and reads from its own table, so an     */}
+          {/* empty one costs nothing.                                    */}
+          <CollapsibleSection
+            heading={COMMITMENTS_COPY.sectionTitle}
+            subheading={COMMITMENTS_COPY.sectionSubtitle}
+            icon={COMMITMENTS_ICON}
+          >
+            <CommitmentsQueue
+              weddingId={weddingId}
+              venueId={wedding.venue_id}
+              onOpenCommunications={() => setActiveTab('communications')}
               onSaved={fetchData}
             />
           </CollapsibleSection>

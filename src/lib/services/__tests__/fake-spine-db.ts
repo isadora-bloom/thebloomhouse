@@ -36,6 +36,11 @@ const UNIQUE_KEYS: Record<string, string[]> = {
   touchpoints: ['venue_id', 'channel', 'external_id'],
   fragments: ['venue_id', 'channel', 'external_id'],
   couples: ['venue_id', 'source_wedding_id'],
+  // W50 (wave 7). `uq_commitment_reconciliation_wedding_key`, migration
+  // 406. The nightly sweep's whole claim to being idempotent is that this
+  // constraint turns a second run into an update, so a fake that let the
+  // duplicate through would prove the opposite of what the test claims.
+  commitment_reconciliation: ['wedding_id', 'commitment_key'],
 }
 
 /** Timestamps compare as time, everything else as a number or a string. */

@@ -934,7 +934,7 @@ async function runJob(
       return sweepFragmentsAllVenues(supabase)
     }
 
-    case 'data_integrity_sweep':
+    case 'data_integrity_sweep': {
       // Phase 2 multi-venue rollout (2026-04-30). Runs the 8 data
       // integrity invariants on every venue and persists current
       // violations as 'data_anomaly' rows on intelligence_insights.
@@ -943,7 +943,29 @@ async function runJob(
       // with status='self_healed'. Coordinators see live anomaly
       // status on /intel/anomalies without having to re-run any
       // script. Cheap (~5-10s per venue) and idempotent.
-      return sweepDataIntegrityAllVenues()
+      //
+      // W50 (2026-09-14): commitment reconciliation rides the same
+      // nightly tick rather than taking a cron row of its own — the
+      // budget in scripts/cleanup-budget.json is ratcheted at 49 and
+      // may only fall. This case is the right host: both sweeps are
+      // all-venue, idempotent, and answer the same kind of question,
+      // which is "is what we hold internally consistent". This one asks
+      // it of the couple's day: every intention and special request
+      // they have told us, checked against their day-of timeline, with
+      // whatever has no event left on the coordinator's queue.
+      //
+      // Independent try/catch, following the W6 precedent on
+      // re_engagement_attribution: a reconciliation failure must never
+      // stop the integrity invariants from reporting.
+      const integrity = await sweepDataIntegrityAllVenues()
+      let commitments: unknown = null
+      try {
+        commitments = await sweepCommitmentReconciliationAllVenues()
+      } catch (err) {
+        commitments = { error: err instanceof Error ? err.message : String(err) }
+      }
+      return { data_integrity_sweep: integrity, commitment_reconciliation: commitments }
+    }
 
     case 're_engagement_attribution': {
       // Phase D Tier 2 / Stage 3 (2026-04-30). Daily — for each
@@ -2053,6 +2075,16 @@ async function sweepPhaseBAllVenues(): Promise<
 async function sweepDataIntegrityAllVenues() {
   const supabase = createServiceClient()
   return runDataIntegritySweepAllVenues(supabase)
+}
+
+/**
+ * W50 commitment reconciliation. Lazy import so the module (and the AI
+ * client it pulls in) is only loaded on the nightly tick that uses it,
+ * matching how the other heavier sweeps are wired in this file.
+ */
+async function sweepCommitmentReconciliationAllVenues() {
+  const mod = await import('@/lib/services/commitments/reconcile')
+  return mod.sweepCommitmentReconciliationAllVenues()
 }
 
 async function sweepReEngagementAttribution() {

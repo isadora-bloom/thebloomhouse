@@ -11,6 +11,13 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-14 (The groom's cake — stated plans, v1.1 → v1.2)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| extraction (`extractSignals`, `src/lib/services/extraction.ts`) | `extraction.prompt.v1.1` | `extraction.prompt.v1.2` | NOVEMBER-PLAN.md wave 7, W50. Added an `intentions` field. The schema had `questions` for what a couple asks and `specialRequests` for access and dietary needs, and nothing at all for a stated plan: "we're having a groom's cake", "my uncle is officiating", "we want sparklers at the send-off". Those are neither a question nor a request, so they were being dropped or miscast as questions, and a coordinator reading the extraction saw nothing that had to be planned for. The prompt now defines an intention as a sentence nobody has to answer but somebody has to plan for, and says explicitly that anything phrased as a question belongs in `questions`. Also new in the same pass, not a prompt change: every list field on the response now goes through `coerceStringList`, so a missing or malformed array is an empty list rather than an `undefined` typed as `string[]`. |
+| commitment judge (`src/lib/services/commitments/reconcile.ts`) | — | `commitments.judge.v1.0` | New. Given a wedding's running order and the sentences the couple has told the venue, decides which sentences nothing on the day covers. One Haiku call per wedding, the whole unmatched list at once, cached by a content hash of the quote plus the running order so an unchanged wedding costs nothing on the nightly sweep. Biased towards "not covered" when unsure: a spurious row costs a coordinator a click, a missed groom's cake costs the day. Must copy a matched event title verbatim from the timeline it was shown, never invent one. |
+
 ## 2026-09-11 (Ask for the key — handle extraction, v1.0 → v1.1)
 
 | brain | from | to | change |
@@ -1144,7 +1151,12 @@ prompt-version constants.
 - **v1.0** (2026-05-05) — Initial versioning baseline. Covers both detectDataType
   (24-class classification) and mapColumns (source→target dict). Haiku tier.
 
-### extraction (`extraction.prompt.v1.1`)
+### extraction (`extraction.prompt.v1.2`)
+- **v1.2** (2026-09-14) — NOVEMBER-PLAN.md wave 7, W50. Added `intentions`: stated
+  plans, as distinct from `questions` (what they ask) and `specialRequests` (access,
+  dietary, cultural needs). "We're having a groom's cake" is none of the other two and
+  was being dropped. Fed to `services/commitments/` so a stated plan with no event on
+  the running order reaches the coordinator instead of the day.
 - **v1.1** (2026-09-11) — NOVEMBER-PLAN.md wave 3, W25, HANDLE-IDENTITY-SPEC.md §4.
   Added `handles` to the schema: platform handles the sender gives in a signature or
   body line ("IG @rosie.hoyle"). The model reads it (classification from prose stays
