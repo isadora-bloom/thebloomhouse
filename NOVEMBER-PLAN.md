@@ -111,11 +111,11 @@ Shared rules for every agent:
 6. Re-merge danger exports (draft_feedback 1 row, discovery_sources 3) by hand
 7. Gate: spine sane, point_zero stamped, battery run, golden 15/15
 
-## Parked until after November
+## Everything has a wave now (2026-09-14)
 
-Dubsado / Aisle Planner adapters, Meta/Google/TikTok spend connectors, per-venue Resend
-domains, cross-venue benchmarks (needs a second tenant), native contracts inside Bloom,
-the marketing-site demo becoming live, custom app domain.
+Per Isadora: nothing stays parked indefinitely. Every item that used to sit under "Parked
+until after November" is now a real workstream in wave 8, with a model, an owner, and either
+a build-now scope or a named trigger condition (not a shrug). See wave 8 below.
 
 ## Wave 2 (launched 2026-09-09 morning)
 
@@ -385,46 +385,54 @@ on the couple's side of the portal or as two features never joined. Dry work; no
 | W44 | Table map and guest list joined: a named guest can be assigned to a table from the floor plan (drag or pick), and the assignment list and the map read the same rows | Opus | the seating components under `src/components/couple/**` and `src/app/_couple-pages/seating*/**`, `src/lib/services/couple-portal/seating*` |
 | W45 | Housekeeping the audit asked for: delete `/org` and `/sage` full-page mirrors; migration 404 adds the progression event type so non-HoneyBook CSV anchors move the decay clock; `propose_follow_ups` cost row decision recorded (keep, it is an audit of spend) | Haiku | the two pages, `src/lib/services/identity/progression.ts`, new migration 404, `scripts/cleanup-budget.json`, the isolation battery's skip note |
 
-Not in this wave, needs data or an external source: weather severity (no severity feed
-exists), Instagram versus TikTok comparison (no TikTok connector), investor numbers.
+Weather and the platform-shift question are not out of scope, they are wave 7 below — the
+"no feed exists" line above was written before the audit revision confirmed most of this is
+buildable from data Bloom already pulls in; corrected there.
 
 Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. No spine writes
 outside linkSignal. No database writes. Migrations wait for `npm run migrate:pending`.
 
-## Wave 7 candidates (from the CEO scenario audit, 2026-09-14; launch after wave 6 lands)
+## Wave 7 (launch after wave 6 lands): built, never wired, made to answer
 
-The pattern the audit named: built, tested, then never wired to live data or never given a
-door. Dry work, no reimport needed.
-- Review sentiment is never populated: `reviews.sentiment_score` exists and the six-month trend
-  reads it, but neither the Google import nor the paste tool fills it. Wire the existing review
-  language pass to score each review on ingest; backfill on replay.
-- Social to tours: the correlation engine has no `tours` channel and the follower capture never
-  feeds it. Add tours (from spine touchpoints) as a series and social engagement volume as
-  another, so "does posting more lead to more tours" has a wire, then an honest answer.
-- The groom's cake: four gaps in a row. (1) The loose-detail extractor exists but is switched
-  off for inbox speed; run it out of band after classification. (2) A stated intention is not
-  a question, so the fixed-list extractor drops it; add an `intentions` field. (3) Planning
-  notes fill only from the chatbot and contract PDFs; venue conversations must write there
-  too. (4) Nothing reconciles notes against the day-of timeline; a nightly pass that lists
-  intentions with no timeline item, shown on the wedding page.
-- Google Ads and TikTok connectors are stubs; the reallocation analyst runs on typed-in spend.
-  Say so on the page until a connector exists.
-- Weather, three modes (audit revision 2026-09-14): historic normals ("June's usual 4pm
-  temperature") already have code behind an annual backfill that needs activating; a future
-  trend ("August getting wetter each year") is new code over the data Bloom already pulls; only
-  a specific severity event ("the tornado warning that weekend") needs a feed that does not exist.
-- Platform shift: "is engagement moving from Instagram to TikTok" is a narrower question than
-  social-to-tours. The brain-dump screenshots already land per platform in engagement_events as
-  marketing_metric, so a per-platform series with a month-over-month share comparison answers it
-  from existing data. Name it on the sources page and in Ask your data.
-- Tours as a series in the correlation engine unlocks all eight external-context channels
-  (weather, FRED, cultural moments, holiday calendar, census, government shutdown, Google Trends
-  via SerpAPI, social engagement), not just social. Google Trends silently does nothing without
-  a SerpAPI key and a venue metro; check Rixey has both.
-- Surfacing (the audit document's "wave 8"): a consolidated CEO view, coordinator daily-surface
-  links, and two couple-experience additions: personalising the couple-facing assistant from the
-  identity profile (scope with care: the repo's aggregate-not-disclose doctrine applies, and it
-  must read as warmth, not surveillance), and weather- and conversion-informed nudges. Hold every
-  new page to the wave 5 nav standard, add demo-seed coverage for anything new, and specify test,
-  battery and isolation gates per item. The cron budget sits at its ratchet (49), so any new cron
-  reuses a slot or raises the number deliberately.
+Source: the CEO scenario audit (W39 agent, 2026-09-14) plus its revision. The pattern named:
+built, tested, then never wired to live data or never given a door. Dry work, no reimport
+needed. Isadora, 2026-09-14: nothing stays a caveat — every finding gets a build, not a flag.
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W46 | Review sentiment, actually populated: wire the existing review-language scoring pass to run on every ingest path (Google Places poll, CSV/paste import, the brain-dump `reviews_from_screenshot` case) so `reviews.sentiment_score`/`themes` get written, not left null; backfill existing rows on replay | Sonnet | `src/lib/services/reviews/google-places.ts`, `src/lib/services/data-import.ts`, brain-dump route's review case, `src/lib/services/intel/review-language.ts` (call only), a backfill script |
+| W47 | Tours as a series, and everything that unlocks: add a `tours` channel (from spine touchpoints) to `buildSeries`, so all eight existing external-context channels (weather, FRED, cultural moments, holiday calendar including election days, census, government shutdown — live and DC-weighted for Rixey, Google Trends via SerpAPI) and social engagement volume can pair against it, not just inquiries; verify Rixey has a `SERPAPI_API_KEY` and a `google_trends_metro` set, since Trends silently no-ops without both | Opus | `src/lib/services/intel/correlation-engine.ts`, `src/lib/utils/format-series-label.ts`, one operator check on the Trends config |
+| W48 | Platform shift, named and answerable: "is engagement moving from Instagram to TikTok" is narrower than social-to-tours — brain-dump screenshots already land per-platform in `engagement_events` as `marketing_metric`, so build the per-platform series and a month-over-month share comparison, surfaced on the sources page and as an Ask-your-data tool | Sonnet | new `src/lib/intel/tool-sources/platform-shift.ts`, `src/app/(platform)/intel/sources/page.tsx` (a card), test, index line |
+| W49 | Weather, three modes, all built, none parked: **specific** — a real severity feed via the National Weather Service's public alerts API (`api.weather.gov/alerts`, free, no key required), replacing the dead tornado-keyword branch; **historic** — activate the existing decade-normals backfill (code already exists, gated on an annual job that needs turning on and verifying it ran for Rixey); **future** — a genuine year-over-year trend calculation per month/metric, which the current two-point decade comparison does not provide | Sonnet | `src/lib/services/intel/weather.ts`, `weather-cancellation.ts`, `climate-context.ts`, `weather-climate-norms.ts`, new NWS alerts loader, one migration |
+| W50 | The groom's cake, all four gaps closed: (1) run the existing loose-detail (`specialRequests`) extractor out-of-band after classification, not on the hot path; (2) add an `intentions` field to the fixed-schema classifier so a stated plan (not just a question) gets captured; (3) extend Planning Notes population to coordinator-venue conversations, not only the couple's chatbot and contract PDFs; (4) a nightly reconciliation pass that lists any captured intention with no matching day-of timeline event, shown on the wedding page | Opus | `src/lib/services/extraction.ts`, `src/lib/services/email/pipeline.ts` (two call sites, coordinate by call site not whole-file), `src/lib/services/intel/planning-extraction.ts`, new `src/lib/services/commitments/**`, a cron entry (reuse a slot — cron budget is at 49/49, its ratchet, do not just add one), a coordinator-facing queue on the wedding page |
+| W51 | Reallocation analyst, honest about its inputs: the marketing-roi recommendations page states plainly, in the coordinator's own words, that Google/TikTok/Meta numbers are typed-in until a connector exists (W54 below), not silently presented as live | Haiku | `src/app/(platform)/intel/marketing-roi/recommendations/page.tsx`, `MarketingRecommendationsDashboard.tsx` |
+| W52 | Surface it to all three audiences: a consolidated CEO view (response time, weekday tour conversion, channel ROI, review trend, one screen); coordinator daily-surface links from `/today` into the deeper answers; couple-experience personalisation from the identity profile (the repo's aggregate-not-disclose doctrine applies — scope which fields are safe to reflect back before wiring, this must read as warmth, not surveillance); weather- and conversion-informed couple nudges | Opus | new `src/app/(platform)/intel/monthly-story/page.tsx` + a real `nav-config.ts` entry, `src/app/(platform)/today/**` (links only), `src/lib/services/brain/**` (couple-portal prompt layer specifically), `_couple-pages/**` (wedding-day weather card) |
+
+Every workstream above states its own "done when" in the description; hold to the wave 5
+nav standard (a new page ships with a nav entry, not an orphan); add demo-seed coverage for
+anything new so Crestwood shows it working, not only Rixey; add battery ground-truth probes
+for W46-W48's new answerable questions; add W47's new channel and W50's new writer to the
+wave 5 isolation battery's coverage. Shared rules as wave 3.
+
+## Wave 8 (launch after wave 7 lands): the rest, built or triggered, not parked
+
+Everything that used to sit under "Parked until after November" gets a real workstream. Two
+of these are trigger-gated on something outside this repo's control (a second signed venue, a
+separate repo's release) rather than buildable this week — trigger-gated is not the same as
+parked: the code ships now, the activation condition is named, not open-ended.
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W53 | Dubsado and Aisle Planner CRM adapters, same adapter interface the Knot/HoneyBook adapters already use | Sonnet | new `src/lib/services/crm-import/dubsado.ts`, `aisle-planner.ts`, registry entries, tests |
+| W54 | Real Google Ads, Meta Ads and TikTok Ads connectors: OAuth-based ingestion replacing the manual brain-dump-only spend capture, each connector's own documented API (Google Ads API, Meta Marketing API, TikTok Business API) | Opus | `src/lib/services/marketing-spend/connectors/google-ads.ts`, `meta-ads.ts`, `tiktok-ads.ts` (replace the stubs), OAuth settings pages under `src/app/(platform)/settings/integrations/**` |
+| W55 | Per-venue Resend sending domains, so venue emails don't share one domain's reputation | Sonnet | `src/lib/services/email/**` (send path), a venue_config field, a settings section, Resend domain-verification flow |
+| W56 | Cross-venue benchmarks: build the comparison surface now against the existing single-venue data model so it needs no further code once a second venue exists; **triggered** — goes live the moment venue 2's onboarding (the plan's own week-4 gate) completes, not before, since it has nothing to compare against until then | Opus | `src/app/(platform)/intel/benchmark/page.tsx` (already scaffolded, gear-menu-reachable — wire it for real), `src/lib/services/cohort/**` (cross-venue query path) |
+| W57 | Native contracts inside Bloom, MVP scope: generate a contract from a booked wedding's package data, send it to the couple through the existing disclosure-guarded send path, track signed/unsigned status on the wedding page. Not full e-signature legal infrastructure — status tracking and generation, matching what the coordinator-side contract work in wave 6 (W43) already reads | Opus | new `src/lib/services/contracts/**`, `src/app/api/portal/contracts/**`, a section on `portal/weddings/[id]/page.tsx` |
+| W58 | Marketing-site demo goes live: the Bloom-side hooks the live demo needs (a public-facing read-only snapshot route, rate-limited, no auth) — the marketing-site repo's own build is out of this repo, this workstream only ships what Bloom must expose | Sonnet | new `src/app/api/public/demo-snapshot/**`, rate-limit config |
+| W59 | Custom app domain: DNS + Vercel domain config, cert, redirect from the current domain | Haiku | `vercel.json`, DNS records (operator applies), redirect middleware |
+
+Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. No database
+writes. W54's connectors are the only workstream here that needs real third-party credentials
+before it can go live in production — build and test against each provider's sandbox/test
+mode; going live is an operator step (provisioning API access), same shape as Instagram DMs
+waiting on Meta credentials, not a reason to defer the build.
