@@ -26,6 +26,7 @@ import {
   forbidden,
   badRequest,
 } from '@/lib/api/auth-helpers'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 interface HandleClaim {
   platform: string
@@ -42,7 +43,7 @@ interface ProfileHandleRow {
 }
 
 export async function GET(req: NextRequest) {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   let venueId: string | null = null
 
   if (cronAuth) {

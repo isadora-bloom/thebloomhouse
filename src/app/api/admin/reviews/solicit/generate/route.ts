@@ -27,6 +27,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { solicitReview, REVIEW_SOLICIT_PROMPT_VERSION } from '@/lib/services/reviews/solicit'
 import type { ReviewTargetChannel } from '@/config/prompts/review-solicit'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 120
 
@@ -48,7 +49,7 @@ async function resolveAuth(
   req: NextRequest,
   weddingId: string | null,
 ): Promise<{ venueId: string } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!weddingId) return badRequest('CRON_SECRET path requires weddingId')
     const supabase = createServiceClient()

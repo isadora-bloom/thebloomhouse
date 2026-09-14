@@ -19,7 +19,8 @@ import {
  *   1. Operator visits /settings/integrations/instagram
  *   2. Presses Connect, which sends the browser here
  *   3. We mint a CSRF-safe state token (HMAC of venueId + timestamp +
- *      nonce, keyed on CRON_SECRET) and redirect to Meta's consent dialog
+ *      userId and nonce, keyed on STATE_SIGNING_SECRET) and redirect to
+ *      Meta's consent dialog
  *   4. Meta returns the operator to /oauth/callback with code + state
  *
  * Returns 503 with the missing env-var names when the app credentials
@@ -45,7 +46,7 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  const state = mintInstagramState(auth.venueId)
+  const state = mintInstagramState(auth.venueId, auth.userId)
   const url = buildInstagramAuthorizeUrl({
     env: envCheck.env,
     redirectUri: instagramRedirectUri(request.nextUrl.origin),

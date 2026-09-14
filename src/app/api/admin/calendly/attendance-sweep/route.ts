@@ -23,6 +23,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { sweepPastBookingsForAttendance } from '@/lib/services/identity/calendly-outcomes'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 120
 
@@ -32,8 +33,7 @@ export async function POST(req: NextRequest) {
     bookingLimit?: number
   }
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string | null = null
   if (cronAuth) {

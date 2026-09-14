@@ -38,6 +38,7 @@ import {
   DISCOVERY_ENGINE_PROMPT_VERSION,
 } from '@/lib/services/intel/discovery/engine'
 import { enqueueDiscoveryRun } from '@/lib/services/intel/discovery/enqueue'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // One discovery run is one Sonnet call with ~3-5k input + ~1-3k output
 // tokens — comfortably under a minute even on cold-start. 280s budget
@@ -60,8 +61,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

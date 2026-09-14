@@ -23,6 +23,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { analyzeCalibration } from '@/lib/services/calibration/analyze'
 import { narrateCalibration } from '@/lib/services/calibration/narrate'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 120
 
@@ -34,8 +35,7 @@ export async function GET(req: NextRequest) {
   const narrateParam = url.searchParams.get('narrate')
   const windowDays = windowDaysParam ? Math.max(1, parseInt(windowDaysParam, 10) || 90) : 90
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string | null = null
   if (cronAuth) {

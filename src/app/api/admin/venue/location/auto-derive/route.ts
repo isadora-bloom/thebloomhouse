@@ -33,6 +33,7 @@ import {
   deriveLocationFromAddress,
   type AddressInput,
 } from '@/lib/services/external-signals-config/derive-from-address'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 30
 
@@ -44,8 +45,7 @@ export async function POST(req: NextRequest) {
     body = {}
   }
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string
   let derivationActor: 'ops_cron' | 'coordinator_manual'

@@ -55,6 +55,8 @@ export async function GET(request: NextRequest) {
   const stateCheck = verifyInstagramState(state)
   if (!stateCheck.ok) return fail(stateCheck.reason.replace(/\s+/g, '_'))
   if (stateCheck.venueId !== auth.venueId) return fail('venue_mismatch')
+  // S2: bound to the user who started the flow, not only the venue.
+  if (stateCheck.userId !== auth.userId) return fail('user_mismatch')
 
   const envCheck = readInstagramEnv()
   if (!envCheck.ok) return fail('not_configured')

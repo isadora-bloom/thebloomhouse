@@ -33,6 +33,7 @@ import {
   computeCrossVenueOverlap,
   listStoredOverlaps,
 } from '@/lib/services/intel/onboarding/cross-venue-overlap'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // Bounded — comparison is in-process intersection logic over already-
 // stored aggregates. No LLM. 60s is plenty.
@@ -51,8 +52,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.anchorVenueId || typeof body.anchorVenueId !== 'string') {
       return badRequest('CRON_SECRET path requires anchorVenueId in body')
@@ -110,8 +110,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const venueIdParam = url.searchParams.get('venueId')
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   let anchorVenueId: string | null = null
   if (cronAuth) {
     if (!venueIdParam) return badRequest('CRON_SECRET path requires venueId param')

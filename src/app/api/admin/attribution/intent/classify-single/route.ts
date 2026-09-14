@@ -19,6 +19,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { classifyAndPersistInquiryIntent } from '@/lib/services/attribution-roles/intent-classifier'
 import { INQUIRY_INTENT_JUDGE_PROMPT_VERSION } from '@/config/prompts/inquiry-intent-judge'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 120
 
@@ -39,7 +40,7 @@ async function resolveAuth(
   req: NextRequest,
   attributionEventId: string | null,
 ): Promise<{ ctx: AuthCtx } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!attributionEventId) {
       return badRequest('CRON_SECRET path requires attributionEventId')

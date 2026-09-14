@@ -28,25 +28,34 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { recoverBookedDataForVenue } from '@/lib/services/booked-data-recovery'
 import { createServiceClient } from '@/lib/supabase/service'
-
-function resolveSecret(): string | null {
-  const harnessSecret = process.env.TEST_HARNESS_SECRET
-  if (harnessSecret) return harnessSecret
-  if (process.env.CRON_SECRET) return process.env.CRON_SECRET
-  return null
-}
+import { isCronSecretConfigured, verifyCronAuth } from '@/lib/cron-auth'
 
 export async function POST(request: NextRequest) {
-  const expected = resolveSecret()
-  if (!expected) {
+  // S2 (2026-09-14 security audit). The CRON_SECRET arm used to be an
+  // inline `===`, which admitted the literal `Bearer undefined` whenever
+  // the variable was unset. It goes through the helper now, and because
+  // this endpoint rewrites booked-wedding data it carries the
+  // destructive tier — the same classification `booked_data_recovery`
+  // already has in DESTRUCTIVE_JOBS. The TEST_HARNESS_SECRET arm is
+  // unchanged and still takes precedence.
+  const harnessSecret = process.env.TEST_HARNESS_SECRET
+  if (!harnessSecret && !isCronSecretConfigured()) {
     return NextResponse.json(
       { error: 'Service-role secret unset (CRON_SECRET / TEST_HARNESS_SECRET)' },
       { status: 501 },
     )
   }
-  const auth = request.headers.get('authorization')
-  if (auth !== `Bearer ${expected}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  if (harnessSecret) {
+    const auth = request.headers.get('authorization')
+    if (auth !== `Bearer ${harnessSecret}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+  } else {
+    const cronAuth = verifyCronAuth(request, { alwaysDestructive: true })
+    if (!cronAuth.ok) {
+      return NextResponse.json({ error: cronAuth.error }, { status: cronAuth.status })
+    }
   }
 
   let payload: { venueId?: string }

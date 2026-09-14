@@ -19,6 +19,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { computePersonaChannelRollups } from '@/lib/services/intel/persona-channel-rollup'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // Recompute walks every spend row + attribution event in a venue across
 // three windows. ~30s in practice for a venue with thousands of rows;
@@ -39,8 +40,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

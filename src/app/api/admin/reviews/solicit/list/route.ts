@@ -20,6 +20,7 @@ import {
   forbidden,
   badRequest,
 } from '@/lib/api/auth-helpers'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 const VALID_STATUSES = new Set([
   'queued',
@@ -31,7 +32,7 @@ const VALID_STATUSES = new Set([
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   let venueId = url.searchParams.get('venueId')
 
   if (!cronAuth) {

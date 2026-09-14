@@ -39,6 +39,7 @@ import {
   getStoredCoupleIntel,
   COUPLE_INTEL_DERIVE_PROMPT_VERSION,
 } from '@/lib/services/intel/per-couple-derive'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // One derive is one Sonnet call (~10-30s typical). Pad for evidence-load
 // latency.
@@ -65,7 +66,7 @@ async function resolveAuth(
   req: NextRequest,
   weddingId: string | null,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!weddingId) {
       return badRequest('CRON_SECRET path requires weddingId')

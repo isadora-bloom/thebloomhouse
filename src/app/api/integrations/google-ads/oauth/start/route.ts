@@ -18,8 +18,9 @@ import {
  * Coordinator-side flow:
  *   1. Visit /settings/integrations/google-ads
  *   2. Click "Connect Google Ads" → browser GETs this endpoint
- *   3. We mint a CSRF-safe state token (HMAC of venueId + nonce + ts
- *      using CRON_SECRET), build the Google authorize URL, redirect.
+ *   3. We mint a CSRF-safe, single-use state token (HMAC of venueId +
+ *      userId + nonce + ts using STATE_SIGNING_SECRET), build the Google
+ *      authorize URL, redirect.
  *   4. Google sends the user back to /oauth/callback with code+state.
  *
  * Returns a 503 with structured error when env vars are missing — the
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  const state = mintOauthState(auth.venueId)
+  const state = mintOauthState(auth.venueId, auth.userId)
   const url = buildAuthorizeUrl({ env: envCheck.env, state })
   return NextResponse.redirect(url, 302)
 }

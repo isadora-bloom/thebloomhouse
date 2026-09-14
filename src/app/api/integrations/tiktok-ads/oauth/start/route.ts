@@ -35,7 +35,7 @@ export async function GET(_request: NextRequest) {
     )
   }
 
-  const state = mintAdOauthState(auth.venueId)
+  const state = mintAdOauthState(auth.venueId, auth.userId, 'tiktok_ads')
   return NextResponse.redirect(
     buildTikTokAuthorizeUrl({ env: envCheck.env, state }),
     302,

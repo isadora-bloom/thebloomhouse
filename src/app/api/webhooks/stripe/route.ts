@@ -21,6 +21,9 @@ import type Stripe from 'stripe'
 // for canonical validation. Otherwise we fall back to a manual HMAC check
 // so the endpoint keeps working even if the SDK isn't initialised.
 //
+// Env-gated: with STRIPE_WEBHOOK_SECRET unset the route answers 503 and
+// does nothing else. It never parses an unverified body.
+//
 // Idempotency — state-machine pattern (migration 209, Phase 1 audit Fix 2):
 //   stripe_events now has a processed_at TIMESTAMPTZ column.
 //   - On first delivery: INSERT row with processed_at = NULL (claim).
@@ -213,52 +216,69 @@ async function sendPaymentAlertEmail(opts: {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
-  let outcome: 'processed' | 'duplicate' | 'unhandled' | 'invalid_signature' | 'invalid_event' | 'error' = 'processed'
+  let outcome:
+    | 'processed'
+    | 'duplicate'
+    | 'unhandled'
+    | 'invalid_signature'
+    | 'invalid_event'
+    | 'not_configured'
+    | 'error' = 'processed'
   let eventType: string | null = null
+
+  // S2 (2026-09-14 security audit). Refuse before reading the body when
+  // the signing secret is missing. The old shape logged a warning and
+  // then JSON.parse'd an unverified payload — anyone who knew the URL
+  // could mint a `customer.subscription.updated` and move a venue onto
+  // the enterprise plan for free. Same posture as /api/webhooks/twilio
+  // and /api/webhooks/instagram: no secret, no work, 503.
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
+  if (!webhookSecret) {
+    console.error(
+      '[webhook/stripe] STRIPE_WEBHOOK_SECRET is not set — refusing the ' +
+        'delivery. Nothing was parsed or processed. Set the variable in ' +
+        'Vercel and replay the event from the Stripe dashboard.',
+    )
+    outcome = 'not_configured'
+    await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
+    return NextResponse.json({ error: 'stripe_not_configured' }, { status: 503 })
+  }
+
   try {
     const rawBody = await request.text()
 
     const sig = request.headers.get('stripe-signature')
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
 
     let event: Stripe.Event | null = null
 
-    if (webhookSecret) {
-      if (!sig) {
-        console.warn('[webhook/stripe] Missing stripe-signature header')
+    if (!sig) {
+      console.warn('[webhook/stripe] Missing stripe-signature header')
+      outcome = 'invalid_signature'
+      await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
+      return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
+    }
+
+    if (isStripeConfigured()) {
+      // Preferred path — SDK-validated construction
+      try {
+        const stripe = getStripe()
+        event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret)
+      } catch (err) {
+        // Stripe constructEvent errors can echo signature material
+        // and (less commonly) payload fragments. Redact before stdout.
+        console.warn('[webhook/stripe] constructEvent failed:', redactError(err))
         outcome = 'invalid_signature'
         await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
-        return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
-      }
-
-      if (isStripeConfigured()) {
-        // Preferred path — SDK-validated construction
-        try {
-          const stripe = getStripe()
-          event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret)
-        } catch (err) {
-          // Stripe constructEvent errors can echo signature material
-          // and (less commonly) payload fragments. Redact before stdout.
-          console.warn('[webhook/stripe] constructEvent failed:', redactError(err))
-          outcome = 'invalid_signature'
-          await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
-          return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-        }
-      } else {
-        // Fallback — manual HMAC
-        if (!verifyStripeSignature(rawBody, sig, webhookSecret)) {
-          console.warn('[webhook/stripe] Invalid webhook signature')
-          outcome = 'invalid_signature'
-          await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
-          return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-        }
-        event = JSON.parse(rawBody) as Stripe.Event
+        return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
       }
     } else {
-      console.warn(
-        '[webhook/stripe] STRIPE_WEBHOOK_SECRET not set — skipping signature validation. ' +
-        'Set this env var in production.'
-      )
+      // Fallback — manual HMAC
+      if (!verifyStripeSignature(rawBody, sig, webhookSecret)) {
+        console.warn('[webhook/stripe] Invalid webhook signature')
+        outcome = 'invalid_signature'
+        await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
+        return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+      }
       event = JSON.parse(rawBody) as Stripe.Event
     }
 

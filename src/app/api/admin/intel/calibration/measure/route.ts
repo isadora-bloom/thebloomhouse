@@ -23,6 +23,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { measureOutcomes } from '@/lib/services/calibration/measure-outcomes'
 import { runCalibrationSweep } from '@/lib/services/calibration/sweep'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 300
 
@@ -41,8 +42,7 @@ export async function POST(req: NextRequest) {
     body = {}
   }
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string | null = null
 

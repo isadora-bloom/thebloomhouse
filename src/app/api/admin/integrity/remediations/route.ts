@@ -20,6 +20,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { isSupportedInvariantId } from '@/lib/services/data-integrity/remediation'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
@@ -28,7 +29,7 @@ export async function GET(req: NextRequest) {
   const limitParam = url.searchParams.get('limit')
   const limit = Math.min(200, Math.max(1, Number.parseInt(limitParam ?? '50', 10) || 50))
 
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   let venueId: string | null = null
   if (cronAuth) {
     if (!requestedVenueId) return badRequest('CRON_SECRET path requires venueId')

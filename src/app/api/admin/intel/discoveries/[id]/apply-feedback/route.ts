@@ -31,6 +31,7 @@ import {
   notFound,
 } from '@/lib/api/auth-helpers'
 import { applyDiscoveryFeedback } from '@/lib/services/intel/discovery/feedback-loop'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // Feedback writes are cheap (DB writes only — no LLM calls). 60s ceiling
 // is plenty.
@@ -48,8 +49,7 @@ interface AuthContext {
 async function resolveAuth(
   req: NextRequest,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     return { ctx: { isCron: true, authVenueId: null } }
   }

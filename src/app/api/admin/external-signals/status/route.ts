@@ -20,6 +20,7 @@ import {
   assertCanAccessVenue,
 } from '@/lib/api/auth-helpers'
 import { checkExternalSignalHealth } from '@/lib/services/external-signals-config/health-check'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 30
 
@@ -27,8 +28,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const venueIdParam = url.searchParams.get('venueId')
 
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
 
   let venueId: string
   if (cronAuth) {

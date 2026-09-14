@@ -39,6 +39,7 @@ import {
   HYPOTHESIS_VALIDATOR_PROMPT_VERSION,
 } from '@/lib/services/intel/validation/run-validation'
 import { enqueueHypothesisValidation } from '@/lib/services/intel/validation/enqueue'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // Two Sonnet calls + a query — comfortably inside 300s. Mirrors the
 // 7A run endpoint timing budget.
@@ -58,8 +59,7 @@ interface AuthContext {
 async function resolveAuth(
   req: NextRequest,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     return { ctx: { isCron: true, authVenueId: null } }
   }

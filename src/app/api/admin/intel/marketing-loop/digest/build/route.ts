@@ -24,6 +24,7 @@ import {
   notFound,
 } from '@/lib/api/auth-helpers'
 import { buildWeeklyDigest } from '@/lib/services/marketing-spend/loop'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // Sonnet call; pad for slow LLM responses.
 export const maxDuration = 300
@@ -43,8 +44,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: AuthContext } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!body.venueId || typeof body.venueId !== 'string') {
       return badRequest('CRON_SECRET path requires venueId in body')

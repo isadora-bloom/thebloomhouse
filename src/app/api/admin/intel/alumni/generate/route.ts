@@ -27,6 +27,7 @@ import {
   generateAlumniCohorts,
   ALUMNI_COHORT_PROMPT_VERSION,
 } from '@/lib/services/intel/alumni/generate'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 300
 
@@ -38,7 +39,7 @@ async function resolveAuth(
   req: NextRequest,
   venueId: string | null,
 ): Promise<{ venueId: string } | NextResponse> {
-  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     if (!venueId) return badRequest('CRON_SECRET path requires venueId')
     return { venueId }

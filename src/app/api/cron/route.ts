@@ -3381,9 +3381,11 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Tier-C #126 two-tier cron auth. The destructive secondary kicks in
-  // for the merge / prune / outbound jobs when CRON_SECRET_DESTRUCTIVE
-  // is configured; otherwise behaves identically to single-secret.
+  // Tier-C #126 two-tier cron auth. The destructive secondary applies to
+  // the merge / prune / outbound jobs in DESTRUCTIVE_JOBS. S2
+  // (2026-09-14): in production those jobs now answer 503 while
+  // CRON_SECRET_DESTRUCTIVE is unset, rather than falling back to
+  // single-secret behaviour. Outside production they run with a warning.
   const { verifyCronAuth } = await import('@/lib/cron-auth')
   const authResult = verifyCronAuth(request, { jobName: job })
   if (!authResult.ok) {

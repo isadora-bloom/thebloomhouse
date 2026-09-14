@@ -49,11 +49,12 @@ import { recordSpend } from '../ingest'
 
 /**
  * The anti-forgery state token on the authorise round trip is
- * provider-neutral: an HMAC of venue id, a nonce and a timestamp, signed
- * with CRON_SECRET and good for ten minutes. It was written for Google
- * Ads first and still lives in that module. Re-exported here under a
- * neutral name rather than copied, because two implementations of one
- * CSRF check is one more than anyone can keep correct.
+ * provider-neutral: an HMAC of venue id, user id, a nonce and a timestamp,
+ * signed with STATE_SIGNING_SECRET and good for ten minutes. It was
+ * written for Google Ads first and still lives in that module, which now
+ * wraps the shared signer at integrations/oauth-state.ts. Re-exported here
+ * under a neutral name rather than copied, because two implementations of
+ * one CSRF check is one more than anyone can keep correct.
  */
 export {
   mintOauthState as mintAdOauthState,

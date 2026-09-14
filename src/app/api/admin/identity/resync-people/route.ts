@@ -35,18 +35,13 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { syncProfileToPeople } from '@/lib/services/identity/profile-to-people-sync'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
   // ---- Auth ----
-  const authHeader = req.headers.get('authorization')
-  const cronSecret = process.env.CRON_SECRET
-  const isCron = !!(
-    authHeader &&
-    cronSecret &&
-    authHeader === `Bearer ${cronSecret}`
-  )
+  const isCron = verifyCronAuth(req).ok
 
   let venueId: string | null = null
   if (!isCron) {

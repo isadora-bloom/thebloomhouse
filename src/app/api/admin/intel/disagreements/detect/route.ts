@@ -25,6 +25,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { detectDisagreements } from '@/lib/services/disagreement/detect'
 import { narrateDisagreements } from '@/lib/services/disagreement/narrate'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 export const maxDuration = 300
 
@@ -47,8 +48,7 @@ async function resolveAuth(
   req: NextRequest,
   body: PostBody,
 ): Promise<{ ctx: Ctx } | NextResponse> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   const narrate = body.narrate === true
   const limit =
     typeof body.limit === 'number' && body.limit > 0 ? Math.min(500, body.limit) : 100

@@ -12,9 +12,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createHmac } from 'crypto'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { ZOOM_SCOPES } from '@/lib/services/ingestion/zoom'
+import {
+  isOAuthStateConfigured,
+  mintOAuthState,
+} from '@/lib/services/integrations/oauth-state'
 
 const ZOOM_OAUTH_AUTHORIZE = 'https://zoom.us/oauth/authorize'
 
@@ -32,32 +35,26 @@ function getRedirectUri(request: NextRequest): string {
   return `${origin}/api/auth/zoom/callback`
 }
 
-function getStateSecret(): string {
-  // Reuse CRON_SECRET if available; fall back to NEXTAUTH_SECRET, then to a
-  // dev-only constant. Either of the env vars is fine — we only need a
-  // stable per-deployment secret.
-  return (
-    process.env.ZOOM_STATE_SECRET ||
-    process.env.CRON_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    'bloom-zoom-state-dev-secret'
-  )
-}
-
 /**
- * Build a state string of the form `<payload-b64url>.<sig-b64url>` where
- * payload is JSON({ venueId, userId, returnTo, ts }) signed with HMAC-SHA256.
+ * Build the signed state. S2 (2026-09-14 security audit): this used to
+ * pick its key from ZOOM_STATE_SECRET → CRON_SECRET → NEXTAUTH_SECRET →
+ * the literal 'bloom-zoom-state-dev-secret', which is in the repository.
+ * A deploy missing all three env vars signed every Zoom state with a
+ * public string. It now goes through the shared signer, which uses
+ * STATE_SIGNING_SECRET and throws rather than falling back, and which
+ * adds a single-use nonce.
  */
 export function buildSignedState(payload: {
   venueId: string
   userId: string
   returnTo: string
-  ts: number
 }): string {
-  const json = JSON.stringify(payload)
-  const payloadB64 = Buffer.from(json, 'utf-8').toString('base64url')
-  const sig = createHmac('sha256', getStateSecret()).update(payloadB64).digest('base64url')
-  return `${payloadB64}.${sig}`
+  return mintOAuthState({
+    provider: 'zoom',
+    venueId: payload.venueId,
+    userId: payload.userId,
+    returnTo: payload.returnTo,
+  })
 }
 
 export async function GET(request: NextRequest) {
@@ -82,12 +79,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(errorUrl)
   }
 
+  if (!isOAuthStateConfigured()) {
+    const errorUrl = new URL(returnTo, request.url)
+    errorUrl.searchParams.set('zoom', 'error')
+    errorUrl.searchParams.set('reason', 'state_signing_not_configured')
+    return NextResponse.redirect(errorUrl)
+  }
+
   const redirectUri = getRedirectUri(request)
   const state = buildSignedState({
     venueId: auth.venueId,
     userId: auth.userId,
     returnTo,
-    ts: Date.now(),
   })
 
   const authorizeUrl = new URL(ZOOM_OAUTH_AUTHORIZE)

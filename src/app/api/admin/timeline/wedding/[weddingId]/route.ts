@@ -34,6 +34,7 @@ import {
   buildCoupleTimeline,
   type TimelineEventKind,
 } from '@/lib/services/timeline/build-timeline'
+import { verifyCronAuth } from '@/lib/cron-auth'
 
 // One timeline is a bunch of parallel reads — cap at 30s to be safe for
 // large couples on slow connections.
@@ -64,8 +65,7 @@ async function resolveAuth(
   req: NextRequest,
   weddingId: string,
 ): Promise<NextResponse | { venueId: string }> {
-  const cronAuth =
-    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  const cronAuth = verifyCronAuth(req).ok
   if (cronAuth) {
     const supabase = createServiceClient()
     const { data: wedding } = await supabase

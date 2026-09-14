@@ -5,7 +5,7 @@
  * Meta Messaging API" row. Shape copied from google-ads-oauth.ts, which
  * is the repo's worked example of an env-gated OAuth connector that
  * refuses to half-ship: a `read*Env()` that names what is missing, an
- * HMAC state token signed with CRON_SECRET, a token exchange, and a
+ * HMAC state token signed with STATE_SIGNING_SECRET, a token exchange, and a
  * connection row nobody but the service role can read the secret from.
  *
  * WHAT THIS MODULE OWNS
@@ -48,7 +48,8 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { createHmac, randomUUID, timingSafeEqual } from 'crypto'
+import { createHmac, timingSafeEqual } from 'crypto'
+import { mintOAuthState, verifyOAuthState } from './oauth-state'
 
 // ---------------------------------------------------------------------------
 // Config
@@ -179,47 +180,22 @@ export function verifyMetaSignature(
 // OAuth state (anti-CSRF for the roundtrip)
 // ---------------------------------------------------------------------------
 //
-// Same shape as google-ads-oauth.ts: no table for transient state, an
-// HMAC over `${venueId}:${timestamp}:${nonce}` keyed on CRON_SECRET,
-// base64url encoded, valid for ten minutes.
+// S2 (2026-09-14 security audit). Was its own HMAC over
+// `${venueId}:${timestamp}:${nonce}` keyed on CRON_SECRET — the cron and
+// admin-ops bearer token — with no user binding and no single-use
+// marker. Delegates now to ./oauth-state.ts: STATE_SIGNING_SECRET, the
+// user id in the payload, the nonce consumed on first verify.
 
-const STATE_TTL_MS = 10 * 60 * 1000
-
-export function mintInstagramState(venueId: string): string {
-  const secret = process.env.CRON_SECRET ?? ''
-  if (!secret) throw new Error('CRON_SECRET missing — cannot sign OAuth state')
-  const payload = `${venueId}:${Date.now()}:${randomUUID()}`
-  const signature = createHmac('sha256', secret).update(payload).digest('hex')
-  return Buffer.from(`${payload}:${signature}`).toString('base64url')
+export function mintInstagramState(venueId: string, userId: string): string {
+  return mintOAuthState({ provider: 'instagram', venueId, userId })
 }
 
 export function verifyInstagramState(
   state: string,
-): { ok: true; venueId: string } | { ok: false; reason: string } {
-  const secret = process.env.CRON_SECRET ?? ''
-  if (!secret) return { ok: false, reason: 'CRON_SECRET missing' }
-  let decoded: string
-  try {
-    decoded = Buffer.from(state, 'base64url').toString('utf-8')
-  } catch {
-    return { ok: false, reason: 'invalid encoding' }
-  }
-  const parts = decoded.split(':')
-  if (parts.length < 4) return { ok: false, reason: 'malformed state' }
-  const signature = parts.pop() as string
-  const payload = parts.join(':')
-  const expected = createHmac('sha256', secret).update(payload).digest('hex')
-  const sigBuf = Buffer.from(signature, 'hex')
-  const expBuf = Buffer.from(expected, 'hex')
-  if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
-    return { ok: false, reason: 'signature mismatch' }
-  }
-  const [venueId, tsStr] = parts
-  const ts = Number(tsStr)
-  if (!Number.isFinite(ts) || Date.now() - ts > STATE_TTL_MS) {
-    return { ok: false, reason: 'state expired' }
-  }
-  return { ok: true, venueId }
+): { ok: true; venueId: string; userId: string } | { ok: false; reason: string } {
+  const result = verifyOAuthState(state, 'instagram')
+  if (!result.ok) return { ok: false, reason: result.reason }
+  return { ok: true, venueId: result.payload.venueId, userId: result.payload.userId }
 }
 
 // ---------------------------------------------------------------------------
