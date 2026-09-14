@@ -16,6 +16,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { createHmac } from 'crypto'
 
+// The route imports its dependencies lazily, so the first test in a loaded
+// full-suite run can spend most of the default five seconds on module load
+// (seen 2026-09-14: 6.6s and 5.4s). Twenty seconds still fails a hang.
+vi.setConfig({ testTimeout: 20_000 })
+
 const createServiceClientMock = vi.fn(() => {
   throw new Error('createServiceClient must not be called without a verified signature')
 })
