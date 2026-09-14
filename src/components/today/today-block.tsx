@@ -96,6 +96,21 @@ export function TodayBlockCard({ block }: { block: TodayBlock }) {
           {block.hidden} more not shown here, so the list stays short enough to work through.
         </p>
       )}
+
+      {/* W52: the way out of the block. Every one of these four lists was
+          a dead end once you had read it — the row actions open one
+          couple, nothing opened the list behind the block. Shown even
+          when the block is empty, because that is exactly when somebody
+          wants the wider view. */}
+      <div className="px-4 sm:px-5 py-3 border-t border-border">
+        <Link
+          href={block.deeper.href}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-sage-700 hover:text-sage-900"
+        >
+          {block.deeper.label}
+          <ArrowRight className="w-3.5 h-3.5" aria-hidden />
+        </Link>
+      </div>
     </section>
   )
 }

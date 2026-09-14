@@ -60,6 +60,16 @@ export interface TodayBlock {
   hidden: number
   /** Warm, specific copy for when `count` is 0. */
   empty: string
+  /**
+   * Where to go for the deeper answer this block summarises. W52: /today
+   * is four short lists, and every one of them was a dead end once you
+   * had read it — the row actions go to one couple, nothing went to the
+   * list behind the block. A link, not a computation: the destination
+   * page does its own reading and this surface still derives nothing.
+   * Rendered whether or not the block has rows, because an empty block is
+   * exactly when an owner wants to check the wider view.
+   */
+  deeper: { label: string; href: string }
 }
 
 export interface TodayPulseRow {
@@ -212,6 +222,38 @@ export function openCoupleAction(coupleId: string): TodayRow['action'] {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Deeper answers (W52)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The question each block is the short answer to, pre-filled into Ask
+ * your data. `/intel/nlq` reads `?prompt=` and drops the text into the
+ * box without sending it, so the coordinator can edit before asking.
+ * Written as a coordinator would ask it out loud, not as a query.
+ */
+export function askYourDataHref(question: string): string {
+  return `/intel/nlq?prompt=${encodeURIComponent(question)}`
+}
+
+/** Where each block's deeper answer lives. One destination per block, no
+ *  two the same, so every block is a door rather than a dead end. */
+export const BLOCK_DEEPER: Record<TodayBlockKey, { label: string; href: string }> = {
+  // The full lead list, unfiltered and sortable, rather than today's six.
+  'needs-reply': { label: 'See every lead', href: '/agent/leads' },
+  // The pipeline is where a drifting couple's stage is visible and can be
+  // moved, which is the thing you do about one.
+  'going-quiet': { label: 'Open the pipeline', href: '/agent/pipeline' },
+  // The tours page holds the diary beyond this week, plus outcomes.
+  tours: { label: 'See all upcoming tours', href: '/intel/tours' },
+  // The block names who looks ready; the owner's next question is always
+  // whether that is a good month or a bad one.
+  'ready-to-book': {
+    label: 'Ask how the month is going',
+    href: askYourDataHref('How is this month going compared with last month?'),
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Briefing
 // ─────────────────────────────────────────────────────────────────────
 
@@ -299,6 +341,7 @@ export function buildTodayViewModel(input: TodayInputs): TodayViewModel {
         action: openThreadAction(item),
       })),
       empty: 'Nothing is waiting on you. Everyone who wrote in has had an answer.',
+      deeper: BLOCK_DEEPER['needs-reply'],
     },
     {
       key: 'going-quiet',
@@ -315,6 +358,7 @@ export function buildTodayViewModel(input: TodayInputs): TodayViewModel {
         action: openCoupleAction(item.id),
       })),
       empty: 'Nobody is drifting. Everyone you are talking to has been in touch recently.',
+      deeper: BLOCK_DEEPER['going-quiet'],
     },
     {
       key: 'tours',
@@ -330,6 +374,7 @@ export function buildTodayViewModel(input: TodayInputs): TodayViewModel {
         action: openCoupleAction(tour.coupleId),
       })),
       empty: toursEmptyCopy(daily.nextTourAt, timeZone),
+      deeper: BLOCK_DEEPER.tours,
     },
     {
       key: 'ready-to-book',
@@ -347,6 +392,7 @@ export function buildTodayViewModel(input: TodayInputs): TodayViewModel {
       })),
       empty:
         'Nobody is standing out this week. That usually means it is quiet, not that something is wrong.',
+      deeper: BLOCK_DEEPER['ready-to-book'],
     },
   ]
 

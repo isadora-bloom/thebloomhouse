@@ -21,6 +21,12 @@ import {
   X as XIcon,
 } from 'lucide-react'
 import { CouplePhotoPrompt } from '@/components/couple/couple-photo-prompt'
+import {
+  CouplePortalNudgeCard,
+  WeddingDayWeatherCard,
+} from '@/components/couple/day-outlook-cards'
+import type { DayOutlookCard } from '@/lib/services/couple-portal/day-outlook'
+import type { CoupleNudge } from '@/lib/intel/adapters/couple-nudge'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 
 /**
@@ -289,6 +295,14 @@ export default function CoupleDashboard() {
   const SLUG = slug
   const WEDDING_ID = weddingId
   const [data, setData] = useState<DashboardData | null>(null)
+  // W52: the wedding-day weather card and the single planning nudge.
+  // Loaded separately from the dashboard's own fetch and deliberately
+  // never awaited by it — neither card is worth delaying the page for,
+  // and a failure in either leaves the page exactly as it was.
+  const [outlook, setOutlook] = useState<{
+    weather: DayOutlookCard | null
+    nudge: CoupleNudge | null
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showPhotoPrompt, setShowPhotoPrompt] = useState(false)
   const [dismissedAlerts, setDismissedAlerts] = useState<AlertId[]>([])
@@ -349,6 +363,28 @@ export default function CoupleDashboard() {
     sessionStorage.setItem('bloom_demo_couple_photo_prompted', '1')
     setShowPhotoPrompt(true)
   }, [data])
+
+  // W52: wedding-day weather + the one planning nudge. Both are decided
+  // server-side (the forecast, the venue's own climate record, and the
+  // aggregate that gates the nudge are none of them things a browser
+  // should be able to ask for), so this is one small GET and the cards
+  // render nothing at all until it answers. A failure is swallowed on
+  // purpose: a missing decoration must not put an error on a couple's
+  // home page.
+  useEffect(() => {
+    if (contextLoading || !WEDDING_ID) return
+    let cancelled = false
+    fetch('/api/couple/day-outlook')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j) return
+        setOutlook({ weather: j.weather ?? null, nudge: j.nudge ?? null })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [contextLoading, WEDDING_ID])
 
   useEffect(() => {
     if (contextLoading || !WEDDING_ID) return
@@ -829,6 +865,16 @@ export default function CoupleDashboard() {
               your coordinator.
             </p>
           </div>
+        </div>
+      )}
+
+      {/* W52: the wedding-day outlook and the one nudge. Both render
+          nothing when there is nothing honest to say, so a quiet week
+          leaves this space empty rather than filling it. */}
+      {(outlook?.weather || outlook?.nudge) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <WeddingDayWeatherCard card={outlook.weather} />
+          <CouplePortalNudgeCard nudge={outlook.nudge} base={`/couple/${SLUG}`} />
         </div>
       )}
 

@@ -29,7 +29,7 @@ import {
   Heart, CalendarRange, Upload, MessagesSquare, MessageCircleQuestion,
   Printer, MapPinIcon as TableMap,
   // Intel
-  LayoutDashboard, Lightbulb, AlertTriangle,
+  LayoutDashboard, Lightbulb, AlertTriangle, CalendarCheck,
   TrendingUp, Sparkles as TrendsIcon, Star,
   MapPinIcon, XCircle, Share2, LineChart,
   MessageSquareText, GitMerge, UserCheck, Send, Briefcase, Camera,
@@ -227,7 +227,8 @@ export const MODE_WEDDINGS: ModeConfig = {
 // /sage/voice-dna, /intel/tours, /intel/lost-deals,
 // /intel/social, /intel/health, /intel/marketing-spend (Wave 5 W39),
 // /intel/clients, /intel/clients/[id], /intel/matching,
-// /intel/annotations, /intel/team-compare, /intel/macro-correlations (T5-θ.1)
+// /intel/annotations, /intel/team-compare, /intel/macro-correlations (T5-θ.1),
+// /intel/monthly-story (Wave 7 W52 — the owner's one screen)
 //
 // No nav entry, but reachable by clicking through a kept page (Wave 5 W39
 // PLATFORM-PAGES-AUDIT.md — verdict "keep"): /intel/channels + /channels/
@@ -262,6 +263,12 @@ export const MODE_INTEL: ModeConfig = {
       subtitle: 'Pulse + alerts',
       items: [
         { label: 'Dashboard', href: '/intel/dashboard', icon: LayoutDashboard, daily: true },
+        // Wave 7 W52 (2026-09-14): the owner's screen rather than the
+        // coordinator's. Response time, tour days that book, channel
+        // return and the review direction, all off the canonical layer so
+        // each number matches the page it links to. Nav entry ships with
+        // the page per the wave 5 standard — no orphans.
+        { label: 'Monthly story', href: '/intel/monthly-story', icon: CalendarCheck },
         // The old post-login dashboard, kept whole when /today took over
         // the landing slot. Not flagged `daily` — it is the deeper read,
         // not the morning one.
