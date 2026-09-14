@@ -46,6 +46,17 @@ const UPDATE = process.argv.includes('--update')    // snapshot current gap coun
 const ALLOWLIST = new Map([
   // ['platform_benchmarks', 'cross-venue aggregate by design (min cohort >= 10) — not venue-isolated'],
   // ['venues', 'the tenant registry itself'],
+  [
+    'user_profiles',
+    'False positive, verified against the live policies 2026-09-14 (S3 security '
+      + 'remediation). The heuristic looks for the string venue_id inside a policy '
+      + 'body and user_profiles has none, because its policies key on the row being '
+      + 'YOURS: `id = auth.uid()` plus a super-admin bypass (migrations 055 / 057 / '
+      + '062, written that way to break the RLS recursion a venue_id predicate '
+      + 'caused). Row-per-user is strictly narrower than row-per-venue, so adding a '
+      + 'venue_id predicate to satisfy the scan would widen access, not narrow it. '
+      + 'Allowlisted so the ratchet reads 0 and the next real gap is visible.',
+  ],
 ])
 
 if (!existsSync(MIG_DIR)) {
