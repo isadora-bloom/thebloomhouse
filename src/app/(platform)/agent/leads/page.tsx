@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { personFullName, pickCanonicalPeople } from '@/lib/utils/couple-name'
@@ -36,6 +37,7 @@ import {
   Clock,
   AlertTriangle,
   Search,
+  Upload,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -767,8 +769,21 @@ export default function LeadsPage() {
             See every lead ranked by engagement heat score — from hot prospects ready to book down to cold leads that need a nudge. Click any lead to view their full profile and history.
           </p>
         </div>
-        {/* T4-D Essentials slider — controls density on this surface. */}
-        <EssentialsSlider surface="/agent/leads" />
+        <div className="flex items-center gap-3 shrink-0">
+          {/* W42: a coordinator back from the weekend with a Knot or
+              HoneyBook export had no way in from this page — the only
+              upload entry point was buried under onboarding. Same form,
+              same route, one click away. */}
+          <Link
+            href="/admin/imports/upload"
+            className="inline-flex items-center gap-1.5 text-sm text-sage-600 hover:text-sage-900"
+          >
+            <Upload className="w-4 h-4" aria-hidden />
+            Import a file
+          </Link>
+          {/* T4-D Essentials slider — controls density on this surface. */}
+          <EssentialsSlider surface="/agent/leads" />
+        </div>
       </div>
 
       {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity

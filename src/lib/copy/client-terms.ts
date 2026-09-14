@@ -151,6 +151,15 @@ export const CLIENT_TERMS: Readonly<Record<string, string>> = {
   pre_zero: 'discovery',
   'post zero': 'known couple',
   post_zero: 'known couple',
+
+  // — sending (W42, the "since you were last here" strip) —
+  draft: 'reply',
+  drafts: 'replies',
+  auto_send: 'sent automatically',
+  auto_sent: 'sent automatically',
+  'auto send': 'sent automatically',
+  auto_send_pending: 'about to send',
+  auto_send_failed: "didn't get sent",
 }
 
 /** Normalise a term for lookup: lower case, separators flattened. */
@@ -442,7 +451,7 @@ export const DEFAULT_TIME_ZONE = 'America/New_York'
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-interface ZonedParts {
+export interface ZonedParts {
   year: number
   /** 1-12. */
   month: number
@@ -453,8 +462,12 @@ interface ZonedParts {
 }
 
 /** Split an instant into calendar parts in a named timezone. Returns null
- *  for an unparseable timestamp or an unknown zone. */
-function zonedParts(iso: string, timeZone: string): ZonedParts | null {
+ *  for an unparseable timestamp or an unknown zone. Exported (W42) for
+ *  callers that need calendar-in-timezone arithmetic beyond formatting —
+ *  e.g. the /today "since you were last here" window, which has to find
+ *  "Friday 6pm in the venue's own timezone" rather than just print a
+ *  date that is already known. */
+export function zonedParts(iso: string, timeZone: string): ZonedParts | null {
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return null
   let parts: Intl.DateTimeFormatPart[]
@@ -483,8 +496,9 @@ function zonedParts(iso: string, timeZone: string): ZonedParts | null {
 }
 
 /** Weekday index for a calendar date, computed rather than formatted so
- *  it cannot drift with the locale data. */
-function weekdayIndex(p: ZonedParts): number {
+ *  it cannot drift with the locale data. 0 = Sunday, 6 = Saturday.
+ *  Exported (W42) alongside `zonedParts` for the same reason. */
+export function weekdayIndex(p: ZonedParts): number {
   return new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay()
 }
 
