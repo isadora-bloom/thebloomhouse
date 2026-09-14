@@ -262,6 +262,13 @@ jobs:
       - name: RLS venue-isolation guard — venue_id tables need RLS + policy (G17)
         run: node scripts/check-rls-on-venue-id.mjs
 
+      # A bucket is not a tenant boundary. Migrations 028 / 084 / 097 / 270 each
+      # shipped storage.objects policies whose whole predicate was the bucket id,
+      # which hands every caller of that role every object in the bucket.
+      # Migration 411 swept them; this stops the next one (S3, 2026-09-14 audit).
+      - name: Storage-policy scoping guard — no storage.objects policy on bucket_id alone
+        run: node scripts/check-storage-policies-scoped.mjs
+
       - name: Plan-trace guard — commits cite a plan §/Phase/mandate (FIX-PLAN §B.2)
         run: node scripts/check-pr-cites-section.mjs
 
