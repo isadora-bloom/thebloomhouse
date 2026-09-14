@@ -33,6 +33,10 @@
  *   8. Asks mergeWeddings to merge a wedding from the other venue and
  *      asserts it refuses before writing anything (W60). That is the one
  *      identity write that could move one venue's rows to another.
+ *   9. Walks the cross-venue benchmark reader (wave 8, W56). It is the
+ *      only reader that queries other venues deliberately, so the walker
+ *      is asserting the opposite thing there: that after reading them, it
+ *      returns no peer id, no peer name and no peer's own numbers.
  *
  * WRITES
  * ------
@@ -916,6 +920,22 @@ async function main(): Promise<void> {
     { name: 'getCohortFunnel', call: (v) => canonical.getCohortFunnel(v) },
     { name: 'getDailyList', call: (v) => canonical.getDailyList(v) },
   ]
+
+  // The benchmark reader (NOVEMBER-PLAN.md wave 8, W56) is the one reader
+  // that queries other venues on purpose, so it is the one most worth
+  // walking here. What the walker should find is nothing: no peer id, no
+  // peer name, no peer's own numbers, only a count, a middle figure and a
+  // middle-half range. A FAIL on this line means the anonymisation broke.
+  // Driven through the injectable pair rather than the service-client
+  // wrapper, so it runs on the guarded read-only client like everything
+  // else here.
+  const { buildVenueBenchmark } = await import('@/lib/services/cohort/benchmark')
+  const { buildBenchmarkView } = await import('@/lib/intel/adapters/benchmark-view')
+  simpleReaders.push({
+    name: 'getBenchmarkView',
+    call: async (v) => buildBenchmarkView(await buildVenueBenchmark(supabase, v)),
+  })
+
   for (const reader of simpleReaders) {
     for (const p of venuePairs) {
       results.push(await runAndCheck(reader.name, p, supabase, () => reader.call(p.venueId)))
