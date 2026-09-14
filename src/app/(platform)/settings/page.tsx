@@ -8,8 +8,9 @@ import { useAiName } from '@/lib/hooks/use-ai-name'
 import {
   Settings, Palette, Type, Save, Eye, Building2, User, Clock, DollarSign,
   Layers, ArrowRight, Plus, Trash2, Image as ImageIcon, X, Plug,
-  Upload, Loader2,
+  Upload, Loader2, Globe, Copy, CheckCircle2, RefreshCw, AlertTriangle,
 } from 'lucide-react'
+import { sendingDomainStatusLabel, sendingDomainStatusBadge } from '@/lib/copy/client-terms'
 
 const supabase = createClient()
 
@@ -1236,6 +1237,11 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
       </section>
 
       {/* ------------------------------------------------------------------ */}
+      {/* Sending domain (W55)                                                */}
+      {/* ------------------------------------------------------------------ */}
+      <SendingDomainSection venueId={scope.venueId} />
+
+      {/* ------------------------------------------------------------------ */}
       {/* Integrations — Calendly                                             */}
       {/* ------------------------------------------------------------------ */}
       <CalendlyIntegrationSection venueId={scope.venueId} />
@@ -1497,6 +1503,271 @@ function CalendlyIntegrationSection({ venueId }: { venueId: string | null | unde
           {testing ? 'Testing...' : 'Test Connection'}
         </button>
       </div>
+    </section>
+  )
+}
+
+/* ================================================================== */
+/* Sending domain — enter a domain, add the DNS records, check status   */
+/* (W55, NOVEMBER-PLAN.md wave 8)                                       */
+/* ================================================================== */
+interface SendingDomainRecord {
+  record: string
+  type: string
+  name: string
+  value: string
+  status: string | null
+}
+
+interface SendingDomainState {
+  domain: string | null
+  fromName: string | null
+  status: string
+  checkedAt: string | null
+  hasResendDomain: boolean
+  records: SendingDomainRecord[]
+}
+
+function SendingDomainSection({ venueId }: { venueId: string | null | undefined }) {
+  const [state, setState] = useState<SendingDomainState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [domainInput, setDomainInput] = useState('')
+  const [fromNameInput, setFromNameInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    if (!venueId) {
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    async function load() {
+      try {
+        const resp = await fetch('/api/settings/sending-domain')
+        const json = (await resp.json()) as SendingDomainState & { error?: string }
+        if (cancelled) return
+        if (!resp.ok) {
+          setMessage({ type: 'error', text: json.error ?? 'Could not load your sending domain.' })
+          return
+        }
+        setState(json)
+        setDomainInput(json.domain ?? '')
+        setFromNameInput(json.fromName ?? '')
+      } catch (err) {
+        if (!cancelled) {
+          setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Could not load your sending domain.' })
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [venueId])
+
+  const handleSave = useCallback(async () => {
+    if (!venueId) return
+    setSaving(true)
+    setMessage(null)
+    try {
+      const resp = await fetch('/api/settings/sending-domain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', domain: domainInput.trim(), fromName: fromNameInput.trim() }),
+      })
+      const json = (await resp.json()) as SendingDomainState & { error?: string }
+      if (!resp.ok) {
+        setMessage({ type: 'error', text: json.error ?? 'Could not save that domain.' })
+        return
+      }
+      setState(json)
+      setMessage({ type: 'success', text: 'Domain added — add the records below at your registrar, then check.' })
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Could not save that domain.' })
+    } finally {
+      setSaving(false)
+    }
+  }, [venueId, domainInput, fromNameInput])
+
+  const handleCheck = useCallback(async () => {
+    if (!venueId) return
+    setChecking(true)
+    setMessage(null)
+    try {
+      const resp = await fetch('/api/settings/sending-domain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'check' }),
+      })
+      const json = (await resp.json()) as SendingDomainState & { error?: string }
+      if (!resp.ok) {
+        setMessage({ type: 'error', text: json.error ?? 'Could not check that domain.' })
+        return
+      }
+      setState(json)
+      setMessage(
+        json.status === 'verified'
+          ? { type: 'success', text: "You're set — new emails will send from your own domain." }
+          : { type: 'success', text: 'Checked. ' + sendingDomainStatusLabel(json.status) },
+      )
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Could not check that domain.' })
+    } finally {
+      setChecking(false)
+    }
+  }, [venueId])
+
+  const handleCopy = useCallback((field: string, value: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(value).catch(() => {})
+    }
+    setCopiedField(field)
+    setTimeout(() => setCopiedField((cur) => (cur === field ? null : cur)), 2000)
+  }, [])
+
+  if (loading) return null
+
+  const status = state?.status ?? 'unverified'
+  const badgeClasses =
+    status === 'verified'
+      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      : status === 'pending'
+        ? 'bg-amber-50 text-amber-700 border-amber-200'
+        : status === 'failed'
+          ? 'bg-red-50 text-red-700 border-red-200'
+          : 'bg-sage-50 text-sage-600 border-sage-200'
+
+  return (
+    <section className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-6">
+      <div className="flex items-center gap-2 mb-2">
+        <Globe className="w-5 h-5 text-sage-500" />
+        <h2 className="font-heading text-xl font-semibold text-sage-900">Sending domain</h2>
+      </div>
+      <p className="text-sage-600 text-sm">
+        By default your emails send from a shared Bloom address. Add your own domain so couples
+        see mail coming straight from you, and so nothing another venue does can affect your
+        delivery.
+      </p>
+
+      <div
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${badgeClasses}`}
+      >
+        {status === 'verified' && <CheckCircle2 className="w-3.5 h-3.5" />}
+        {status === 'failed' && <AlertTriangle className="w-3.5 h-3.5" />}
+        {sendingDomainStatusBadge(status)}
+      </div>
+      <p className="text-xs text-sage-500 -mt-4">{sendingDomainStatusLabel(status)}</p>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <label className="block text-sm font-medium text-sage-700 mb-1">Your domain</label>
+          <input
+            type="text"
+            value={domainInput}
+            onChange={(e) => setDomainInput(e.target.value)}
+            placeholder="yourvenue.com"
+            className={inputClasses}
+          />
+          <p className="text-xs text-sage-500 mt-1">The domain your website and email already live on.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-sage-700 mb-1">Name couples see</label>
+          <input
+            type="text"
+            value={fromNameInput}
+            onChange={(e) => setFromNameInput(e.target.value)}
+            placeholder="Your Venue Name"
+            className={inputClasses}
+          />
+          <p className="text-xs text-sage-500 mt-1">Shows as the sender in their inbox.</p>
+        </div>
+      </div>
+
+      {state && state.records.length > 0 && (
+        <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+          <h3 className="text-sm font-medium text-sage-900 mb-1">Add these records at your registrar</h3>
+          <p className="text-xs text-sage-500 mb-3">
+            Wherever you manage DNS for this domain (GoDaddy, Namecheap, Cloudflare, your host).
+            It can take a few minutes to a few hours to take effect.
+          </p>
+          <div className="space-y-2">
+            {state.records.map((rec, i) => (
+              <div key={`${rec.type}-${rec.name}-${i}`} className="border border-sage-100 rounded-lg p-3 bg-white">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-semibold text-sage-700">{rec.record} · {rec.type}</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-sage-400 shrink-0">Name</span>
+                    <code className="truncate font-mono text-sage-800">{rec.name}</code>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(`name-${i}`, rec.name)}
+                      className="shrink-0 text-sage-400 hover:text-sage-700"
+                      title="Copy"
+                    >
+                      {copiedField === `name-${i}` ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-sage-400 shrink-0">Value</span>
+                    <code className="truncate font-mono text-sage-800">{rec.value}</code>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(`value-${i}`, rec.value)}
+                      className="shrink-0 text-sage-400 hover:text-sage-700"
+                      title="Copy"
+                    >
+                      {copiedField === `value-${i}` ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {message && (
+        <div
+          className={`px-4 py-2 rounded-lg text-sm font-medium ${
+            message.type === 'success'
+              ? 'bg-green-50 text-green-700 border border-green-200'
+              : 'bg-red-50 text-red-700 border border-red-200'
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving || !venueId || !domainInput.trim() || !fromNameInput.trim()}
+          className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2 transition-colors text-sm"
+        >
+          <Save className="w-4 h-4" />
+          {saving ? 'Saving...' : state?.hasResendDomain ? 'Update domain' : 'Add domain'}
+        </button>
+        {state?.hasResendDomain && (
+          <button
+            onClick={handleCheck}
+            disabled={checking}
+            className="flex items-center gap-2 bg-warm-white hover:bg-sage-50 disabled:opacity-50 text-sage-700 border border-sage-300 font-medium rounded-lg px-5 py-2 transition-colors text-sm"
+          >
+            <RefreshCw className={`w-4 h-4 ${checking ? 'animate-spin' : ''}`} />
+            {checking ? 'Checking...' : 'Check now'}
+          </button>
+        )}
+      </div>
+      {state?.checkedAt && (
+        <p className="text-xs text-sage-400">Last checked {new Date(state.checkedAt).toLocaleString()}</p>
+      )}
     </section>
   )
 }

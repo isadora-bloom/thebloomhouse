@@ -35,10 +35,15 @@ import {
  * keeps the used_at bookkeeping honest, and partner 2 gets a link addressed
  * to them rather than one already spent by partner 1.
  *
- * Infrastructure carry-forward: the full envelope address is still
- * Bloom's verified Resend domain (the brand domain is thebloomhouse.AI).
- * Fully custom `from@venue.com` needs each venue to verify their own
- * domain in Resend — tracked as infra work, not a Phase 2 blocker.
+ * Sending domain (W55, NOVEMBER-PLAN.md wave 8): the envelope address
+ * used to be hardcoded to Bloom's own verified Resend domain regardless
+ * of venue — this was the "infrastructure carry-forward" this comment
+ * used to flag as deferred. transport.ts now resolves the From address
+ * per venue: once this venue's own domain reaches
+ * venue_config.sending_domain_status = 'verified' the envelope moves to
+ * the venue's own domain automatically; until then it keeps using the
+ * platform domain with the venue's business name as the display name,
+ * exactly as before (see transport.ts's resolveFrom).
  */
 
 /** How long an invitation is good for. Matches the email copy. */
@@ -189,13 +194,11 @@ export async function POST(request: NextRequest) {
     // like a mail-merge template that wasn't filled out.
     const safeCoupleName = coupleName?.trim() || 'there'
 
-    // Sender display name = the venue. Envelope address stays on Bloom's
-    // verified domain (the RESEND sender for all transactional mail) but
-    // the couple's mail client shows the venue as the From line.
-    const envelopeAddress = process.env.EMAIL_FROM?.match(/<([^>]+)>/)?.[1]
-      || process.env.EMAIL_FROM
-      || 'hello@thebloomhouse.ai'
-    const fromHeader = `${businessName} <${envelopeAddress}>`
+    // Sender display name = the venue's business name, used as the
+    // fromName fallback whenever this venue's own domain isn't verified
+    // yet (transport.ts resolveFrom). Once verified, sending_from_name
+    // from venue_config takes over and the envelope itself moves to the
+    // venue's own domain — see the module doc comment above.
 
     // White-label email body. No references to Bloom anywhere a couple
     // can see.
@@ -302,7 +305,8 @@ export async function POST(request: NextRequest) {
         to: recipient,
         subject,
         html: buildHtml(registerUrl),
-        from: fromHeader,
+        venueId,
+        fromName: businessName,
         replyTo: coordinatorEmail,
       })
 

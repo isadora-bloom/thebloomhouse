@@ -206,10 +206,17 @@ export async function POST(request: NextRequest) {
 </body>
 </html>`
 
+    // venueId: null (W55) — this email is Bloom-platform branded throughout
+    // ("Powered by The Bloom House" footer, orgName in the header, no
+    // venue colours/logo), independent of which venue field the row above
+    // happens to carry. Resolving a venue's own sending domain here would
+    // put "Rixey Manor <hello@rixeymanor.com>" on an email that still says
+    // "The Bloom House" inside it — the platform default is correct.
     const emailResult = await sendEmail({
       to: email,
       subject,
       html: htmlBody,
+      venueId: null,
     })
 
     if (!emailResult.ok) {

@@ -82,11 +82,14 @@ export async function alertFallbackFired(alert: FallbackAlert): Promise<void> {
     ].filter(Boolean)
 
     // disclosure-justified: operator alert email, not couple-facing Sage content
+    // venueId: null (W55) — this is a platform-wide AI-provider outage
+    // alert to Bloom's own ops inbox, not about any one venue.
     await sendEmail({
       to,
       subject,
       html: `<pre style="font:14px/1.5 ui-monospace,monospace">${lines.join('\n')}</pre>`,
       text: lines.join('\n'),
+      venueId: null,
     })
   } catch {
     // Alerting must never break an AI call.
@@ -127,11 +130,13 @@ export async function alertModelStale(
     ]
 
     // disclosure-justified: operator alert email, not couple-facing Sage content
+    // venueId: null (W55) — platform-wide, see alertFallbackFired above.
     await sendEmail({
       to,
       subject: 'Bloom AI model stale: configured model not served by provider',
       html: `<pre style="font:14px/1.5 ui-monospace,monospace">${lines.join('\n')}</pre>`,
       text: lines.join('\n'),
+      venueId: null,
     })
   } catch {
     // Alerting must never throw into a check.

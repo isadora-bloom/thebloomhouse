@@ -622,6 +622,46 @@ export function whenLabel(
   return dayLabel(iso, timeZone)
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Sending domain (W55) — plain words for venue_config.sending_domain_status
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * `venue_config.sending_domain_status` in the words shown on
+ * Settings -> Sending domain. A coordinator never sees the raw enum
+ * value — an unmapped/missing status reads as "not set up yet" rather
+ * than falling through to the database string.
+ */
+export function sendingDomainStatusLabel(status: string | null | undefined): string {
+  switch (status) {
+    case 'verified':
+      return 'Verified — your emails send from your own domain'
+    case 'pending':
+      return 'Checking — this can take a few minutes after you update your DNS'
+    case 'failed':
+      return "Not verified yet — we couldn't find those DNS records"
+    case 'unverified':
+    default:
+      return 'Not set up yet'
+  }
+}
+
+/** Short badge word for the same status — used where space is tight
+ *  (a pill next to the domain field) rather than the full sentence. */
+export function sendingDomainStatusBadge(status: string | null | undefined): string {
+  switch (status) {
+    case 'verified':
+      return 'Verified'
+    case 'pending':
+      return 'Checking'
+    case 'failed':
+      return 'Not verified'
+    case 'unverified':
+    default:
+      return 'Not set up'
+  }
+}
+
 /** Where a message arrived from, in the words on the coordinator's own
  *  invoices. Unmapped channels get title case rather than a raw slug. */
 const CHANNEL_LABEL: Record<string, string> = {

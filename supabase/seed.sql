@@ -2449,3 +2449,33 @@ INSERT INTO external_calendar_events (
 ('Valentine''s Day', 'Largest single-day engagement-proposal anchor of the year. Venue inquiries spike sharply in the 2-4 weeks following.', '2027-02-14', '2027-02-14', 'other', 'us', 0, 'manual', 'cron:external_calendar_refresh'),
 ('Mother''s Day', 'Second Sunday in May. Family-gathering day; engagement-announcement spike.', '2027-05-09', '2027-05-09', 'other', 'us', 0, 'manual', 'cron:external_calendar_refresh')
 ON CONFLICT (geo_scope, title, start_date) WHERE deleted_at IS NULL DO NOTHING;
+
+-- ============================================================================
+-- 61. W55 (NOVEMBER-PLAN.md wave 8): per-venue sending domains
+-- ============================================================================
+-- Demo coverage for both branches of transport.ts's resolveFrom:
+--   - Crestwood Farm: verified. A demo viewer flipping into it should see
+--     "your emails send from your own domain" and the From header on any
+--     transactional send resolving to crestwoodfarm.com.
+--   - Hawthorne Manor: domain added but still pending — shows the DNS
+--     records screen mid-flow, the far more common real-world state for
+--     a venue that just signed up.
+--   The Glass House and Rose Hill Gardens are left at the column default
+--   ('unverified', no domain) — the state every new venue actually starts
+--   in, so the demo shows all three states without extra rows.
+-- ============================================================================
+UPDATE venue_config SET
+  sending_domain = 'crestwoodfarm.com',
+  sending_from_name = 'Crestwood Farm',
+  sending_domain_status = 'verified',
+  resend_domain_id = 'demo-resend-domain-crestwood',
+  sending_domain_checked_at = now()
+WHERE venue_id = '22222222-2222-2222-2222-222222222202';
+
+UPDATE venue_config SET
+  sending_domain = 'hawthornemanor.com',
+  sending_from_name = 'Hawthorne Manor',
+  sending_domain_status = 'pending',
+  resend_domain_id = 'demo-resend-domain-hawthorne',
+  sending_domain_checked_at = now()
+WHERE venue_id = '22222222-2222-2222-2222-222222222201';
