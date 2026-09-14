@@ -25,6 +25,10 @@ function baseModelResponse(overrides: Record<string, unknown> = {}) {
     eventType: null,
     budgetRange: null,
     questions: [],
+    // W50 (wave 7). Stated plans, as distinct from questions. Listed here
+    // because this fixture is the schema's full field list and a gap in it
+    // means the next field lands untested.
+    intentions: [],
     sentiment: 'neutral',
     stressSignals: [],
     excitementSignals: [],

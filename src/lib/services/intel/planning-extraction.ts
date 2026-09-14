@@ -24,6 +24,30 @@ import { callAIJson } from '@/lib/ai/client'
  */
 export const PLANNING_EXTRACTION_PROMPT_VERSION = 'planning-extraction.prompt.v1.0'
 
+/**
+ * Categories the `planning_notes` CHECK constraint accepts (migration 015
+ * widened the original four). The AI is asked for one of these and is
+ * mostly obedient, but an invented category fails the INSERT with 23514,
+ * and `savePlanningNotes` logs that and carries on — so the note is lost
+ * quietly. Anything unrecognised falls back to 'note' instead.
+ */
+const VALID_CATEGORIES: ReadonlySet<string> = new Set<PlanningCategory>([
+  'vendor',
+  'guest_count',
+  'decor',
+  'checklist',
+  'cost',
+  'date',
+  'policy',
+  'note',
+])
+
+function coerceCategory(value: unknown): PlanningCategory {
+  return typeof value === 'string' && VALID_CATEGORIES.has(value)
+    ? (value as PlanningCategory)
+    : 'note'
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -43,6 +67,15 @@ export interface PlanningNote {
   content: string
   source_message: string
   confidence?: number
+  /**
+   * The inbound interaction this note came out of, when the source was a
+   * coordinator-venue conversation rather than a Sage chat message or a
+   * contract. Migration 406 added the column. Null for the two older
+   * writers, which have no interaction to point at.
+   */
+  source_interaction_id?: string | null
+  /** 'email' | 'sms' | 'instagram' | ... Null for the older writers. */
+  source_channel?: string | null
 }
 
 /** Shape returned by the AI extraction prompt. */
@@ -222,9 +255,11 @@ export async function savePlanningNotes(
   const rows = newNotes.map((note) => ({
     venue_id: venueId,
     wedding_id: weddingId,
-    category: note.category,
+    category: coerceCategory(note.category),
     content: note.content,
     source_message: note.source_message,
+    source_interaction_id: note.source_interaction_id ?? null,
+    source_channel: note.source_channel ?? null,
     status: 'pending',
   }))
 
@@ -327,6 +362,93 @@ export async function extractAndSaveAINotes(
   const aiNotes = await extractPlanningNotesAI(message)
   if (aiNotes.length === 0) return
   await savePlanningNotes(venueId, weddingId, aiNotes)
+}
+
+// ---------------------------------------------------------------------------
+// Coordinator-venue conversations
+// ---------------------------------------------------------------------------
+
+/**
+ * True when this interaction has already produced planning notes.
+ *
+ * The replay guard. Gmail backfills, the intent drain and the operator
+ * reprocess scripts all run the same interaction through the pipeline
+ * again, and without this the same sentence lands as a new note every
+ * time. The 24-hour content dedup in `savePlanningNotes` does not cover
+ * it: a replay six weeks later falls outside the window.
+ *
+ * Exported so callers can decline to spend a model call at all when the
+ * answer is already on the table.
+ */
+export async function planningNotesExistForInteraction(
+  venueId: string,
+  interactionId: string,
+): Promise<boolean> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('planning_notes')
+    .select('id')
+    .eq('venue_id', venueId)
+    .eq('source_interaction_id', interactionId)
+    .limit(1)
+
+  // A failed read is not evidence of absence. Say "yes, they exist" so
+  // the caller skips: a missed extraction is recoverable on the next
+  // sweep, a duplicated one needs a human to clean up.
+  if (error) return true
+
+  return (data?.length ?? 0) > 0
+}
+
+/**
+ * Planning notes from a coordinator-venue conversation.
+ *
+ * Until now `planning_notes` could only be fed by a couple's Sage chat
+ * message or a contract PDF. But couples do not mostly talk to the
+ * chatbot; they email the coordinator. "We're having a groom's cake"
+ * arrives in a reply to a seating question, gets read, and is never
+ * written down anywhere the day-of view can see it.
+ *
+ * This is the same AI layer the chatbot path uses, pointed at the body of
+ * an inbound interaction. Category defaults to 'note' when nothing better
+ * matches, which is most of the time — these are loose details, not
+ * vendor bookings.
+ *
+ * Venue-scoped and idempotent per interaction id. Never throws: the
+ * caller is a fire-and-forget hook on the inbound hot path and a failure
+ * here must not cost the couple their reply.
+ */
+export async function extractVenueConversationNotes(args: {
+  venueId: string
+  weddingId: string
+  interactionId: string
+  channel: string
+  text: string
+  /** Extra notes to save alongside the AI ones, already categorised. */
+  additionalNotes?: PlanningNote[]
+}): Promise<{ saved: number; skipped: 'already_extracted' | 'empty' | null }> {
+  const { venueId, weddingId, interactionId, channel, text } = args
+
+  if (!text || text.trim().length < 10) return { saved: 0, skipped: 'empty' }
+
+  if (await planningNotesExistForInteraction(venueId, interactionId)) {
+    return { saved: 0, skipped: 'already_extracted' }
+  }
+
+  const aiNotes = await extractPlanningNotesAI(text)
+  const extra = args.additionalNotes ?? []
+  const all = [...aiNotes, ...extra]
+  if (all.length === 0) return { saved: 0, skipped: null }
+
+  const stamped = all.map((n) => ({
+    ...n,
+    category: coerceCategory(n.category),
+    source_interaction_id: interactionId,
+    source_channel: channel,
+  }))
+
+  await savePlanningNotes(venueId, weddingId, stamped)
+  return { saved: stamped.length, skipped: null }
 }
 
 // ---------------------------------------------------------------------------

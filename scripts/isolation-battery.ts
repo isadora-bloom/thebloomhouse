@@ -586,6 +586,162 @@ async function checkScopeHelper(
   return out
 }
 
+/**
+ * W50's writers and their reader.
+ *
+ * Wave 7 added two writers that land couple-facing content: planning
+ * notes lifted out of coordinator-venue conversations
+ * (`services/intel/planning-extraction.ts`), and the nightly commitment
+ * reconciliation (`services/commitments/reconcile.ts`). Both are
+ * venue-scoped by argument rather than by RLS, because both run under
+ * the service key, which means a missing `.eq('venue_id', …)` would not
+ * be caught by a policy. That is exactly the class this battery exists
+ * for.
+ *
+ * Three checks, all read-only:
+ *
+ *   1. Every stored `commitment_reconciliation` row for venue A carries
+ *      venue A. A row with the wrong venue is a leak already written.
+ *
+ *   2. `gatherCommitments` — the reader both the sweep and the queue sit
+ *      on — returns nothing when handed venue A with a wedding that
+ *      belongs to venue B. This is the check that proves the filter
+ *      bites rather than merely being present in the source.
+ *
+ *   3. Every planning note written from a conversation
+ *      (`source_interaction_id IS NOT NULL`) for venue A belongs to a
+ *      wedding of venue A.
+ */
+async function checkCommitmentWriters(
+  venueA: string,
+  venueB: string,
+  supabase: SupabaseClient,
+): Promise<SurfaceResult[]> {
+  const out: SurfaceResult[] = []
+
+  // 1. Stored reconciliation rows carry the venue that owns them.
+  for (const p of [
+    { venue: 'A' as const, venueId: venueA, other: venueB },
+    { venue: 'B' as const, venueId: venueB, other: venueA },
+  ]) {
+    const { data, error } = await supabase
+      .from('commitment_reconciliation')
+      .select('id, venue_id, wedding_id')
+      .eq('venue_id', p.venueId)
+      .limit(500)
+
+    if (error) {
+      out.push(
+        skipResult(
+          'commitment_reconciliation (stored rows)',
+          p.venue,
+          p.venueId,
+          `could not read the table — ${error.message}. Migration 406 may not have run here.`,
+        ),
+      )
+      continue
+    }
+
+    out.push(
+      await checkSurface({
+        surface: 'commitment_reconciliation (stored rows)',
+        venue: p.venue,
+        venueId: p.venueId,
+        otherVenueId: p.other,
+        supabase,
+        result: data ?? [],
+      }),
+    )
+  }
+
+  // 2. The reader refuses another venue's wedding.
+  const { data: bRows, error: bErr } = await supabase
+    .from('commitment_reconciliation')
+    .select('wedding_id')
+    .eq('venue_id', venueB)
+    .limit(1)
+
+  const bWeddingId =
+    !bErr && bRows && bRows.length > 0 ? (bRows[0] as { wedding_id: string }).wedding_id : null
+
+  if (!bWeddingId) {
+    out.push(
+      skipResult(
+        'gatherCommitments (cross-venue wedding)',
+        'A',
+        venueA,
+        'venue B has no reconciliation row to borrow a wedding id from, so the cross-venue read ' +
+          'cannot be posed. Seed a commitment on venue B and re-run to exercise this.',
+      ),
+    )
+  } else {
+    try {
+      const mod = await import('@/lib/services/commitments/reconcile')
+      const leaked = await mod.gatherCommitments(supabase, venueA, bWeddingId)
+      out.push({
+        surface: 'gatherCommitments (cross-venue wedding)',
+        venue: 'A',
+        venueId: venueA,
+        rows: leaked.length,
+        foreignIds: [],
+        venueIdMismatches: [],
+        status: leaked.length === 0 ? 'PASS' : 'FAIL',
+        note:
+          leaked.length === 0
+            ? "venue A's reader returns nothing for a wedding belonging to venue B"
+            : `venue A's reader returned ${leaked.length} commitment(s) for a venue B wedding`,
+      })
+    } catch (err) {
+      out.push(
+        failResult(
+          'gatherCommitments (cross-venue wedding)',
+          'A',
+          venueA,
+          `the reader threw instead of returning empty — ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      )
+    }
+  }
+
+  // 3. Conversation-sourced planning notes stay inside their venue.
+  for (const p of [
+    { venue: 'A' as const, venueId: venueA, other: venueB },
+    { venue: 'B' as const, venueId: venueB, other: venueA },
+  ]) {
+    const { data, error } = await supabase
+      .from('planning_notes')
+      .select('id, venue_id, wedding_id, source_interaction_id')
+      .eq('venue_id', p.venueId)
+      .not('source_interaction_id', 'is', null)
+      .limit(500)
+
+    if (error) {
+      out.push(
+        skipResult(
+          'planning_notes from conversations',
+          p.venue,
+          p.venueId,
+          `could not read the table — ${error.message}. Migration 406 may not have run here.`,
+        ),
+      )
+      continue
+    }
+
+    out.push(
+      await checkSurface({
+        surface: 'planning_notes from conversations',
+        venue: p.venue,
+        venueId: p.venueId,
+        otherVenueId: p.other,
+        supabase,
+        result: data ?? [],
+      }),
+    )
+  }
+
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
@@ -731,6 +887,7 @@ async function main(): Promise<void> {
   results.push(...(await checkToursSeries(venueA, venueB, supabase)))
 
   results.push(...(await checkScopeHelper(venueA, venueB, supabase)))
+  results.push(...(await checkCommitmentWriters(venueA, venueB, supabase)))
 
   printResults(venueA, venueB, results, json)
 

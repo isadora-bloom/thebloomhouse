@@ -48,6 +48,7 @@ import { findIdentityMatches } from '@/lib/services/identity/resolution'
 import { extractKnotPersonId } from '@/lib/services/identity/knot-sender-id'
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
+import { scheduleLooseDetailCapture } from '@/lib/services/commitments/capture'
 import { applySignalInference, stripQuotedReply } from '@/lib/services/attribution/signal-inference'
 import { extractHandlesFromUrls } from '@/lib/services/extraction'
 import { getVenueSocialHandles, stripVenueHandles } from '@/lib/services/identity/handles'
@@ -2406,6 +2407,35 @@ export async function processIncomingEmail(
         }
       })()
     }
+
+    // W50 call site A of two — loose details, for a message that already
+    // belongs to a wedding.
+    //
+    // The couple writes "we're having a groom's cake" in a reply about
+    // seating. Classification calls that a reply and moves on; the
+    // sentence is read once by a person and recorded nowhere, and on the
+    // day there is no cake table. `scheduleLooseDetailCapture` lifts the
+    // stated plans and the special requests out of the body and lands
+    // them as planning notes, which the nightly reconciler then checks
+    // against the day-of timeline.
+    //
+    // Out of band on purpose: it never blocks, so the hot path's latency
+    // is unchanged, and its failures are logged rather than swallowed.
+    // Idempotent per interaction id, so a Gmail backfill replaying six
+    // weeks of mail does not re-bill or re-write any of it.
+    //
+    // Call site B is after the wedding-minting block below, for the
+    // opposite case. The two are mutually exclusive: B only runs when
+    // `weddingId` was still null here, and this call is a no-op without
+    // a wedding.
+    scheduleLooseDetailCapture({
+      venueId,
+      interactionId,
+      weddingId,
+      channel: 'email',
+      text: email.subject ? `${email.subject}\n\n${email.body}` : email.body,
+      correlationId,
+    })
   }
 
   // Wave 4 Phase 4 (2026-05-10): Wave-3 per-email sender_identity capture
@@ -3114,6 +3144,21 @@ export async function processIncomingEmail(
         .from('interactions')
         .update({ wedding_id: weddingId })
         .eq('id', interactionId)
+
+      // W50 call site B of two — loose details, for a message that just
+      // created its wedding. See call site A above for the reasoning.
+      // Placed after the wedding_id update so the capture writes its
+      // planning notes against a wedding that exists. Mutually exclusive
+      // with A: this whole block is gated on `!weddingId`, so A saw null
+      // and did nothing.
+      scheduleLooseDetailCapture({
+        venueId,
+        interactionId,
+        weddingId,
+        channel: 'email',
+        text: email.subject ? `${email.subject}\n\n${email.body}` : email.body,
+        correlationId,
+      })
 
       // Sweep prior orphan interactions for this person and attach
       // them to the new wedding. 2026-04-30: Ryan Schubert at Rixey
