@@ -1,7 +1,14 @@
 'use client'
 
 // Feature: configurable via venue_config.feature_flags
-// Tables: seating_tables, guest_list
+// Tables: seating_tables, guest_list, table_map_layouts
+//
+// Wave 6 W44: the floor plan and the assignment list are one surface now.
+// Both halves render from `buildSeatingView` and save through
+// `saveTableAssignment`, so they cannot disagree. The authoritative column
+// for "who sits where" is `guest_list.table_assignment` (the table's NAME) —
+// the reasoning is written out at the top of
+// src/lib/services/couple-portal/seating-view.ts.
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -10,22 +17,17 @@ import { cn } from '@/lib/utils'
 import {
   Plus,
   X,
-  Users,
-  Search,
   Circle,
   RectangleHorizontal,
   Crown,
   Heart,
   Image,
-  UserPlus,
-  UserMinus,
   ChevronDown,
   ChevronUp,
   Edit2,
   Trash2,
   Check,
   AlertTriangle,
-  BarChart3,
   Table2,
   Tag,
   Info,
@@ -39,30 +41,21 @@ import {
   type VenueSeatingConfig,
 } from '@/lib/services/couple-portal-config'
 import { SeatingImportDialog } from '@/components/couple/seating-import-dialog'
+import { SeatingBoard } from '@/components/couple/seating-board'
+import {
+  buildSeatingView,
+  type SeatedParty,
+  type SeatingGuestRow,
+  type SeatingMapElement,
+  type SeatingTableRow,
+} from '@/lib/services/couple-portal/seating-view'
+import { saveTableAssignment } from '@/lib/services/couple-portal/seating-assignment'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 type TableType = 'round' | 'rectangular' | 'head' | 'sweetheart' | 'farm' | 'cocktail'
-
-interface SeatingTable {
-  id: string
-  table_name: string
-  table_type: TableType
-  capacity: number
-  sort_order: number
-}
-
-interface Guest {
-  id: string
-  table_assignment: string | null
-  rsvp_status: string | null
-  plus_one_name: string | null
-  group_name: string | null
-  first_name: string | null
-  last_name: string | null
-}
 
 interface GuestTagRow {
   id: string
@@ -96,32 +89,17 @@ const EMPTY_FORM: TableFormData = {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function guestName(guest: Guest): string {
-  const name = [guest.first_name, guest.last_name].filter(Boolean).join(' ')
-  return name || 'Unnamed'
-}
-
-function typeLabel(t: TableType): string {
-  return TABLE_TYPE_OPTIONS.find((o) => o.value === t)?.label || t
-}
-
-function typeIcon(t: TableType): React.ElementType {
-  return TABLE_TYPE_OPTIONS.find((o) => o.value === t)?.icon || Circle
-}
-
-// ---------------------------------------------------------------------------
 // Seating Chart Page
 // ---------------------------------------------------------------------------
 
 export default function SeatingChartPage() {
   const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   // Data
-  const [tables, setTables] = useState<SeatingTable[]>([])
-  const [guests, setGuests] = useState<Guest[]>([])
+  const [tables, setTables] = useState<SeatingTableRow[]>([])
+  const [guests, setGuests] = useState<SeatingGuestRow[]>([])
+  const [mapElements, setMapElements] = useState<SeatingMapElement[]>([])
   const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
+  const [venueWidthFt, setVenueWidthFt] = useState<number>(80)
   const [venueSeatingConfig, setVenueSeatingConfig] = useState<VenueSeatingConfig>(EMPTY_SEATING_CONFIG)
   const [loading, setLoading] = useState(true)
 
@@ -129,7 +107,7 @@ export default function SeatingChartPage() {
   const [allTags, setAllTags] = useState<TagChipData[]>([])
   // guest_id -> tag_id[]
   const [guestTagMap, setGuestTagMap] = useState<Record<string, string[]>>({})
-  // Multi-select tag filter applied to the unassigned list
+  // Multi-select tag filter applied to the not-seated list and the pickers
   const [filterTagIds, setFilterTagIds] = useState<Set<string>>(new Set())
   const [showTagFilterMenu, setShowTagFilterMenu] = useState(false)
 
@@ -138,15 +116,10 @@ export default function SeatingChartPage() {
   const [editingTableId, setEditingTableId] = useState<string | null>(null)
   const [tableForm, setTableForm] = useState<TableFormData>(EMPTY_FORM)
 
-  // Guest assignment modal
-  const [showAssignModal, setShowAssignModal] = useState(false)
-  const [assigningTable, setAssigningTable] = useState<SeatingTable | null>(null)
-  const [assignSearch, setAssignSearch] = useState('')
+  // The guest currently being saved, so its row can show as busy
+  const [pendingGuestId, setPendingGuestId] = useState<string | null>(null)
 
-  // Expanded tables
-  const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set())
-
-  // Floor plan expanded
+  // Floor plan expanded (only used for the plain image fallback)
   const [floorPlanExpanded, setFloorPlanExpanded] = useState(true)
 
   const supabase = createClient()
@@ -154,7 +127,7 @@ export default function SeatingChartPage() {
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
     if (!weddingId || !venueId) return
-    const [tablesRes, guestsRes, floorPlan, tagsRes, seatingConfig] = await Promise.all([
+    const [tablesRes, guestsRes, layoutRes, floorPlan, tagsRes, seatingConfig] = await Promise.all([
       supabase
         .from('seating_tables')
         .select('*')
@@ -162,9 +135,18 @@ export default function SeatingChartPage() {
         .order('sort_order', { ascending: true }),
       supabase
         .from('guest_list')
-        .select('id, table_assignment, rsvp_status, plus_one_name, group_name, first_name, last_name')
+        // `table_assignment` is the authoritative column. `plus_one` and
+        // `has_plus_one` decide whether the row is a party of two.
+        .select(
+          'id, table_assignment, rsvp_status, plus_one, has_plus_one, plus_one_name, group_name, first_name, last_name',
+        )
         .eq('wedding_id', weddingId)
         .order('created_at', { ascending: true }),
+      supabase
+        .from('table_map_layouts')
+        .select('elements')
+        .eq('wedding_id', weddingId)
+        .maybeSingle(),
       loadFloorPlan(supabase, venueId),
       supabase
         .from('guest_tags')
@@ -175,11 +157,11 @@ export default function SeatingChartPage() {
     ])
     setVenueSeatingConfig(seatingConfig)
 
-    if (tablesRes.data) setTables(tablesRes.data as unknown as SeatingTable[])
-    if (guestsRes.data) setGuests(guestsRes.data as unknown as Guest[])
-    if (floorPlan.url) {
-      setFloorPlanUrl(floorPlan.url)
-    }
+    if (tablesRes.data) setTables(tablesRes.data as unknown as SeatingTableRow[])
+    if (guestsRes.data) setGuests(guestsRes.data as unknown as SeatingGuestRow[])
+    setMapElements(((layoutRes.data?.elements ?? []) as SeatingMapElement[]) || [])
+    setFloorPlanUrl(floorPlan.url)
+    setVenueWidthFt(floorPlan.venue_width_ft || 80)
 
     // Tags
     if (tagsRes.data) {
@@ -218,49 +200,25 @@ export default function SeatingChartPage() {
     fetchData()
   }, [weddingId, venueId, fetchData])
 
-  // ---- Derived data ----
-  const guestsByTable = useMemo(() => {
-    const map: Record<string, Guest[]> = {}
-    for (const g of guests) {
-      if (g.table_assignment) {
-        if (!map[g.table_assignment]) map[g.table_assignment] = []
-        map[g.table_assignment].push(g)
-      }
+  // ---- The view both halves read ----
+  const view = useMemo(
+    () => buildSeatingView({ tables, guests, mapElements }),
+    [tables, guests, mapElements],
+  )
+
+  // Tag filter narrows the not-seated list and every table's picker, so the
+  // two stay in step (it did the same for the old assign modal).
+  const boardView = useMemo(() => {
+    if (filterTagIds.size === 0) return view
+    return {
+      ...view,
+      unseated: view.unseated.filter((p) =>
+        (guestTagMap[p.guestId] || []).some((tid) => filterTagIds.has(tid)),
+      ),
     }
-    return map
-  }, [guests])
+  }, [view, filterTagIds, guestTagMap])
 
-  const unassignedGuests = useMemo(() => {
-    return guests.filter((g) => !g.table_assignment)
-  }, [guests])
-
-  // Tag-filtered version of unassigned list (applied in both the side panel
-  // and the assignment modal so the filters stay in sync).
-  const tagFilteredUnassigned = useMemo(() => {
-    if (filterTagIds.size === 0) return unassignedGuests
-    return unassignedGuests.filter((g) => {
-      const guestTags = guestTagMap[g.id] || []
-      return guestTags.some((tid) => filterTagIds.has(tid))
-    })
-  }, [unassignedGuests, filterTagIds, guestTagMap])
-
-  const totalGuests = guests.length
-  const assignedCount = totalGuests - unassignedGuests.length
-  const totalCapacity = tables.reduce((sum, t) => sum + t.capacity, 0)
-  const tablesFullCount = tables.filter((t) => {
-    const assigned = (guestsByTable[t.table_name] || []).length
-    return assigned >= t.capacity
-  }).length
-  const tablesWithSpaceCount = tables.length - tablesFullCount
-
-  // Filtered unassigned guests for assignment modal — applies both the
-  // tag filter (from the side panel) and the modal's own search.
-  const filteredUnassigned = useMemo(() => {
-    const base = tagFilteredUnassigned
-    if (!assignSearch.trim()) return base
-    const q = assignSearch.toLowerCase()
-    return base.filter((g) => guestName(g).toLowerCase().includes(q))
-  }, [tagFilteredUnassigned, assignSearch])
+  const tablesFullCount = view.tables.filter((t) => t.isFull || t.isOver).length
 
   // ---- Table CRUD ----
   function openAddTable() {
@@ -269,13 +227,15 @@ export default function SeatingChartPage() {
     setShowTableModal(true)
   }
 
-  function openEditTable(table: SeatingTable) {
+  function openEditTable(tableId: string) {
+    const row = tables.find((t) => t.id === tableId)
+    if (!row) return
     setTableForm({
-      table_name: table.table_name,
-      table_type: table.table_type,
-      capacity: table.capacity,
+      table_name: row.table_name ?? '',
+      table_type: (row.table_type as TableType) || 'round',
+      capacity: row.capacity ?? 0,
     })
-    setEditingTableId(table.id)
+    setEditingTableId(tableId)
     setShowTableModal(true)
   }
 
@@ -291,10 +251,21 @@ export default function SeatingChartPage() {
     }
 
     if (editingTableId) {
+      const previous = tables.find((t) => t.id === editingTableId)
       const { error } = await supabase.from('seating_tables').update(payload).eq('id', editingTableId)
       if (error) {
         alert(`Failed to update table: ${error.message}`)
         return
+      }
+      // Guests point at the NAME, so a rename has to carry them with it or
+      // they are stranded at a table that no longer exists.
+      const oldName = (previous?.table_name ?? '').trim()
+      if (oldName && oldName !== payload.table_name) {
+        await supabase
+          .from('guest_list')
+          .update({ table_assignment: payload.table_name })
+          .eq('wedding_id', weddingId)
+          .eq('table_assignment', oldName)
       }
     } else {
       const { error } = await supabase.from('seating_tables').insert({
@@ -315,55 +286,71 @@ export default function SeatingChartPage() {
     fetchData()
   }
 
-  async function handleDeleteTable(table: SeatingTable) {
-    if (!confirm(`Remove "${table.table_name}"? Guests assigned to this table will become unassigned.`)) return
+  async function handleDeleteTable(tableId: string, tableName: string) {
+    if (!confirm(`Remove "${tableName}"? Guests at this table will go back to the not-seated list.`)) return
 
-    // Unassign guests from this table
-    const assignedGuests = guestsByTable[table.table_name] || []
-    if (assignedGuests.length > 0) {
-      const guestIds = assignedGuests.map((g) => g.id)
+    const seated = view.tables.find((t) => t.tableId === tableId)?.parties ?? []
+    if (seated.length > 0) {
       await supabase
         .from('guest_list')
         .update({ table_assignment: null })
-        .in('id', guestIds)
+        .in('id', seated.map((p) => p.guestId))
     }
 
-    await supabase.from('seating_tables').delete().eq('id', table.id)
+    await supabase.from('seating_tables').delete().eq('id', tableId)
     fetchData()
   }
 
-  // ---- Guest assignment ----
-  function openAssign(table: SeatingTable) {
-    setAssigningTable(table)
-    setAssignSearch('')
-    setShowAssignModal(true)
-  }
+  // ---- The one save route both halves use ----
+  const assignGuest = useCallback(
+    async (guestId: string, tableName: string) => {
+      setPendingGuestId(guestId)
+      // Optimistic: the board should move the chip before the round trip.
+      setGuests((prev) =>
+        prev.map((g) => (g.id === guestId ? { ...g, table_assignment: tableName } : g)),
+      )
+      const { error } = await saveTableAssignment(supabase, { guestId, tableName, venueId })
+      setPendingGuestId(null)
+      if (error) {
+        alert(`Could not seat that guest: ${error.message}`)
+      }
+      fetchData()
+    },
+    [supabase, venueId, fetchData],
+  )
 
-  async function assignGuestToTable(guestId: string, tableName: string) {
-    await supabase
-      .from('guest_list')
-      .update({ table_assignment: tableName })
-      .eq('id', guestId)
-    fetchData()
-  }
+  const unassignGuest = useCallback(
+    async (guestId: string) => {
+      setPendingGuestId(guestId)
+      setGuests((prev) =>
+        prev.map((g) => (g.id === guestId ? { ...g, table_assignment: null } : g)),
+      )
+      const { error } = await saveTableAssignment(supabase, { guestId, tableName: null, venueId })
+      setPendingGuestId(null)
+      if (error) {
+        alert(`Could not take that guest off the table: ${error.message}`)
+      }
+      fetchData()
+    },
+    [supabase, venueId, fetchData],
+  )
 
-  async function unassignGuest(guestId: string) {
-    await supabase
-      .from('guest_list')
-      .update({ table_assignment: null })
-      .eq('id', guestId)
-    fetchData()
-  }
-
-  // ---- Toggle expand ----
-  function toggleExpand(tableId: string) {
-    setExpandedTables((prev) => {
-      const next = new Set(prev)
-      if (next.has(tableId)) next.delete(tableId)
-      else next.add(tableId)
-      return next
-    })
-  }
+  const renderPartyExtra = useCallback(
+    (party: SeatedParty) => {
+      const tagIds = guestTagMap[party.guestId] || []
+      if (tagIds.length === 0) return null
+      return (
+        <span className="inline-flex flex-wrap gap-0.5 ml-1.5 align-middle">
+          {tagIds.map((tid) => {
+            const tag = allTags.find((t) => t.id === tid)
+            if (!tag) return null
+            return <TagChip key={tid} tag={tag} />
+          })}
+        </span>
+      )
+    },
+    [guestTagMap, allTags],
+  )
 
   // ---- Loading ----
   if (contextLoading || !weddingId || !venueId || loading) {
@@ -389,7 +376,8 @@ export default function SeatingChartPage() {
             Seating Chart
           </h1>
           <p className="text-gray-500 text-sm">
-            View your floor plan, manage tables, and assign guests to their seats.
+            Your floor plan and your guest list, together. Drag a name onto a table, or search for
+            one from the table itself.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -421,106 +409,122 @@ export default function SeatingChartPage() {
         </div>
       )}
 
-      {/* Stats Bar */}
-      {(tables.length > 0 || guests.length > 0) && (
+      {/* Stats Bar. Counts are people, so a plus one counts as a seat. */}
+      {(view.tables.length > 0 || view.totals.parties > 0) && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-          <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
-            <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-              {totalGuests}
-            </p>
-            <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Total Guests</p>
-          </div>
-          <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
-            <p className="text-xl font-bold tabular-nums text-emerald-600">
-              {assignedCount}
-            </p>
-            <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Assigned</p>
-          </div>
-          <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
-            <p className={cn('text-xl font-bold tabular-nums', unassignedGuests.length > 0 ? 'text-amber-600' : 'text-emerald-600')}>
-              {unassignedGuests.length}
-            </p>
-            <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Unassigned</p>
-          </div>
-          <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
-            <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-              {tables.length}
-            </p>
-            <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Tables</p>
-          </div>
-          <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
-            <p className="text-xl font-bold tabular-nums text-emerald-600">
-              {tablesFullCount}
-            </p>
-            <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Tables Full</p>
-          </div>
-          <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
-            <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-              {totalCapacity}
-            </p>
-            <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Total Capacity</p>
-          </div>
+          <StatCard label="Guests" value={view.totals.people} tone="primary" />
+          <StatCard label="Seated" value={view.totals.seatedPeople} tone="good" />
+          <StatCard
+            label="Not seated"
+            value={view.totals.unseatedPeople}
+            tone={view.totals.unseatedPeople > 0 ? 'warn' : 'good'}
+          />
+          <StatCard label="Tables" value={view.tables.length} tone="primary" />
+          <StatCard label="Tables full" value={tablesFullCount} tone="good" />
+          <StatCard label="Total seats" value={view.totals.capacity} tone="primary" />
         </div>
       )}
 
-      {/* Floor Plan Section */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <button
-          onClick={() => setFloorPlanExpanded(!floorPlanExpanded)}
-          className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            <Image className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
-            <h2
-              className="text-sm font-semibold"
-              style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-            >
-              Floor Plan
-            </h2>
-          </div>
-          {floorPlanExpanded ? (
-            <ChevronUp className="w-4 h-4 text-gray-400" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-gray-400" />
-          )}
-        </button>
-
-        {floorPlanExpanded && (
-          <div className="px-5 pb-5">
-            {floorPlanUrl ? (
-              <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-                <img
-                  src={floorPlanUrl}
-                  alt="Floor plan"
-                  className="w-full h-auto max-h-[500px] object-contain"
-                />
-              </div>
+      {/* Floor plan image on its own, for weddings with no layout drawn yet */}
+      {mapElements.length === 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          <button
+            onClick={() => setFloorPlanExpanded(!floorPlanExpanded)}
+            className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Image className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
+              <h2
+                className="text-sm font-semibold"
+                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+              >
+                Floor Plan
+              </h2>
+            </div>
+            {floorPlanExpanded ? (
+              <ChevronUp className="w-4 h-4 text-gray-400" />
             ) : (
-              <div className="flex flex-col items-center justify-center py-12 text-center bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                <Image className="w-10 h-10 mb-3 text-gray-300" />
-                <p className="text-sm text-gray-500 font-medium mb-1">No floor plan uploaded yet</p>
-                <p className="text-xs text-gray-400">
-                  Your venue will upload a floor plan for you to view here.
-                </p>
+              <ChevronDown className="w-4 h-4 text-gray-400" />
+            )}
+          </button>
+
+          {floorPlanExpanded && (
+            <div className="px-5 pb-5">
+              {floorPlanUrl ? (
+                <>
+                  <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={floorPlanUrl}
+                      alt="Floor plan"
+                      className="w-full h-auto max-h-[500px] object-contain"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">
+                    Your coordinator has not placed your tables on this plan yet. Once they do, you
+                    can drag guests straight onto them.
+                  </p>
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-center bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                  <Image className="w-10 h-10 mb-3 text-gray-300" />
+                  <p className="text-sm text-gray-500 font-medium mb-1">No floor plan uploaded yet</p>
+                  <p className="text-xs text-gray-400">
+                    Your venue will upload a floor plan for you to view here.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tag filter */}
+      {allTags.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <button
+              onClick={() => setShowTagFilterMenu((v) => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1 border border-gray-200 rounded-lg text-xs bg-white hover:border-gray-300"
+            >
+              <Tag className="w-3 h-3 text-gray-400" />
+              {filterTagIds.size === 0
+                ? 'Filter by tag'
+                : `${filterTagIds.size} tag${filterTagIds.size === 1 ? '' : 's'}`}
+              <ChevronDown className="w-3 h-3 text-gray-400" />
+            </button>
+            {showTagFilterMenu && (
+              <div className="absolute left-0 top-full mt-1 z-40">
+                <TagPicker
+                  tags={allTags}
+                  selectedIds={[...filterTagIds]}
+                  onToggle={(tid) => {
+                    setFilterTagIds((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(tid)) next.delete(tid)
+                      else next.add(tid)
+                      return next
+                    })
+                  }}
+                  onClose={() => setShowTagFilterMenu(false)}
+                  title="Filter by tag"
+                />
               </div>
             )}
           </div>
-        )}
-      </div>
-
-      {/* Capacity Warning */}
-      {tables.length > 0 && totalGuests > totalCapacity && (
-        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-100 rounded-xl text-sm text-amber-800">
-          <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0 text-amber-500" />
-          <p className="text-xs">
-            <span className="font-medium">Capacity warning:</span> You have {totalGuests} guests but only{' '}
-            {totalCapacity} total seats across {tables.length} tables. You may need to add more tables.
-          </p>
+          {filterTagIds.size > 0 && (
+            <button
+              onClick={() => setFilterTagIds(new Set())}
+              className="text-xs text-gray-400 hover:text-gray-600"
+            >
+              Clear
+            </button>
+          )}
         </div>
       )}
 
-      {/* Tables List */}
-      {tables.length === 0 ? (
+      {/* The board: plan, tables and the not-seated list, all on one view */}
+      {view.tables.length === 0 && view.totals.parties === 0 ? (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
           <Table2 className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
           <h3
@@ -542,265 +546,56 @@ export default function SeatingChartPage() {
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
-          <h2
-            className="text-sm font-semibold text-gray-600 uppercase tracking-wider flex items-center gap-2"
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            Tables ({tables.length})
-          </h2>
-
-          {tables.map((table) => {
-            const assignedGuests = guestsByTable[table.table_name] || []
-            const remaining = table.capacity - assignedGuests.length
-            const isFull = remaining <= 0
-            const isExpanded = expandedTables.has(table.id)
-            const progressPct = table.capacity > 0 ? Math.min((assignedGuests.length / table.capacity) * 100, 100) : 0
-            const TypeIcon = typeIcon(table.table_type)
-
-            return (
-              <div
-                key={table.id}
-                className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden group hover:shadow-md transition-shadow"
-              >
-                {/* Table header */}
-                <div className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div
-                        className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                        style={{ backgroundColor: 'color-mix(in srgb, var(--couple-primary) 10%, white)' }}
-                      >
-                        <TypeIcon className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
-                      </div>
-                      <div className="min-w-0">
-                        <h3
-                          className="font-semibold text-sm truncate"
-                          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-                        >
-                          {table.table_name}
-                        </h3>
-                        <p className="text-xs text-gray-400">
-                          {typeLabel(table.table_type)} &middot; {table.capacity} seats
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => openAssign(table)}
-                        disabled={isFull}
-                        className={cn(
-                          'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors',
-                          isFull
-                            ? 'text-gray-400 border-gray-200 cursor-not-allowed'
-                            : 'text-white border-transparent hover:opacity-90',
-                        )}
-                        style={!isFull ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-                      >
-                        <UserPlus className="w-3 h-3" />
-                        Assign
-                      </button>
-                      <button
-                        onClick={() => openEditTable(table)}
-                        className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 opacity-0 group-hover:opacity-100 transition-all"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteTable(table)}
-                        className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Progress bar */}
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1 font-medium uppercase tracking-wide">
-                      <span>{assignedGuests.length} / {table.capacity} assigned</span>
-                      <span className={cn(isFull ? 'text-emerald-600 font-semibold' : remaining <= 2 && remaining > 0 ? 'text-amber-600' : '')}>
-                        {isFull ? 'Full' : `${remaining} remaining`}
-                      </span>
-                    </div>
-                    <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-300"
-                        style={{
-                          width: `${progressPct}%`,
-                          backgroundColor: isFull ? '#10b981' : 'var(--couple-primary)',
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Expand toggle */}
-                  {assignedGuests.length > 0 && (
-                    <button
-                      onClick={() => toggleExpand(table.id)}
-                      className="flex items-center gap-1 mt-3 text-xs text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {isExpanded ? (
-                        <>
-                          <ChevronUp className="w-3 h-3" />
-                          Hide guests
-                        </>
-                      ) : (
-                        <>
-                          <ChevronDown className="w-3 h-3" />
-                          Show {assignedGuests.length} guest{assignedGuests.length !== 1 ? 's' : ''}
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                {/* Expanded guest list */}
-                {isExpanded && assignedGuests.length > 0 && (
-                  <div className="border-t border-gray-100 px-4 py-3">
-                    <div className="space-y-1">
-                      {assignedGuests.map((guest) => (
-                        <div
-                          key={guest.id}
-                          className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-gray-50"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <span className="text-sm text-gray-700">{guestName(guest)}</span>
-                            {guest.plus_one_name && (
-                              <span className="text-xs text-gray-400 ml-2">+ {guest.plus_one_name}</span>
-                            )}
-                            {guest.group_name && (
-                              <span className="text-[10px] text-gray-300 ml-2">({guest.group_name})</span>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => unassignGuest(guest.id)}
-                            className="text-gray-300 hover:text-red-500 transition-colors p-1"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+        <SeatingBoard
+          view={boardView}
+          floorPlanUrl={floorPlanUrl}
+          mapElements={mapElements}
+          venueWidthFt={venueWidthFt}
+          onAssign={assignGuest}
+          onUnassign={unassignGuest}
+          pendingGuestId={pendingGuestId}
+          renderPartyExtra={renderPartyExtra}
+          renderTableActions={(table) =>
+            table.existsInTables ? (
+              <>
+                <button
+                  onClick={() => openEditTable(table.tableId)}
+                  aria-label={`Edit ${table.name}`}
+                  className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleDeleteTable(table.tableId, table.name)}
+                  aria-label={`Delete ${table.name}`}
+                  className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </>
+            ) : null
+          }
+        />
       )}
 
-      {/* Unassigned Guests Section */}
-      {unassignedGuests.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100" style={{ backgroundColor: 'color-mix(in srgb, var(--couple-accent) 5%, white)' }}>
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-2">
-                <Users className="w-4 h-4 text-amber-600" />
-                <h2
-                  className="text-sm font-semibold"
-                  style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-                >
-                  Unassigned Guests
-                </h2>
-              </div>
-              <div className="flex items-center gap-2">
-                {/* Tag filter */}
-                {allTags.length > 0 && (
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowTagFilterMenu((v) => !v)}
-                      className="flex items-center gap-1.5 px-2.5 py-1 border border-gray-200 rounded-lg text-xs bg-white hover:border-gray-300"
-                    >
-                      <Tag className="w-3 h-3 text-gray-400" />
-                      {filterTagIds.size === 0
-                        ? 'Filter by tag'
-                        : `${filterTagIds.size} tag${filterTagIds.size === 1 ? '' : 's'}`}
-                      <ChevronDown className="w-3 h-3 text-gray-400" />
-                    </button>
-                    {showTagFilterMenu && (
-                      <div className="absolute right-0 top-full mt-1 z-40">
-                        <TagPicker
-                          tags={allTags}
-                          selectedIds={[...filterTagIds]}
-                          onToggle={(tid) => {
-                            setFilterTagIds((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(tid)) next.delete(tid)
-                              else next.add(tid)
-                              return next
-                            })
-                          }}
-                          onClose={() => setShowTagFilterMenu(false)}
-                          title="Filter by tag"
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-                {filterTagIds.size > 0 && (
-                  <button
-                    onClick={() => setFilterTagIds(new Set())}
-                    className="text-xs text-gray-400 hover:text-gray-600"
-                  >
-                    Clear
-                  </button>
-                )}
-                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full">
-                  {tagFilteredUnassigned.length} guest{tagFilteredUnassigned.length !== 1 ? 's' : ''}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-5">
-            {tagFilteredUnassigned.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-4">
-                No unassigned guests match the selected tag filter.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                {tagFilteredUnassigned.map((guest) => {
-                  const tagIds = guestTagMap[guest.id] || []
-                  return (
-                    <div
-                      key={guest.id}
-                      className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-50 text-sm text-gray-600"
-                    >
-                      <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-medium text-gray-500 shrink-0 mt-0.5">
-                        {guestName(guest).charAt(0).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <span className="truncate block">{guestName(guest)}</span>
-                        {guest.plus_one_name && (
-                          <span className="text-[10px] text-gray-400">+ {guest.plus_one_name}</span>
-                        )}
-                        {tagIds.length > 0 && (
-                          <div className="flex flex-wrap gap-0.5 mt-1">
-                            {tagIds.map((tid) => {
-                              const tag = allTags.find((t) => t.id === tid)
-                              if (!tag) return null
-                              return <TagChip key={tid} tag={tag} />
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
+      {/* Tables drawn on the plan that nobody can sit at */}
+      {view.unmatchedMapLabels.length > 0 && (
+        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-100 rounded-xl text-amber-800">
+          <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0 text-amber-500" />
+          <p className="text-xs">
+            <span className="font-medium">On the plan but not in your table list:</span>{' '}
+            {view.unmatchedMapLabels.join(', ')}. Add a table with the same name to seat people
+            there.
+          </p>
         </div>
       )}
 
       {/* All guests assigned message */}
-      {guests.length > 0 && unassignedGuests.length === 0 && tables.length > 0 && (
+      {view.totals.parties > 0 && view.totals.unseatedParties === 0 && view.tables.length > 0 && (
         <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-100 rounded-xl text-sm text-emerald-800">
           <Check className="w-5 h-5 shrink-0 text-emerald-500" />
           <p className="text-xs font-medium">
-            All {totalGuests} guests have been assigned to tables.
+            All {view.totals.people} guests have a table.
           </p>
         </div>
       )}
@@ -836,6 +631,10 @@ export default function SeatingChartPage() {
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
                   placeholder="e.g., Table 1, Head Table, Sweetheart"
                 />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Use the same name your coordinator used on the floor plan and the two will line
+                  up.
+                </p>
               </div>
 
               {/* Table type */}
@@ -905,147 +704,36 @@ export default function SeatingChartPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
 
-      {/* ================================================================ */}
-      {/* Guest Assignment Modal */}
-      {/* ================================================================ */}
-      {showAssignModal && assigningTable && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowAssignModal(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md max-h-[85vh] flex flex-col">
-            {/* Modal header */}
-            <div className="px-6 pt-6 pb-4 border-b border-gray-100 shrink-0">
-              <div className="flex items-center justify-between mb-1">
-                <h2
-                  className="text-lg font-semibold"
-                  style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-                >
-                  Assign to {assigningTable.table_name}
-                </h2>
-                <button onClick={() => setShowAssignModal(false)} className="text-gray-400 hover:text-gray-600">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <p className="text-xs text-gray-400">
-                {(guestsByTable[assigningTable.table_name] || []).length} / {assigningTable.capacity} seats filled
-              </p>
+// ---------------------------------------------------------------------------
+// Stat card
+// ---------------------------------------------------------------------------
 
-              {/* Currently assigned */}
-              {(guestsByTable[assigningTable.table_name] || []).length > 0 && (
-                <div className="mt-3 space-y-1">
-                  <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Currently assigned</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(guestsByTable[assigningTable.table_name] || []).map((g) => (
-                      <span
-                        key={g.id}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium"
-                        style={{
-                          backgroundColor: 'color-mix(in srgb, var(--couple-primary) 10%, white)',
-                          color: 'var(--couple-primary)',
-                        }}
-                      >
-                        {guestName(g)}
-                        <button
-                          onClick={() => unassignGuest(g.id)}
-                          className="hover:opacity-70 transition-opacity"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Search */}
-              <div className="mt-3 relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" />
-                <input
-                  type="text"
-                  value={assignSearch}
-                  onChange={(e) => setAssignSearch(e.target.value)}
-                  placeholder="Search unassigned guests..."
-                  className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                />
-              </div>
-            </div>
-
-            {/* Guest list */}
-            <div className="flex-1 overflow-y-auto px-6 py-3">
-              {filteredUnassigned.length === 0 ? (
-                <p className="text-sm text-gray-400 py-8 text-center">
-                  {unassignedGuests.length === 0
-                    ? 'All guests have been assigned to tables.'
-                    : 'No matching guests found.'}
-                </p>
-              ) : (
-                <div className="space-y-0.5">
-                  {filteredUnassigned.map((guest) => {
-                    const currentAssigned = (guestsByTable[assigningTable.table_name] || []).length
-                    const isFull = currentAssigned >= assigningTable.capacity
-
-                    return (
-                      <button
-                        key={guest.id}
-                        onClick={() => {
-                          if (!isFull) {
-                            assignGuestToTable(guest.id, assigningTable.table_name)
-                          }
-                        }}
-                        disabled={isFull}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors',
-                          isFull
-                            ? 'text-gray-300 cursor-not-allowed'
-                            : 'text-gray-700 hover:bg-gray-50',
-                        )}
-                      >
-                        <div className="flex items-center gap-2 text-left flex-1 min-w-0">
-                          <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-[10px] font-medium text-gray-500 shrink-0">
-                            {guestName(guest).charAt(0).toUpperCase()}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <span className="block truncate">{guestName(guest)}</span>
-                            {guest.plus_one_name && (
-                              <span className="text-[10px] text-gray-400">+ {guest.plus_one_name}</span>
-                            )}
-                            {(guestTagMap[guest.id] || []).length > 0 && (
-                              <div className="flex flex-wrap gap-0.5 mt-0.5">
-                                {(guestTagMap[guest.id] || []).map((tid) => {
-                                  const tag = allTags.find((t) => t.id === tid)
-                                  if (!tag) return null
-                                  return <TagChip key={tid} tag={tag} />
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        {!isFull && <Plus className="w-3.5 h-3.5 text-gray-300 shrink-0" />}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Modal footer */}
-            <div className="px-6 py-4 border-t border-gray-100 shrink-0">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-gray-400">
-                  {unassignedGuests.length} guest{unassignedGuests.length !== 1 ? 's' : ''} remaining
-                </p>
-                <button
-                  onClick={() => setShowAssignModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+function StatCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone: 'primary' | 'good' | 'warn'
+}) {
+  return (
+    <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
+      <p
+        className={cn(
+          'text-xl font-bold tabular-nums',
+          tone === 'good' && 'text-emerald-600',
+          tone === 'warn' && 'text-amber-600',
+        )}
+        style={tone === 'primary' ? { color: 'var(--couple-primary)' } : undefined}
+      >
+        {value}
+      </p>
+      <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">{label}</p>
     </div>
   )
 }
