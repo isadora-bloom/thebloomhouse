@@ -75,13 +75,11 @@ export async function POST(request: NextRequest) {
     // what the recipient actually received)
     // signal-class-justified: outbound venue-side sends are not lead signals
     const supabase = createServiceClient()
-    // html-stripped-justified: outbound coordinator/AI sends are plain
-    // text composed in the coordinator UI plus the appended disclosure;
-    // there is no inbound HTML to strip.
+    // Both markers are one line on purpose: the HTML guard looks six lines
+    // above the insert, the legacy-reads guard four lines above the from.
+    // html-stripped-justified: outbound plain text composed in the coordinator UI plus the disclosure; no inbound HTML
     const { data: insertedRow } = await supabase
-      // legacy-read-ok: MIRROR-MAINTENANCE: the outbound is logged to
-      // interactions, which is the message log the inbox thread view reads.
-      // See REPAIR-ENDPOINTS.md.
+      // legacy-read-ok: MIRROR-MAINTENANCE: outbound logged to interactions, the inbox thread's message log (REPAIR-ENDPOINTS.md)
       .from('interactions')
       .insert({
         venue_id: auth.venueId,
