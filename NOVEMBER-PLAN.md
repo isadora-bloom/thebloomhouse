@@ -602,6 +602,46 @@ while the plan talks about Crestwood; both are demo venues, but the public snaps
 Hawthorne. Tokens on the three ad connection tables and Instagram are still plaintext (the
 pgsodium HARDENING TODO carried forward on 407); do that before a second venue connects.
 
+## Wave 9 status (integrated 2026-09-14, late night)
+
+All seven merged, plus W69 (the e2e harness). Legacy-table reads under `src/app`: **255 to 40**
+(weddings 124 to 27, people 45 to 5, interactions 62 to 7, attribution_events 23 to 1,
+wedding_touchpoints 1 to 0), baseline ratcheted once at the end; `people.platform_handles` reads
+36 to 31. Gate on the head: tsc 0, vitest 2686 across 183 files, governance green with three more
+guards (tangential writes, cascade update/delete ratchet, widened scopes), links 325 OK, every CI
+guard green except `check-pr-cites-section` (two integrator commits; inert in CI) and
+`check-types-fresh` (operator regen).
+
+What is true now: the four daily surfaces and `/dashboard`, `/agent/inbox`, `/agent/analytics`,
+`/intel/roi`, `/intel/clients/[id]`, the couple dashboard and the couple layout read the spine
+through readers under `src/lib/intel/readers/`; the leads and pipeline boards are the thirteen
+vocabulary stages from spine rows with a drag that writes through an audited API; `/intel/roi`
+and `/intel/sources` give one channel answer by construction (a test asserts the chain); 17
+API sites converted through a couple-by-wedding reader and 144 mirror-maintenance reads tagged
+with their class and a retire-when in `REPAIR-ENDPOINTS.md`; `cleanup-ghost-weddings` tombstones
+instead of deleting; the tangential pool has no writer left (four, not three, were found) with a
+guard and a truthful migration 412; loose-detail capture and venue-conversation notes run on the
+SMS and DM chokepoint; `tracer.ts` is `spine-writers.ts`; about 230 API routes return a generic
+error plus correlation id instead of the driver's message; the e2e harness refuses production by
+construction.
+
+What the spine still cannot express, recorded by the workstreams with evidence (not a shrug):
+no thirteen-stage column (the mirror's `lifecycle_stage` is read in one documented seam), no
+outbound proposal event, no revenue (`booking_value` lives only on `weddings`, so the dashboard's
+revenue tile is gone and points at `/intel/roi`; the agency drill-down lost its value column), no
+`confidence_flag` or `code_extension`, a four-bucket heat where the legacy view had five, unstamped
+direction on pre-381 touchpoints (counted as unknown and said so). The 40 reads left are: the
+three coordinator wedding pages (fields with no spine home), `intel/company` and `intel/health`
+(revenue and a stored composite), `couples/[id]` (`raw_import_row`), and a handful of
+mirror-maintenance sites now tagged. Three channel derivations live outside `src/app` where the
+ratchet cannot see them (`channel-intel-hub/compute.ts`, `channel-truth/data-loader.ts`,
+`marketing-agencies.ts`), so the agency card and its drill-down disagree by construction: wave 10.
+
+Behaviour changes worth an operator eye before master: the NLQ sufficiency gate counts couples
+not weddings; inbox folders are recomputed from the spine (vendor rows may change tab); fresh CSV
+imports no longer run the legacy Phase B clusterer (the nightly sweep still does); auto-send is
+materially tighter (S4a); demo reseed needs one more `--apply` for the decision-timeline tile.
+
 ## Wave 9 (launched 2026-09-14, night): finish W2, the canonical wiring
 
 The verification found the plan's headline goal unmet: 255 legacy-table reads under `src/app`
