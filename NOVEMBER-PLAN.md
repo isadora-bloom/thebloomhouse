@@ -413,6 +413,10 @@ door. Dry work, no reimport needed.
   temperature") already have code behind an annual backfill that needs activating; a future
   trend ("August getting wetter each year") is new code over the data Bloom already pulls; only
   a specific severity event ("the tornado warning that weekend") needs a feed that does not exist.
+- Platform shift: "is engagement moving from Instagram to TikTok" is a narrower question than
+  social-to-tours. The brain-dump screenshots already land per platform in engagement_events as
+  marketing_metric, so a per-platform series with a month-over-month share comparison answers it
+  from existing data. Name it on the sources page and in Ask your data.
 - Tours as a series in the correlation engine unlocks all eight external-context channels
   (weather, FRED, cultural moments, holiday calendar, census, government shutdown, Google Trends
   via SerpAPI, social engagement), not just social. Google Trends silently does nothing without
