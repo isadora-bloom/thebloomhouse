@@ -48,6 +48,7 @@ import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 import { loadFredSeries } from '../external-context/fred'
 import { loadCulturalMomentsSeries } from '../external-context/cultural-moments'
+import { loadTourDayCounts } from '../intel/correlation-engine'
 import { loadCalendarSeries } from '../external-context/calendar'
 import {
   formatSeriesLabel,
@@ -313,6 +314,18 @@ async function loadSeriesForChannels(
     )
   }
 
+  // tours: held tours by UTC day from the spine, the same reader the
+  // engine uses (W47). Without this branch a tours card fell through to
+  // the marketing-metric lookup below, found nothing, and rendered with
+  // no sparkline.
+  if (channels.includes('tours') && !out.has('tours')) {
+    const counts = await loadTourDayCounts(supabase, venueId, start, now)
+    out.set(
+      'tours',
+      Array.from(counts.held.entries()).map(([dayKey, value]) => ({ dayKey, value })),
+    )
+  }
+
   // marketing_metric: channels of shape `{source}_{metric}`. We only
   // pull when one of the requested channels matches the prefix pattern.
   // Conservative: skip if we can't confidently identify the source.
@@ -322,6 +335,7 @@ async function loadSeriesForChannels(
       !c.startsWith('calendar_') &&
       c !== 'cultural_moments' &&
       c !== 'inquiries' &&
+      c !== 'tours' &&
       !c.endsWith('_signals'),
   )
   if (mmChannels.length > 0) {

@@ -290,7 +290,10 @@ async function run(
     .eq('venue_id', venueId)
     .in('action_type', TOUR_ACTION_TYPES as unknown as string[])
     .not('couple_id', 'is', null)
-    .order('occurred_at', { ascending: true })
+    // Newest first: with the scan cap, an old venue would otherwise keep
+    // its oldest tours and stop answering about recent windows (found by
+    // W47, whose engine reader orders the same way).
+    .order('occurred_at', { ascending: false })
     .limit(TOUCHPOINT_SCAN_LIMIT)
   if (error) {
     return { n: 0, enoughData: false, reason: `touchpoints read failed: ${error.message}` }
