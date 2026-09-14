@@ -262,6 +262,9 @@ jobs:
         if: hashFiles('scripts/check-no-new-legacy-reads.mjs') != ''
         run: node scripts/check-no-new-legacy-reads.mjs
 
+      - name: Wedding-cascade freshness — the generated merge table list is not behind the migrations (W60)
+        run: node scripts/check-wedding-fk-tables-fresh.mjs
+
       - name: Supabase types freshness (informational)
         continue-on-error: true
         run: node scripts/check-types-fresh.mjs

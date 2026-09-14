@@ -55,6 +55,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { createServiceClient } from '@/lib/supabase/service'
+import weddingFkTables from './wedding-fk-tables.generated.json'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -1649,39 +1650,118 @@ export async function resolveIdentity(
 // Wedding-merger
 // ---------------------------------------------------------------------------
 
+/** One of the strategies in wedding-fk-tables.generated.json. */
+export type MergeStrategy =
+  | 'reassign'
+  | 'merge_one_per_wedding'
+  | 'trigger_covered'
+  | 'skip_archived'
+  | 'skip_view'
+  | 'skip_history'
+  | 'skip_self_reference'
+
+/** One row of the generated cascade file. */
+export interface WeddingFkSpec {
+  table: string
+  column: string
+  strategy: MergeStrategy
+  reason: string
+  pk: string | null
+  key_columns?: string[]
+  unique_source?: string
+  unique_partial?: boolean
+  has_fk: boolean
+}
+
+/** A loser row that could not move because the winner already holds the key. */
+export interface MergeCollision {
+  rowId: string | null
+  key: Record<string, unknown>
+}
+
+/** What happened to one wedding-keyed column during a merge. */
+export interface MergeTableOutcome {
+  table: string
+  column: string
+  strategy: MergeStrategy
+  /** Rows re-pointed at the canonical wedding. */
+  moved: number
+  /** Loser rows deliberately left in place, each one named. */
+  collisions: MergeCollision[]
+  /** Set when the table could not be processed. Never aborts the merge. */
+  error?: string
+  /** The loser had more rows than the per-row fallback could walk. */
+  truncated?: boolean
+}
+
 export interface MergeWeddingsResult {
   canonicalId: string
   duplicateId: string
+  /** `table.column` -> rows moved. Kept in this shape for existing callers. */
   reassigned: Record<string, number>
+  /** Every column in the generated file, including the skipped ones. */
+  outcomes: MergeTableOutcome[]
 }
+
+/**
+ * The cascade list, generated from the live schema by
+ * scripts/gen-wedding-fk-tables.ts. Never hand-edit it, and never add a
+ * table here in code: regenerate.
+ *
+ * The hand-written list this replaced had drifted to 35 tables, nine of
+ * which no longer existed, while 75 tables with a wedding_id foreign key
+ * were never touched by a merge at all. Their rows stayed on the losing
+ * wedding, invisible to every reader that filters merged_into_id.
+ */
+const CASCADE: readonly WeddingFkSpec[] = (
+  weddingFkTables.tables as unknown as WeddingFkSpec[]
+)
+
+/**
+ * How many loser rows the per-row fallback will walk on one table before
+ * it stops and says so. A one-row-per-wedding table never comes near
+ * this; the cap only exists so a mis-classified table cannot turn one
+ * merge into an unbounded number of requests.
+ */
+const PER_ROW_CAP = 500
 
 /**
  * Soft-merge `duplicateId` into `canonicalId`.
  *
- * Migrates every row that FKs `weddings.id` from the duplicate to the
- * canonical. Tables covered (the comprehensive list — every wedding_id
- * reader the app touches):
+ * Every row keyed to the losing wedding follows it to the winner. What
+ * "every row" means is not written down here: it comes from
+ * wedding-fk-tables.generated.json, which is generated from the live
+ * schema, so a new migration that adds a wedding_id column cannot quietly
+ * fall out of the merge (scripts/check-wedding-fk-tables-fresh.mjs fails
+ * CI if the file is behind, and scripts/check-merge-weddings-cascade.mjs
+ * diffs it against the database).
  *
- *   interactions, drafts, engagement_events, tours, briefings, payments,
- *   notifications, admin_notifications, knowledge_gaps, intelligence_extractions,
- *   signal_inferences, booking_signals, wedding_touchpoints, attribution_events,
- *   candidate_identities (resolved_wedding_id), wedding_journey_narratives,
- *   tangential_signals, escalations, follow_ups, lost_deals, sage_chats,
- *   couple_invites, vendor_portal_tokens, wedding_files, owner_notes,
- *   activity_logs, error_logs, signal_pairs, anomaly_alerts (per-wedding),
- *   wedding_packages, contracts, payments_schedule, ph_*-prefixed tables stay
- *   out (Presshouse-domain), source_attribution.
+ * Per-table strategies, all recorded in that file with a reason:
+ *   - reassign               plain UPDATE of the column
+ *   - merge_one_per_wedding  the table holds one row per wedding, so the
+ *                            winner's row wins; a colliding loser row is
+ *                            left where it is and named in the audit
+ *   - trigger_covered        migration 202's trigger moves it on the
+ *                            tombstone UPDATE
+ *   - skip_archived          `_archived_*` snapshots, recorded not touched
+ *   - skip_view              a view has no rows of its own
+ *   - skip_history           a record of a past merge; rewriting it lies
+ *   - skip_self_reference    weddings' own columns; the tombstone owns them
  *
- * Tables already covered automatically by the post-merge trigger
- * (migration 202): attribution_events, wedding_touchpoints,
- * candidate_identities. We still UPDATE merged_into_id on the duplicate
- * so the trigger fires + writes the audit row.
+ * A failure on one table is recorded and the merge carries on. Nothing is
+ * dropped silently: the final activity_log row lists per-table counts,
+ * every collision, and every failure. That follows the audit shape the
+ * couples-side merge already uses (merge_couples, migrations 379 and 402):
+ * the winner wins a conflict, and what the loser lost is named in the audit
+ * rather than quietly discarded.
+ *
+ * Venue isolation: both weddings must belong to the same venue. A
+ * cross-venue merge throws before anything is written.
  *
  * Notes columns are unioned: weddings.notes (text) gets concatenated,
  * weddings.sage_context_notes (jsonb array) gets concat-deduped.
  *
- * `weddings.merged_into_id` already exists (migration 177). Setting it
- * tombstones the duplicate.
+ * `weddings.merged_into_id` (migration 177) tombstones the duplicate.
  */
 export async function mergeWeddings(
   canonicalId: string,
@@ -1693,82 +1773,131 @@ export async function mergeWeddings(
   }
   const supabase = options.supabase ?? createServiceClient()
 
-  const reassigned: Record<string, number> = {}
+  // ---- venue isolation + preconditions -----------------------------------
+  // Read both weddings first. A cross-venue merge is never legitimate, and
+  // finding out after half the rows have moved is not a recovery position.
+  const [{ data: dup }, { data: canon }] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, venue_id, notes, sage_context_notes, merged_into_id')
+      .eq('id', duplicateId)
+      .maybeSingle(),
+    supabase
+      .from('weddings')
+      .select('id, venue_id, notes, sage_context_notes, merged_into_id')
+      .eq('id', canonicalId)
+      .maybeSingle(),
+  ])
+  if (!canon) throw new Error(`mergeWeddings: canonical wedding ${canonicalId} not found`)
+  if (!dup) throw new Error(`mergeWeddings: duplicate wedding ${duplicateId} not found`)
 
-  // Helper: UPDATE table SET wedding_id = canonical WHERE wedding_id = duplicate
-  async function reassign(table: string, column = 'wedding_id'): Promise<number> {
-    const { count, error } = await supabase
-      .from(table)
-      .update({ [column]: canonicalId }, { count: 'exact' })
-      .eq(column, duplicateId)
-    if (error) {
-      // We swallow the per-table error so a single missing column / RLS
-      // hiccup doesn't abort the merge. Audit the failure to console;
-      // the migration UI surfaces partial-success on the resolver page.
-      console.warn(`[mergeWeddings] reassign ${table}.${column} failed:`, error.message)
-      return 0
-    }
-    reassigned[`${table}.${column}`] = count ?? 0
-    return count ?? 0
+  const venueId = (canon.venue_id as string | null) ?? null
+  const dupVenueId = (dup.venue_id as string | null) ?? null
+  if (venueId !== dupVenueId) {
+    throw new Error(
+      `mergeWeddings: refusing to merge across venues (${duplicateId} is venue ${dupVenueId ?? 'null'}, ` +
+        `${canonicalId} is venue ${venueId ?? 'null'})`,
+    )
+  }
+  const alreadyMergedInto = (dup.merged_into_id as string | null) ?? null
+  if (alreadyMergedInto && alreadyMergedInto !== canonicalId) {
+    throw new Error(
+      `mergeWeddings: duplicate ${duplicateId} is already merged into ${alreadyMergedInto}; ` +
+        'unmerge it before merging it somewhere else',
+    )
   }
 
-  // Reassign every direct wedding_id column. Listed top-down by importance:
-  // loss of a row here = lost coordinator data, so we walk the schema
-  // exhaustively rather than assume FK cascade does it. Confirmed against
-  // the migrations directory on 2026-05-08; tables that don't have a
-  // wedding_id column return rowcount=0 from PostgREST and are skipped.
-  await reassign('interactions')
-  await reassign('drafts')
-  await reassign('engagement_events')
-  await reassign('tours')
-  await reassign('lost_deals')
-  await reassign('admin_notifications')
-  // public.notifications has no wedding_id column (mig 017 created it
-  // with venue + user only). Skipping prevents PostgREST 400s on
-  // missing column. Confirmed against schema 2026-05-08.
-  await reassign('knowledge_gaps')
-  await reassign('intelligence_extractions')
-  await reassign('tangential_signals')
-  await reassign('source_attribution')
-  await reassign('error_logs')
-  await reassign('event_feedback')
-  await reassign('contracts')                 // 004_portal_tables.sql
-  await reassign('booked_vendors')            // 015_vendors_contracts_upgrade.sql
-  await reassign('day_of_media')              // 097_ports_from_rixey.sql
-  await reassign('wedding_internal_notes')    // 097_ports_from_rixey.sql
-  await reassign('vendor_checklist')          // 097_ports_from_rixey.sql
-  await reassign('messages')                  // 004_portal_tables.sql
-  await reassign('sage_conversations')        // 004_portal_tables.sql
-  await reassign('planning_notes')            // 004_portal_tables.sql
-  await reassign('checklist_items')           // 004_portal_tables.sql
-  await reassign('budget')                    // 004_portal_tables.sql
-  await reassign('guest_list')                // 004_portal_tables.sql
-  await reassign('timeline')                  // 004_portal_tables.sql
-  await reassign('seating_tables')            // 004_portal_tables.sql
-  await reassign('seating_assignments')       // 004_portal_tables.sql
-  await reassign('vendor_recommendations')    // 004_portal_tables.sql
-  await reassign('inspo_gallery')             // 004_portal_tables.sql
-  await reassign('booked_dates')              // 001_shared_tables.sql
-  await reassign('lead_score_history')        // 002_agent_tables.sql
-  await reassign('draft_feedback')            // 002_agent_tables.sql
-  await reassign('user_profiles')             // 220_share_token_default_and_rls.sql
-  await reassign('wedding_lifecycle_events')  // 246_*.sql (parallel agent)
-  await reassign('couple_notifications')      // 389_couple_notifications.sql
-  // attribution_events / wedding_touchpoints / candidate_identities are
-  // covered by the migration-202 trigger; we still tombstone the loser
-  // below so the trigger fires.
+  const reassigned: Record<string, number> = {}
+  const outcomes: MergeTableOutcome[] = []
 
-  // Also re-point people whose wedding_id is the duplicate. After this,
-  // both partners on the duplicate (if any) are now attached to the
-  // canonical wedding under their existing person rows.
-  await reassign('people')
+  /**
+   * Move the loser's rows one at a time, letting Postgres decide what
+   * collides. Used when the bulk UPDATE comes back 23505: the constraint
+   * may be partial, so a pre-computed collision set would guess, and a
+   * guess here either loses rows or leaves movable ones behind.
+   */
+  async function moveRowByRow(spec: WeddingFkSpec, outcome: MergeTableOutcome): Promise<void> {
+    const { table, column, pk } = spec
+    if (!pk) {
+      outcome.error = 'collision on a table with no single-column primary key; rows left in place'
+      return
+    }
+    const keyCols = spec.key_columns ?? []
+    const cols = [pk, ...keyCols].join(', ')
+    const { data: loserRows, error: selErr } = await supabase
+      .from(table)
+      .select(cols)
+      .eq(column, duplicateId)
+      .limit(PER_ROW_CAP)
+    if (selErr) {
+      outcome.error = `could not list rows after a collision: ${selErr.message}`
+      return
+    }
+    const rows = (loserRows ?? []) as unknown as Array<Record<string, unknown>>
+    if (rows.length === PER_ROW_CAP) outcome.truncated = true
+
+    for (const row of rows) {
+      const rowId = (row[pk] as string | null) ?? null
+      const key: Record<string, unknown> = {}
+      for (const c of keyCols) key[c] = row[c]
+      if (rowId === null) {
+        outcome.collisions.push({ rowId: null, key })
+        continue
+      }
+      const { error } = await writeOrLog(
+        supabase.from(table).update({ [column]: canonicalId }).eq(pk, rowId),
+        { op: `merge_weddings.move.${table}`, venueId, ignoreCodes: ['23505'] },
+      )
+      if (error?.code === '23505') {
+        // The winner already holds this key. Leave the row where it is and
+        // name it, so a coordinator can decide what to do with it.
+        outcome.collisions.push({ rowId, key })
+        continue
+      }
+      if (error) {
+        outcome.error = error.message
+        return
+      }
+      outcome.moved += 1
+    }
+  }
+
+  /**
+   * One wedding-keyed column. Bulk UPDATE first, which is the whole job
+   * whenever nothing collides; fall back to per-row on 23505.
+   */
+  async function runSpec(spec: WeddingFkSpec): Promise<void> {
+    const { table, column, strategy } = spec
+    const outcome: MergeTableOutcome = { table, column, strategy, moved: 0, collisions: [] }
+    outcomes.push(outcome)
+    if (strategy !== 'reassign' && strategy !== 'merge_one_per_wedding') return
+
+    const { count, error } = await writeOrLog(
+      supabase.from(table).update({ [column]: canonicalId }, { count: 'exact' }).eq(column, duplicateId),
+      { op: `merge_weddings.reassign.${table}`, venueId, ignoreCodes: ['23505'] },
+    )
+    if (!error) {
+      outcome.moved = count ?? 0
+      reassigned[`${table}.${column}`] = outcome.moved
+      return
+    }
+    if (error.code === '23505') {
+      await moveRowByRow(spec, outcome)
+      reassigned[`${table}.${column}`] = outcome.moved
+      return
+    }
+    // One table failing must not abort the other 100. Record it; the audit
+    // row and the return value both carry it.
+    outcome.error = error.message
+    console.warn(`[mergeWeddings] ${table}.${column} failed:`, error.message)
+  }
+
+  for (const spec of CASCADE) {
+    await runSpec(spec)
+  }
 
   // Now merge text fields from duplicate → canonical without overwriting.
-  const [{ data: dup }, { data: canon }] = await Promise.all([
-    supabase.from('weddings').select('notes, sage_context_notes').eq('id', duplicateId).maybeSingle(),
-    supabase.from('weddings').select('notes, sage_context_notes').eq('id', canonicalId).maybeSingle(),
-  ])
-  if (dup && canon) {
+  {
     const updates: Record<string, unknown> = {}
     const dupNotes = (dup.notes as string | null) ?? null
     const canNotes = (canon.notes as string | null) ?? null
@@ -1791,7 +1920,10 @@ export async function mergeWeddings(
       updates.sage_context_notes = merged
     }
     if (Object.keys(updates).length > 0) {
-      await supabase.from('weddings').update(updates).eq('id', canonicalId)
+      await writeOrLog(supabase.from('weddings').update(updates).eq('id', canonicalId), {
+        op: 'merge_weddings.union_notes',
+        venueId,
+      })
     }
   }
 
@@ -1807,9 +1939,59 @@ export async function mergeWeddings(
     throw new Error(`mergeWeddings: failed to tombstone duplicate ${duplicateId}: ${tombErr.message}`)
   }
 
+  // ---- audit -------------------------------------------------------------
+  // One row per merge, carrying the per-table counts, every collision left
+  // in place, and every table that failed. Same shape as the couples-side
+  // merge audit (merge_couples, migration 379): who won, who lost, what
+  // moved, why. Without this a partial merge is invisible.
+  const movedByTable: Record<string, number> = {}
+  for (const o of outcomes) {
+    if (o.moved > 0) movedByTable[`${o.table}.${o.column}`] = o.moved
+  }
+  const collisions = outcomes
+    .filter((o) => o.collisions.length > 0)
+    .map((o) => ({ table: o.table, column: o.column, rows: o.collisions }))
+  const failures = outcomes
+    .filter((o) => o.error)
+    .map((o) => ({ table: o.table, column: o.column, error: o.error }))
+  const strategyCounts: Record<string, number> = {}
+  for (const o of outcomes) strategyCounts[o.strategy] = (strategyCounts[o.strategy] ?? 0) + 1
+
+  if (venueId) {
+    await writeOrLog(
+      supabase.from('activity_log').insert({
+        venue_id: venueId,
+        wedding_id: canonicalId,
+        activity_type: 'wedding_merged',
+        entity_type: 'wedding',
+        entity_id: duplicateId,
+        details: {
+          reason: options.reason ?? null,
+          canonical_id: canonicalId,
+          duplicate_id: duplicateId,
+          cascade_columns: CASCADE.length,
+          rows_moved_total: Object.values(movedByTable).reduce((a, b) => a + b, 0),
+          moved_by_table: movedByTable,
+          collisions_left_in_place: collisions,
+          failed_tables: failures,
+          strategy_counts: strategyCounts,
+          truncated_tables: outcomes.filter((o) => o.truncated).map((o) => o.table),
+        },
+      }),
+      { op: 'merge_weddings.audit', venueId },
+    )
+  }
+  if (failures.length > 0 || collisions.length > 0) {
+    console.warn(
+      `[mergeWeddings] ${duplicateId} -> ${canonicalId}: ` +
+        `${failures.length} table(s) failed, ${collisions.length} table(s) left rows in place`,
+    )
+  }
+
   return {
     canonicalId,
     duplicateId,
     reassigned,
+    outcomes,
   }
 }
