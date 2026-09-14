@@ -37,6 +37,7 @@ import {
   Calendar,
   Cpu,
   Database,
+  Megaphone,
   Link2,
   CheckCircle2,
   AlertTriangle,
@@ -61,6 +62,8 @@ function iconFor(name?: string) {
       return Cpu
     case 'Database':
       return Database
+    case 'Megaphone':
+      return Megaphone
     default:
       return Link2
   }

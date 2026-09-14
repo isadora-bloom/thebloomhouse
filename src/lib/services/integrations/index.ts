@@ -37,6 +37,11 @@ import { audioCaptureAdapter } from './audio_capture'
 import { honeybookAdapter } from './honeybook'
 import { dubsadoAdapter } from './dubsado'
 import { aislePlannerAdapter } from './aisle_planner'
+import {
+  googleAdsIntegrationAdapter,
+  metaAdsIntegrationAdapter,
+  tiktokAdsIntegrationAdapter,
+} from './ads'
 
 export const INTEGRATION_ADAPTERS: ReadonlyArray<IntegrationAdapter> = [
   // email
@@ -51,6 +56,11 @@ export const INTEGRATION_ADAPTERS: ReadonlyArray<IntegrationAdapter> = [
   vonageAdapter,
   // social DM (Wave 3 W28 — Instagram through the Meta Messaging API)
   instagramAdapter,
+  // ads (wave 8 W54: real connectors; the hub entry is what makes their
+  // settings pages reachable)
+  googleAdsIntegrationAdapter,
+  metaAdsIntegrationAdapter,
+  tiktokAdsIntegrationAdapter,
   // video
   zoomAdapter,
   googleMeetAdapter,
@@ -79,6 +89,7 @@ export const CATEGORY_ORDER: ReadonlyArray<IntegrationCategory> = [
   'calendar',
   'audio_capture',
   'social_dm',
+  'ads',
   'crm',
   'sms_webhook',
 ]
@@ -92,6 +103,7 @@ export const CATEGORY_LABELS: Record<IntegrationCategory, string> = {
   crm: 'CRM',
   sms_webhook: 'SMS (webhook)',
   social_dm: 'Social DMs',
+  ads: 'Ad platforms',
 }
 
 export const CATEGORY_BLURBS: Record<IntegrationCategory, string> = {
@@ -104,6 +116,7 @@ export const CATEGORY_BLURBS: Record<IntegrationCategory, string> = {
   sms_webhook: 'Push-style SMS pipelines for venues already on another phone stack.',
   social_dm:
     'The first message a couple sends is often a DM. It arrives as a handle, and a handle is an identifier the record can hold.',
+  ads: 'Spend and results arrive from the ad account itself, so the return column is measured rather than typed in.',
 }
 
 export function adaptersByCategory(category: IntegrationCategory): IntegrationAdapter[] {

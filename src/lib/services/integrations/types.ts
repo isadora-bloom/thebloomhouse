@@ -26,6 +26,9 @@ export type IntegrationCategory =
    *  else Meta opens up later. Separate from 'sms_webhook' because the
    *  identifier is a handle, not a phone number. */
   | 'social_dm'
+  /** Wave 8 W54. Paid ad platforms whose spend arrives by API instead of
+   *  being typed in from screenshots. */
+  | 'ads'
 
 export type IntegrationAuthShape =
   | 'oauth'
