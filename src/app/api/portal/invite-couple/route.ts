@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
 import { mintInviteToken } from '@/lib/services/portal/provision'
+import { appUrl } from '@/lib/app-url'
 import {
   getPlatformAuth,
   assertCanAccessVenue,
@@ -171,7 +172,7 @@ export async function POST(request: NextRequest) {
     }
     const aiName = resolvedAiName
 
-    const portalUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://bloom-house-iota.vercel.app'}/couple/${venue.slug}`
+    const portalUrl = appUrl(`/couple/${venue.slug}`)
 
     const subject = `You've been invited to your ${businessName} wedding portal`
     // De-duplicate: a couple who share an address should get one invite,
