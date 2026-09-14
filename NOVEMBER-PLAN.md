@@ -370,3 +370,23 @@ Follow-ups for wave 6 (dry work still possible):
   battery skips it for that reason. Decide whether a read tool may spend.
 - Instagram outbound replies through the disclosure guard once credentials exist.
 - Investor materials on measured numbers: the template can be written now, the numbers wait.
+
+## Wave 6 (launched 2026-09-14): a coordinator's Monday, made true
+
+Source: the Monday walkthrough audit (W39 agent, 2026-09-14), read against the code. The
+morning loop is mostly real; the walkthrough is where the day breaks because the pieces live
+on the couple's side of the portal or as two features never joined. Dry work; no data needed.
+
+| # | Workstream | Model | Owns (files) |
+|---|---|---|---|
+| W41 | Screenshot capture works: enable the disabled file input on the social capture modal and wire it to the existing vision extraction so a followers/story/DM screenshot becomes rows through the W23 path | Sonnet | `src/components/intel/social/CaptureNowModal.tsx`, `src/app/api/intel/social-integration/capture/**`, `src/lib/services/social/vision-prompt.ts` (call only) |
+| W42 | Monday admin reachable: a Knot/CSV upload entry on `/agent/leads` or the imports page (not only onboarding); a "since Friday" strip on `/today` (came in, auto-sent, waiting, failed) computed from the spine and drafts, not the midnight-reset stats | Sonnet | `src/app/(platform)/today/**`, `src/app/(platform)/admin/imports/**` or the leads page header, `src/lib/intel/adapters/**` (one new view model) |
+| W43 | The coordinator's side of the wedding page: read and search the couple's contracts, view and edit the day-of timeline, and see the reconstructed couple story (identity profile) on the same wedding page a coordinator has open in a walkthrough | Opus | `src/app/(platform)/portal/weddings/[id]/**`, the couple-portal timeline and contract components made shareable under `src/components/couple/**` (read the couple pages, do not fork them), `src/lib/intel/adapters/identity-profile-view.ts` (reuse) |
+| W44 | Table map and guest list joined: a named guest can be assigned to a table from the floor plan (drag or pick), and the assignment list and the map read the same rows | Opus | the seating components under `src/components/couple/**` and `src/app/_couple-pages/seating*/**`, `src/lib/services/couple-portal/seating*` |
+| W45 | Housekeeping the audit asked for: delete `/org` and `/sage` full-page mirrors; migration 404 adds the progression event type so non-HoneyBook CSV anchors move the decay clock; `propose_follow_ups` cost row decision recorded (keep, it is an audit of spend) | Haiku | the two pages, `src/lib/services/identity/progression.ts`, new migration 404, `scripts/cleanup-budget.json`, the isolation battery's skip note |
+
+Not in this wave, needs data or an external source: weather severity (no severity feed
+exists), Instagram versus TikTok comparison (no TikTok connector), investor numbers.
+
+Shared rules as wave 3. `git reset --hard consolidation` and `npm ci` first. No spine writes
+outside linkSignal. No database writes. Migrations wait for `npm run migrate:pending`.
