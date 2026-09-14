@@ -5,8 +5,11 @@ import { useParams, useRouter } from 'next/navigation'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
-import { dedupePeopleByName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 import { htmlToText } from '@/lib/utils/html-text'
+// W64: contacts and the communication history come from the canonical
+// journey reader now, keyed on the couple this wedding was minted into.
+// The page no longer queries `people` or `interactions` itself.
+import { useCoupleJourneyByWedding } from '../../_canonical/use-journey'
 import { detectInteractionFlavor } from '@/lib/utils/interaction-flavor'
 import {
   ArrowLeft,
@@ -122,7 +125,9 @@ interface PersonRow {
 interface InteractionRow {
   id: string
   type: string
-  direction: string
+  /** Write-time direction stamp (migration 381). Null on a touchpoint
+   *  written before that migration — never inferred at read time. */
+  direction: string | null
   subject: string | null
   body_preview: string | null
   // 2026-05-09: Communication-history rows are click-to-expand.
@@ -366,7 +371,8 @@ function noteCategoryConfig(category: string): {
 
 function interactionIcon(
   type: string,
-  direction: string,
+  // Null when the touchpoint carries no write-time direction stamp.
+  direction: string | null,
   flavor: 'calendly' | null = null,
 ) {
   // Flavor wins over raw type — a Calendly-sourced SMS or meeting
@@ -632,8 +638,6 @@ export default function ClientProfilePage() {
   const aiName = useAiName()
 
   const [wedding, setWedding] = useState<WeddingDetail | null>(null)
-  const [people, setPeople] = useState<PersonRow[]>([])
-  const [interactions, setInteractions] = useState<InteractionRow[]>([])
   const [events, setEvents] = useState<EngagementEventRow[]>([])
   // T5-Rixey-GGG Bug 25: scoreHistory snapshots are still fetched
   // (HeatHistoryPanel reads them) but the inline sparkline now derives
@@ -702,36 +706,26 @@ export default function ClientProfilePage() {
       // batch via a wedding-scoped inner-join through drafts. Pre-fix this
       // ran sequentially after the first 11 queries resolved (a separate
       // round-trip just to get feedback IDs).
-      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, toursRes, activityRes, extractionsRes, feedbackRes] = await Promise.all([
+      const [weddingRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, toursRes, activityRes, extractionsRes, feedbackRes] = await Promise.all([
+        // W64: the operator columns, named. `couples` has no home for
+        // any of these — quoted value, guest estimates, lost reason,
+        // the AI opt-out, the client-code extension — so this one read
+        // stays until the spine grows them. Identity, heat, lifecycle
+        // and the couple's own dates come from the journey reader
+        // above, not from here, and the select is explicit so the gap
+        // is a list somebody can work through rather than a `*`.
         supabase
           .from('weddings')
-          .select('*')
+          .select(
+            'id, venue_id, status, source, source_detail, wedding_date, wedding_date_precision, ' +
+              'guest_count_estimate, estimated_guests, partner_count, booking_value, ' +
+              'assigned_consultant_id, inquiry_date, first_response_at, tour_date, booked_at, ' +
+              'lost_at, lost_reason, notes, code_extension, created_at, updated_at, ' +
+              'ai_opted_out, ai_opted_out_at, ai_opted_out_reason',
+          )
           .eq('id', weddingId)
           .eq('venue_id', VENUE_ID)
           .single(),
-        supabase
-          .from('people')
-          .select('id, role, first_name, last_name, email, phone')
-          .eq('wedding_id', weddingId)
-          .eq('venue_id', VENUE_ID)
-          // F2 in MERGED-INTO-ID-TRACE-2026-05-12.md: exclude soft-
-          // tombstoned partner rows so duplicates created via the
-          // phantom-tombstone path (or any direct-SQL fixup) stop
-          // rendering twice in Contacts.
-          .is('merged_into_id', null),
-        supabase
-          .from('interactions')
-          // 2026-05-09: select full_body + gmail_thread_id alongside
-          // the truncated body_preview so each row can expand-on-click
-          // without a follow-up fetch, and link to the inbox thread
-          // when one exists. full_body lives on every row written by
-          // the live pipeline; pre-fix CRM-import rows may have
-          // full_body=null and the UI degrades gracefully.
-          .select('id, type, direction, subject, body_preview, full_body, gmail_thread_id, timestamp')
-          .eq('wedding_id', weddingId)
-          .eq('venue_id', VENUE_ID)
-          .order('timestamp', { ascending: false })
-          .limit(50),
         supabase
           .from('engagement_events')
           .select('id, event_type, points, metadata, occurred_at, created_at')
@@ -813,15 +807,13 @@ export default function ClientProfilePage() {
         .eq('venue_id', VENUE_ID)
         .maybeSingle()
       const weddingWithHeat = {
-        ...(weddingRes.data as Record<string, unknown>),
+        ...(weddingRes.data as unknown as Record<string, unknown>),
         heat_score: (heatRow?.heat_score as number | null | undefined) ?? 0,
         temperature_tier: (heatRow?.temperature_tier as string | null | undefined) ?? 'cool',
       } as WeddingDetail
 
       const fetchedDrafts = (draftsRes.data ?? []) as DraftRow[]
       setWedding(weddingWithHeat)
-      setPeople((peopleRes.data ?? []) as PersonRow[])
-      setInteractions((intRes.data ?? []) as InteractionRow[])
       setEvents((eventsRes.data ?? []) as EngagementEventRow[])
       setScoreHistory((scoreRes.data ?? []) as LeadScoreRow[])
       setDrafts(fetchedDrafts)
@@ -849,48 +841,89 @@ export default function ClientProfilePage() {
     fetchData()
   }, [fetchData])
 
-  // Derived data — partners filtered to the partner roles, then
-  // canonicalised so a wedding with both a Knot-relay nickname row
-  // ("Jen B") and a calculator-submission legal-name row ("Jennifer
-  // Biaksangi") collapses to the legal name in the header. The
-  // Contacts list below still iterates the raw partners array so a
-  // coordinator can see every row that exists for this couple. The
-  // canonical list is what drives the headline + email/phone
-  // shortcuts.
-  const partners = useMemo(
-    () => people.filter((p) => p.role === 'partner1' || p.role === 'partner2'),
-    [people]
-  )
+  // W64: contacts, the couple's name and the communication history all
+  // come from the canonical journey reader, keyed on the couple this
+  // wedding was minted into.
+  //
+  // This replaces three jobs the page used to do itself. It read every
+  // `people` row on the wedding and then picked a canonical pair out of
+  // them, because a Knot-relay nickname row ("Jen B") and a calculator
+  // legal-name row ("Jennifer Biaksangi") were two rows for one person.
+  // On the spine that reconciliation has already happened: the couple
+  // IS the pair, and `couples.primary_contact_*` / `partner_contact_*`
+  // are the picked values. One record, no re-picking, and the name in
+  // this header is now the same string the couples list and the pipeline
+  // print for the same couple.
+  const {
+    journey,
+    contact,
+    fields: ribbonFields,
+  } = useCoupleJourneyByWedding(weddingId)
 
-  const canonicalPartners = useMemo(
-    () => pickCanonicalPeople(partners),
-    [partners]
-  )
-
-  const coupleName = useMemo(() => {
-    if (canonicalPartners.length === 0) return 'Unknown Client'
-    const deduped = dedupePeopleByName(canonicalPartners)
-    // Bug 3 of Sophie trace: when only ONE partner row exists, render
-    // full "FirstName LastName" so the header isn't a bare first name.
-    // When two partners exist, keep the "First1 & First2" couple
-    // shorthand — readers know the surname from the lead detail panels.
-    if (deduped.length === 1) {
-      const p = deduped[0]
-      const last = p.last_name?.trim()
-      return last ? `${p.first_name} ${last}` : p.first_name
+  const partners = useMemo<PersonRow[]>(() => {
+    if (!contact) return []
+    const rows: PersonRow[] = []
+    if (contact.primary_contact_name || contact.primary_contact_email || contact.primary_contact_phone) {
+      rows.push({
+        id: 'primary',
+        role: 'partner1',
+        first_name: contact.primary_contact_name ?? '',
+        last_name: '',
+        email: contact.primary_contact_email,
+        phone: contact.primary_contact_phone,
+      })
     }
-    return deduped.map((p) => p.first_name).join(' & ')
-  }, [canonicalPartners])
+    if (contact.partner_contact_name || contact.partner_contact_email || contact.partner_contact_phone) {
+      rows.push({
+        id: 'partner',
+        role: 'partner2',
+        first_name: contact.partner_contact_name ?? '',
+        last_name: '',
+        email: contact.partner_contact_email,
+        phone: contact.partner_contact_phone,
+      })
+    }
+    return rows
+  }, [contact])
 
-  const primaryEmail = useMemo(
-    () => canonicalPartners.find((p) => p.email)?.email ?? null,
-    [canonicalPartners]
-  )
+  const coupleName = journey?.couple?.names ?? 'Unknown Client'
 
-  const primaryPhone = useMemo(
-    () => canonicalPartners.find((p) => p.phone)?.phone ?? null,
-    [canonicalPartners]
-  )
+  const primaryEmail = contact?.primary_contact_email ?? contact?.partner_contact_email ?? null
+  const primaryPhone = contact?.primary_contact_phone ?? contact?.partner_contact_phone ?? null
+
+  // Communication history — the canonical ribbon, decorated with the
+  // payload columns the rows render. Ordering and membership come from
+  // the reader; nothing here decides which touchpoints exist.
+  //
+  // `interactions` used to be its own table read. Everything it held is
+  // carried onto the touchpoint at write time: subject, thread id and,
+  // since Phase 1.1.b, the full body. A row whose payload has no body
+  // degrades exactly as an old CRM-imported interaction did.
+  const interactions = useMemo<InteractionRow[]>(() => {
+    if (!journey) return []
+    const byId = new Map(ribbonFields.map((f) => [f.id, f]))
+    const str = (raw: Record<string, unknown> | null, key: string): string | null => {
+      const v = raw?.[key]
+      return typeof v === 'string' && v.trim() !== '' ? v : null
+    }
+    return journey.ribbon
+      .map((t) => {
+        const raw = byId.get(t.id)?.raw_payload ?? null
+        const full = str(raw, 'full_body')
+        return {
+          id: t.id,
+          type: t.channel,
+          direction: byId.get(t.id)?.direction ?? null,
+          subject: str(raw, 'subject'),
+          body_preview: str(raw, 'body_preview') ?? (full ? full.slice(0, 200) : null),
+          full_body: full,
+          gmail_thread_id: str(raw, 'thread_id'),
+          timestamp: t.occurredAt,
+        }
+      })
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 50)
+  }, [journey, ribbonFields])
 
   // T5-Rixey-GGG Bug 25: derive a real time-series for the heat
   // sparkline from engagement_events.occurred_at (the REAL event
@@ -948,12 +981,16 @@ export default function ClientProfilePage() {
     ]
   }, [wedding])
 
-  // Interaction stats
+  // Interaction stats. Direction is stamped when a touchpoint is
+  // written (migration 381) and never inferred here, so a row written
+  // before that migration counts towards the total and towards neither
+  // side. `unstamped` says how many, rather than quietly rounding them
+  // into "out".
   const interactionStats = useMemo(() => {
     const total = interactions.length
     const inbound = interactions.filter((i) => i.direction === 'inbound').length
     const outbound = interactions.filter((i) => i.direction === 'outbound').length
-    return { total, inbound, outbound }
+    return { total, inbound, outbound, unstamped: total - inbound - outbound }
   }, [interactions])
 
 
@@ -1252,6 +1289,11 @@ export default function ClientProfilePage() {
                 <span>{interactionStats.total} total</span>
                 <span className="flex items-center gap-1"><ArrowDownRight className="w-3 h-3 text-blue-500" /> {interactionStats.inbound} in</span>
                 <span className="flex items-center gap-1"><ArrowUpRight className="w-3 h-3 text-emerald-500" /> {interactionStats.outbound} out</span>
+                {interactionStats.unstamped > 0 && (
+                  <span title="Written before direction was stamped at write time. Counted once, attributed to neither side.">
+                    {interactionStats.unstamped} unmarked
+                  </span>
+                )}
               </div>
             </div>
 

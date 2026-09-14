@@ -1,59 +1,97 @@
 'use client'
 
+/**
+ * /intel/roi — "Your Impact".
+ *
+ * W64: this page used to run eight browser queries of its own across
+ * `interactions`, `weddings`, `drafts` and `draft_feedback`, and derive
+ * every figure inline. That gave it its own idea of an inquiry, its own
+ * idea of a first response, and its own idea of a booking, none of which
+ * matched /intel/cohort, /intel/sources or Ask your data.
+ *
+ * It now holds no queries. One fetch to /api/intel/canonical/impact
+ * returns what the readers already know, and the channel table at the
+ * bottom is `ChannelTruthSection` — the same component /intel/sources
+ * renders, hitting the same endpoint, calling the same
+ * `getSourceAttribution`. The two pages cannot disagree about a channel,
+ * because there is only one function.
+ *
+ * Three figures changed on purpose, and the page says so on screen:
+ *   - first response is a MEDIAN in hours from `getCohortFunnel`, not a
+ *     mean in minutes this page invented;
+ *   - "leads rescued" became the funnel's drop-off point, which is the
+ *     measured version of the same claim rather than a threshold someone
+ *     picked;
+ *   - pipeline is a count of live couples, not a sum of quoted values.
+ *     `couples` carries no revenue column, and the old sum read as
+ *     money the venue had never been promised.
+ */
+
 import { useEffect, useState, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import { useScope } from '@/lib/hooks/use-scope'
 import {
   Mail,
   Clock,
   Timer,
-  Flame,
+  TrendingDown,
   TrendingUp,
   ThumbsUp,
   ArrowUp,
   ArrowDown,
   Minus,
   BarChart3,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react'
+import { WhyThisCard } from '@/components/ui/why-this-card'
+import { renderDistribution, WITHHELD } from '@/lib/intel/adapters/honesty'
+import type { Distribution, CohortFunnel } from '@/lib/intel/canonical'
+import { ChannelTruthSection } from '../_canonical/channel-truth'
 
 // ---------------------------------------------------------------------------
-// Types
+// Wire types — mirror /api/intel/canonical/impact
 // ---------------------------------------------------------------------------
 
-interface ROIMetrics {
-  inquiriesHandled: number
-  inquiriesLastMonth: number
-  avgResponseMinutes: number | null
-  hoursSaved: number
-  hoursSavedLastMonth: number
-  rescuedLeads: number
-  bookingsThisMonth: number
-  pipelineValue: number
-  bookingsLastMonth: number
-  aiAccuracy: number | null
-  totalDrafts: number
+interface ImpactPart {
+  venueId: string
+  venueName: string | null
+  responseTime: Distribution
+  knee: CohortFunnel['knee']
 }
 
-const EMPTY_METRICS: ROIMetrics = {
-  inquiriesHandled: 0,
-  inquiriesLastMonth: 0,
-  avgResponseMinutes: null,
-  hoursSaved: 0,
-  hoursSavedLastMonth: 0,
-  rescuedLeads: 0,
-  bookingsThisMonth: 0,
-  pipelineValue: 0,
-  bookingsLastMonth: 0,
-  aiAccuracy: null,
-  totalDrafts: 0,
+interface ImpactTotals {
+  inquiries: { thisMonth: number; lastMonth: number }
+  bookings: { thisMonth: number; lastMonth: number }
+  livePipelineCouples: number
+  unstampedThisMonth: number
+  draftsThisMonth: number
+  draftsLastMonth: number
+  feedbackTotal: number
+  feedbackApproved: number
+}
+
+interface ApiResponse {
+  ok: boolean
+  venueCount?: number
+  truncated?: boolean
+  totals?: ImpactTotals
+  parts?: ImpactPart[]
+  error?: string
+}
+
+const EMPTY_TOTALS: ImpactTotals = {
+  inquiries: { thisMonth: 0, lastMonth: 0 },
+  bookings: { thisMonth: 0, lastMonth: 0 },
+  livePipelineCouples: 0,
+  unstampedThisMonth: 0,
+  draftsThisMonth: 0,
+  draftsLastMonth: 0,
+  feedbackTotal: 0,
+  feedbackApproved: 0,
 }
 
 // Time we assume a coordinator spends typing one response from scratch.
-// Used as the multiplier for the "Hours Saved" card: drafts × MINUTES_PER_DRAFT.
-// This is an internal model assumption, not an industry-benchmarked
-// figure. We don't claim it on the UI as an industry average — the
-// label says "estimated time per response" so the number is honest about
-// what it represents.
+// An internal model assumption, not an industry benchmark, and the label
+// on screen says which.
 const ESTIMATED_MINUTES_PER_DRAFT = 8
 
 // ---------------------------------------------------------------------------
@@ -98,345 +136,165 @@ function EmptyNote({ text }: { text: string }) {
   return <p className="text-[10px] text-sage-400 mt-1 leading-tight">{text}</p>
 }
 
+/** Median hours, as a sentence an operator reads rather than a decimal. */
+function hoursText(d: Distribution): string {
+  const rendered = renderDistribution(d, 'number')
+  if (rendered.text === WITHHELD || d.value === null) return '--'
+  const hours = d.value
+  if (hours < 1) return `${Math.round(hours * 60)}m`
+  if (hours < 48) return `${Math.round(hours)}h`
+  return `${Math.round(hours / 24)}d`
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export default function ROIDashboardPage() {
-  const scope = useScope()
-  const [metrics, setMetrics] = useState<ROIMetrics>(EMPTY_METRICS)
+  const [totals, setTotals] = useState<ImpactTotals>(EMPTY_TOTALS)
+  const [parts, setParts] = useState<ImpactPart[]>([])
+  const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  // Resolve venue IDs from scope
-  const resolveVenueIds = useCallback(async (): Promise<string[] | null> => {
-    const supabase = createClient()
-    if (scope.level === 'venue' && scope.venueId) return [scope.venueId]
-    if (scope.level === 'group' && scope.groupId) {
-      const { data } = await supabase
-        .from('venue_group_members')
-        .select('venue_id')
-        .eq('group_id', scope.groupId)
-      return (data ?? []).map((r) => r.venue_id as string)
-    }
-    if (scope.orgId) {
-      // company scope — filter to user's org's venues only (prevents cross-org leak)
-      const { data: orgVenues } = await supabase
-        .from('venues')
-        .select('id')
-        .eq('org_id', scope.orgId)
-      return (orgVenues ?? []).map((v) => v.id as string)
-    }
-    return null // company without orgId — legacy fallback
-  }, [scope.level, scope.venueId, scope.groupId, scope.orgId])
-
-  useEffect(() => {
-    if (scope.loading) return
-
-    async function load() {
-      setLoading(true)
-      const supabase = createClient()
-      const venueIds = await resolveVenueIds()
-
-      // Helper: apply venue filter
-      function vf<T extends { in: (col: string, vals: string[]) => T }>(q: T): T {
-        if (venueIds && venueIds.length > 0) return q.in('venue_id', venueIds)
-        return q
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/intel/canonical/impact', { cache: 'no-store' })
+      const body = (await res.json()) as ApiResponse
+      if (!body.ok) {
+        setError(body.error ?? `Impact failed (HTTP ${res.status})`)
+        setTotals(EMPTY_TOTALS)
+        setParts([])
+        return
       }
-
-      const now = new Date()
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-
-      // 1. Inquiries handled this month (inbound emails).
-      // T5-Rixey-LL: window on timestamp (real email send/receive
-      // time) not created_at (Bloom-side row insertion). Pre-fix a
-      // backfilled venue would either see zero inquiries (none imported
-      // recently) or a giant import-day spike (all 12 months collapsed
-      // into the import day's bucket).
-      const inboundQ = supabase
-        .from('interactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('direction', 'inbound')
-        .gte('timestamp', monthStart.toISOString())
-      const { count: inquiriesHandled } = await vf(inboundQ as never)
-
-      // Inquiries last month for comparison
-      const inboundLastQ = supabase
-        .from('interactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('direction', 'inbound')
-        .gte('timestamp', lastMonthStart.toISOString())
-        .lte('timestamp', lastMonthEnd.toISOString())
-      const { count: inquiriesLastMonth } = await vf(inboundLastQ as never)
-
-      // 2. Average first response time.
-      // Fetch inbound interactions this month with their wedding_id.
-      // Window AND ordering use timestamp — same doctrine as above,
-      // and we need the email-time semantics for matching outbound
-      // replies after the inbound (response time = elapsed event-time,
-      // not elapsed import-time).
-      const inboundDataQ = supabase
-        .from('interactions')
-        .select('id, wedding_id, timestamp')
-        .eq('direction', 'inbound')
-        .gte('timestamp', thirtyDaysAgo.toISOString())
-        .order('timestamp', { ascending: true })
-        .limit(500)
-      const { data: inboundData } = await vf(inboundDataQ as never) as {
-        data: Array<{ id: string; wedding_id: string | null; timestamp: string }> | null
-      }
-
-      // Fetch outbound interactions for matching
-      const outboundDataQ = supabase
-        .from('interactions')
-        .select('id, wedding_id, timestamp')
-        .eq('direction', 'outbound')
-        .gte('timestamp', thirtyDaysAgo.toISOString())
-        .order('timestamp', { ascending: true })
-        .limit(500)
-      const { data: outboundData } = await vf(outboundDataQ as never) as {
-        data: Array<{ id: string; wedding_id: string | null; timestamp: string }> | null
-      }
-
-      // Compute average response time: for each inbound with a wedding_id,
-      // find the first outbound with the same wedding_id after it
-      let totalResponseMs = 0
-      let responseCount = 0
-      let rescuedLeads = 0
-
-      if (inboundData && outboundData) {
-        // Index outbound by wedding_id (earliest first). T5-Rixey-LL:
-        // use timestamp (real send time) instead of created_at so
-        // backfilled responses match their backfilled inbounds in the
-        // right chronological order.
-        const outboundByWedding = new Map<string, Array<{ timestamp: string }>>()
-        for (const ob of outboundData) {
-          if (!ob.wedding_id) continue
-          const arr = outboundByWedding.get(ob.wedding_id) ?? []
-          arr.push({ timestamp: ob.timestamp })
-          outboundByWedding.set(ob.wedding_id, arr)
-        }
-
-        // Track already-matched wedding_ids to get first response only
-        const matched = new Set<string>()
-        for (const ib of inboundData) {
-          if (!ib.wedding_id || matched.has(ib.wedding_id)) continue
-          const outbounds = outboundByWedding.get(ib.wedding_id)
-          if (!outbounds) continue
-
-          // Find first outbound after this inbound
-          const ibTime = new Date(ib.timestamp).getTime()
-          const firstReply = outbounds.find(
-            (ob) => new Date(ob.timestamp).getTime() > ibTime
-          )
-          if (firstReply) {
-            const replyTime = new Date(firstReply.timestamp).getTime()
-            const diffMs = replyTime - ibTime
-            totalResponseMs += diffMs
-            responseCount += 1
-            matched.add(ib.wedding_id)
-
-            // Check rescued leads: response < 60 min AND inbound was sitting > 24 hours
-            // (i.e., no earlier outbound within 24 hours before our response)
-            const responseMinutes = diffMs / 60000
-            if (responseMinutes < 60) {
-              // Check if this lead had been waiting > 24 hours (no prior outbound)
-              const priorOutbound = outbounds.find(
-                (ob) => new Date(ob.timestamp).getTime() <= ibTime
-              )
-              if (!priorOutbound) {
-                rescuedLeads += 1
-              }
-            }
-          }
-        }
-      }
-
-      const avgResponseMinutes =
-        responseCount > 0 ? Math.round(totalResponseMs / responseCount / 60000) : null
-
-      // 3. Hours saved: count of AI drafts this month * 8 min / 60
-      const draftsQ = supabase
-        .from('drafts')
-        .select('id', { count: 'exact', head: true })
-        .gte('created_at', monthStart.toISOString())
-      const { count: draftsThisMonth } = await vf(draftsQ as never)
-
-      const draftsLastQ = supabase
-        .from('drafts')
-        .select('id', { count: 'exact', head: true })
-        .gte('created_at', lastMonthStart.toISOString())
-        .lte('created_at', lastMonthEnd.toISOString())
-      const { count: draftsLastMonth } = await vf(draftsLastQ as never)
-
-      const hoursSaved = Math.round(((draftsThisMonth ?? 0) * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
-      const hoursSavedLastMonth = Math.round(((draftsLastMonth ?? 0) * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
-
-      // 5. Bookings this month vs last month + pipeline value.
-      // T5-Rixey-LL: window on booked_at (real signing date), not
-      // created_at (import date). Pre-fix, a venue importing 12 months
-      // of HoneyBook history would see "0 bookings this month" because
-      // every booked wedding's created_at was the import day, not the
-      // actual signing date.
-      const bookingsQ = supabase
-        .from('weddings')
-        .select('id, booking_value')
-        .eq('status', 'booked')
-        .gte('booked_at', monthStart.toISOString())
-      const { data: bookingsData } = await vf(bookingsQ as never) as {
-        data: Array<{ id: string; booking_value: number | null }> | null
-      }
-
-      const bookingsLastMonthQ = supabase
-        .from('weddings')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'booked')
-        .gte('booked_at', lastMonthStart.toISOString())
-        .lte('booked_at', lastMonthEnd.toISOString())
-      const { count: bookingsLastMonthCount } = await vf(bookingsLastMonthQ as never)
-
-      const pipelineQ = supabase
-        .from('weddings')
-        .select('booking_value')
-        .eq('status', 'inquiry')
-      const { data: pipelineData } = await vf(pipelineQ as never) as {
-        data: Array<{ booking_value: number | null }> | null
-      }
-
-      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
-      const pipelineValue = (pipelineData ?? []).reduce(
-        (sum, r) => sum + (r.booking_value ?? 0) / 100,
-        0
-      )
-
-      // 6. AI accuracy: drafts approved without edit / total feedback
-      const approvedQ = supabase
-        .from('draft_feedback')
-        .select('id', { count: 'exact', head: true })
-        .eq('action', 'approved')
-      const { count: approvedCount } = await vf(approvedQ as never)
-
-      const totalFeedbackQ = supabase
-        .from('draft_feedback')
-        .select('id', { count: 'exact', head: true })
-      const { count: totalFeedbackCount } = await vf(totalFeedbackQ as never)
-
-      const aiAccuracy =
-        (totalFeedbackCount ?? 0) > 0
-          ? Math.round(((approvedCount ?? 0) / (totalFeedbackCount ?? 1)) * 100)
-          : null
-
-      setMetrics({
-        inquiriesHandled: inquiriesHandled ?? 0,
-        inquiriesLastMonth: inquiriesLastMonth ?? 0,
-        avgResponseMinutes,
-        hoursSaved,
-        hoursSavedLastMonth,
-        rescuedLeads,
-        bookingsThisMonth: bookingsData?.length ?? 0,
-        pipelineValue,
-        bookingsLastMonth: bookingsLastMonthCount ?? 0,
-        aiAccuracy,
-        totalDrafts: totalFeedbackCount ?? 0,
-      })
+      setTotals(body.totals ?? EMPTY_TOTALS)
+      setParts(body.parts ?? [])
+      setTruncated(Boolean(body.truncated))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
       setLoading(false)
     }
+  }, [])
 
-    load()
-  }, [scope.loading, scope.level, scope.venueId, scope.groupId, resolveVenueIds])
+  useEffect(() => {
+    void load()
+  }, [load])
 
-  // ---- Card definitions ----
-  const inquiryTrend = trendIndicator(metrics.inquiriesHandled, metrics.inquiriesLastMonth)
-  const hoursTrend = trendIndicator(metrics.hoursSaved, metrics.hoursSavedLastMonth)
-  const bookingTrend = trendIndicator(metrics.bookingsThisMonth, metrics.bookingsLastMonth)
+  const inquiryTrend = trendIndicator(totals.inquiries.thisMonth, totals.inquiries.lastMonth)
+  const bookingTrend = trendIndicator(totals.bookings.thisMonth, totals.bookings.lastMonth)
+
+  const hoursSaved =
+    Math.round((totals.draftsThisMonth * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
+  const hoursSavedLastMonth =
+    Math.round((totals.draftsLastMonth * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
+  const hoursTrend = trendIndicator(hoursSaved, hoursSavedLastMonth)
+
+  const aiAccuracy =
+    totals.feedbackTotal > 0
+      ? Math.round((totals.feedbackApproved / totals.feedbackTotal) * 100)
+      : null
+
+  // Response time is a median, and medians do not add. With one venue in
+  // scope there is one median to print; with several, the card says to
+  // read the per-venue rows below rather than inventing a blended figure.
+  const singleVenue = parts.length === 1 ? parts[0] : null
+  const knee = singleVenue?.knee ?? null
 
   const cards = [
     {
       label: 'Inquiries Handled',
-      value: metrics.inquiriesHandled,
+      value: totals.inquiries.thisMonth,
       icon: Mail,
       color: 'text-sage-600',
       bg: 'bg-sage-50',
       trend: <TrendBadge direction={inquiryTrend.direction} label={`${inquiryTrend.pct}% vs last month`} />,
-      note: null,
+      note:
+        totals.unstampedThisMonth > 0 ? (
+          <EmptyNote
+            text={`${totals.unstampedThisMonth} touchpoint${totals.unstampedThisMonth === 1 ? '' : 's'} this month carry no direction stamp and are not counted either way.`}
+          />
+        ) : null,
     },
     {
-      label: 'Avg First Response',
-      value: metrics.avgResponseMinutes !== null ? `${metrics.avgResponseMinutes}m` : '--',
+      label: 'Median First Response',
+      value: singleVenue ? hoursText(singleVenue.responseTime) : parts.length > 1 ? 'per venue' : '--',
       icon: Clock,
       color: 'text-teal-600',
       bg: 'bg-teal-50',
-      trend: null,
+      trend: singleVenue && singleVenue.responseTime.value !== null ? (
+        <span className="text-xs text-sage-500">n={singleVenue.responseTime.n} couples</span>
+      ) : null,
       note:
-        metrics.avgResponseMinutes === null ? (
-          <EmptyNote text="Needs inbound + outbound interactions to calculate." />
+        singleVenue && singleVenue.responseTime.value === null ? (
+          <EmptyNote text="Needs a couple with an inbound touch and a reply after it." />
+        ) : parts.length > 1 ? (
+          <EmptyNote text="Medians do not add. One row per venue below." />
         ) : null,
     },
     {
       label: 'Hours Saved',
-      value: metrics.hoursSaved > 0 ? `~${metrics.hoursSaved}h` : '--',
+      value: hoursSaved > 0 ? `~${hoursSaved}h` : '--',
       icon: Timer,
       color: 'text-emerald-600',
       bg: 'bg-emerald-50',
-      trend: metrics.hoursSaved > 0 ? (
+      trend: hoursSaved > 0 ? (
         <TrendBadge direction={hoursTrend.direction} label={`${hoursTrend.pct}% vs last month`} />
       ) : null,
       note:
-        metrics.hoursSaved === 0 ? (
+        hoursSaved === 0 ? (
           <EmptyNote text="Based on AI drafts generated (8 min saved per draft)." />
         ) : null,
     },
     {
-      label: 'Leads Rescued',
-      value: metrics.rescuedLeads > 0 ? metrics.rescuedLeads : '--',
-      icon: Flame,
+      label: 'Replying Late Costs',
+      value: knee ? `${Math.round(knee.dropoffAfter * 100)}pts` : '--',
+      icon: TrendingDown,
       color: 'text-orange-600',
       bg: 'bg-orange-50',
-      trend:
-        metrics.rescuedLeads > 0 ? (
-          <span className="text-xs text-orange-600 font-medium">
-            Responded in &lt;60 min to new leads
-          </span>
-        ) : null,
-      note:
-        metrics.rescuedLeads === 0 ? (
-          <EmptyNote text="Counts leads that got a fast AI response before going cold." />
-        ) : null,
+      trend: knee ? (
+        <span className="text-xs text-orange-600 font-medium">
+          tour rate falls after {Math.round(knee.responseHours)}h
+        </span>
+      ) : null,
+      note: knee ? null : (
+        <EmptyNote text="No drop-off point detectable yet. Needs couples across several response-speed bands." />
+      ),
     },
     {
       label: 'Bookings This Month',
-      value: metrics.bookingsThisMonth > 0 ? metrics.bookingsThisMonth : '--',
+      value: totals.bookings.thisMonth > 0 ? totals.bookings.thisMonth : '--',
       icon: TrendingUp,
       color: 'text-purple-600',
       bg: 'bg-purple-50',
       trend:
-        metrics.bookingsThisMonth > 0 ? (
+        totals.bookings.thisMonth > 0 ? (
           <TrendBadge direction={bookingTrend.direction} label={`${bookingTrend.pct}% vs last month`} />
         ) : (
           <span className="text-xs text-sage-400">
-            {metrics.pipelineValue > 0
-              ? `$${(metrics.pipelineValue / 1000).toFixed(0)}k in pipeline`
-              : 'No pipeline data yet'}
+            {totals.livePipelineCouples > 0
+              ? `${totals.livePipelineCouples} live couples in the pipeline`
+              : 'No live couples yet'}
           </span>
         ),
       note: null,
     },
     {
       label: 'AI Draft Accuracy',
-      value: metrics.aiAccuracy !== null ? `${metrics.aiAccuracy}%` : '--',
+      value: aiAccuracy !== null ? `${aiAccuracy}%` : '--',
       icon: ThumbsUp,
       color: 'text-blue-600',
       bg: 'bg-blue-50',
       trend:
-        metrics.aiAccuracy !== null ? (
+        aiAccuracy !== null ? (
           <span className="text-xs text-blue-600 font-medium">
-            approved as-is ({metrics.totalDrafts} reviews)
+            approved as-is ({totals.feedbackTotal} reviews)
           </span>
         ) : null,
       note:
-        metrics.aiAccuracy === null ? (
+        aiAccuracy === null ? (
           <EmptyNote text="Start approving drafts to see this metric." />
         ) : null,
     },
@@ -450,14 +308,22 @@ export default function ROIDashboardPage() {
           <BarChart3 className="w-6 h-6 text-emerald-600" />
         </div>
         <div>
-          <h1 className="font-heading text-3xl font-bold text-sage-900">
-            Your Impact
-          </h1>
+          <h1 className="font-heading text-3xl font-bold text-sage-900">Your Impact</h1>
           <p className="text-sage-600 mt-0.5">
-            Measurable ROI from Bloom House on your venue operations this month.
+            What Bloom House changed about your venue operations this month.
           </p>
         </div>
       </div>
+
+      {error ? (
+        <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <div className="font-medium">Could not load your impact</div>
+            <div className="mt-0.5 text-rose-700">{error}</div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Stat Cards - 2x3 grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -481,9 +347,7 @@ export default function ROIDashboardPage() {
               {loading ? (
                 <div className="h-9 w-20 bg-sage-100 rounded-lg animate-pulse" />
               ) : (
-                <p className="text-3xl font-bold text-sage-900 tabular-nums">
-                  {card.value}
-                </p>
+                <p className="text-3xl font-bold text-sage-900 tabular-nums">{card.value}</p>
               )}
             </div>
 
@@ -497,53 +361,77 @@ export default function ROIDashboardPage() {
         ))}
       </div>
 
-      {/* Context section */}
-      <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-        <h2 className="font-heading text-lg font-semibold text-sage-900 mb-3">
-          How These Numbers Are Calculated
-        </h2>
-        <ul className="space-y-2.5 text-sm text-sage-600">
-          <li className="flex items-start gap-3">
-            <Mail className="w-4 h-4 text-sage-400 mt-0.5 shrink-0" />
-            <span>
-              <strong className="text-sage-800">Inquiries Handled</strong> counts
-              inbound emails processed this month.
-            </span>
-          </li>
-          <li className="flex items-start gap-3">
-            <Clock className="w-4 h-4 text-sage-400 mt-0.5 shrink-0" />
-            <span>
-              <strong className="text-sage-800">Avg First Response</strong> measures
-              the time between an inbound email and the first outbound reply on
-              the same Gmail thread.
-            </span>
-          </li>
-          <li className="flex items-start gap-3">
-            <Timer className="w-4 h-4 text-sage-400 mt-0.5 shrink-0" />
-            <span>
-              <strong className="text-sage-800">Hours Saved</strong> assumes{' '}
-              {ESTIMATED_MINUTES_PER_DRAFT} minutes per response written from
-              scratch, multiplied by the number of AI drafts generated. This is
-              a model estimate, not an industry benchmark.
-            </span>
-          </li>
-          <li className="flex items-start gap-3">
-            <Flame className="w-4 h-4 text-sage-400 mt-0.5 shrink-0" />
-            <span>
-              <strong className="text-sage-800">Leads Rescued</strong> counts new
-              leads where Bloom responded in under 60 minutes, preventing the lead from going cold.
-            </span>
-          </li>
-          <li className="flex items-start gap-3">
-            <ThumbsUp className="w-4 h-4 text-sage-400 mt-0.5 shrink-0" />
-            <span>
-              <strong className="text-sage-800">AI Draft Accuracy</strong> is the
-              percentage of AI-generated drafts approved without edits, based on your
-              feedback in the approval queue.
-            </span>
-          </li>
-        </ul>
+      {/* Per-venue response time, when the scope covers more than one. */}
+      {!loading && parts.length > 1 ? (
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+          <h2 className="font-heading text-lg font-semibold text-sage-900 mb-3">
+            Median first response, by venue
+          </h2>
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wide text-sage-500">
+              <tr>
+                <th className="py-2">Venue</th>
+                <th className="py-2 text-right">Median reply</th>
+                <th className="py-2 text-right">Couples</th>
+              </tr>
+            </thead>
+            <tbody>
+              {parts.map((p) => (
+                <tr key={p.venueId} className="border-t border-border first:border-t-0">
+                  <td className="py-2 text-sage-900">{p.venueName ?? p.venueId}</td>
+                  <td className="py-2 text-right tabular-nums text-sage-900">
+                    {hoursText(p.responseTime)}
+                  </td>
+                  <td className="py-2 text-right tabular-nums text-sage-500">
+                    {p.responseTime.n}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {truncated ? (
+            <p className="mt-3 text-xs text-sage-500">
+              Showing the first {parts.length} venues in this scope.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Channel truth — the same component and endpoint /intel/sources renders. */}
+      <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+        <div>
+          <h2 className="font-heading text-lg font-semibold text-sage-900">
+            Which channels are working
+          </h2>
+          <p className="text-sm text-sage-600 mt-0.5">
+            The same table as Sources, from the same reader. If the two pages ever
+            disagree it is a bug, not a difference of opinion.
+          </p>
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-sage-600">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading…
+          </div>
+        ) : (
+          <ChannelTruthSection model="first_touch" />
+        )}
       </div>
+
+      {/* Context section */}
+      <WhyThisCard
+        title="How these numbers are worked out"
+        reasoning="Every figure on this page is returned by a reader, not computed here. The page holds no database queries at all, so it cannot drift away from the rest of the platform."
+        evidence={[
+          'Inquiries Handled counts inbound touchpoints this calendar month. Direction is stamped when the touchpoint is written and never guessed at afterwards, so an unstamped row is reported rather than counted.',
+          'Median First Response is getCohortFunnel().responseTime — the median hours between a couple reaching out and the venue replying, over couples with both. A median, not a mean, and never blended across venues.',
+          `Hours Saved assumes ${ESTIMATED_MINUTES_PER_DRAFT} minutes per response written from scratch, multiplied by AI drafts generated. A model estimate, not an industry benchmark.`,
+          'Replying Late Costs is the funnel’s drop-off point: the response-speed band after which the tour rate falls most, and by how many points. It replaces the old "leads rescued" card, which counted replies under an hour against a threshold nobody had measured.',
+          'Bookings This Month counts couples with a contract-signed touchpoint this month, once each however many contract events they have.',
+          'Pipeline is a count of live couples. The spine carries no revenue column, so there is no pipeline value to show, and a sum of quoted figures would have been money nobody promised you.',
+        ]}
+        source="getCohortFunnel + getVenueOverview + loadVenueImpact (src/lib/intel)"
+      />
     </div>
   )
 }

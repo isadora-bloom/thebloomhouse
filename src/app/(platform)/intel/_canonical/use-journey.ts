@@ -40,6 +40,8 @@ interface RibbonField {
   id: string
   signal_tier: string
   confidence_tier: string | null
+  /** Write-time direction stamp (migration 381), never inferred. */
+  direction: string | null
   raw_payload: Record<string, unknown> | null
 }
 
@@ -53,7 +55,25 @@ interface ApiResponse {
   error?: string
 }
 
+/** W64: the same journey, for a page that only holds a wedding id. The
+ *  route maps it onto the couple through `couples.source_wedding_id`, so
+ *  a wedding-keyed operator surface reads the spine without a `weddings`
+ *  query of its own. Exactly one of `coupleId` / `weddingId` is used;
+ *  `coupleId` wins when both are given. */
+export function useCoupleJourneyByWedding(weddingId: string | null, reloadKey = 0) {
+  return useJourney({ weddingId }, reloadKey)
+}
+
 export function useCoupleJourney(coupleId: string | null, reloadKey = 0) {
+  return useJourney({ coupleId }, reloadKey)
+}
+
+function useJourney(
+  key: { coupleId?: string | null; weddingId?: string | null },
+  reloadKey: number,
+) {
+  const coupleId = key.coupleId ?? null
+  const weddingId = key.weddingId ?? null
   const [journey, setJourney] = useState<CoupleJourney | null>(null)
   const [contact, setContact] = useState<JourneyContact | null>(null)
   const [heat, setHeat] = useState<HeatWhy | null>(null)
@@ -62,14 +82,18 @@ export function useCoupleJourney(coupleId: string | null, reloadKey = 0) {
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    if (!coupleId) return
+    const query = coupleId
+      ? `coupleId=${encodeURIComponent(coupleId)}`
+      : weddingId
+        ? `weddingId=${encodeURIComponent(weddingId)}`
+        : null
+    if (!query) return
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(
-        `/api/intel/canonical/journey?coupleId=${encodeURIComponent(coupleId)}`,
-        { cache: 'no-store' },
-      )
+      const res = await fetch(`/api/intel/canonical/journey?${query}`, {
+        cache: 'no-store',
+      })
       const body = (await res.json()) as ApiResponse
       if (!body.ok) {
         setError(body.error ?? `Journey failed (HTTP ${res.status})`)
@@ -89,7 +113,7 @@ export function useCoupleJourney(coupleId: string | null, reloadKey = 0) {
     } finally {
       setLoading(false)
     }
-  }, [coupleId])
+  }, [coupleId, weddingId])
 
   useEffect(() => {
     void load()
@@ -124,5 +148,5 @@ export function useCoupleJourney(coupleId: string | null, reloadKey = 0) {
     }))
   }, [journey])
 
-  return { journey, contact, heat, touchpoints, anchors, loading, error, reload: load }
+  return { journey, contact, heat, fields, touchpoints, anchors, loading, error, reload: load }
 }

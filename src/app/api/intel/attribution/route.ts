@@ -1,47 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { recomputeFirstTouch } from '@/lib/services/identity/candidate-resolver'
-import { recalculateHeatScore } from '@/lib/services/heat-mapping'
-import { normalizeSource } from '@/lib/services/normalize-source'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
-import { redactError } from '@/lib/observability/redact'
+import {
+  acceptComputedSource,
+  loadAttributionEvent,
+  revertAttributionEvent,
+  venueOrgId,
+  type ConflictAction,
+} from '@/lib/services/attribution/conflict-resolution'
 
 /**
- * Attribution mutation endpoint (Phase B / PB.12 fixes #2 + #3).
+ * Attribution conflict-resolution endpoint (Phase B / PB.12 fixes #2 + #3).
  *
  *   POST /api/intel/attribution
- *     Body shapes:
- *       { action: 'revert',  attribution_event_id }
- *         — sets reverted_at on the row, then recomputes is_first_touch
- *           across remaining live rows for that wedding. Without this
- *           recompute, reverting the first-touch row leaves the wedding
- *           with no first-touch until a new signal arrives.
- *       { action: 'accept_computed', attribution_event_id }
- *         — coordinator decides the computed first-touch is correct
- *           when there's a conflict. Overwrites weddings.source with
- *           the normalized computed platform, clears the
- *           conflict_with_legacy_source flag on the row, leaves the
- *           audit trail intact.
- *       { action: 'accept_legacy', attribution_event_id }
- *         — coordinator decides the legacy weddings.source is correct.
- *           Reverts the attribution_event row + recomputes first-touch
- *           the same way 'revert' does, plus clears the conflict flag
- *           on any sibling rows for the same wedding so the queue
- *           item disappears.
+ *     { action: 'revert',          attribution_event_id }
+ *     { action: 'accept_legacy',   attribution_event_id }
+ *     { action: 'accept_computed', attribution_event_id }
  *
- * RLS: writes via service client after auth.venueId check matches the
- * row's venue. The attribution_events table has the venue_id denormalized
- * so the check is a single fetch.
+ * This is a repair surface over the pre-spine `attribution_events`
+ * ledger, not a reader. No figure on any page comes from it: channel
+ * truth is derived from the couple ribbon by `getSourceAttribution`, and
+ * the conflict queue this settles empties as the reimport lands.
+ *
+ * W64 moved the three write sequences into
+ * `src/lib/services/attribution/conflict-resolution.ts`, where the
+ * legacy-ledger code belongs and can be read in one piece. What stayed
+ * here is what a route is for: plan gate, auth, tenancy, and dispatch.
+ *
+ * Tenancy: coordinators are venue-scoped; org and super admins may fix a
+ * conflict on any venue inside their own org, which is checked against
+ * the row's venue rather than assumed. Mirrors /api/agent/post-tour-brief.
  */
 
-interface RevertBody {
-  action: 'revert' | 'accept_legacy'
-  attribution_event_id: string
-}
-interface AcceptComputedBody {
-  action: 'accept_computed'
-  attribution_event_id: string
+interface PostBody {
+  action?: ConflictAction
+  attribution_event_id?: string
 }
 
 export async function POST(req: NextRequest) {
@@ -56,9 +50,9 @@ export async function POST(req: NextRequest) {
   const demoRefusal = refuseDemo(auth)
   if (demoRefusal) return demoRefusal
 
-  let body: RevertBody | AcceptComputedBody
+  let body: PostBody
   try {
-    body = await req.json()
+    body = (await req.json()) as PostBody
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
@@ -68,98 +62,34 @@ export async function POST(req: NextRequest) {
 
   const supabase = createServiceClient()
 
-  // Verify the row belongs to a venue the caller has access to.
-  const { data: row, error: rowErr } = await supabase
-    .from('attribution_events')
-    .select('id, venue_id, wedding_id, source_platform, conflict_with_legacy_source, reverted_at')
-    .eq('id', body.attribution_event_id)
-    .single()
-  if (rowErr || !row) {
+  const row = await loadAttributionEvent(supabase, body.attribution_event_id)
+  if (!row) {
     return NextResponse.json({ error: 'attribution_event not found' }, { status: 404 })
   }
-  const r = row as {
-    id: string
-    venue_id: string
-    wedding_id: string
-    source_platform: string
-    conflict_with_legacy_source: string | null
-    reverted_at: string | null
-  }
-  // Org admins + super admins manage attributions across every
-  // venue in their org. Coordinators are venue-scoped. Mirrors the
-  // pattern in /api/agent/post-tour-brief. Without this, org admins
-  // can't fix an attribution conflict on a venue they don't sit on.
+
   const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
-  if (!isAdmin && r.venue_id !== auth.venueId) {
+  if (!isAdmin && row.venue_id !== auth.venueId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
   if (isAdmin && auth.orgId) {
-    const { data: rowVenue } = await supabase
-      .from('venues')
-      .select('org_id')
-      .eq('id', r.venue_id)
-      .single()
-    if ((rowVenue as { org_id: string | null } | null)?.org_id !== auth.orgId) {
+    if ((await venueOrgId(supabase, row.venue_id)) !== auth.orgId) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
   }
 
   if (body.action === 'revert' || body.action === 'accept_legacy') {
-    if (!r.reverted_at) {
-      const { error: updErr } = await supabase
-        .from('attribution_events')
-        .update({
-          reverted_at: new Date().toISOString(),
-          reverted_by: auth.userId ?? null,
-          reverted_reason: body.action === 'accept_legacy' ? 'coordinator: legacy source wins' : 'coordinator: reverted',
-        })
-        .eq('id', r.id)
-      if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 })
-    }
-
-    // Clear conflict flags on sibling live rows for the same wedding —
-    // accepting legacy ends the conflict for the wedding entirely.
-    if (body.action === 'accept_legacy') {
-      await supabase
-        .from('attribution_events')
-        .update({ conflict_with_legacy_source: null })
-        .eq('wedding_id', r.wedding_id)
-        .is('reverted_at', null)
-    }
-
-    const ft = await recomputeFirstTouch(supabase, r.wedding_id)
-    if (ft.error) return NextResponse.json({ error: ft.error }, { status: 500 })
-    // Connective tissue (gap C — 2026-04-30): the reverted
-    // attribution was contributing to the wedding's heat (cross-
-    // platform bonus, AI-tier bonus, funnel weight). Recompute so
-    // the score reflects the new live attribution set. Best-effort
-    // — never roll back the revert on heat-calc failure.
-    try {
-      await recalculateHeatScore(r.venue_id, r.wedding_id)
-    } catch (err) {
-      console.warn('[attribution revert] heat recalc failed:', redactError(err))
-    }
+    const result = await revertAttributionEvent(supabase, row, {
+      acceptLegacy: body.action === 'accept_legacy',
+      userId: auth.userId ?? null,
+    })
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
     return NextResponse.json({ ok: true })
   }
 
   if (body.action === 'accept_computed') {
-    const computed = normalizeSource(r.source_platform)
-    const { error: wedErr } = await supabase
-      .from('weddings')
-      .update({ source: computed })
-      .eq('id', r.wedding_id)
-    if (wedErr) return NextResponse.json({ error: wedErr.message }, { status: 500 })
-
-    // Clear conflict flag on every live attribution row for this
-    // wedding — coordinator's decision applies to all sources, not
-    // just this one row.
-    await supabase
-      .from('attribution_events')
-      .update({ conflict_with_legacy_source: null })
-      .eq('wedding_id', r.wedding_id)
-      .is('reverted_at', null)
-
-    return NextResponse.json({ ok: true, new_source: computed })
+    const result = await acceptComputedSource(supabase, row)
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+    return NextResponse.json({ ok: true, new_source: result.newSource })
   }
 
   return NextResponse.json({ error: 'unknown action' }, { status: 400 })

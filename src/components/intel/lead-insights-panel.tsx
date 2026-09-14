@@ -3,7 +3,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Flame, MessageCircle, AlertTriangle, TrendingDown, Users, RefreshCw, Loader2 } from 'lucide-react'
 import { PriorTouchesBadge } from '@/components/intel/inline-primitives'
-import type { PriorTouchSummary } from '@/lib/services/intel/prior-touches'
+// W64: the wedding-scoped prior-touches route now answers from the spine
+// ribbon (loadCouplePriorTouches), keyed on the couple rather than on a
+// legacy person row. Same badge, better count.
+import type { CouplePriorTouches } from '@/lib/intel/readers/prior-touches'
 
 // ---------------------------------------------------------------------------
 // Lead insights panel — renders the 3 T3 generators (heat narration,
@@ -120,7 +123,7 @@ function riskBadgeColor(score: number): string {
 
 export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsPanelProps) {
   const [data, setData] = useState<InsightsResponse | null>(null)
-  const [priorTouches, setPriorTouches] = useState<PriorTouchSummary | null>(null)
+  const [priorTouches, setPriorTouches] = useState<CouplePriorTouches | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -152,7 +155,7 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
       setData(json)
       setError(null)
       if (ptRes.ok) {
-        const pt = (await ptRes.json()) as PriorTouchSummary | { error: string }
+        const pt = (await ptRes.json()) as CouplePriorTouches | { error: string }
         if ('touches' in pt) setPriorTouches(pt)
         else setPriorTouches(null)
       } else {
