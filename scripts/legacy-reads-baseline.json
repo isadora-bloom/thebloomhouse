@@ -1,14 +1,13 @@
 {
   "_comment": "W2 ratchet baseline. Counts of legacy-table reads under src/app. These numbers may only fall. Regenerate with: node scripts/check-no-new-legacy-reads.mjs --write",
-  "_note_2026_09_14": "weddings fell 125 to 124 in wave 6 W43 because the couple timeline builder moved from src/app/_couple-pages/timeline/page.tsx to src/components/couple/timeline-builder.tsx, taking its wedding_date read with it. The read was not retired, it left the scanned directory. Lowered anyway so it cannot come back into src/app.",
   "scanDir": "src/app",
   "tables": {
-    "weddings": 124,
-    "people": 45,
-    "interactions": 62,
-    "attribution_events": 23,
-    "wedding_touchpoints": 1
+    "weddings": 27,
+    "people": 5,
+    "interactions": 7,
+    "attribution_events": 1,
+    "wedding_touchpoints": 0
   },
-  "total": 255,
+  "total": 40,
   "updatedAt": "2026-09-14"
 }
