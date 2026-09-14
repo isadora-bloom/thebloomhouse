@@ -1,25 +1,35 @@
 'use client'
 
 /**
- * 3-step capture modal for /intel/social-integration.
+ * Capture modal for /intel/social-integration.
  *
  * Step 1 -- Link out: open instagram.com/<handle>/followers/ in a new
  *           tab. The button is gated on the venue_handle from
  *           platform_configs (passed in by the parent page).
  * Step 2 -- Instructions: numbered list with the copy-paste JS snippet
- *           the operator runs in their browser console.
+ *           the operator runs in their browser console, plus a
+ *           screenshot upload as the alternative.
  * Step 3 -- Paste area: a textarea + submit. POSTs to
  *           /api/intel/social-integration/capture and renders the
  *           result inline (matched count, pre-inquiry surfaced, samples).
+ *
+ * NOVEMBER-PLAN.md wave 6 (W41): the screenshot file input used to be
+ * disabled with a "coming in V1.1" label. It is live now -- one or more
+ * JPEG/PNG/WebP files, <=10 MB each, POST as multipart/form-data to the
+ * same route. The server resizes, runs vision extraction, and hands the
+ * rows through the identical spine path a paste uses, so the result
+ * view below is shared between both capture modes without a fork: a
+ * screenshot row and a pasted row render the same "what happened to
+ * each handle" list.
  *
  * The modal is self-contained so the parent page does not own the
  * fetch + result state. After submit, the modal stays open showing the
  * result; the operator closes it manually and the parent refreshes.
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
-import { ExternalLink, X, Loader2, CheckCircle2, Sparkles, Image as ImageIcon } from 'lucide-react'
+import { ExternalLink, X, Loader2, CheckCircle2, Sparkles, Image as ImageIcon, AlertTriangle } from 'lucide-react'
 
 /** One handle and what the spine did with it. */
 interface SpineSample {
@@ -30,6 +40,24 @@ interface SpineSample {
   outcome: string
   occurred_at: string
   match_status: 'matched' | 'unmatched'
+}
+
+/** Per-image outcome, screenshot mode only. */
+interface ImageOutcome {
+  filename: string
+  ok: boolean
+  error?: string
+  rowCount: number
+  invalidCount: number
+  rejected?: 'file_too_large' | 'unsupported_type' | 'empty_file'
+}
+
+/** A row the model returned that did not validate -- shown, never
+ *  silently dropped. */
+interface InvalidVisionRow {
+  index: number
+  reason: string
+  handle_hint: string | null
 }
 
 interface CaptureResult {
@@ -46,11 +74,18 @@ interface CaptureResult {
   unmatched: number
   samples: SpineSample[]
   errors?: string[]
+  /** Screenshot mode only. */
+  images?: ImageOutcome[]
+  visionInvalid?: { count: number; samples: InvalidVisionRow[] }
 }
 
+const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_IMAGES = 6
+
 interface Props {
-  platform: 'instagram'
-  metricType: 'new_followers'
+  platform: 'instagram' | 'tiktok' | 'facebook' | 'pinterest'
+  metricType: string
   venueHandle: string | null
   followersUrlOverride: string | null
   onClose: () => void
@@ -60,23 +95,54 @@ interface Props {
 const SNIPPET = `copy([...document.querySelectorAll('a[href*="/"]')].map(a => a.href.split('/').filter(Boolean).pop()).filter(h => h && !h.includes('.')).join('\\n'))`
 
 export function CaptureNowModal({
-  platform: _platform,
-  metricType: _metricType,
+  platform,
+  metricType,
   venueHandle,
   followersUrlOverride,
   onClose,
   onCaptured,
 }: Props) {
   const [pasteText, setPasteText] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const [fileError, setFileError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<CaptureResult | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const followersUrl = followersUrlOverride
     ? followersUrlOverride
     : venueHandle
       ? `https://www.instagram.com/${venueHandle}/followers/`
       : 'https://www.instagram.com/'
+
+  function onFilesSelected(selected: FileList | null) {
+    setFileError(null)
+    if (!selected || selected.length === 0) return
+    const picked = Array.from(selected)
+    if (picked.length > MAX_IMAGES) {
+      setFileError(`Pick at most ${MAX_IMAGES} screenshots at a time.`)
+      return
+    }
+    const bad = picked.find(
+      (f) => !ACCEPTED_IMAGE_TYPES.includes(f.type.toLowerCase()) || f.size > MAX_IMAGE_BYTES,
+    )
+    if (bad) {
+      setFileError(
+        !ACCEPTED_IMAGE_TYPES.includes(bad.type.toLowerCase())
+          ? `${bad.name} is not a JPEG, PNG or WebP image.`
+          : `${bad.name} is over 10 MB.`,
+      )
+      return
+    }
+    setFiles(picked)
+  }
+
+  function clearFiles() {
+    setFiles([])
+    setFileError(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   async function submit() {
     if (!pasteText.trim()) {
@@ -105,6 +171,39 @@ export function CaptureNowModal({
       onCaptured?.(j)
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function submitFiles() {
+    if (files.length === 0) {
+      setFileError('Choose one or more screenshots first.')
+      return
+    }
+    setSubmitting(true)
+    setFileError(null)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.set('platform', platform)
+      form.set('metric_type', metricType)
+      for (const f of files) form.append('files', f)
+
+      const resp = await fetch('/api/intel/social-integration/capture', {
+        method: 'POST',
+        body: form,
+      })
+      if (!resp.ok) {
+        const j = (await resp.json().catch(() => null)) as { error?: string; message?: string } | null
+        setFileError(j?.message ?? j?.error ?? 'Capture failed')
+        return
+      }
+      const j = (await resp.json()) as CaptureResult
+      setResult(j)
+      onCaptured?.(j)
+    } catch (e) {
+      setFileError((e as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -184,21 +283,57 @@ export function CaptureNowModal({
                 <li>Paste below.</li>
               </ol>
 
-              <details className="rounded-md border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">
+              <details className="rounded-md border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600" open={files.length > 0}>
                 <summary className="cursor-pointer text-stone-700">
                   <ImageIcon className="mr-1 inline h-3 w-3" />
-                  Or screenshot the followers list and paste the image
+                  Or upload a screenshot instead
                 </summary>
                 <p className="mt-2 text-stone-500">
-                  Image OCR capture is coming in V1.1. For now, please
-                  use the text-paste path.
+                  Can&apos;t copy the list as text (story viewers, DMs)?
+                  Screenshot it and upload the image -- Bloom reads the
+                  handles off the picture and captures them the same way.
                 </p>
                 <input
+                  ref={fileInputRef}
                   type="file"
-                  accept="image/*"
-                  disabled
-                  className="mt-2 block w-full cursor-not-allowed text-xs text-stone-400"
+                  accept="image/jpeg,image/png,image/webp"
+                  multiple
+                  onChange={(e) => onFilesSelected(e.target.files)}
+                  disabled={submitting}
+                  className="mt-2 block w-full text-xs text-stone-600 file:mr-2 file:rounded file:border-0 file:bg-sage-100 file:px-2 file:py-1 file:text-sage-700"
                 />
+                {files.length > 0 ? (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-stone-600">
+                      {files.length} image{files.length === 1 ? '' : 's'} selected (
+                      {(files.reduce((sum, f) => sum + f.size, 0) / (1024 * 1024)).toFixed(1)} MB)
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={submitFiles}
+                        disabled={submitting}
+                        className="inline-flex items-center gap-1 rounded-md bg-sage-600 px-3 py-1.5 text-xs text-white transition hover:bg-sage-700 disabled:opacity-50"
+                      >
+                        {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                        Capture from screenshots
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearFiles}
+                        disabled={submitting}
+                        className="text-stone-500 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {fileError ? (
+                  <p className="mt-2 flex items-center gap-1 text-rose-600">
+                    <AlertTriangle className="h-3 w-3" /> {fileError}
+                  </p>
+                ) : null}
               </details>
             </section>
 
@@ -290,6 +425,52 @@ function ResultView({
           <ExternalLink className="h-3 w-3" />
         </Link>
       </div>
+
+      {result.images && result.images.length > 0 ? (
+        <section className="rounded-md border border-stone-200 bg-white p-3 text-xs text-stone-600">
+          <h4 className="mb-1 font-semibold uppercase tracking-wide text-stone-500">
+            Screenshots
+          </h4>
+          <ul className="space-y-1">
+            {result.images.map((img, i) => (
+              <li key={`${img.filename}-${i}`} className="flex items-center justify-between gap-2">
+                <span className="truncate">{img.filename}</span>
+                {img.rejected ? (
+                  <span className="shrink-0 text-rose-600">
+                    Skipped ({img.rejected === 'file_too_large' ? 'over 10 MB' : img.rejected === 'unsupported_type' ? 'not a supported image' : 'empty file'})
+                  </span>
+                ) : !img.ok ? (
+                  <span className="shrink-0 text-rose-600">{img.error ?? 'Could not process'}</span>
+                ) : (
+                  <span className="shrink-0 text-stone-500">
+                    {img.rowCount} row{img.rowCount === 1 ? '' : 's'}
+                    {img.invalidCount > 0 ? `, ${img.invalidCount} unusable` : ''}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {result.visionInvalid && result.visionInvalid.count > 0 ? (
+        <section className="rounded-md border border-gold-200 bg-gold-50 p-3 text-xs text-gold-800">
+          <div className="flex items-center gap-1 font-semibold uppercase tracking-wide text-gold-700">
+            <AlertTriangle className="h-3 w-3" />
+            {result.visionInvalid.count} row{result.visionInvalid.count === 1 ? '' : 's'} the model returned did not validate
+          </div>
+          <p className="mt-1 text-gold-700">
+            Nothing here was written. These rows are shown, not dropped silently.
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {result.visionInvalid.samples.map((r, i) => (
+              <li key={i}>
+                {r.handle_hint ? `@${r.handle_hint}` : `row ${r.index + 1}`} — {r.reason}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <p className="text-xs text-stone-500">
         A handle on its own is not a name. Bloom attaches it when it knows
