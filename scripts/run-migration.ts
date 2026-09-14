@@ -29,7 +29,7 @@ import { splitSqlStatements } from './lib/sql-split.js'
 function loadEnv() {
   const env: Record<string, string> = { ...process.env } as Record<string, string>
   try {
-    const raw = readFileSync('.env.local', 'utf8')
+    const raw = readFileSync(process.env.MIGRATION_ENV_FILE ?? '.env.local', 'utf8')
     for (const line of raw.split('\n')) {
       const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
       if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')

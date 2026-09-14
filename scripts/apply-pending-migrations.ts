@@ -9,6 +9,7 @@
  * Usage:
  *   npx tsx scripts/apply-pending-migrations.ts                    dry run
  *   npx tsx scripts/apply-pending-migrations.ts --apply --allow-prod
+ *   npx tsx scripts/apply-pending-migrations.ts --env-file .env.test --apply   # golden-case branch
  *   npx tsx scripts/apply-pending-migrations.ts --include-legacy ...  also the older six
  *   npx tsx scripts/apply-pending-migrations.ts --from 399 ...        resume after a failure
  *
@@ -107,7 +108,7 @@ const LEGACY_MIGRATIONS: Pending[] = [
 function loadEnv(): Record<string, string> {
   const env: Record<string, string> = { ...process.env } as Record<string, string>
   try {
-    const raw = readFileSync('.env.local', 'utf8')
+    const raw = readFileSync(process.env.MIGRATION_ENV_FILE ?? '.env.local', 'utf8')
     for (const line of raw.split('\n')) {
       const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
       if (m) env[m[1]!] = m[2]!.replace(/^["']|["']$/g, '').replace(/\r$/, '')
@@ -137,11 +138,17 @@ async function main() {
   const fromIdx = argv.indexOf('--from')
   const from = fromIdx >= 0 ? argv[fromIdx + 1] ?? '' : ''
 
+  // --env-file <path> points both this runner and the spawned run-migration.ts
+  // at another env file, e.g. .env.test for the golden-case branch. The
+  // production guard below is by URL, so it still applies whichever file is used.
+  const envIdx = argv.indexOf('--env-file')
+  if (envIdx >= 0 && argv[envIdx + 1]) process.env.MIGRATION_ENV_FILE = argv[envIdx + 1]
+
   const env = loadEnv()
   const url = env.NEXT_PUBLIC_SUPABASE_URL
   const key = env.SUPABASE_SERVICE_ROLE_KEY
   if (!url || !key) {
-    console.error('NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required (.env.local).')
+    console.error('NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required (from the env file, default .env.local).')
     process.exit(2)
   }
   const isProd = /jsxxgwprxuqgcauzlxcb/.test(url)
