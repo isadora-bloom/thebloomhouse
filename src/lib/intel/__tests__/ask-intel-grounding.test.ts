@@ -164,6 +164,13 @@ vi.mock('@/lib/supabase/service', () => ({
 const { askIntel, composeIntelAnswer } = await import('@/lib/intel/canonical')
 const tools = await import('@/lib/intel/tools')
 
+// These tests drive the real grounding loop through scripted model turns and
+// need close to three seconds on their own. Under a full parallel run on a
+// loaded machine the default five-second budget was not enough and the file
+// flaked (seen by three wave 7 agents on 2026-09-14). Twenty seconds is still
+// a hard failure for a hung loop, just not for a busy box.
+vi.setConfig({ testTimeout: 20_000 })
+
 const VENUE = '11111111-1111-1111-1111-111111111111'
 
 function setScript(turns: ScriptedTurn[]): void {
