@@ -19,9 +19,15 @@ import { resolvePlatformScope } from '@/lib/api/resolve-platform-scope'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getDailyList, getVenueOverview } from '@/lib/intel/canonical'
 import { aggregatePulse } from '@/lib/services/intel/pulse-aggregator'
+import {
+  buildSinceLastHereStrip,
+  computeSinceLastHereWindow,
+  getSinceLastHere,
+} from '@/lib/intel/adapters/since-last-here'
 import { DataMaturity } from '@/components/ui/data-maturity'
 import { TodayBlockCard } from '@/components/today/today-block'
 import { TodayPulse } from '@/components/today/today-pulse'
+import { SinceLastHereStripCard } from '@/components/today/since-last-here-strip'
 import { DEFAULT_TIME_ZONE } from '@/lib/copy/client-terms'
 import { nowMs } from '@/lib/utils/clock'
 import { buildTodayViewModel, PULSE_ROWS, type PulseLike } from './view-model'
@@ -72,9 +78,16 @@ export default async function TodayPage() {
   // client pages: the compiler's purity check flags a bare Date.now().
   const now = nowMs()
 
-  // Three reads, in parallel. The pulse read is best-effort: a flagged-
-  // items outage must not take the landing page down with it.
-  const [dailyResult, overviewResult, pulseResult, timeZone] = await Promise.all([
+  // The timezone gates the "since you were last here" window (today's
+  // weekday, venue-local, decides where the window starts), so it is
+  // read before the parallel batch below rather than inside it.
+  const timeZone = await venueTimeZone(scope.venueId)
+  const sinceLastHereWindow = computeSinceLastHereWindow(now, timeZone)
+
+  // Four reads, in parallel. The pulse and since-last-here reads are
+  // best-effort: an outage in either must not take the landing page
+  // down with it.
+  const [dailyResult, overviewResult, pulseResult, sinceLastHereResult] = await Promise.all([
     getDailyList(scope.venueId).then(
       (v) => ({ ok: true as const, v }),
       (e: unknown) => ({ ok: false as const, e }),
@@ -87,7 +100,10 @@ export default async function TodayPage() {
       (v) => ({ ok: true as const, v }),
       (e: unknown) => ({ ok: false as const, e }),
     ),
-    venueTimeZone(scope.venueId),
+    getSinceLastHere(scope.venueId, sinceLastHereWindow).then(
+      (v) => ({ ok: true as const, v }),
+      (e: unknown) => ({ ok: false as const, e }),
+    ),
   ])
 
   if (!dailyResult.ok || !overviewResult.ok) {
@@ -142,6 +158,14 @@ export default async function TodayPage() {
           </p>
         )}
       </header>
+
+      {/* "Since you were last here" — the Monday-walkthrough audit's
+          second finding: nothing said what happened over the weekend
+          because the inbox/drafts stats reset at midnight. Best-effort:
+          an outage here should not hide the four blocks below it. */}
+      {sinceLastHereResult.ok && (
+        <SinceLastHereStripCard strip={buildSinceLastHereStrip(sinceLastHereResult.v)} />
+      )}
 
       {/* Data maturity — a count-up, not a telling-off. Shown only while
           the venue is still below the threshold. */}

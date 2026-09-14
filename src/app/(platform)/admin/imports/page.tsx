@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import {
   Database,
   AlertCircle,
@@ -29,6 +30,7 @@ import {
   CheckCircle2,
   XCircle,
   Eye,
+  Upload,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
@@ -133,17 +135,26 @@ export default function ImportsAdminPage() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-8">
-      <header>
-        <h1 className="text-2xl font-serif text-sage-900 flex items-center gap-3">
-          <Database className="w-6 h-6 text-sage-700" />
-          Imports
-        </h1>
-        <p className="text-sage-600 mt-2 text-sm max-w-2xl">
-          Every CSV/PDF the unified import-router has persisted. Raw bytes are
-          retained so a mis-routed import can be reprocessed against the
-          current adapter set. Each completed run also enqueues identity
-          reconstruction for every wedding the import touched.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-serif text-sage-900 flex items-center gap-3">
+            <Database className="w-6 h-6 text-sage-700" />
+            Imports
+          </h1>
+          <p className="text-sage-600 mt-2 text-sm max-w-2xl">
+            Every CSV/PDF the unified import-router has persisted. Raw bytes are
+            retained so a mis-routed import can be reprocessed against the
+            current adapter set. Each completed run also enqueues identity
+            reconstruction for every wedding the import touched.
+          </p>
+        </div>
+        <Link
+          href="/admin/imports/upload"
+          className="inline-flex items-center gap-1.5 rounded bg-sage-700 hover:bg-sage-800 text-white text-sm font-medium px-3 py-2 shrink-0"
+        >
+          <Upload className="w-4 h-4" aria-hidden />
+          Import a file
+        </Link>
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -171,8 +182,11 @@ export default function ImportsAdminPage() {
 
       {!loading && rows.length === 0 && (
         <div className="text-sm text-sage-500 italic">
-          No imports on record yet. Drop a CSV via brain-dump or the
-          /onboarding/crm-import flow to populate this list.
+          No imports on record yet. Use{' '}
+          <Link href="/admin/imports/upload" className="underline not-italic hover:text-sage-700">
+            Import a file
+          </Link>{' '}
+          above, or drop a CSV via brain-dump, to populate this list.
         </div>
       )}
 
