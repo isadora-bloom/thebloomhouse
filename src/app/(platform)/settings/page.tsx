@@ -1028,7 +1028,7 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
-                  <p className="text-[11px] text-sage-500 mt-1">Used by Sage to match images to email replies.</p>
+                  <p className="text-[11px] text-sage-500 mt-1">Used by {aiName} to match images to email replies.</p>
                 </div>
               </div>
 
@@ -1045,7 +1045,7 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
                   className={inputClasses + ' text-sm'}
                 />
                 <p className="text-[11px] text-sage-500 mt-1">
-                  One line describing what is shown. Sage reads this when picking a photo. {newAssetCaption.length}/200
+                  One line describing what is shown. {aiName} reads this when picking a photo. {newAssetCaption.length}/200
                 </p>
               </div>
 
