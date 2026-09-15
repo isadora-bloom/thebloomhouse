@@ -1,0 +1,7 @@
+{
+  "promptVersion": "review-language.prompt.v1.0",
+  "taskType": "review_language",
+  "model": null,
+  "recordedAt": null,
+  "text": "{\"phrases\": [{\"phrase\": \"answered every question\", \"theme\": \"other\", \"sentiment\": 0.8}, {\"phrase\": \"parking was tight\", \"theme\": \"other\", \"sentiment\": -0.4}]}"
+}

@@ -1,0 +1,7 @@
+{
+  "promptVersion": "intel-brain.prompt.v2.1",
+  "taskType": "nlq_intel",
+  "model": null,
+  "recordedAt": null,
+  "text": "Placeholder fixture, not a recording. This is the legacy Ask Your Data path, reached only with NLQ_LEGACY=1. Record a real answer before asserting on any figure it contains."
+}

@@ -1,0 +1,7 @@
+{
+  "promptVersion": "crm-import.ai-mapped.prompt.v1.0",
+  "taskType": "crm_import_ai_mapped",
+  "model": null,
+  "recordedAt": null,
+  "text": "{\"mappings\": []}"
+}

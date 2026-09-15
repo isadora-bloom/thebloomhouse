@@ -1,0 +1,7 @@
+{
+  "promptVersion": "reviews.paste.v1",
+  "taskType": "reviews_paste_extract",
+  "model": null,
+  "recordedAt": null,
+  "text": "{\"reviews\": [{\"reviewer_name\": \"E2E Reviewer One\", \"rating\": 5, \"body\": \"Placeholder fixture, not a recording. A wonderful day at the barn, and the team answered every question before we thought to ask it.\", \"review_date\": \"2026-07-04\", \"source\": \"google\", \"title\": \"Everything we hoped for\"}, {\"reviewer_name\": \"E2E Reviewer Two\", \"rating\": 4, \"body\": \"Placeholder fixture, not a recording. A lovely venue with one caveat: parking was tight for our older guests and we would have liked more warning.\", \"review_date\": \"2026-07-19\", \"source\": \"the_knot\", \"title\": null}]}"
+}

@@ -1,0 +1,7 @@
+{
+  "promptVersion": "seating-import-col-detect-v1",
+  "taskType": "seating_import_column_detect",
+  "model": null,
+  "recordedAt": null,
+  "text": "{\"table\": 0, \"seat\": null, \"name\": 1, \"relationship\": null, \"notes\": null, \"allergies\": null, \"table_notes\": null, \"rsvp\": null}"
+}
