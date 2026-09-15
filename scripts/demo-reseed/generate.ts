@@ -42,9 +42,9 @@ import type {
 
 export interface GenerateOptions {
   seed?: number
-  /** ISO instant the offsets are measured from. Defaults to now, which is
-   *  the only place in this module that would read a clock, so callers in
-   *  tests always pass it explicitly. */
+  /** ISO instant the offsets are measured from. Defaults to `SEED_TODAY`,
+   *  so this module never reads a clock and two runs agree. The live
+   *  reseed CLI passes the real clock explicitly. */
   today?: string
   /** Roughly how many couples to produce across all four venues. The
    *  actual count is the sum of the per-venue shares, so it lands within
@@ -54,6 +54,23 @@ export interface GenerateOptions {
 
 export const DEFAULT_SEED = 20260909
 export const DEFAULT_COUPLE_COUNT = 60
+
+/**
+ * The instant every offset in the demo is measured from when the caller
+ * does not supply one.
+ *
+ * `scripts/demo-reseed.ts` passes the real clock, because a reseed run
+ * against a live demo should make the demo look like the day it was run.
+ * Everything that has to be REPRODUCIBLE — the composed e2e seed, the
+ * coverage report, the determinism test — takes this constant instead, so
+ * two runs a week apart produce the same rows and a diff of the generated
+ * SQL is a diff of intent rather than of the calendar.
+ *
+ * Midday UTC rather than midnight: a story step at `minuteOfDay` 0 on
+ * `daysAgo` 0 would otherwise sit exactly on the boundary and flip
+ * between "today" and "yesterday" depending on the reader's timezone.
+ */
+export const SEED_TODAY = '2026-09-15T12:00:00.000Z'
 
 /** Lifecycle mix. Weights, not percentages; normalised at pick time. */
 const LIFECYCLE_WEIGHTS: Record<DemoLifecycle, number> = {
@@ -74,9 +91,11 @@ const CHANNEL_WEIGHTS: Record<DemoChannel, number> = {
   gmail: 18,
   // Calendly is never an origin — a tour booking always follows an
   // inquiry on some other channel. Nor is HoneyBook: the contract is the
-  // end of a story, never its start.
+  // end of a story, never its start. Nor SMS: a couple only has the
+  // number once someone has replied to them.
   calendly: 0,
   honeybook: 0,
+  sms: 0,
 }
 
 /** `weddings.status` for each lifecycle. CHECK list from migration 001. */
@@ -177,6 +196,16 @@ function contractBody(rng: Rng): string {
   ])
 }
 
+function smsBody(rng: Rng): string {
+  return rng.pick([
+    'Running about fifteen minutes late for the tour, sorry.',
+    'Is parking on the left as we come up the drive?',
+    'Sent the guest numbers through on email just now.',
+    'Can we bring my mum on Saturday?',
+    'Thank you for today, we both loved it.',
+  ])
+}
+
 function coolingBody(rng: Rng): string {
   return rng.pick([
     'Thank you for the follow up. We are still deciding.',
@@ -233,13 +262,20 @@ function openingSteps(
       inquiryDaysAgo,
       inquiryMinute,
       originChannel,
+      // These verbs are not decorative. `progressionEventTypeFor` maps
+      // (channel, action_type) to a progression event, and it only knows
+      // the live vocabulary: knot/weddingwire 'inquiry', website
+      // 'inquiry_form_submitted', gmail 'reply'. The reseed used to emit
+      // 'channel_inquiry' and 'form_submit', which map to nothing, so
+      // every Knot and web-form inquiry in the demo landed as a
+      // touchpoint with no progression row and no decay clock behind it.
       originChannel === 'instagram'
         ? 'ig_dm'
         : originChannel === 'website'
-          ? 'form_submit'
+          ? 'inquiry_form_submitted'
           : originChannel === 'gmail'
             ? 'reply'
-            : 'channel_inquiry',
+            : 'inquiry',
       originChannel === 'instagram' ? 'medium' : 'high',
       'inbound',
       inquiryBody(rng, venue, ctx.guestCount),
@@ -264,18 +300,23 @@ function buildInquiry(ctx: TimelineContext): {
   responseDelayHours: number
 } {
   const { rng } = ctx
-  // Three shapes so the leads list is not uniformly warm or uniformly
+  // Four shapes so the leads list is not uniformly warm or uniformly
   // dead: something landed today, something is a fortnight old and
-  // cooling, something has been sitting since spring.
-  const shape = weightedPick(rng, { fresh: 34, cooling: 33, stale: 33 })
+  // cooling, something has been sitting since spring, and something is
+  // old enough that the monthly story, the cohort funnel and the weekday
+  // conversion charts have more than one season to draw. Eighteen months
+  // is the window those readers ask for.
+  const shape = weightedPick(rng, { fresh: 28, cooling: 26, stale: 26, historic: 20 })
   const inquiryDaysAgo =
     shape === 'fresh'
       ? rng.int(0, 5)
       : shape === 'cooling'
         ? rng.int(12, 38)
-        : rng.int(70, 175)
+        : shape === 'stale'
+          ? rng.int(70, 175)
+          : rng.int(210, 540)
   const responseDelayHours =
-    shape === 'stale' ? rng.int(6, 72) : rng.int(1, 20)
+    shape === 'stale' || shape === 'historic' ? rng.int(6, 72) : rng.int(1, 20)
   const extraHeat =
     shape === 'fresh'
       ? rng.chance(0.6)
@@ -314,7 +355,7 @@ function buildInquiry(ctx: TimelineContext): {
         ),
       )
     }
-  } else if (shape === 'cooling') {
+  } else if (shape === 'cooling' || shape === 'historic') {
     steps.push(
       step(
         Math.max(0, inquiryDaysAgo - ctx.rng.int(2, 6)),
@@ -696,7 +737,7 @@ function venueShares(coupleCount: number): Array<{ venue: DemoVenue; count: numb
 
 export function generateDemoDataset(options: GenerateOptions = {}): DemoDataset {
   const seed = options.seed ?? DEFAULT_SEED
-  const today = options.today ?? new Date().toISOString()
+  const today = options.today ?? SEED_TODAY
   const coupleCount = options.coupleCount ?? DEFAULT_COUPLE_COUNT
   const rng = makeRng(seed)
 
@@ -733,6 +774,12 @@ export function generateDemoDataset(options: GenerateOptions = {}): DemoDataset 
 
       // 555-01xx is the reserved-for-fiction block.
       const primaryPhone = `540-555-0${String(100 + (nameIndex % 900)).padStart(3, '0')}`
+
+      // About half the roster has a handle. Normalised the way
+      // `normalizeHandle` does it: lower case, no @, no URL.
+      const instagramHandle = rng.chance(0.5)
+        ? `${slugify(slot.primaryFirst)}.${slugify(slot.partnerFirst)}`
+        : null
 
       const lifecycle: DemoLifecycle = isHero
         ? 'booked'
@@ -803,6 +850,27 @@ export function generateDemoDataset(options: GenerateOptions = {}): DemoDataset 
         bookingValue = venue.basePrice + rng.int(0, 20) * 250
       }
 
+      // A text, once the coordinator has replied and the couple has a
+      // number to text. Two in five stories, which is roughly what a
+      // venue's own inbox looks like. `sms_inbound` is the action type
+      // the live Twilio and OpenPhone builders emit, so this lands as an
+      // `inbound_sms` progression event exactly as a real one would.
+      if (rng.chance(0.4)) {
+        const smsDaysAgo = Math.max(0, inquiryDaysAgo - rng.int(1, 8))
+        steps.push(
+          step(
+            smsDaysAgo,
+            rng.int(8 * 60, 21 * 60),
+            'sms',
+            'sms_inbound',
+            'high',
+            'inbound',
+            smsBody(rng),
+            ['email_reply_received'],
+          ),
+        )
+      }
+
       // A handful of tours fall over. Real venues have no-shows.
       if (tourOutcome === 'completed' && lifecycle !== 'booked' && lifecycle !== 'completed') {
         if (rng.chance(0.12)) tourOutcome = 'no_show'
@@ -839,6 +907,7 @@ export function generateDemoDataset(options: GenerateOptions = {}): DemoDataset 
         primaryEmail,
         partnerEmail,
         primaryPhone,
+        instagramHandle,
         lifecycle,
         weddingSource,
         guestCount,

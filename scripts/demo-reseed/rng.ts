@@ -61,6 +61,27 @@ export function makeRng(seed: number): Rng {
 }
 
 /**
+ * A v4-shaped uuid drawn from the rng stream.
+ *
+ * Not random: the same seed gives the same id, which is the point. The
+ * mirror rows the reseed writes (a guest, a budget line, a contract) need
+ * stable primary keys so a second run replaces them rather than piling a
+ * second copy alongside, and so a Playwright spec can hold an id.
+ *
+ * Version and variant nibbles are set the way a real v4 sets them, so
+ * Postgres accepts the string and nothing downstream has to special-case
+ * a seeded id.
+ */
+export function uuidFrom(rng: Rng): string {
+  const hex: string[] = []
+  for (let i = 0; i < 16; i++) hex.push(rng.int(0, 255).toString(16).padStart(2, '0'))
+  hex[6] = ((parseInt(hex[6], 16) & 0x0f) | 0x40).toString(16).padStart(2, '0')
+  hex[8] = ((parseInt(hex[8], 16) & 0x3f) | 0x80).toString(16).padStart(2, '0')
+  const s = hex.join('')
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`
+}
+
+/**
  * Weighted pick. Weights need not sum to one; they are normalised.
  * Deterministic given the rng stream.
  */

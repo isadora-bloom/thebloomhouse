@@ -25,6 +25,11 @@ export type DemoChannel =
   | 'instagram'
   | 'website'
   | 'calendly'
+  // Never an origin either. A couple texts once the coordinator has
+  // given them a number, which means after the first email. Present so
+  // the multi-channel ribbon has more than email on it, and so the
+  // `inbound_sms` progression event exists in the demo at all.
+  | 'sms'
   // Never an origin. A booked story ends with the contract landing here,
   // because `contract_signed` is the progression event the spine writes
   // for channel='honeybook' and nothing else (progression.ts) — without
@@ -87,6 +92,11 @@ export interface DemoCoupleStory {
   primaryEmail: string
   partnerEmail: string | null
   primaryPhone: string
+  /** Instagram handle, already normalised (lower case, no @). Null for
+   *  the couples who never turned up on social. Carried onto the signal
+   *  so `linkSignal` writes `couples.handles` the way live ingestion
+   *  does, rather than the reseed writing that column itself. */
+  instagramHandle: string | null
   lifecycle: DemoLifecycle
   weddingSource: DemoWeddingSource
   guestCount: number
@@ -146,6 +156,11 @@ export type ReseedStepKind =
   | 'tour_row'
   | 'lost_deal_row'
   | 'hero_contact_sync'
+  // Plain mirror rows on a table the spine does not own: a guest list, a
+  // budget, a contract, a planning note. Never `couples`, `touchpoints`,
+  // `people` or `weddings` — those four have exactly one writer each and
+  // the applier refuses any aux step naming them.
+  | 'aux_rows'
 
 export interface ReseedStep {
   kind: ReseedStepKind
@@ -161,8 +176,14 @@ export interface ReseedStep {
   heatDirection?: 'inbound' | 'outbound'
   /** Present on `wedding_state` steps. */
   weddingPatch?: Record<string, unknown>
-  /** Present on `tour_row` / `lost_deal_row` steps. */
+  /** Present on `tour_row` / `lost_deal_row` / `hero_contact_sync` steps. */
   row?: Record<string, unknown>
+  /** Present on `aux_rows` steps: the table the rows go to. */
+  table?: string
+  /** Present on `aux_rows` steps. Rows carrying `<wedding:key>` or
+   *  `<couple:key>` placeholders have them substituted at apply time for
+   *  the ids the run actually minted. */
+  rows?: Array<Record<string, unknown>>
 }
 
 export interface ReseedPlan {
@@ -178,6 +199,8 @@ export interface ReseedPlan {
     stories: number
     signals: number
     heatEvents: number
+    /** Mirror rows across every `aux_rows` step. */
+    auxRows: number
     byVenue: Record<string, number>
     byLifecycle: Record<DemoLifecycle, number>
     byExpectedTier: Record<DemoTier, number>

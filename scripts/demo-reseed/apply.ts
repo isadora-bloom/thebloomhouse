@@ -22,6 +22,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NormalizedSignal } from '../../src/lib/services/identity/sources/types'
+import { AUX_FORBIDDEN_TABLES, COUPLE_REF_RE, WEDDING_REF_RE } from './mirror-rows'
 import { assertDemoVenues } from './guard'
 import { offsetDate } from './plan'
 import type { DemoCoupleStory, DemoDataset, DeleteOp, ReseedPlan, ReseedStep } from './types'
@@ -96,9 +97,52 @@ export interface ApplyResult {
   toursWritten: number
   lostDealsWritten: number
   weddingsUpdated: number
+  /** Mirror rows written, by table. */
+  auxRowsByTable: Record<string, number>
   /** storyKey to the wedding id the run used. */
   weddingIdByStory: Record<string, string>
+  /** storyKey to the couples id the mirror made. Empty on a dry run. */
+  coupleIdByStory: Record<string, string>
   errors: string[]
+}
+
+/**
+ * Swap `<wedding:key>` and `<couple:key>` for the ids the run minted.
+ *
+ * A plan is built without a database, so an aux row cannot carry a real
+ * foreign key. Only whole-string values are substituted: a placeholder
+ * buried inside a sentence would be a bug in the generator, and quietly
+ * patching it up would hide that.
+ */
+export function substituteRefs(
+  row: Record<string, unknown>,
+  resolveWedding: (key: string) => string | null,
+  resolveCouple: (key: string) => string | null,
+): { row: Record<string, unknown>; unresolved: string[] } {
+  const out: Record<string, unknown> = {}
+  const unresolved: string[] = []
+  for (const [k, v] of Object.entries(row)) {
+    if (typeof v !== 'string') {
+      out[k] = v
+      continue
+    }
+    const w = WEDDING_REF_RE.exec(v)
+    if (w) {
+      const id = resolveWedding(w[1])
+      if (id === null) unresolved.push(v)
+      out[k] = id
+      continue
+    }
+    const c = COUPLE_REF_RE.exec(v)
+    if (c) {
+      const id = resolveCouple(c[1])
+      if (id === null) unresolved.push(v)
+      out[k] = id
+      continue
+    }
+    out[k] = v
+  }
+  return { row: out, unresolved }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +222,9 @@ export async function applyReseed(options: ApplyOptions): Promise<ApplyResult> {
     toursWritten: 0,
     lostDealsWritten: 0,
     weddingsUpdated: 0,
+    auxRowsByTable: {},
     weddingIdByStory: {},
+    coupleIdByStory: {},
     errors: [],
   }
 
@@ -214,6 +260,8 @@ export async function applyReseed(options: ApplyOptions): Promise<ApplyResult> {
 
   const resolveWeddingId = (storyKey: string): string | null =>
     result.weddingIdByStory[storyKey] ?? null
+  const resolveCoupleId = (storyKey: string): string | null =>
+    result.coupleIdByStory[storyKey] ?? null
 
   for (const step of plan.steps) {
     const story = stories.get(step.storyKey)
@@ -229,6 +277,7 @@ export async function applyReseed(options: ApplyOptions): Promise<ApplyResult> {
         dryRun,
         result,
         resolveWeddingId,
+        resolveCoupleId,
         today: plan.today,
       })
     } catch (err) {
@@ -247,8 +296,13 @@ interface StepContext {
   dryRun: boolean
   result: ApplyResult
   resolveWeddingId: (storyKey: string) => string | null
+  resolveCoupleId: (storyKey: string) => string | null
   today: string
 }
+
+/** PostgREST takes a batch happily; a 500-row array in one request does
+ *  not. 200 keeps every insert well inside the payload limit. */
+const AUX_CHUNK = 200
 
 async function runStep(
   step: ReseedStep,
@@ -319,7 +373,49 @@ async function runStep(
         result.errors.push(`mirror_couple: no wedding id for ${story.key}`)
         return
       }
-      await writers.mirrorCouple({ venueId: story.venueId, weddingId, supabase })
+      const mirrored = await writers.mirrorCouple({
+        venueId: story.venueId,
+        weddingId,
+        supabase,
+      })
+      if (mirrored.coupleId) result.coupleIdByStory[story.key] = mirrored.coupleId
+      return
+    }
+
+    case 'aux_rows': {
+      const table = step.table ?? ''
+      const rows = step.rows ?? []
+      if (AUX_FORBIDDEN_TABLES.includes(table)) {
+        // Writer discipline, enforced rather than trusted. `couples`,
+        // `touchpoints`, `weddings`, `people` and the progression log
+        // have exactly one writer each and it is not this file.
+        result.errors.push(
+          `aux_rows: refusing to write ${table} — that table has one canonical writer ` +
+            `(mintWedding / linkSignal), and it is not the mirror-row path.`,
+        )
+        return
+      }
+      result.auxRowsByTable[table] = (result.auxRowsByTable[table] ?? 0) + rows.length
+      if (dryRun) return
+
+      const resolved: Array<Record<string, unknown>> = []
+      for (const raw of rows) {
+        const { row, unresolved } = substituteRefs(raw, ctx.resolveWeddingId, ctx.resolveCoupleId)
+        if (unresolved.length > 0) {
+          result.errors.push(`aux_rows ${table}: unresolved ${unresolved.join(', ')}`)
+          continue
+        }
+        resolved.push(row)
+      }
+
+      for (let i = 0; i < resolved.length; i += AUX_CHUNK) {
+        const batch = resolved.slice(i, i + AUX_CHUNK)
+        const { error } = await supabase.from(table).insert(batch)
+        if (error) {
+          result.errors.push(`aux_rows ${table} (${story.key}): ${error.message}`)
+          return
+        }
+      }
       return
     }
 

@@ -41,6 +41,10 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { splitSqlStatements } from './lib/sql-split.js'
 import { loadE2EEnv, assertNotProduction } from '../e2e/helpers/env'
+import { applyReseed, type ReseedWriters } from './demo-reseed/apply'
+import { generateDemoDataset, SEED_TODAY } from './demo-reseed/generate'
+import { buildReseedPlan } from './demo-reseed/plan'
+import { reseedTableRows } from './demo-coverage'
 
 // ---------------------------------------------------------------------------
 // What gets seeded
@@ -60,10 +64,35 @@ const DEMO_SQL_FILES = [
   'supabase/seed.sql',
   'supabase/seed-demo-rich.sql',
   'supabase/seed-marketing-spend-records.sql',
-  'supabase/seed-commitments-demo.sql',
   'supabase/seed-contracts-demo.sql',
   'supabase/seed-ad-connections-demo.sql',
+  // W70 additions. `seed-reviews.sql` was written for wave 8 and never
+  // wired into this list, so the branch would have had no reviews at all
+  // and journey 28's "reviews import populates sentiment" step nothing to
+  // assert on. `seed-demo-venue-surfaces.sql` carries the team, the
+  // invitations, the sending-domain state, benchmark participation and
+  // the ad connections — the venue-level rows the reseed cannot write.
+  'supabase/seed-reviews.sql',
+  'supabase/seed-demo-venue-surfaces.sql',
 ] as const
+
+/**
+ * Left out of the list above on purpose.
+ *
+ * `supabase/seed-commitments-demo.sql` keys its four rows to wedding
+ * 44444444-…-000209, which step 3 deletes and re-mints. Applied before the
+ * reseed the rows cascade away; applied after, the wedding id no longer
+ * exists and the insert fails the foreign key. The reseed now writes
+ * commitments, planning notes and a timeline for every booking, so the
+ * table is better covered than that file ever made it. The file stays in
+ * the repo for anyone running against a database with the old seed on it.
+ */
+const DEMO_SQL_FILES_SUPERSEDED: ReadonlyArray<{ file: string; why: string }> = [
+  {
+    file: 'supabase/seed-commitments-demo.sql',
+    why: 'keyed to a wedding the reseed re-mints; superseded by the reseed aux rows',
+  },
+]
 
 /** Ashcombe Barn: the one venue in the fixture that is not a demo. */
 const ASHCOMBE = {
@@ -165,6 +194,106 @@ async function applySqlFile(sb: SupabaseClient, file: string): Promise<string> {
     ok++
   }
   return `${ok} applied, ${skipped} already present`
+}
+
+// ---------------------------------------------------------------------------
+// The reseed
+// ---------------------------------------------------------------------------
+
+/**
+ * The spine, rebuilt through `linkSignal`.
+ *
+ * `supabase/seed.sql` writes 72 weddings with fixed 2024-to-2026 dates and
+ * no touchpoints at all, which is why the live demo reads Frozen and why
+ * every progression-driven surface is blank on it. The reseed clears the
+ * four demo venues and replays 60 stories through the real writers, with
+ * every date an offset from `SEED_TODAY`. It has to run AFTER the SQL
+ * files, because it needs the venues, and because its delete phase would
+ * otherwise wipe rows those files had just written.
+ */
+const RESEED_TODAY = process.env.E2E_SEED_TODAY ?? SEED_TODAY
+
+function reseedDataset() {
+  return generateDemoDataset({ today: RESEED_TODAY })
+}
+
+/**
+ * The real writers, imported only when the run is going to write. The
+ * import is dynamic so `loadE2EEnv()` has already put the branch
+ * credentials on `process.env` before any module builds a client at
+ * import time — the same reason `scripts/demo-reseed.ts` does it this way.
+ */
+async function liveReseedWriters(): Promise<ReseedWriters> {
+  const { linkSignal, mintWedding } = await import('../src/lib/spine/cascade')
+  const { mirrorCoupleFromWedding } = await import(
+    '../src/lib/services/identity/mirror-couple'
+  )
+  const { recordEngagementEventsBatch } = await import('../src/lib/services/heat-mapping')
+  const { newJudgeBudget } = await import('../src/lib/services/identity/llm-judge')
+
+  return {
+    linkSignal: async (args) =>
+      linkSignal({
+        supabase: args.supabase,
+        venueId: args.venueId,
+        signal: args.signal,
+        bypassCache: true,
+        judgeBudget: newJudgeBudget(1),
+        source: 'e2e-seed',
+      }),
+    mintWedding: async (input) =>
+      mintWedding({
+        venueId: input.venueId,
+        source: 'csv_import',
+        reason: input.reason,
+        supabase: input.supabase,
+        signals: input.signals,
+      }),
+    mirrorCouple: async (input) =>
+      mirrorCoupleFromWedding({
+        venueId: input.venueId,
+        weddingId: input.weddingId,
+        supabase: input.supabase,
+      }),
+    recordHeat: async (venueId, weddingId, events, direction, occurredAt) =>
+      recordEngagementEventsBatch(venueId, weddingId, events, direction, occurredAt),
+  }
+}
+
+async function runReseed(sb: SupabaseClient): Promise<string> {
+  const plan = buildReseedPlan(reseedDataset())
+  const result = await applyReseed({
+    supabase: sb,
+    plan,
+    dataset: reseedDataset(),
+    writers: await liveReseedWriters(),
+    dryRun: false,
+  })
+  if (result.errors.length > 0) {
+    throw new Error(
+      `reseed reported ${result.errors.length} error(s):\n  ` +
+        result.errors.slice(0, 8).join('\n  '),
+    )
+  }
+  const aux = Object.values(result.auxRowsByTable).reduce((s, n) => s + n, 0)
+  return (
+    `${result.minted} weddings, ${result.mirrored} couples, ` +
+    `${result.signalsLinked} signals, ${result.heatEventsWritten} heat events, ` +
+    `${aux} mirror rows`
+  )
+}
+
+/** The per-table plan a dry run prints. */
+function reseedPlanLines(): string[] {
+  const plan = buildReseedPlan(reseedDataset())
+  const byTable = reseedTableRows(plan)
+  const names = Object.keys(byTable).sort()
+  const width = Math.max(...names.map((n) => n.length))
+  return [
+    `today ${RESEED_TODAY}, seed ${plan.seed}, ${plan.summary.stories} couples`,
+    `${plan.deletes.length} tables cleared first, venue-scoped`,
+    ...names.map((n) => `${n.padEnd(width)}  ${String(byTable[n]).padStart(5)}`),
+  ]
 }
 
 interface Credential {
@@ -322,6 +451,11 @@ async function main() {
   const steps: Step[] = [
     ...DEMO_SQL_FILES.map((f) => sqlStep(f)),
     {
+      name: 'Reseed the Crestwood spine through linkSignal',
+      detail: reseedPlanLines(),
+      run: runReseed,
+    },
+    {
       name: 'Seed Ashcombe Barn',
       detail: [
         `organisation ${ASHCOMBE.orgName} (${ASHCOMBE.orgId})`,
@@ -347,6 +481,11 @@ async function main() {
     console.log(`  ${i + 1}. ${step.name}`)
     for (const d of step.detail) console.log(`       - ${d}`)
   })
+  console.log('')
+  for (const s of DEMO_SQL_FILES_SUPERSEDED) {
+    console.log(`  not applied: ${s.file}`)
+    console.log(`       ${s.why}`)
+  }
   console.log('')
 
   if (!apply) {
