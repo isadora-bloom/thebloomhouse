@@ -17,6 +17,7 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report e2e/report",
     "migrate:pending": "tsx scripts/apply-pending-migrations.ts",
+    "preflight": "node scripts/deploy-preflight.mjs",
     "check:links": "node scripts/check-internal-links.mjs",
     "check:wedding-cascade": "node scripts/check-merge-weddings-cascade.mjs",
     "check:people-insert": "node scripts/check-no-direct-people-insert.mjs",
