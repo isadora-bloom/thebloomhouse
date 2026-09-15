@@ -45,6 +45,8 @@ import { applyReseed, type ReseedWriters } from './demo-reseed/apply'
 import { generateDemoDataset, SEED_TODAY } from './demo-reseed/generate'
 import { buildReseedPlan } from './demo-reseed/plan'
 import { reseedTableRows } from './demo-coverage'
+import { readSchemaFacts } from './demo-reseed/schema-facts'
+import { validateFiles, formatFindings, SEED_SQL_FILES } from './validate-seed-sql'
 
 // ---------------------------------------------------------------------------
 // What gets seeded
@@ -332,7 +334,12 @@ async function seedAshcombe(sb: SupabaseClient): Promise<string> {
 
   const { error: orgErr } = await sb
     .from('organisations')
-    .upsert({ id: ASHCOMBE.orgId, name: ASHCOMBE.orgName, plan_tier: 'intelligence' }, { onConflict: 'id' })
+    // W74: migration 215 retired the 3-tier vocabulary this used to say
+    // 'intelligence' in; 'growth' is the mapped-forward equivalent.
+    // organisations.plan_tier carries no CHECK, so the stale value never
+    // failed here, but venues.plan_tier below did — see the CHECK-
+    // violation this same migration put on that column.
+    .upsert({ id: ASHCOMBE.orgId, name: ASHCOMBE.orgName, plan_tier: 'growth' }, { onConflict: 'id' })
   if (orgErr) throw new Error(`organisations: ${orgErr.message}`)
   notes.push('org')
 
@@ -342,7 +349,11 @@ async function seedAshcombe(sb: SupabaseClient): Promise<string> {
       org_id: ASHCOMBE.orgId,
       name: ASHCOMBE.venueName,
       slug: ASHCOMBE.venueSlug,
-      plan_tier: 'intelligence',
+      // W74: 'intelligence' is pre-migration-215 vocabulary. venues has a
+      // CHECK on plan_tier (pre_opening | solo | growth | multi |
+      // enterprise) — this was the statement that actually failed
+      // 23514 on the test branch, the seed SQL findings came after it.
+      plan_tier: 'growth',
       status: 'active',
       is_demo: false,
     },
@@ -548,6 +559,26 @@ async function main() {
   // Belt and braces: loadE2EEnv has already refused, this says so again
   // with this script named on the line.
   assertNotProduction(env.supabaseUrl, 'scripts/e2e-seed.ts')
+
+  // W74: validate the seed SQL against the migrations before building or
+  // printing the plan — dry run and apply alike. `supabase/seed.sql`
+  // inserting `venues.plan_tier = 'intelligence'` (migration 215 retired
+  // it) reached `--apply` and died on its first statement; a second pass
+  // found `interactions` rows missing the NOT NULL `signal_class`
+  // (migration 192) right behind it. Same class of bug `demo-reseed/
+  // validate-plan.ts` already catches for the generated reseed rows —
+  // this is that check for the hand-written files.
+  const seedFacts = readSchemaFacts()
+  const seedFindings = validateFiles(SEED_SQL_FILES, seedFacts)
+  if (seedFindings.length > 0) {
+    console.error('')
+    console.error(formatFindings(seedFindings))
+    console.error('')
+    throw new Error(
+      `seed SQL failed validation (${seedFindings.length} finding(s)) — run ` +
+        `\`npm run check:seed-sql\` for the full list. Refusing to ${apply ? 'apply' : 'plan'}.`,
+    )
+  }
 
   const steps: Step[] = [
     ...DEMO_SQL_FILES.map((f) => sqlStep(f)),
