@@ -45,6 +45,7 @@ import { splitSqlStatements } from './lib/sql-split.js'
 import { generateDemoDataset, SEED_TODAY } from './demo-reseed/generate'
 import { buildReseedPlan } from './demo-reseed/plan'
 import { DEMO_VENUE_IDS } from './demo-reseed/roster'
+import { readSchemaFacts } from './demo-reseed/schema-facts'
 import { progressionEventTypeFor } from '../src/lib/services/identity/progression'
 import type { ReseedPlan } from './demo-reseed/types'
 
@@ -164,6 +165,18 @@ export interface DemoTable {
  * Same heuristic as `scripts/check-rls-on-venue-id.mjs`, deliberately:
  * one scan shape, two guards, so a table cannot be venue-scoped for RLS
  * purposes and invisible for coverage purposes.
+ *
+ * W72: this function's own `DROP TABLE` guard does not catch `ALTER
+ * TABLE ... RENAME TO ...` — the shape migration 040 uses to retire
+ * `follow_up_sequence_templates`. That table has `venue_id` in its
+ * column list here and no `DROP TABLE` ever names it, so on its own this
+ * function would keep counting it as a table the demo seed answers for,
+ * years after it stopped existing under that name. `buildStaticCoverage`
+ * closes that gap by filtering this function's output through
+ * `schema-facts.ts`'s `tableExists`, which does understand RENAME — the
+ * same reader `validate-plan.ts` uses to keep the reseed generator from
+ * writing that table in the first place. One schema-facts reader, so a
+ * phantom table cannot be invisible to one script and present in another.
  */
 export function enumerateDemoTables(migrationSql: string): DemoTable[] {
   const venue = new Set<string>()
@@ -610,7 +623,12 @@ export function buildStaticCoverage(options: CoverageOptions): CoverageRow[] {
     .map((f) => readFileSync(join(migDir, f), 'utf8'))
     .join('\n')
 
-  const tables = enumerateDemoTables(migrationSql)
+  // `enumerateDemoTables` sees a plain CREATE/DROP; it does not see a
+  // later RENAME. schema-facts does, so a table renamed away (W72:
+  // `follow_up_sequence_templates`) cannot survive into the coverage
+  // report just because nothing ever ran a literal DROP TABLE on it.
+  const schemaFacts = readSchemaFacts(migDir)
+  const tables = enumerateDemoTables(migrationSql).filter((t) => schemaFacts.tableExists(t.table))
 
   let seedSql = ''
   for (const file of SEED_SQL_FILES) {

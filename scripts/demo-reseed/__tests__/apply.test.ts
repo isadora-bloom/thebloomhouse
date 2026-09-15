@@ -14,10 +14,17 @@
 
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { applyReseed, runDelete, withWeddingId, type ReseedWriters } from '../apply'
+import {
+  applyReseed,
+  resolveExistingSpineIds,
+  runDelete,
+  withWeddingId,
+  type ReseedWriters,
+} from '../apply'
 import { assertKnownDemoVenueIds, checkVenuesAreDemo } from '../guard'
 import { generateDemoDataset } from '../generate'
-import { buildReseedPlan } from '../plan'
+import { AUX_TABLES } from '../mirror-rows'
+import { buildReseedPlan, externalIdFor } from '../plan'
 import { DEMO_VENUE_IDS, HERO_WEDDING_ID } from '../roster'
 
 const TODAY = '2026-09-09T12:00:00.000Z'
@@ -467,6 +474,171 @@ describe('applyReseed — apply', () => {
     expect(first.calls.map((c) => `${c.table}:${c.op}`)).toEqual(
       second.calls.map((c) => `${c.table}:${c.op}`),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// --only-aux (W72)
+// ---------------------------------------------------------------------------
+
+describe("applyReseed — mode: 'aux-only'", () => {
+  it('deletes only aux-owned tables and replays only aux_rows steps', async () => {
+    const { dataset, plan } = smallPlan()
+    const { client, calls } = makeFakeClient(ALL_DEMO)
+    const log = makeWriters()
+    const result = await applyReseed({
+      supabase: client,
+      plan,
+      dataset,
+      writers: log.writers,
+      dryRun: true,
+      mode: 'aux-only',
+    })
+
+    // Nothing outside aux_rows counted, because nothing outside aux_rows ran.
+    expect(result.minted).toBe(0)
+    expect(result.mirrored).toBe(0)
+    expect(result.signalsLinked).toBe(0)
+    expect(result.heatEventsWritten).toBe(0)
+    expect(result.toursWritten).toBe(0)
+    expect(result.lostDealsWritten).toBe(0)
+    expect(result.weddingsUpdated).toBe(0)
+    expect(Object.values(result.auxRowsByTable).reduce((a, b) => a + b, 0)).toBe(
+      plan.summary.auxRows,
+    )
+    for (const table of Object.keys(result.auxRowsByTable)) {
+      expect(AUX_TABLES).toContain(table)
+    }
+    expect(calls.filter((c) => c.op !== 'select')).toHaveLength(0)
+    expect(log.minted).toHaveLength(0)
+    expect(log.mirrored).toHaveLength(0)
+    expect(log.linked).toHaveLength(0)
+  })
+
+  it('requires writers.resolveExistingSpine to actually apply', async () => {
+    const { dataset, plan } = smallPlan()
+    const { client } = makeFakeClient(ALL_DEMO)
+    const log = makeWriters() // no resolveExistingSpine on this writer set
+    const result = await applyReseed({
+      supabase: client,
+      plan,
+      dataset,
+      writers: log.writers,
+      dryRun: false,
+      mode: 'aux-only',
+    })
+    expect(result.errors.some((e) => e.includes('resolveExistingSpine'))).toBe(true)
+  })
+
+  it('resolves ids via resolveExistingSpine and writes aux rows against them', async () => {
+    const { dataset, plan } = smallPlan()
+    const { client, calls } = makeFakeClient(ALL_DEMO, {
+      // Any aux table the plan touches inserts happily.
+      ...Object.fromEntries(AUX_TABLES.map((t) => [t, []])),
+    })
+    const log = makeWriters()
+    log.writers.resolveExistingSpine = async () => ({
+      weddingIdByStory: Object.fromEntries(
+        dataset.stories.filter((s) => !s.hero).map((s, i) => [s.key, `existing-wedding-${i}`]),
+      ),
+      coupleIdByStory: Object.fromEntries(
+        dataset.stories.map((s, i) => [s.key, `existing-couple-${i}`]),
+      ),
+      missing: [],
+    })
+
+    const result = await applyReseed({
+      supabase: client,
+      plan,
+      dataset,
+      writers: log.writers,
+      dryRun: false,
+      mode: 'aux-only',
+    })
+
+    expect(result.errors).toEqual([])
+    const inserts = calls.filter((c) => c.op === 'insert')
+    expect(inserts.length).toBeGreaterThan(0)
+    // Every row the applier actually inserted for this story must carry
+    // the resolved wedding id, not the plan's <wedding:key> placeholder.
+    for (const call of inserts) {
+      const rows = Array.isArray(call.payload) ? call.payload : [call.payload]
+      for (const row of rows as Array<Record<string, unknown>>) {
+        if (row.wedding_id) expect(String(row.wedding_id)).not.toMatch(/^<wedding:/)
+      }
+    }
+  })
+})
+
+describe('resolveExistingSpineIds', () => {
+  function makeSpineClient(
+    touchpoints: Array<{ external_id: string; couple_id: string | null }>,
+    couples: Array<{ id: string; source_wedding_id: string | null }>,
+  ): SupabaseClient {
+    const from = (table: string) => {
+      const chain: Record<string, unknown> = {}
+      let eqFilter: { column: string; value: unknown } | null = null
+      Object.assign(chain, {
+        select: () => chain,
+        in: (column: string, values: unknown[]) => {
+          if (table === 'touchpoints') {
+            const data = touchpoints.filter((t) => (values as string[]).includes(t.external_id))
+            return Promise.resolve({ data, error: null })
+          }
+          const data = couples.filter((c) => (values as string[]).includes(c.id))
+          return Promise.resolve({ data, error: null })
+        },
+        eq: (column: string, value: unknown) => {
+          eqFilter = { column, value }
+          return chain
+        },
+        maybeSingle: () => {
+          const row = couples.find(
+            (c) => eqFilter?.column === 'source_wedding_id' && c.source_wedding_id === eqFilter.value,
+          )
+          return Promise.resolve({ data: row ?? null, error: null })
+        },
+      })
+      return chain
+    }
+    return { from } as unknown as SupabaseClient
+  }
+
+  it('resolves wedding and couple ids from the deterministic first-signal external_id', async () => {
+    const dataset = generateDemoDataset({ seed: 909, today: TODAY, coupleCount: 6 })
+    const nonHero = dataset.stories.filter((s) => !s.hero)
+    const hero = dataset.stories.find((s) => s.hero)!
+
+    const touchpoints = nonHero.map((s, i) => ({
+      external_id: externalIdFor(s, 0),
+      couple_id: `couple-${i}`,
+    }))
+    const couples = [
+      ...nonHero.map((s, i) => ({ id: `couple-${i}`, source_wedding_id: `wedding-${i}` })),
+      { id: 'hero-couple', source_wedding_id: hero.pinnedWeddingId },
+    ]
+    const client = makeSpineClient(touchpoints, couples)
+
+    const resolved = await resolveExistingSpineIds(client, dataset)
+
+    expect(resolved.missing).toEqual([])
+    expect(resolved.weddingIdByStory[hero.key]).toBe(hero.pinnedWeddingId)
+    expect(resolved.coupleIdByStory[hero.key]).toBe('hero-couple')
+    nonHero.forEach((s, i) => {
+      expect(resolved.coupleIdByStory[s.key]).toBe(`couple-${i}`)
+      expect(resolved.weddingIdByStory[s.key]).toBe(`wedding-${i}`)
+    })
+  })
+
+  it('reports a story as missing when its first-signal touchpoint is not found', async () => {
+    const dataset = generateDemoDataset({ seed: 909, today: TODAY, coupleCount: 6 })
+    const nonHero = dataset.stories.filter((s) => !s.hero)
+    // No touchpoints at all — as if the spine was never actually seeded.
+    const client = makeSpineClient([], [])
+
+    const resolved = await resolveExistingSpineIds(client, dataset)
+
+    for (const s of nonHero) expect(resolved.missing).toContain(s.key)
   })
 })
 
