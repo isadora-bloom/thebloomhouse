@@ -27,6 +27,7 @@
 import { calendlyToNormalizedSignal } from '../../src/lib/services/identity/calendly-to-signal'
 import { emailToNormalizedSignal } from '../../src/lib/services/identity/email-to-signal'
 import type { NormalizedSignal } from '../../src/lib/services/identity/sources/types'
+import { buildStoryAux, buildVenueAux, coupleRef } from './mirror-rows'
 import { DEMO_VENUES, HERO_WEDDING_ID, tierForScore } from './roster'
 import { WEDDING_STATUS_FOR_LIFECYCLE } from './generate'
 import type {
@@ -55,6 +56,64 @@ const DAY_MS = 86_400_000
  * `src/lib/api/auth-helpers.ts`.
  */
 export const RESEED_DELETE_TABLES: ReadonlyArray<{ table: string; why: string }> = [
+  // W70 mirror rows, child before parent. These used to be spared for the
+  // hero wedding, on the reasoning that deleting the weddings row would
+  // cascade them away. The reseed now REBUILDS them for every booking
+  // including the hero, with dates measured from `today`, so sparing them
+  // would leave last year's rehearsal dinner sitting under a heading that
+  // says next week.
+  { table: 'rsvp_responses', why: 'RSVP answers; rebuilt with the guest list' },
+  { table: 'rsvp_config', why: 'RSVP form settings; one per booked wedding' },
+  { table: 'guest_list', why: 'guests and their seats; rebuilt per booking' },
+  { table: 'seating_tables', why: 'table map; rebuilt per booking' },
+  { table: 'budget_payments', why: 'payments against budget lines' },
+  { table: 'budget_items', why: 'the couple budget' },
+  { table: 'contracts', why: 'generated and signed agreements' },
+  { table: 'booked_vendors', why: 'suppliers on the day' },
+  { table: 'wedding_party', why: 'the wedding party' },
+  { table: 'commitment_reconciliation', why: 'the commitments queue' },
+  { table: 'planning_notes', why: 'notes extracted from the couple thread' },
+  { table: 'messages', why: 'couple-portal chat' },
+  { table: 'event_feedback', why: 'post-event debrief on completed weddings' },
+  { table: 'couple_invites', why: 'pending portal invitations' },
+  { table: 'checklist_items', why: 'the planning checklist' },
+  { table: 'timeline', why: 'the day timeline' },
+  { table: 'drafts', why: 'the draft queue' },
+  { table: 'lifecycle_transitions', why: 'stage history' },
+  // Venue-level mirror rows the reseed also owns. Cleared for the same
+  // reason as the rest: every date on them is measured from `today`.
+  { table: 'marketing_spend_records', why: 'eighteen months of spend, re-dated' },
+  { table: 'campaigns', why: 'campaign rollups behind the ROI page' },
+  { table: 'reviews', why: 'reviews across four platforms, re-dated' },
+  { table: 'review_language', why: 'phrase bank derived from those reviews' },
+  { table: 'weather_alerts', why: 'one live alert, the rest expired' },
+  { table: 'weather_climate_norms', why: 'decade-over-decade norms' },
+  { table: 'weather_climate_annual', why: 'per-year monthly climate' },
+  { table: 'follow_up_sequences', why: 'sequence definitions' },
+  { table: 'follow_up_sequence_templates', why: 'sequence step templates' },
+  { table: 'packages', why: 'package, upgrade and discount catalogue' },
+  { table: 'storefront', why: 'couple-facing picks' },
+  { table: 'portal_section_config', why: 'which portal sections show' },
+  { table: 'venue_resources', why: 'couple-facing links' },
+  { table: 'brand_assets', why: 'logos and photography' },
+  { table: 'accommodations', why: 'where guests stay' },
+  { table: 'voice_training_sessions', why: 'voice-game history' },
+  { table: 'brain_dump_entries', why: 'the brain-dump inbox' },
+  { table: 'wedding_config', why: 'per-wedding budget settings' },
+  { table: 'wedding_details', why: 'the details sheet' },
+  { table: 'staffing_assignments', why: 'who is on shift' },
+  { table: 'shuttle_schedule', why: 'shuttle runs' },
+  { table: 'sage_conversations', why: 'portal chat history' },
+  { table: 'ai_briefings', why: 'weekly and monthly briefings' },
+  { table: 'anomaly_alerts', why: 'the anomaly feed' },
+  { table: 'learned_preferences', why: 'what the voice loop has learned' },
+  { table: 'natural_language_queries', why: 'ask-your-data history' },
+  { table: 'phrase_usage', why: 'phrase bank usage' },
+  { table: 'trend_recommendations', why: 'recommendations queue' },
+  { table: 'email_sync_state', why: 'the mailbox cursor' },
+  { table: 'draft_feedback', why: 'what the coordinator did with a draft' },
+  { table: 'intelligence_extractions', why: 'what the extractor pulled out' },
+  { table: 'inspo_gallery', why: 'the couple inspiration board' },
   { table: 'engagement_events', why: 'heat inputs; rewritten with fresh occurred_at' },
   { table: 'touchpoints', why: 'spine event log; rebuilt through linkSignal' },
   { table: 'fragments', why: 'unanchored signals from the old seed' },
@@ -84,6 +143,10 @@ const KIND_RANK: Record<ReseedStepKind, number> = {
   tour_row: 5,
   lost_deal_row: 6,
   wedding_state: 7,
+  // Last: mirror rows hang off a wedding that must already exist, and
+  // their own order is carried by a per-millisecond nudge on occurredAt
+  // rather than by this rank, because they are ordered among themselves.
+  aux_rows: 8,
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +269,15 @@ export function buildSignal(
     partner_email: story.partnerEmail,
     wedding_date: weddingDate,
     author_class: step.direction === 'inbound' ? 'couple' : 'operator',
+    // Migration 398: a handle is a first-class identifier, and the
+    // linker is the only writer of `couples.handles`. Carrying it on the
+    // signal is how a real Instagram DM arrives, so the demo gets the
+    // handle column populated by the same route rather than by a seed
+    // UPDATE that would prove nothing.
+    handles:
+      step.channel === 'instagram' && story.instagramHandle
+        ? { instagram: story.instagramHandle }
+        : undefined,
     raw_payload: {
       ...base.raw_payload,
       demo_reseed: true,
@@ -284,8 +356,9 @@ export function buildReseedPlan(dataset: DemoDataset): ReseedPlan {
   const steps: ReseedStep[] = []
   let signalCount = 0
   let heatEventCount = 0
+  let auxRowCount = 0
 
-  for (const story of dataset.stories) {
+  for (const [storyIndex, story] of dataset.stories.entries()) {
     // The hero's wedding row is preserved, so its id is known up front.
     // Every other story gets its id at run time from mintWedding; the
     // plan carries a placeholder the applier substitutes.
@@ -419,6 +492,52 @@ export function buildReseedPlan(dataset: DemoDataset): ReseedPlan {
       occurredAt: settleAt,
       weddingPatch: weddingPatchFor(story, today),
     })
+
+    // Mirror rows last, and in the order `buildStoryAux` returns them: a
+    // budget payment cannot precede its budget line. The sort below is
+    // stable, but leaning on that would be a silent dependency, so each
+    // bundle gets its own instant a millisecond apart.
+    const settleMs = new Date(settleAt).getTime()
+    buildStoryAux(story, today, dataset.seed, storyIndex).forEach((bundle, i) => {
+      steps.push({
+        kind: 'aux_rows',
+        storyKey: story.key,
+        venueId: story.venueId,
+        occurredAt: new Date(settleMs + 1 + i).toISOString(),
+        table: bundle.table,
+        rows: bundle.rows,
+      })
+      auxRowCount += bundle.rows.length
+    })
+  }
+
+  // Venue-level mirror rows: the fragments that never resolved and the
+  // candidate-match queue. They go after every story so the couple ids
+  // they reference are already minted. Anchored to the venue's first
+  // story because the applier walks steps by story.
+  for (const venueId of venueIds) {
+    const venueStories = dataset.stories.filter((s) => s.venueId === venueId)
+    if (venueStories.length === 0) continue
+    const anchor = venueStories[0]
+    const tail = new Date(
+      Math.max(...steps.map((s) => new Date(s.occurredAt).getTime())) + 1000,
+    ).getTime()
+    buildVenueAux(
+      venueId,
+      today,
+      dataset.seed,
+      venueStories.map((s) => coupleRef(s.key)),
+    ).forEach((bundle, i) => {
+      steps.push({
+        kind: 'aux_rows',
+        storyKey: anchor.key,
+        venueId,
+        occurredAt: new Date(tail + i).toISOString(),
+        table: bundle.table,
+        rows: bundle.rows,
+      })
+      auxRowCount += bundle.rows.length
+    })
   }
 
   steps.sort((a, b) => {
@@ -457,6 +576,7 @@ export function buildReseedPlan(dataset: DemoDataset): ReseedPlan {
       stories: dataset.stories.length,
       signals: signalCount,
       heatEvents: heatEventCount,
+      auxRows: auxRowCount,
       byVenue,
       byLifecycle,
       byExpectedTier,
