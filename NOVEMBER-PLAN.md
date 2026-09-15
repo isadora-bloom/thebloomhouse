@@ -106,6 +106,17 @@ layer still reads the legacy tables in 255 places and two of the four daily surf
   rotate `CRON_SECRET` (32 random bytes); set `CRON_SECRET_DESTRUCTIVE`, `STATE_SIGNING_SECRET`,
   `STRIPE_WEBHOOK_SECRET`, `CALENDLY_WEBHOOK_SECRET` in Vercel production. The merged code refuses
   cron jobs, OAuth connects and both webhooks without them, so this comes before the master FF.
+- [ ] **Deploy, in this order (`docs/DEPLOY.md`):** `npm run preflight` must pass; then the four
+  secrets (rotate `CRON_SECRET` to 32 random bytes, add `CRON_SECRET_DESTRUCTIVE`,
+  `STRIPE_WEBHOOK_SECRET`, `CALENDLY_WEBHOOK_SECRET`; the classifier blocks me from writing them);
+  then master FF + push (I do it); then the bundle `supabase/PENDING-MIGRATIONS-2026-09-14.sql`
+  in the SQL editor (23 files); then `node scripts/check-live-policies.mjs`; then the types
+  regeneration (I do it); then `npx tsx scripts/demo-reseed.ts --apply --allow-prod` once so the
+  demo spine exists on production (W70 found touchpoints, progression events and fragments at
+  zero rows for all four demo venues).
+- [ ] **Test branch for the e2e run (`E2E-PLAN.md`, W69 and W70 reports):** reset, migrate with
+  `--env .env.test`, `check-live-policies --env .env.test`, `e2e-seed.ts` dry then `--apply`
+  (capture the printed credentials), `demo-coverage.ts --live --env .env.test`, branch secrets.
 - [ ] **RECONNECT GMAIL.** `gmail_connections` for Rixey has been `status=error`
   ("Token refresh failed") since **2026-07-24**. Settings → Gmail → Connect. Nothing else replaces it.
 - [ ] Fast-forward `master` to `consolidation` (129+ commits: waves 1 to 7 gated and pushed).
