@@ -9,6 +9,9 @@
 
 import { describe, it, expect } from 'vitest'
 import { generateDemoDataset, predictHeat } from '../generate'
+import { buildReseedPlan } from '../plan'
+import { readSchemaFacts } from '../schema-facts'
+import { validatePlan } from '../validate-plan'
 import {
   DEMO_VENUE_IDS,
   FORBIDDEN_EMAIL_FRAGMENTS,
@@ -22,6 +25,22 @@ describe('generateDemoDataset', () => {
     const a = generateDemoDataset({ seed: 4242, today: TODAY })
     const b = generateDemoDataset({ seed: 4242, today: TODAY })
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+
+  // W72: the same production incident that motivated schema-facts.ts —
+  // an aux_rows step naming a table the migrations renamed away, or a
+  // value outside a CHECK set — would not have shown up in the
+  // determinism check above (both runs would agree on the SAME wrong
+  // plan). Running the real plan through the real schema on every test
+  // run is what actually catches it, and it belongs next to the
+  // determinism test because both are "does what generate.ts produces
+  // stay trustworthy" checks on the same output.
+  it('produces a plan that validates against the real migrations (W72)', () => {
+    const dataset = generateDemoDataset({ seed: 4242, today: TODAY })
+    const plan = buildReseedPlan(dataset)
+    const result = validatePlan(plan, readSchemaFacts())
+    expect(result.findings).toEqual([])
+    expect(result.pass).toBe(true)
   })
 
   it('produces a different roster for a different seed', () => {

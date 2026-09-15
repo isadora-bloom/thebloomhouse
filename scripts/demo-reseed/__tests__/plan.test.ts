@@ -9,7 +9,18 @@
 
 import { describe, it, expect } from 'vitest'
 import { generateDemoDataset } from '../generate'
-import { buildReseedPlan, externalIdFor, offsetDate, offsetIso, RESEED_DELETE_TABLES } from '../plan'
+import {
+  auxOnlyDeletes,
+  auxOnlySteps,
+  buildReseedPlan,
+  externalIdFor,
+  offsetDate,
+  offsetIso,
+  RESEED_DELETE_TABLES,
+} from '../plan'
+import { AUX_TABLES } from '../mirror-rows'
+import { readSchemaFacts } from '../schema-facts'
+import { validatePlan } from '../validate-plan'
 import { DEMO_VENUE_IDS, HERO_WEDDING_ID } from '../roster'
 
 const TODAY = '2026-09-09T12:00:00.000Z'
@@ -219,5 +230,57 @@ describe('buildReseedPlan — heat and lifecycle', () => {
         expect(step.row!.outcome).toBeNull()
       }
     }
+  })
+})
+
+// W72: schema-facts.ts + validate-plan.ts. The three production errors
+// (a phantom table, two CHECK violations) were all reachable from the
+// plan this suite already builds — this is the check that would have
+// caught them on the dry run that preceded the 2026-09-15 apply.
+describe('buildReseedPlan — validates against the real migrations (W72)', () => {
+  it('passes validatePlan against schema-facts read from supabase/migrations', () => {
+    const result = validatePlan(plan, readSchemaFacts())
+    expect(result.findings).toEqual([])
+    expect(result.pass).toBe(true)
+  })
+
+  it('never writes the phantom follow_up_sequence_templates table', () => {
+    // Migration 040 renamed it to _archived_follow_up_sequence_templates;
+    // the live table for sequence steps is sequence_steps. Regression
+    // guard for the exact table that broke the first production run.
+    const tables = new Set(plan.steps.filter((s) => s.kind === 'aux_rows').map((s) => s.table))
+    expect(tables.has('follow_up_sequence_templates')).toBe(false)
+    const deleteTables = new Set(plan.deletes.map((d) => d.table))
+    expect(deleteTables.has('follow_up_sequence_templates')).toBe(false)
+  })
+})
+
+describe('auxOnlyDeletes / auxOnlySteps (--only-aux)', () => {
+  it('keeps only aux-owned tables in the delete list', () => {
+    const deletes = auxOnlyDeletes(plan)
+    expect(deletes.length).toBeGreaterThan(0)
+    for (const d of deletes) expect(AUX_TABLES).toContain(d.table)
+    // The spine and the dedicated-step-kind tables must never appear —
+    // that delete-and-rebuild is exactly what --only-aux exists to skip.
+    const spineAndDedicated = [
+      'couples',
+      'touchpoints',
+      'weddings',
+      'people',
+      'engagement_events',
+      'tours',
+      'lost_deals',
+    ]
+    for (const t of spineAndDedicated) {
+      expect(deletes.some((d) => d.table === t)).toBe(false)
+    }
+  })
+
+  it('keeps only aux_rows steps, in the plan\'s own order', () => {
+    const steps = auxOnlySteps(plan)
+    expect(steps.length).toBeGreaterThan(0)
+    expect(steps.every((s) => s.kind === 'aux_rows')).toBe(true)
+    const fullOrder = plan.steps.filter((s) => s.kind === 'aux_rows')
+    expect(steps).toEqual(fullOrder)
   })
 })

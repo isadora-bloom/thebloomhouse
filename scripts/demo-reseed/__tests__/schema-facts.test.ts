@@ -1,0 +1,310 @@
+/**
+ * Unit tests for the schema-facts static reader (W72).
+ *
+ * Fixture SQL only — these never touch the real `supabase/migrations/`
+ * tree, so a change to the actual migration set cannot make this suite
+ * flaky. `plan.test.ts` covers the real tree separately, via
+ * `validatePlan`.
+ *
+ * Every fixture below is modelled on a real shape from this repo's
+ * migrations (see the file references in each test), not invented, so a
+ * pass here is evidence the reader handles what the repo actually does.
+ */
+
+import { describe, it, expect } from 'vitest'
+import {
+  buildSchemaFacts,
+  extractBalanced,
+  parseCheckExpr,
+  splitStatements,
+  sortMigrationFiles,
+  stripLineComments,
+  topLevelSplit,
+  type MigrationFile,
+} from '../schema-facts'
+
+function facts(files: MigrationFile[]) {
+  return buildSchemaFacts(files)
+}
+
+describe('stripLineComments', () => {
+  it('drops a trailing comment but keeps the code before it', () => {
+    expect(stripLineComments("id uuid, -- primary key\nname text")).toContain('name text')
+    expect(stripLineComments('id uuid, -- primary key\nname text')).not.toContain('primary key')
+  })
+
+  it('does not treat -- inside a string literal as a comment', () => {
+    const sql = "caption text DEFAULT 'see note -- not a comment'"
+    expect(stripLineComments(sql)).toContain('see note -- not a comment')
+  })
+})
+
+describe('splitStatements', () => {
+  it('splits on semicolons outside quotes', () => {
+    expect(splitStatements('A; B; C')).toHaveLength(3)
+  })
+
+  it('does not split on a semicolon inside a string literal', () => {
+    const stmts = splitStatements("INSERT INTO x (a) VALUES ('one; two');")
+    expect(stmts).toHaveLength(1)
+  })
+})
+
+describe('topLevelSplit', () => {
+  it('does not split inside parens', () => {
+    expect(topLevelSplit("a IN ('x', 'y'), b text")).toEqual(["a IN ('x', 'y')", 'b text'])
+  })
+})
+
+describe('extractBalanced', () => {
+  it('finds the matching close paren through nested parens', () => {
+    const text = "CHECK (a IN ('x', 'y'))"
+    const open = text.indexOf('(')
+    const bal = extractBalanced(text, open)
+    expect(bal?.inner).toBe("a IN ('x', 'y')")
+  })
+})
+
+describe('parseCheckExpr', () => {
+  it('parses a plain IN-list CHECK', () => {
+    expect(parseCheckExpr("trigger_type IN ('post_tour', 'ghosted')")).toEqual({
+      column: 'trigger_type',
+      values: ['post_tour', 'ghosted'],
+    })
+  })
+
+  it('parses the nullable "col IS NULL OR col IN (...)" shape', () => {
+    expect(parseCheckExpr("explanation_source IS NULL\n  OR explanation_source IN ('ai', 'template', 'rule')")).toEqual({
+      column: 'explanation_source',
+      values: ['ai', 'template', 'rule'],
+    })
+  })
+
+  it('returns null for a CHECK that is not an IN-list', () => {
+    expect(parseCheckExpr('end_date > start_date')).toBeNull()
+  })
+})
+
+describe('buildSchemaFacts — CREATE TABLE', () => {
+  it('declares every column, with or without a CHECK', () => {
+    const f = facts([
+      {
+        name: '001_x.sql',
+        sql: `
+          CREATE TABLE IF NOT EXISTS follow_up_sequences (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            venue_id uuid NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+            trigger_type text NOT NULL CHECK (trigger_type IN ('post_tour', 'ghosted', 'custom')),
+            is_active boolean DEFAULT true
+          );
+        `,
+      },
+    ])
+    expect(f.tableExists('follow_up_sequences')).toBe(true)
+    expect(f.columnDeclared('follow_up_sequences', 'venue_id')).toBe(true)
+    expect(f.columnDeclared('follow_up_sequences', 'is_active')).toBe(true)
+    expect(f.allowedValues('follow_up_sequences', 'is_active')).toBeNull()
+    expect(f.allowedValues('follow_up_sequences', 'trigger_type')).toEqual([
+      'post_tour',
+      'ghosted',
+      'custom',
+    ])
+    expect(f.columnDeclared('follow_up_sequences', 'nope')).toBe(false)
+  })
+
+  it('treats an undeclared table as not existing', () => {
+    const f = facts([])
+    expect(f.tableExists('anything')).toBe(false)
+    expect(f.columnDeclared('anything', 'id')).toBe(false)
+    expect(f.allowedValues('anything', 'id')).toBeNull()
+  })
+})
+
+describe('buildSchemaFacts — ADD COLUMN with an inline CHECK', () => {
+  // Modelled on migration 073 (venue_availability.status).
+  it('picks up the CHECK on a later ALTER TABLE ADD COLUMN', () => {
+    const f = facts([
+      { name: '001_x.sql', sql: 'CREATE TABLE IF NOT EXISTS t (id uuid PRIMARY KEY);' },
+      {
+        name: '002_x.sql',
+        sql: `
+          ALTER TABLE public.t
+            ADD COLUMN IF NOT EXISTS status text
+              CHECK (status IN ('available', 'booked', 'hold'));
+        `,
+      },
+    ])
+    expect(f.columnDeclared('t', 'status')).toBe(true)
+    expect(f.allowedValues('t', 'status')).toEqual(['available', 'booked', 'hold'])
+  })
+})
+
+describe('buildSchemaFacts — the DO-block guarded ADD CONSTRAINT shape', () => {
+  // Modelled on migration 243 (brand_assets.category): the ALTER TABLE
+  // sits inside `DO $$ BEGIN IF NOT EXISTS (...) THEN ... END IF; END
+  // $$;`, guarded by a `pg_constraint` existence check rather than an
+  // `IF NOT EXISTS` on the column.
+  it('finds the CHECK even though it is wrapped in a DO block guard', () => {
+    const f = facts([
+      {
+        name: '001_x.sql',
+        sql: 'CREATE TABLE IF NOT EXISTS brand_assets (id uuid PRIMARY KEY, category text);',
+      },
+      {
+        name: '002_x.sql',
+        sql: `
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint
+              WHERE conname = 'brand_assets_category_check'
+            ) THEN
+              ALTER TABLE public.brand_assets
+                ADD CONSTRAINT brand_assets_category_check
+                CHECK (category IS NULL OR category IN (
+                  'ceremony', 'tent', 'reception', 'detail',
+                  'aerial', 'venue_exterior', 'staff', 'other'
+                ));
+            END IF;
+          END $$;
+        `,
+      },
+    ])
+    expect(f.allowedValues('brand_assets', 'category')).toEqual([
+      'ceremony',
+      'tent',
+      'reception',
+      'detail',
+      'aerial',
+      'venue_exterior',
+      'staff',
+      'other',
+    ])
+  })
+})
+
+describe('buildSchemaFacts — DROP CONSTRAINT then a wider re-ADD', () => {
+  // Modelled on migrations 297 + 318 (follow_up_sequences.trigger_type):
+  // a later migration drops the old CHECK by its repo-convention name
+  // and adds a wider one under the same name. The LATEST set must win.
+  it('replaces the allowed set rather than keeping the first one found', () => {
+    const f = facts([
+      {
+        name: '025_x.sql',
+        sql: `
+          CREATE TABLE IF NOT EXISTS follow_up_sequences (
+            id uuid PRIMARY KEY,
+            trigger_type text NOT NULL CHECK (trigger_type IN ('post_tour', 'ghosted'))
+          );
+        `,
+      },
+      {
+        name: '297_x.sql',
+        sql: `
+          ALTER TABLE follow_up_sequences DROP CONSTRAINT IF EXISTS follow_up_sequences_trigger_type_check;
+          ALTER TABLE follow_up_sequences
+            ADD CONSTRAINT follow_up_sequences_trigger_type_check
+            CHECK (trigger_type IN ('post_tour', 'ghosted', 'post_booking', 'pre_event', 'custom'));
+        `,
+      },
+    ])
+    expect(f.allowedValues('follow_up_sequences', 'trigger_type')).toEqual([
+      'post_tour',
+      'ghosted',
+      'post_booking',
+      'pre_event',
+      'custom',
+    ])
+  })
+
+  it('a DROP CONSTRAINT with nothing re-added leaves the column unconstrained', () => {
+    const f = facts([
+      {
+        name: '001_x.sql',
+        sql: `
+          CREATE TABLE IF NOT EXISTS t (
+            id uuid PRIMARY KEY,
+            kind text CHECK (kind IN ('a', 'b'))
+          );
+        `,
+      },
+      { name: '002_x.sql', sql: 'ALTER TABLE t DROP CONSTRAINT IF EXISTS t_kind_check;' },
+    ])
+    expect(f.columnDeclared('t', 'kind')).toBe(true)
+    expect(f.allowedValues('t', 'kind')).toBeNull()
+  })
+})
+
+describe('buildSchemaFacts — RENAME TO', () => {
+  // Modelled on migration 040: follow_up_sequence_templates renamed to
+  // _archived_follow_up_sequence_templates. This is the W72 root cause —
+  // a generator that only checks "was this CREATE TABLE'd somewhere"
+  // would still think the old name is live.
+  it('marks the old name gone and the new name live', () => {
+    const f = facts([
+      {
+        name: '009_x.sql',
+        sql: `
+          CREATE TABLE IF NOT EXISTS follow_up_sequence_templates (
+            id uuid PRIMARY KEY,
+            venue_id uuid NOT NULL
+          );
+        `,
+      },
+      {
+        name: '040_x.sql',
+        sql: 'ALTER TABLE follow_up_sequence_templates RENAME TO _archived_follow_up_sequence_templates;',
+      },
+    ])
+    expect(f.tableExists('follow_up_sequence_templates')).toBe(false)
+    expect(f.tableExists('_archived_follow_up_sequence_templates')).toBe(true)
+    // The renamed table keeps its columns under the new name.
+    expect(f.columnDeclared('_archived_follow_up_sequence_templates', 'venue_id')).toBe(true)
+  })
+
+  it('does not confuse an ALTER INDEX rename for a table rename', () => {
+    const f = facts([
+      { name: '001_x.sql', sql: 'CREATE TABLE IF NOT EXISTS t (id uuid PRIMARY KEY);' },
+      {
+        name: '002_x.sql',
+        sql: 'ALTER INDEX public.idx_old RENAME TO idx_new;',
+      },
+    ])
+    expect(f.tableExists('t')).toBe(true)
+    expect(f.tableExists('idx_old')).toBe(false)
+    expect(f.tableExists('idx_new')).toBe(false)
+  })
+})
+
+describe('buildSchemaFacts — DROP TABLE', () => {
+  it('marks a dropped table as not existing, CASCADE or not', () => {
+    const f = facts([
+      {
+        name: '001_x.sql',
+        sql: `
+          CREATE TABLE IF NOT EXISTS a (id uuid PRIMARY KEY);
+          CREATE TABLE IF NOT EXISTS b (id uuid PRIMARY KEY);
+        `,
+      },
+      {
+        name: '002_x.sql',
+        sql: `
+          DROP TABLE public.a;
+          DROP TABLE IF EXISTS public.b CASCADE;
+        `,
+      },
+    ])
+    expect(f.tableExists('a')).toBe(false)
+    expect(f.tableExists('b')).toBe(false)
+  })
+})
+
+describe('sortMigrationFiles', () => {
+  it('sorts numerically, not lexically', () => {
+    expect(sortMigrationFiles(['100_x.sql', '9_y.sql', '25_z.sql'])).toEqual([
+      '9_y.sql',
+      '25_z.sql',
+      '100_x.sql',
+    ])
+  })
+})

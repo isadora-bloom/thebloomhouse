@@ -24,8 +24,16 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NormalizedSignal } from '../../src/lib/services/identity/sources/types'
 import { AUX_FORBIDDEN_TABLES, COUPLE_REF_RE, WEDDING_REF_RE } from './mirror-rows'
 import { assertDemoVenues } from './guard'
-import { offsetDate } from './plan'
+import { auxOnlyDeletes, auxOnlySteps, externalIdFor, offsetDate } from './plan'
 import type { DemoCoupleStory, DemoDataset, DeleteOp, ReseedPlan, ReseedStep } from './types'
+
+/** Split an array into chunks of at most `size`, so an `.in(...)` filter
+ *  stays inside the URL length PostgREST will accept. */
+function chunkArray<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
 
 // ---------------------------------------------------------------------------
 // Injected writers
@@ -73,6 +81,103 @@ export interface ReseedWriters {
     direction: 'inbound' | 'outbound',
     occurredAt: string,
   ): Promise<unknown>
+  /**
+   * Only required in `mode: 'aux-only'`. The spine already exists on this
+   * database from a prior full run; this resolves each story's wedding
+   * and couple id from it instead of minting again.
+   */
+  resolveExistingSpine?(input: {
+    supabase: SupabaseClient
+    dataset: DemoDataset
+  }): Promise<ExistingSpineIds>
+}
+
+export interface ExistingSpineIds {
+  weddingIdByStory: Record<string, string>
+  coupleIdByStory: Record<string, string>
+  /** Story keys the lookup could not resolve — no touchpoint with the
+   *  expected external_id, or a touchpoint with no couple attached. */
+  missing: string[]
+}
+
+/**
+ * Resolve wedding/couple ids for a dataset whose spine was already
+ * written by a prior full reseed, without re-minting anything.
+ *
+ * Every signal `linkSignal` writes carries a deterministic
+ * `demo-reseed:<story.key>:<index>` external_id (see `plan.ts`'s
+ * `externalIdFor`), so a story's FIRST signal (index 0) is a stable
+ * handle back to the touchpoint it produced, and from there to the
+ * couple it anchored to and that couple's `source_wedding_id`. Two
+ * round trips total, chunked, rather than one query per story.
+ */
+export async function resolveExistingSpineIds(
+  supabase: SupabaseClient,
+  dataset: DemoDataset,
+): Promise<ExistingSpineIds> {
+  const weddingIdByStory: Record<string, string> = {}
+  const coupleIdByStory: Record<string, string> = {}
+  const missing: string[] = []
+
+  const heroStory = dataset.stories.find((s) => s.hero) ?? null
+  if (heroStory?.pinnedWeddingId) weddingIdByStory[heroStory.key] = heroStory.pinnedWeddingId
+
+  const nonHero = dataset.stories.filter((s) => !s.hero)
+  const externalIdToStory = new Map(nonHero.map((s) => [externalIdFor(s, 0), s]))
+
+  const touchpointByExternalId = new Map<string, string | null>()
+  for (const batch of chunkArray([...externalIdToStory.keys()], 150)) {
+    const { data, error } = await supabase
+      .from('touchpoints')
+      .select('external_id, couple_id')
+      .in('external_id', batch)
+    if (error) continue
+    for (const row of (data ?? []) as Array<{ external_id: string; couple_id: string | null }>) {
+      touchpointByExternalId.set(row.external_id, row.couple_id)
+    }
+  }
+
+  for (const [externalId, story] of externalIdToStory) {
+    const coupleId = touchpointByExternalId.get(externalId)
+    if (coupleId === undefined) {
+      missing.push(story.key)
+      continue
+    }
+    if (coupleId) coupleIdByStory[story.key] = coupleId
+  }
+
+  if (heroStory) {
+    const { data } = await supabase
+      .from('couples')
+      .select('id')
+      .eq('source_wedding_id', heroStory.pinnedWeddingId)
+      .maybeSingle()
+    const heroCoupleId = (data as { id?: string } | null)?.id
+    if (heroCoupleId) coupleIdByStory[heroStory.key] = heroCoupleId
+  }
+
+  const coupleIds = [...new Set(Object.values(coupleIdByStory))]
+  const sourceWeddingByCoupleId = new Map<string, string | null>()
+  for (const batch of chunkArray(coupleIds, 150)) {
+    const { data, error } = await supabase
+      .from('couples')
+      .select('id, source_wedding_id')
+      .in('id', batch)
+    if (error) continue
+    for (const row of (data ?? []) as Array<{ id: string; source_wedding_id: string | null }>) {
+      sourceWeddingByCoupleId.set(row.id, row.source_wedding_id)
+    }
+  }
+
+  for (const story of nonHero) {
+    const coupleId = coupleIdByStory[story.key]
+    if (!coupleId) continue
+    const weddingId = sourceWeddingByCoupleId.get(coupleId)
+    if (weddingId) weddingIdByStory[story.key] = weddingId
+    else if (!missing.includes(story.key)) missing.push(story.key)
+  }
+
+  return { weddingIdByStory, coupleIdByStory, missing }
 }
 
 export interface ApplyOptions {
@@ -83,6 +188,15 @@ export interface ApplyOptions {
   /** False writes. True (the default) walks and reports only. */
   dryRun?: boolean
   log?: (line: string) => void
+  /**
+   * 'full' (default): the whole plan — delete and rebuild the spine, then
+   * replay every step. 'aux-only': the spine already exists on this
+   * database from a prior full run; delete and rewrite only the
+   * aux-owned tables (`auxOnlyDeletes` / `auxOnlySteps` from `plan.ts`),
+   * resolving each story's wedding/couple id from the existing spine via
+   * `writers.resolveExistingSpine` instead of minting again.
+   */
+  mode?: 'full' | 'aux-only'
 }
 
 export interface ApplyResult {
@@ -208,6 +322,7 @@ export async function applyReseed(options: ApplyOptions): Promise<ApplyResult> {
   const { supabase, plan, dataset, writers } = options
   const dryRun = options.dryRun ?? true
   const log = options.log ?? (() => {})
+  const mode = options.mode ?? 'full'
 
   const stories = storyIndex(dataset)
   const result: ApplyResult = {
@@ -236,7 +351,10 @@ export async function applyReseed(options: ApplyOptions): Promise<ApplyResult> {
     log(`  venue ok: ${v.id} ${v.name ?? ''} (is_demo=${String(v.is_demo)})`)
   }
 
-  for (const op of plan.deletes) {
+  const deletes = mode === 'aux-only' ? auxOnlyDeletes(plan) : plan.deletes
+  const steps = mode === 'aux-only' ? auxOnlySteps(plan) : plan.steps
+
+  for (const op of deletes) {
     if (dryRun) {
       result.deletes.push({ table: op.table, performed: false, error: null })
       log(
@@ -258,12 +376,30 @@ export async function applyReseed(options: ApplyOptions): Promise<ApplyResult> {
     if (story.pinnedWeddingId) result.weddingIdByStory[story.key] = story.pinnedWeddingId
   }
 
+  if (mode === 'aux-only' && !dryRun) {
+    if (!writers.resolveExistingSpine) {
+      result.errors.push(
+        'aux-only apply requires writers.resolveExistingSpine, and none was supplied',
+      )
+    } else {
+      const resolved = await writers.resolveExistingSpine({ supabase, dataset })
+      Object.assign(result.weddingIdByStory, resolved.weddingIdByStory)
+      Object.assign(result.coupleIdByStory, resolved.coupleIdByStory)
+      for (const key of resolved.missing) {
+        result.errors.push(
+          `aux-only: could not resolve an existing wedding/couple id for story ${key} ` +
+            `— is the spine actually seeded on this database?`,
+        )
+      }
+    }
+  }
+
   const resolveWeddingId = (storyKey: string): string | null =>
     result.weddingIdByStory[storyKey] ?? null
   const resolveCoupleId = (storyKey: string): string | null =>
     result.coupleIdByStory[storyKey] ?? null
 
-  for (const step of plan.steps) {
+  for (const step of steps) {
     const story = stories.get(step.storyKey)
     if (!story) {
       result.errors.push(`step for unknown story ${step.storyKey}`)

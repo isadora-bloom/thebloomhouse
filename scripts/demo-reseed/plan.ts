@@ -27,7 +27,7 @@
 import { calendlyToNormalizedSignal } from '../../src/lib/services/identity/calendly-to-signal'
 import { emailToNormalizedSignal } from '../../src/lib/services/identity/email-to-signal'
 import type { NormalizedSignal } from '../../src/lib/services/identity/sources/types'
-import { buildStoryAux, buildVenueAux, coupleRef } from './mirror-rows'
+import { AUX_TABLES, buildStoryAux, buildVenueAux, coupleRef } from './mirror-rows'
 import { DEMO_VENUES, HERO_WEDDING_ID, tierForScore } from './roster'
 import { WEDDING_STATUS_FOR_LIFECYCLE } from './generate'
 import type {
@@ -90,7 +90,10 @@ export const RESEED_DELETE_TABLES: ReadonlyArray<{ table: string; why: string }>
   { table: 'weather_climate_norms', why: 'decade-over-decade norms' },
   { table: 'weather_climate_annual', why: 'per-year monthly climate' },
   { table: 'follow_up_sequences', why: 'sequence definitions' },
-  { table: 'follow_up_sequence_templates', why: 'sequence step templates' },
+  // NOT 'follow_up_sequence_templates' — migration 040 renamed it to
+  // _archived_follow_up_sequence_templates. See mirror-rows.ts for the
+  // full story; a delete against the old name fails with "not in the
+  // schema cache" exactly like the aux insert did (W72).
   { table: 'packages', why: 'package, upgrade and discount catalogue' },
   { table: 'storefront', why: 'couple-facing picks' },
   { table: 'portal_section_config', why: 'which portal sections show' },
@@ -582,4 +585,26 @@ export function buildReseedPlan(dataset: DemoDataset): ReseedPlan {
       byExpectedTier,
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// --only-aux — re-run the mirror rows on a database whose spine (weddings,
+// people, couples, touchpoints) is already seeded, without the
+// delete-and-rebuild the full plan does.
+// ---------------------------------------------------------------------------
+
+/** The delete ops a `--only-aux` run should perform: exactly the aux-owned
+ *  tables, still venue-scoped. Never `couples`, `touchpoints`, `weddings`,
+ *  `people`, `engagement_events`, `tours`, `lost_deals` or
+ *  `lifecycle_transitions`'s siblings that hang off dedicated step kinds
+ *  rather than `aux_rows` — those are the spine and the delete-and-rebuild
+ *  this mode exists to skip. */
+export function auxOnlyDeletes(plan: ReseedPlan): DeleteOp[] {
+  return plan.deletes.filter((d) => AUX_TABLES.includes(d.table))
+}
+
+/** The steps a `--only-aux` run should replay: every `aux_rows` step, in
+ *  the same order the full plan carries them. */
+export function auxOnlySteps(plan: ReseedPlan): ReseedStep[] {
+  return plan.steps.filter((s) => s.kind === 'aux_rows')
 }

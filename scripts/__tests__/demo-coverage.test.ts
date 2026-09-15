@@ -326,4 +326,15 @@ describe('the committed seed set', () => {
     )
     expect(thin.map((r) => r.table)).toEqual([])
   })
+
+  it('does not count a table a later migration renamed away (W72)', () => {
+    // Migration 009 creates follow_up_sequence_templates; migration 040
+    // renames it to _archived_follow_up_sequence_templates. No migration
+    // ever runs a literal DROP TABLE on it, so enumerateDemoTables's own
+    // regex would keep it. schema-facts sees the RENAME, and
+    // buildStaticCoverage filters through schema-facts precisely so this
+    // phantom table cannot show up as a gap (or, worse, as seeded) in
+    // the coverage report.
+    expect(rows.find((r) => r.table === 'follow_up_sequence_templates')).toBeUndefined()
+  })
 })

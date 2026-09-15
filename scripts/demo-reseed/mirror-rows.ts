@@ -109,7 +109,14 @@ export const AUX_TABLES: readonly string[] = [
   'weather_climate_norms',
   'weather_climate_annual',
   'follow_up_sequences',
-  'follow_up_sequence_templates',
+  // NOT 'follow_up_sequence_templates'. Migration 009 created it;
+  // migration 040 renamed it to _archived_follow_up_sequence_templates
+  // when the sequence model was consolidated onto follow_up_sequences +
+  // sequence_steps. It has not existed under this name since, so it is
+  // phantom on production (W72 finding 1) — PostgREST answers "not in
+  // the schema cache", which reads like a permissions error but is a
+  // schema-drift one. `schema-facts.ts` + `validate-plan.ts` catch this
+  // class generically now; this table is simply not written.
   'packages',
   'storefront',
   'portal_section_config',
@@ -1199,18 +1206,6 @@ export function buildVenueAux(
   })
 
   out.push({
-    table: 'follow_up_sequence_templates',
-    rows: SEQUENCE_TEMPLATES.map((t) => ({
-      id: uuidFrom(rng),
-      venue_id: venueId,
-      name: t.name,
-      trigger: t.trigger,
-      steps: t.steps,
-      is_active: true,
-    })),
-  })
-
-  out.push({
     table: 'packages',
     rows: buildPackages(venue),
   })
@@ -1348,7 +1343,14 @@ export function buildVenueAux(
       ai_explanation: a.explanation,
       causes: { candidates: a.causes },
       acknowledged: i > 3,
-      explanation_source: 'demo-seeded',
+      // Migration 252's CHECK allows only 'ai' | 'template' | 'rule'
+      // (NULL is the legacy/unknown sentinel). These rows are canned
+      // strings with no LLM ever attempted, so 'rule' would be the
+      // more literal read, but every one of them is written to look
+      // like the deterministic-template fallback a real detector
+      // produces when the LLM narrator is unavailable — 'template' is
+      // the honest label for that shape.
+      explanation_source: 'template',
       created_at: offsetIso(today, 2 + i * 6, 6 * 60),
     })),
   })
@@ -1434,7 +1436,7 @@ export function buildVenueAux(
       label: a.label,
       url: `https://example.com/${venue.slug}/assets/${a.label.toLowerCase().replace(/[^a-z]+/g, '-')}.jpg`,
       caption: a.caption,
-      category: a.type,
+      category: a.category,
       couple_facing: a.coupleFacing,
       sage_eligible: a.coupleFacing,
       sort_order: i,
@@ -1558,50 +1560,6 @@ const FOLLOW_UPS: ReadonlyArray<{
   { name: 'Gone quiet, by text', description: 'The same, for the couples who only ever text.', trigger: 'ghosted', delayDays: 14, channel: 'sms', active: false },
   { name: 'Welcome after booking', description: 'The day after the contract is signed.', trigger: 'post_booking', delayDays: 1, channel: 'email', active: true },
   { name: 'Six weeks out', description: 'Final details and the balance.', trigger: 'pre_event', delayDays: 42, channel: 'email', active: true },
-]
-
-const SEQUENCE_TEMPLATES: ReadonlyArray<{ name: string; trigger: string; steps: unknown[] }> = [
-  {
-    name: 'New inquiry, three touches',
-    trigger: 'new_inquiry',
-    steps: [
-      { day: 0, subject: 'Thank you for getting in touch' },
-      { day: 3, subject: 'A few dates we still have' },
-      { day: 9, subject: 'Shall I let the date go?' },
-    ],
-  },
-  {
-    name: 'No response, two touches',
-    trigger: 'no_response',
-    steps: [
-      { day: 5, subject: 'Still here when you are' },
-      { day: 15, subject: 'Closing this one off' },
-    ],
-  },
-  {
-    name: 'After the tour',
-    trigger: 'post_tour',
-    steps: [
-      { day: 1, subject: 'Lovely to meet you' },
-      { day: 6, subject: 'The pricing we talked about' },
-    ],
-  },
-  {
-    name: 'After a hold',
-    trigger: 'post_hold',
-    steps: [
-      { day: 2, subject: 'Your hold expires in a fortnight' },
-      { day: 12, subject: 'Last call on the hold' },
-    ],
-  },
-  {
-    name: 'Long-lead enquiry',
-    trigger: 'new_inquiry',
-    steps: [
-      { day: 0, subject: 'Thank you, and here is the brochure' },
-      { day: 30, subject: 'Checking in, no rush' },
-    ],
-  },
 ]
 
 function buildPackages(venue: { id: string; name: string; basePrice: number }): Array<Record<string, unknown>> {
@@ -1758,13 +1716,27 @@ const BRAIN_DUMPS: ReadonlyArray<{ text: string; type: string; status: string }>
   { text: 'Spreadsheet of next season prices.', type: 'csv', status: 'dismissed' },
 ]
 
-const BRAND_ASSETS: ReadonlyArray<{ type: string; label: string; caption: string; coupleFacing: boolean }> = [
-  { type: 'logo', label: 'Primary logo', caption: 'On light backgrounds.', coupleFacing: false },
-  { type: 'hero_image', label: 'Front elevation', caption: 'Late afternoon, early June.', coupleFacing: true },
-  { type: 'photography', label: 'Ceremony room', caption: 'Set for eighty.', coupleFacing: true },
-  { type: 'photography', label: 'Walled garden', caption: 'Drinks reception.', coupleFacing: true },
-  { type: 'texture', label: 'Stone wall', caption: 'Background texture for print.', coupleFacing: false },
-  { type: 'icon', label: 'Monogram', caption: 'For stationery.', coupleFacing: false },
+/**
+ * `category` is the internal Sage-matching taxonomy from migration 243
+ * (`ceremony` / `tent` / `reception` / `detail` / `aerial` /
+ * `venue_exterior` / `staff` / `other`), which is deliberately NOT the
+ * same vocabulary as `asset_type` (media-type: `logo` / `hero_image` /
+ * `photography` / `texture` / `icon`). Reusing `type` as `category`
+ * (W72 finding 3) wrote values the CHECK constraint rejects outright.
+ */
+const BRAND_ASSETS: ReadonlyArray<{
+  type: string
+  category: string
+  label: string
+  caption: string
+  coupleFacing: boolean
+}> = [
+  { type: 'logo', category: 'other', label: 'Primary logo', caption: 'On light backgrounds.', coupleFacing: false },
+  { type: 'hero_image', category: 'venue_exterior', label: 'Front elevation', caption: 'Late afternoon, early June.', coupleFacing: true },
+  { type: 'photography', category: 'ceremony', label: 'Ceremony room', caption: 'Set for eighty.', coupleFacing: true },
+  { type: 'photography', category: 'reception', label: 'Walled garden', caption: 'Drinks reception.', coupleFacing: true },
+  { type: 'texture', category: 'detail', label: 'Stone wall', caption: 'Background texture for print.', coupleFacing: false },
+  { type: 'icon', category: 'other', label: 'Monogram', caption: 'For stationery.', coupleFacing: false },
 ]
 
 /** Every aux bundle for a whole dataset, keyed by story. Convenience for
