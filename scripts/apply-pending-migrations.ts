@@ -132,6 +132,10 @@ const WAVE_MIGRATIONS: Pending[] = [
     file: '412_tangential_comment.sql',
     why: "W68: corrects 400's tangential_signals comment, which claimed 'no new rows' while four adapters were still inserting. Comment only, no DDL, so there is nothing to probe for",
   },
+  {
+    file: '413_venue_config_token_columns_authenticated.sql',
+    why: '411 follow-up: the three venue_config token columns were still SELECTable by authenticated',
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */

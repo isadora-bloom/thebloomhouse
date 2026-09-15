@@ -366,9 +366,14 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
         setLoading(false)
         return
       }
+      // Named columns, never '*': the token columns on this table are
+      // service-role only (migrations 411 and 413), and a '*' read fails
+      // with "permission denied for column gmail_tokens".
       const { data, error } = await supabase
         .from('venue_config')
-        .select('*')
+        .select(
+          'id, venue_id, business_name, primary_color, secondary_color, accent_color, font_pair, timezone, catering_model, bar_model, capacity, base_price, coordinator_name, coordinator_email, coordinator_phone, portal_tagline, logo_url, auto_attach_photos, feature_flags, social_handles, sending_domain, sending_from_name, sending_domain_status, benchmark_participation, onboarding_completed',
+        )
         .eq('venue_id', scope.venueId)
         .maybeSingle()
 
