@@ -18,7 +18,11 @@
  *
  *   - `CREATE TABLE (IF NOT EXISTS)? [public.]name (...)` — column defs,
  *     inline column-level `CHECK (...)`, and table-level `CHECK (...)` /
- *     `CONSTRAINT name CHECK (...)` entries in the column list.
+ *     `CONSTRAINT name CHECK (...)` entries in the column list. A CHECK
+ *     is read when it is an IN-list or (W75) a `col ~ 'regex'`, each
+ *     optionally wrapped as `col IS NULL OR ...`. A CHECK built inside
+ *     `format()` in a DO block (migration 411) is text this reader can
+ *     never see; `live-constraints.ts` reads those from the database.
  *   - `ALTER TABLE [ONLY] [public.]name <clause>[, <clause> ...]` where a
  *     clause is `ADD COLUMN (IF NOT EXISTS)? col type [CHECK (...)]`,
  *     `ADD CONSTRAINT name CHECK (...)`, `DROP CONSTRAINT (IF EXISTS)?
@@ -72,6 +76,20 @@ export interface ColumnFact {
    *  parse (a range, a regex, a cross-column comparison). A `null` here
    *  is therefore "cannot rule anything out", not "anything goes". */
   allowedValues: readonly string[] | null
+  /** W75. POSIX/ARE regex source from the latest CHECK constraint of the
+   *  shape `col ~ 'x'` or `col IS NULL OR col ~ 'x'` touching this
+   *  column. Independent of `allowedValues`: a column may carry both an
+   *  IN-list CHECK and a regex CHECK under two constraint names. `null`
+   *  means no such CHECK is known, with the same "cannot rule anything
+   *  out" caveat as `allowedValues`. The source is kept as Postgres wrote
+   *  it; `posix-regex.ts` does the JS translation at check time. */
+  pattern: string | null
+  /** True when the regex CHECK used `~*` rather than `~`. */
+  patternCaseInsensitive: boolean
+  /** Name of the constraint `pattern` came from, for the message a
+   *  finding prints. `null` when the CHECK was anonymous (inline column
+   *  CHECK in a CREATE TABLE) or when `pattern` is null. */
+  patternConstraint: string | null
   /** True when the column carries NOT NULL as the migrations leave it
    *  after every ALTER (CREATE TABLE inline, ADD COLUMN inline, or a
    *  later `ALTER COLUMN ... SET/DROP NOT NULL`). */
@@ -289,22 +307,235 @@ function unquote(value: string): string {
   return m ? m[1].replace(/''/g, "'") : value
 }
 
-/** Parse a CHECK constraint expression of the shape this repo uses:
- *  `col IN (...)` or `col IS NULL OR col IN (...)`. Returns the column
- *  the CHECK is written against and its allowed values, or `null` when
- *  the expression is not an IN-list CHECK (a range check, a regex, a
- *  cross-column comparison — genuinely a different shape, not a bug to
- *  paper over). */
-export function parseCheckExpr(expr: string): { column: string; values: string[] } | null {
-  const colMatch = /^\s*"?(\w+)"?/.exec(expr)
+/** Remove `::type` casts outside single-quoted strings. `pg_get_constraintdef`
+ *  deparses every literal with its cast (`'solo'::text`,
+ *  `'a'::character varying`, `(ARRAY[...])::text[]`) and a varchar column
+ *  as `(col)::text`; none of that changes what the CHECK allows, and
+ *  stripping it lets the live definitions and the migration text go
+ *  through the same parser. */
+export function stripCasts(text: string): string {
+  let out = ''
+  let inQuote = false
+  const CAST_RE = /^::\s*"?[A-Za-z_]+"?(?:\s+varying)?(?:\s+precision)?(?:\(\d+(?:,\s*\d+)?\))?(?:\[\])*/
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!
+    if (inQuote) {
+      out += c
+      if (c === "'") {
+        if (text[i + 1] === "'") {
+          out += text[++i]
+          continue
+        }
+        inQuote = false
+      }
+      continue
+    }
+    if (c === "'") {
+      inQuote = true
+      out += c
+      continue
+    }
+    if (c === ':' && text[i + 1] === ':') {
+      const m = CAST_RE.exec(text.slice(i))
+      if (m) {
+        i += m[0].length - 1
+        continue
+      }
+    }
+    out += c
+  }
+  return out
+}
+
+/** Strip every layer of redundant outer parentheses: `((x))` -> `x`.
+ *  Only when the opening paren's match is the final character, so
+ *  `(a) OR (b)` is left alone. */
+export function unwrapParens(text: string): string {
+  let t = text.trim()
+  for (;;) {
+    if (!t.startsWith('(')) return t
+    const bal = extractBalanced(t, 0)
+    if (!bal || bal.end !== t.length) return t
+    t = bal.inner.trim()
+  }
+}
+
+/** Split on the keyword `OR` at paren depth 0, outside quotes. */
+export function splitTopLevelOr(text: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let depth = 0
+  let inQuote = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!
+    if (inQuote) {
+      cur += c
+      if (c === "'") {
+        if (text[i + 1] === "'") {
+          cur += text[++i]
+          continue
+        }
+        inQuote = false
+      }
+      continue
+    }
+    if (c === "'") {
+      inQuote = true
+      cur += c
+      continue
+    }
+    if (c === '(' || c === '[') depth++
+    else if (c === ')' || c === ']') depth--
+    if (depth === 0) {
+      const m = /^\s+OR\s+/i.exec(text.slice(i))
+      if (m) {
+        out.push(cur)
+        cur = ''
+        i += m[0].length - 1
+        continue
+      }
+    }
+    cur += c
+  }
+  out.push(cur)
+  return out.map((s) => s.trim()).filter((s) => s.length > 0)
+}
+
+export interface ParsedCheckExpr {
+  column: string
+  /** Allowed literal values for an IN-list CHECK; `null` for a regex CHECK. */
+  values: string[] | null
+  /** Regex source for a `col ~ 'x'` CHECK; `null` for an IN-list CHECK. */
+  pattern: string | null
+  patternCaseInsensitive: boolean
+}
+
+const COLUMN_HEAD_RE = /^\(?\s*"?(\w+)"?\s*\)?\s*/
+
+/** Parse a CHECK constraint expression of the shapes this repo uses:
+ *
+ *   - `col IN (...)`, and the nullable `col IS NULL OR col IN (...)`;
+ *   - the deparsed form of the same, `col = ANY (ARRAY[...])`, which is
+ *     what `pg_get_constraintdef` prints for an IN-list (W75, live
+ *     reader);
+ *   - `col ~ 'regex'` / `col ~* 'regex'`, and `col IS NULL OR col ~ 'regex'`
+ *     (W75: the shape migration 411 builds inside `format()`, invisible
+ *     to the migration-text reader, hence the live reader).
+ *
+ *  Casts and redundant parentheses are stripped first, so the live
+ *  `CHECK (((col IS NULL) OR (col ~ 'x'::text)))` and the migration text
+ *  `col IS NULL OR col ~ 'x'` parse identically. Returns `null` when the
+ *  expression is none of these (a range check, a cross-column
+ *  comparison, `!~`, `LIKE`) — genuinely a different shape, not a bug to
+ *  paper over. */
+export function parseCheckExpr(expr: string): ParsedCheckExpr | null {
+  const cleaned = unwrapParens(stripCasts(expr))
+  const colMatch = COLUMN_HEAD_RE.exec(cleaned)
   if (!colMatch) return null
-  const inMatch = /\bIN\s*\(/i.exec(expr)
+
+  // Nullable shape: `col IS NULL OR <core>`. Either order is accepted.
+  let core = cleaned
+  const parts = splitTopLevelOr(cleaned)
+  if (parts.length === 2) {
+    const nullIdx = parts.findIndex((p) => /^"?(\w+)"?\s+IS\s+NULL$/i.test(unwrapParens(p)))
+    if (nullIdx !== -1) core = unwrapParens(parts[1 - nullIdx]!)
+  }
+
+  const regexMatch = /^\(?\s*"?(\w+)"?\s*\)?\s*(~\*?)\s*('(?:[^']|'')*')\s*$/.exec(core)
+  if (regexMatch) {
+    return {
+      column: regexMatch[1]!,
+      values: null,
+      pattern: unquote(regexMatch[3]!),
+      patternCaseInsensitive: regexMatch[2] === '~*',
+    }
+  }
+
+  const anyMatch = /^\(?\s*"?(\w+)"?\s*\)?\s*=\s*ANY\s*\(/i.exec(core)
+  if (anyMatch) {
+    const bal = extractBalanced(core, anyMatch[0].length - 1)
+    if (!bal) return null
+    const arr = unwrapParens(bal.inner)
+    const arrHead = /^ARRAY\s*\[/i.exec(arr)
+    if (!arrHead || !arr.endsWith(']')) return null
+    const inner = arr.slice(arrHead[0].length, arr.length - 1)
+    return {
+      column: anyMatch[1]!,
+      values: topLevelSplit(inner, ',').map((v) => unquote(v.trim())),
+      pattern: null,
+      patternCaseInsensitive: false,
+    }
+  }
+
+  // Loose IN-list read, unchanged from W72: the first identifier is the
+  // column, the first `IN (` anywhere in the expression is the list.
+  const inMatch = /\bIN\s*\(/i.exec(cleaned)
   if (!inMatch) return null
   const openIdx = inMatch.index + inMatch[0].length - 1
-  const balanced = extractBalanced(expr, openIdx)
+  const balanced = extractBalanced(cleaned, openIdx)
   if (!balanced) return null
   const values = topLevelSplit(balanced.inner, ',').map((v) => unquote(v.trim()))
-  return { column: colMatch[1]!, values }
+  return { column: colMatch[1]!, values, pattern: null, patternCaseInsensitive: false }
+}
+
+// ---------------------------------------------------------------------------
+// Shared fact setters. Also used by `live-constraints.ts` (W75) to merge
+// live CHECK definitions over the migration-derived facts, so the two
+// readers write the same shape into the same map.
+// ---------------------------------------------------------------------------
+
+export type CheckKind = 'values' | 'pattern'
+
+export function blankColumnFact(): ColumnFact {
+  return {
+    declared: true,
+    allowedValues: null,
+    pattern: null,
+    patternCaseInsensitive: false,
+    patternConstraint: null,
+    notNull: false,
+    hasDefault: false,
+    requiredSinceMigration: null,
+    declaredIn: null,
+  }
+}
+
+export function setColumnAllowedValues(t: TableFact, column: string, values: readonly string[] | null): void {
+  const existing = t.columns.get(column)
+  if (existing) existing.allowedValues = values
+  // A column known only through a CHECK is not declared: `<table>_<col>_check`
+  // is a naming convention, and a guarded ALTER inside a DO block can name a
+  // column the table never gained (215's user_profiles_plan_tier_check).
+  else t.columns.set(column, { ...blankColumnFact(), declared: false, allowedValues: values })
+}
+
+export function setColumnPattern(
+  t: TableFact,
+  column: string,
+  pattern: string | null,
+  caseInsensitive: boolean,
+  constraintName: string | null,
+): void {
+  const existing = t.columns.get(column) ?? { ...blankColumnFact(), declared: false }
+  existing.pattern = pattern
+  existing.patternCaseInsensitive = pattern === null ? false : caseInsensitive
+  existing.patternConstraint = pattern === null ? null : constraintName
+  t.columns.set(column, existing)
+}
+
+/** Wrap a tables map in the query interface. `buildSchemaFacts` returns
+ *  this; the live merge rebuilds it over the same map after writing. */
+export function schemaFactsFromTables(tables: Map<string, TableFact>): SchemaFacts {
+  return {
+    tables,
+    tableExists: (table) => tables.get(table.toLowerCase())?.exists === true,
+    columnDeclared: (table, column) => tables.get(table.toLowerCase())?.columns.get(column)?.declared === true,
+    allowedValues: (table, column) => tables.get(table.toLowerCase())?.columns.get(column)?.allowedValues ?? null,
+    columnRequired: (table, column) =>
+      tables.get(table.toLowerCase())?.columns.get(column)?.requiredSinceMigration != null,
+    columnRequiredSince: (table, column) =>
+      tables.get(table.toLowerCase())?.columns.get(column)?.requiredSinceMigration ?? null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,9 +545,11 @@ export function parseCheckExpr(expr: string): { column: string; values: string[]
 export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
   const tables = new Map<string, TableFact>()
   /** `${table}::${constraintName}` -> the column it was last known to
-   *  constrain. Lets a later `DROP CONSTRAINT` find its column even when
-   *  the name does not fit the `<table>_<col>_check` convention. */
-  const constraintColumn = new Map<string, string>()
+   *  constrain and which kind of CHECK it was. Lets a later `DROP
+   *  CONSTRAINT` find its column even when the name does not fit the
+   *  `<table>_<col>_check` convention, and clear only the fact that
+   *  constraint carried. */
+  const constraintColumn = new Map<string, { column: string; kind: CheckKind }>()
 
   /** Name of the migration file being processed; stamped onto every
    *  table and column the moment it comes into existence. */
@@ -331,14 +564,8 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     return t
   }
 
-  const blankColumn = (): ColumnFact => ({
-    declared: true,
-    allowedValues: null,
-    notNull: false,
-    hasDefault: false,
-    requiredSinceMigration: null,
-    declaredIn: currentMigration,
-  })
+  /** A freshly declared column, stamped with the migration declaring it. */
+  const blankColumn = (): ColumnFact => ({ ...blankColumnFact(), declaredIn: currentMigration })
 
   const setColumnDeclared = (table: string, column: string): void => {
     const t = ensureTable(table)
@@ -349,16 +576,21 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     } else t.columns.set(column, blankColumn())
   }
 
-  const setColumnCheck = (table: string, column: string, values: string[] | null): void => {
+  /** Record a parsed CHECK on the column it names. An IN-list sets
+   *  `allowedValues`, a regex sets `pattern`; each leaves the other
+   *  alone, because they are independent constraints that can coexist
+   *  under two names. `constraintName` is null for an anonymous inline
+   *  CHECK. */
+  const applyParsedCheck = (table: string, parsed: ParsedCheckExpr, constraintName: string | null): void => {
     const t = ensureTable(table)
-    const existing = t.columns.get(column)
-    if (existing) existing.allowedValues = values
-    // A column known only through a CHECK constraint name is not
-    // declared: `<table>_<col>_check` is a naming convention, and a
-    // guarded ALTER inside a DO block can name a column the table never
-    // gained (215's user_profiles_plan_tier_check). Declared means a
-    // CREATE TABLE column list or an ADD COLUMN said so.
-    else t.columns.set(column, { ...blankColumn(), declared: false, declaredIn: null, allowedValues: values })
+    if (parsed.values) {
+      setColumnAllowedValues(t, parsed.column, parsed.values)
+      if (constraintName) constraintColumn.set(`${table}::${constraintName}`, { column: parsed.column, kind: 'values' })
+    }
+    if (parsed.pattern !== null) {
+      setColumnPattern(t, parsed.column, parsed.pattern, parsed.patternCaseInsensitive, constraintName)
+      if (constraintName) constraintColumn.set(`${table}::${constraintName}`, { column: parsed.column, kind: 'pattern' })
+    }
   }
 
   /** Recompute `requiredSinceMigration` from the column's current
@@ -437,10 +669,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
       const openIdx = trimmed.indexOf('(', namedCheck[0]!.length)
       const bal = openIdx === -1 ? null : extractBalanced(trimmed, openIdx)
       const parsed = bal ? parseCheckExpr(bal.inner) : null
-      if (parsed) {
-        setColumnCheck(table, parsed.column, parsed.values)
-        constraintColumn.set(`${table}::${namedCheck[1]}`, parsed.column)
-      }
+      if (parsed) applyParsedCheck(table, parsed, namedCheck[1]!)
       return
     }
 
@@ -448,7 +677,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
       const openIdx = trimmed.indexOf('(')
       const bal = extractBalanced(trimmed, openIdx)
       const parsed = bal ? parseCheckExpr(bal.inner) : null
-      if (parsed) setColumnCheck(table, parsed.column, parsed.values)
+      if (parsed) applyParsedCheck(table, parsed, null)
       return
     }
 
@@ -471,7 +700,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
       const openIdx = rest.indexOf('(', checkIdx)
       const bal = extractBalanced(rest, openIdx)
       const parsed = bal ? parseCheckExpr(bal.inner) : null
-      if (parsed) setColumnCheck(table, parsed.column, parsed.values)
+      if (parsed) applyParsedCheck(table, parsed, null)
     }
   }
 
@@ -528,7 +757,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
         const openIdx = rest.indexOf('(', checkIdx)
         const bal = extractBalanced(rest, openIdx)
         const parsed = bal ? parseCheckExpr(bal.inner) : null
-        if (parsed) setColumnCheck(table, parsed.column, parsed.values)
+        if (parsed) applyParsedCheck(table, parsed, null)
       }
       return
     }
@@ -539,25 +768,31 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
       const openIdx = c.indexOf('(', addConstraint[0]!.length)
       const bal = openIdx === -1 ? null : extractBalanced(c, openIdx)
       const parsed = bal ? parseCheckExpr(bal.inner) : null
-      if (parsed) {
-        setColumnCheck(table, parsed.column, parsed.values)
-        constraintColumn.set(`${table}::${name}`, parsed.column)
-      }
+      if (parsed) applyParsedCheck(table, parsed, name)
       return
     }
 
     const dropConstraint = /^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?"?(\w+)"?/i.exec(c)
     if (dropConstraint) {
       const name = dropConstraint[1]!
-      let column = constraintColumn.get(`${table}::${name}`) ?? null
-      if (!column) {
-        const prefix = `${table}_`
-        const suffix = '_check'
-        if (name.startsWith(prefix) && name.endsWith(suffix) && name.length > prefix.length + suffix.length) {
-          column = name.slice(prefix.length, name.length - suffix.length)
-        }
+      const known = constraintColumn.get(`${table}::${name}`) ?? null
+      if (known) {
+        const t = ensureTable(table)
+        if (known.kind === 'values') setColumnAllowedValues(t, known.column, null)
+        else setColumnPattern(t, known.column, null, false, null)
+        return
       }
-      if (column) setColumnCheck(table, column, null)
+      // Convention-resolved: the name says which column but not which
+      // kind of CHECK, so both facts go back to "cannot rule anything
+      // out". Clearing too much is the safe direction here.
+      const prefix = `${table}_`
+      const suffix = '_check'
+      if (name.startsWith(prefix) && name.endsWith(suffix) && name.length > prefix.length + suffix.length) {
+        const column = name.slice(prefix.length, name.length - suffix.length)
+        const t = ensureTable(table)
+        setColumnAllowedValues(t, column, null)
+        setColumnPattern(t, column, null, false, null)
+      }
       return
     }
 
@@ -621,16 +856,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     }
   }
 
-  return {
-    tables,
-    tableExists: (table) => tables.get(table.toLowerCase())?.exists === true,
-    columnDeclared: (table, column) => tables.get(table.toLowerCase())?.columns.get(column)?.declared === true,
-    allowedValues: (table, column) => tables.get(table.toLowerCase())?.columns.get(column)?.allowedValues ?? null,
-    columnRequired: (table, column) =>
-      tables.get(table.toLowerCase())?.columns.get(column)?.requiredSinceMigration != null,
-    columnRequiredSince: (table, column) =>
-      tables.get(table.toLowerCase())?.columns.get(column)?.requiredSinceMigration ?? null,
-  }
+  return schemaFactsFromTables(tables)
 }
 
 // ---------------------------------------------------------------------------

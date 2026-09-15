@@ -45,8 +45,7 @@ import { applyReseed, type ReseedWriters } from './demo-reseed/apply'
 import { generateDemoDataset, SEED_TODAY } from './demo-reseed/generate'
 import { buildReseedPlan } from './demo-reseed/plan'
 import { reseedTableRows } from './demo-coverage'
-import { readSchemaFacts } from './demo-reseed/schema-facts'
-import { validateFiles, formatFindings, SEED_SQL_FILES } from './validate-seed-sql'
+import { validateFiles, formatFindings, loadSeedFacts, SEED_SQL_FILES } from './validate-seed-sql'
 
 // ---------------------------------------------------------------------------
 // What gets seeded
@@ -568,8 +567,27 @@ async function main() {
   // (migration 192) right behind it. Same class of bug `demo-reseed/
   // validate-plan.ts` already catches for the generated reseed rows —
   // this is that check for the hand-written files.
-  const seedFacts = readSchemaFacts()
-  const seedFindings = validateFiles(SEED_SQL_FILES, seedFacts)
+  //
+  // W75: with the env file to hand, the validator also reads the live
+  // CHECK constraints from the branch (read-only probe through exec_sql)
+  // and merges them over the migration-derived facts. Migration 411's
+  // `format()`-built regex CHECKs are the reason: the text reader cannot
+  // see them and the seed died on one at --apply. Dry run and apply both
+  // pay for the read; a missing env file falls back to offline facts
+  // with a warning, but a present env whose read fails is fatal.
+  const liveEnvFile = env.found && env.supabaseUrl && env.serviceRoleKey ? env.envPath : null
+  if (!liveEnvFile) {
+    console.warn(
+      `[e2e-seed] ${env.envFile} has no Supabase credentials; validating against migration text only ` +
+        '(live CHECK constraints, e.g. migration 411 regex shapes, are not checked).',
+    )
+  }
+  const loaded = await loadSeedFacts(liveEnvFile)
+  if (loaded.notes.length > 0) {
+    console.log('[e2e-seed] seed validation notes:')
+    for (const n of loaded.notes) console.log(`  - ${n}`)
+  }
+  const seedFindings = validateFiles(SEED_SQL_FILES, loaded.facts)
   if (seedFindings.length > 0) {
     console.error('')
     console.error(formatFindings(seedFindings))
