@@ -546,7 +546,14 @@ async function runStep(
 
       for (let i = 0; i < resolved.length; i += AUX_CHUNK) {
         const batch = resolved.slice(i, i + AUX_CHUNK)
-        const { error } = await supabase.from(table).insert(batch)
+        // Every aux row carries a deterministic id (uuidFrom(rng)), so an
+        // aux-only rerun over an already-seeded database must upsert, not
+        // insert: the first production rerun (2026-09-15) hit
+        // table_map_layouts_pkey duplicates for exactly this reason.
+        const idempotent = batch.every((r) => typeof (r as { id?: unknown }).id === 'string')
+        const { error } = idempotent
+          ? await supabase.from(table).upsert(batch, { onConflict: 'id' })
+          : await supabase.from(table).insert(batch)
         if (error) {
           result.errors.push(`aux_rows ${table} (${story.key}): ${error.message}`)
           return
