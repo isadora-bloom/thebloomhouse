@@ -11,7 +11,8 @@ import {
 } from '@/lib/services/demo-token'
 
 // Routes that never require authentication
-const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/forgot-password', '/reset-password', '/couple/login', '/demo', '/join']
+// /vendor/[token] is the vendor portal: token-gated on its own route, opened from an email, no session (W73 found it landing on /login).
+const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/forgot-password', '/reset-password', '/couple/login', '/demo', '/join', '/vendor']
 const PUBLIC_PREFIXES = ['/api/', '/_next/', '/demo/']
 
 // The dashboard at / requires auth or demo. Unauthed users get sent to /welcome.

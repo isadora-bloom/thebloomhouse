@@ -53,7 +53,9 @@ const PRIMARY_PROJECT = 'chromium-desktop'
 
 /** Screenshot root. Overridable so a run can keep them past the HTML report. */
 export function screenshotRoot(): string {
-  return process.env.E2E_SCREENSHOT_DIR?.trim() || join('e2e', 'report', 'screens')
+  // Outside e2e/report on purpose: the HTML reporter deletes that folder
+  // when it writes, which wiped the screenshots on a default run (W73).
+  return process.env.E2E_SCREENSHOT_DIR?.trim() || join('e2e', 'screens')
 }
 
 /**

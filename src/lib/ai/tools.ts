@@ -30,6 +30,7 @@ import type Anthropic from '@anthropic-ai/sdk'
 import { callAnthropicTurn, type CallAIOptions } from '@/lib/ai/client'
 import { isFallbackForced, isFallbackDisabled, shouldSkip, recordCall } from '@/lib/ai/circuit-breaker'
 import { redactError } from '@/lib/observability/redact'
+import { isStubActive, stubAnswer } from '@/lib/ai/e2e-stub'
 
 /** Hard ceiling on model turns in one loop. */
 export const MAX_TOOL_TURNS = 6
@@ -141,6 +142,28 @@ export async function callAITools(
       inputTokens,
       outputTokens,
       cost,
+    }
+  }
+
+  // E2E stub (AI_E2E_STUB=1, never in production): answer from the recorded
+  // fixture for this prompt version with no tool loop and no billed call.
+  // Without this branch the coordinator brain was the one path the stub did
+  // not cover, so an e2e run of Ask your data billed a real model (W73).
+  if (isStubActive()) {
+    const stub = await stubAnswer({
+      promptVersion: opts.promptVersion,
+      systemPrompt: opts.systemPrompt,
+      taskType: opts.taskType,
+    })
+    return {
+      refused: false,
+      text: stub.text,
+      calls,
+      inputTokens,
+      outputTokens,
+      cost,
+      turns: 0,
+      truncated: false,
     }
   }
 

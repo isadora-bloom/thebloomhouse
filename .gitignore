@@ -27,3 +27,6 @@ next-env.d.ts
 
 # Phase 2 operator-data exports (PII; never commit)
 phase2-exports/
+
+# Playwright journey screenshots (per run)
+e2e/screens/
