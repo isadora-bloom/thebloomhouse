@@ -7,7 +7,7 @@
  *
  *   node scripts/deploy-secrets.mjs            dry run: says what it would do
  *   node scripts/deploy-secrets.mjs --apply    does it
- *   node scripts/deploy-secrets.mjs --apply --only calendly   one step only (cron | calendly | stripe)
+ *   node scripts/deploy-secrets.mjs --apply --only calendly   one step only (cron | calendly | stripe | supabase)
  *
  * What it does, in order:
  *   1. CRON_SECRET: replaces the 21-character literal with 32 random bytes
@@ -184,6 +184,18 @@ async function main() {
   if (want('stripe')) {
     console.log('4. STRIPE_WEBHOOK_SECRET (Stripe not wired; random value so the route fails closed)')
     setEnv('STRIPE_WEBHOOK_SECRET', `nostripe_${hex32()}`)
+  }
+
+  // 5: Supabase service key from .env.local (rotation)
+  if (want('supabase')) {
+    console.log('5. SUPABASE_SERVICE_ROLE_KEY (copy the rotated key from .env.local)')
+    const k = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!k) console.log('  no SUPABASE_SERVICE_ROLE_KEY in .env.local; skipping')
+    else if (k.startsWith('eyJ')) console.log('  .env.local still holds a legacy JWT key; rotate in Supabase first. Skipping.')
+    else {
+      setEnv('SUPABASE_SERVICE_ROLE_KEY', k)
+      console.log('  then: redeploy (vercel redeploy --prod, or push), and disable the legacy JWT keys in Supabase.')
+    }
   }
 
   console.log(`\n${APPLY ? 'Done. Now: npm run preflight' : 'Dry run only. Rerun with --apply.'}\n`)
