@@ -155,6 +155,22 @@ export function loadE2EEnv(opts: { reload?: boolean; cwd?: string } = {}): Loade
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
   assertNotProduction(supabaseUrl, found ? envPath : 'the ambient environment')
 
+  // The branch file must carry the browser key as well as the URL. Next
+  // fills any gap from .env.local, so a file without
+  // NEXT_PUBLIC_SUPABASE_ANON_KEY sends production's publishable key to the
+  // branch's auth endpoint and every sign-in answers 401 (section 32, the
+  // vendor page, 2026-09-15). Better to stop here and say so.
+  if (found) {
+    const missing = ['NEXT_PUBLIC_SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'].filter((k) => !values[k])
+    if (missing.length > 0) {
+      throw new Error(
+        `${envFile} is missing ${missing.join(' and ')}. Both must name the branch project ` +
+          `(${supabaseUrl || 'unknown URL'}); without them Next borrows production's values from .env.local. ` +
+          'The publishable key is under Project Settings, API Keys, in the Supabase dashboard for that project.'
+      )
+    }
+  }
+
   cached = {
     envFile,
     envPath,

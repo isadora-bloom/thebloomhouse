@@ -132,6 +132,13 @@ export class Journey {
     page.on('console', (msg) => {
       if (msg.type() !== 'error') return
       const text = msg.text()
+      // Chromium logs its own "Failed to load resource: the server
+      // responded with a status of 404" for every 4xx/5xx. That is the
+      // same event the `response` handler below already records, with
+      // the method and URL and with `allowRequest` applied, so a refusal a
+      // journey asked for on purpose (an expired contract link answering
+      // 404) must not come back as a nameless console error.
+      if (/^Failed to load resource: the server responded with a status of \d+/.test(text)) return
       if (this.allowConsole.some((re) => re.test(text))) return
       this.consoleErrors.push(text)
     })
@@ -151,7 +158,14 @@ export class Journey {
     })
 
     page.on('requestfailed', (req) => {
-      const line = `failed ${req.method()} ${req.url()} (${req.failure()?.errorText ?? 'unknown'})`
+      const errorText = req.failure()?.errorText ?? 'unknown'
+      // ERR_ABORTED is the browser cancelling its own request, not the
+      // server failing one: a Next RSC prefetch (`?_rsc=`) abandoned when
+      // the test navigates on, a fetch dropped on unload. The server never
+      // answered, so there is no status to judge. Real failures (a reset
+      // connection, a refused one, a blocked origin) keep their own codes.
+      if (errorText === 'net::ERR_ABORTED') return
+      const line = `failed ${req.method()} ${req.url()} (${errorText})`
       if (this.allowRequests.some((re) => re.test(req.url()))) return
       this.failedRequests.push(line)
     })

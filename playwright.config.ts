@@ -20,6 +20,8 @@ const BASE_URL = USE_LOCAL
 
 export default defineConfig({
   testDir: './e2e',
+  // A broken node_modules surfaces as 500s deep in the app; check it first.
+  globalSetup: './e2e/global-setup.ts',
   testMatch: ['sections/**/*.spec.ts', 'pending/**/*.spec.ts'],
   timeout: 60_000,
   expect: { timeout: 10_000 },
@@ -60,21 +62,24 @@ export default defineConfig({
     ? {
         // Force webpack (no Turbopack) — Turbopack has a reproducible crash on
         // Windows during CSS compiles that kills dev mid-run. See BUG-DEV-01.
-        command: `npx next dev --webpack -p ${LOCAL_PORT}`,
+        // Next loads `.env.local` itself, so pointing the harness at
+        // `.env.test` is only half the job: the app under test would
+        // still have come up on production. e2e/dev-server.ts loads the
+        // branch file into the server's own process.env (which wins over
+        // Next's dotenv) and refuses production the same way the tests do.
+        // The values are NOT passed through `env` here on purpose: the
+        // JSON reporter serialises this whole block into e2e/results.json,
+        // and on 2026-09-15 that put every branch secret in a tracked file.
+        // Only the file name and the port cross this boundary.
+        command: `npx tsx e2e/dev-server.ts`,
         url: `http://localhost:${LOCAL_PORT}/welcome`,
         reuseExistingServer: true,
         timeout: 180_000,
         stdout: 'ignore',
         stderr: 'pipe',
-        // Next loads `.env.local` itself, so pointing the harness at
-        // `.env.test` is only half the job — the app under test would
-        // still have come up on production. Anything already present in
-        // process.env wins over Next's own dotenv loading, so handing the
-        // branch values in here closes that second door. AI_E2E_STUB
-        // keeps the run off the real model (see src/lib/ai/e2e-stub.ts).
         env: {
-          ...E2E_ENV.values,
-          AI_E2E_STUB: process.env.AI_E2E_STUB ?? '1',
+          E2E_ENV_FILE: E2E_ENV.envFile,
+          E2E_PORT: String(LOCAL_PORT),
         },
       }
     : undefined,

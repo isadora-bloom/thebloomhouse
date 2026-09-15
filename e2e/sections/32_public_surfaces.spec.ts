@@ -242,20 +242,21 @@ test.describe('§32 Public surfaces', () => {
     test.skip(!vendorRowId, 'the vendor fixture could not be seeded')
     const j = publicSurfaces(page)
 
-    await j.step('signed out, the link bounces to login', async () => {
-      // Current behaviour, asserted so it cannot drift silently:
-      // src/middleware.ts lists /welcome, /login, /signup,
-      // /forgot-password, /reset-password, /couple/login, /demo and
-      // /join as public. /vendor is not among them, so a link emailed
-      // to a florist lands on the sign-in page. The API behind it IS
-      // public; only the page is gated.
+    await j.step('signed out, the link opens the vendor page', async () => {
+      // src/middleware.ts lists /vendor among PUBLIC_ROUTES (added
+      // 2026-09-15, wave 9 repair): a link emailed to a florist must
+      // open without a Bloom House login, since the token is the
+      // credential. Asserted so it cannot drift back to a login bounce.
       await page.context().clearCookies()
       await page.goto(`/vendor/${VENDOR_TOKEN}`)
       await page.waitForLoadState('domcontentloaded')
       expect(
         new URL(page.url()).pathname,
-        'the vendor page is public now — good, but the spec and the middleware list disagree'
-      ).toMatch(/^\/login/)
+        'the vendor page bounced a signed-out visitor; /vendor must stay in PUBLIC_ROUTES'
+      ).toBe(`/vendor/${VENDOR_TOKEN}`)
+      await expect(page.getByText('Vendor Portal', { exact: false })).toBeVisible({
+        timeout: 30_000,
+      })
     })
 
     await j.step('the API behind it is public and honours the token', async () => {

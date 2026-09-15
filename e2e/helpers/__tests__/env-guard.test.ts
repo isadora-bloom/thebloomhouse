@@ -88,7 +88,10 @@ describe('loadE2EEnv', () => {
 
   it('honours E2E_ENV_FILE', () => {
     process.env.E2E_ENV_FILE = '.env.branch'
-    writeEnv('.env.branch', `NEXT_PUBLIC_SUPABASE_URL=${BRANCH_URL}\n`)
+    writeEnv(
+      '.env.branch',
+      `NEXT_PUBLIC_SUPABASE_URL=${BRANCH_URL}\nSUPABASE_SERVICE_ROLE_KEY=branch-key\nNEXT_PUBLIC_SUPABASE_ANON_KEY=anon-key\n`
+    )
     expect(envFileName()).toBe('.env.branch')
     expect(loadE2EEnv({ reload: true, cwd: dir }).supabaseUrl).toBe(BRANCH_URL)
   })
@@ -97,6 +100,14 @@ describe('loadE2EEnv', () => {
     process.env.E2E_ENV_FILE = FORBIDDEN_ENV_FILE
     writeEnv(FORBIDDEN_ENV_FILE, `NEXT_PUBLIC_SUPABASE_URL=${BRANCH_URL}\n`)
     expect(() => loadE2EEnv({ reload: true, cwd: dir })).toThrow(/will not load it/)
+  })
+
+  it('refuses a branch file without the browser key, naming what is missing', () => {
+    // Without NEXT_PUBLIC_SUPABASE_ANON_KEY in the file, Next borrows
+    // production's publishable key from .env.local and every sign-in
+    // against the branch answers 401 (section 32, 2026-09-15).
+    writeEnv('.env.test', `NEXT_PUBLIC_SUPABASE_URL=${BRANCH_URL}\nSUPABASE_SERVICE_ROLE_KEY=branch-key\n`)
+    expect(() => loadE2EEnv({ reload: true, cwd: dir })).toThrow(/missing NEXT_PUBLIC_SUPABASE_ANON_KEY/)
   })
 
   it('survives a missing env file so --list and --noEmit still work', () => {

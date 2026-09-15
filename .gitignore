@@ -30,3 +30,9 @@ phase2-exports/
 
 # Playwright journey screenshots (per run)
 e2e/screens/
+
+# Playwright output. The JSON report used to serialise the whole webServer env
+# (every branch secret) and was tracked; never again.
+e2e/results.json
+e2e/report/
+test-results/
