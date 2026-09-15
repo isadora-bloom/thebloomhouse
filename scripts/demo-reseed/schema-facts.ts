@@ -72,6 +72,20 @@ export interface ColumnFact {
    *  parse (a range, a regex, a cross-column comparison). A `null` here
    *  is therefore "cannot rule anything out", not "anything goes". */
   allowedValues: readonly string[] | null
+  /** True when the column carries NOT NULL as the migrations leave it
+   *  after every ALTER (CREATE TABLE inline, ADD COLUMN inline, or a
+   *  later `ALTER COLUMN ... SET/DROP NOT NULL`). */
+  notNull: boolean
+  /** True when the column carries a DEFAULT as the migrations leave it
+   *  after every ALTER (inline DEFAULT, or a later `ALTER COLUMN ...
+   *  SET/DROP DEFAULT`). */
+  hasDefault: boolean
+  /** Name of the migration file whose ALTER (or the CREATE TABLE) most
+   *  recently put this column into the "NOT NULL, no DEFAULT" state —
+   *  i.e. the migration an insert that omits this column would need to
+   *  cite as the cause of its NOT NULL violation. `null` when the
+   *  column is not currently in that state. */
+  requiredSinceMigration: string | null
 }
 
 export interface TableFact {
@@ -86,6 +100,13 @@ export interface SchemaFacts {
   tableExists(table: string): boolean
   columnDeclared(table: string, column: string): boolean
   allowedValues(table: string, column: string): readonly string[] | null
+  /** True when the column is currently NOT NULL with no DEFAULT — an
+   *  INSERT that does not supply it will fail with 23502. */
+  columnRequired(table: string, column: string): boolean
+  /** The migration file that put the column into the required state
+   *  `columnRequired` reports, or `null` when it is not required (or the
+   *  column is undeclared). */
+  columnRequiredSince(table: string, column: string): string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -159,9 +180,15 @@ export function splitStatements(sql: string): string[] {
   return out
 }
 
-/** Split on `sep` at paren-depth 0, outside single-quoted strings. Used
- *  both for a CREATE TABLE column list and for the comma-joined clauses
- *  of one ALTER TABLE statement. */
+/** Split on `sep` at paren/bracket-depth 0, outside single-quoted
+ *  strings. Used for a CREATE TABLE column list, the comma-joined
+ *  clauses of one ALTER TABLE statement, and (W74) a VALUES tuple —
+ *  bracket depth matters there because a Postgres `ARRAY['a', 'b']`
+ *  literal's commas must not be mistaken for tuple-value separators. No
+ *  migration or seed file in this repo uses an unmatched `[`/`]`
+ *  outside a string, so tracking bracket depth alongside paren depth is
+ *  never wrong for the existing callers, only additionally correct for
+ *  the new one. */
 export function topLevelSplit(text: string, sep = ','): string[] {
   const out: string[] = []
   let cur = ''
@@ -185,12 +212,12 @@ export function topLevelSplit(text: string, sep = ','): string[] {
       cur += c
       continue
     }
-    if (c === '(') {
+    if (c === '(' || c === '[') {
       depth++
       cur += c
       continue
     }
-    if (c === ')') {
+    if (c === ')' || c === ']') {
       depth--
       cur += c
       continue
@@ -291,18 +318,80 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     return t
   }
 
+  const blankColumn = (): ColumnFact => ({
+    declared: true,
+    allowedValues: null,
+    notNull: false,
+    hasDefault: false,
+    requiredSinceMigration: null,
+  })
+
   const setColumnDeclared = (table: string, column: string): void => {
     const t = ensureTable(table)
     const existing = t.columns.get(column)
     if (existing) existing.declared = true
-    else t.columns.set(column, { declared: true, allowedValues: null })
+    else t.columns.set(column, blankColumn())
   }
 
   const setColumnCheck = (table: string, column: string, values: string[] | null): void => {
     const t = ensureTable(table)
     const existing = t.columns.get(column)
     if (existing) existing.allowedValues = values
-    else t.columns.set(column, { declared: true, allowedValues: values })
+    else t.columns.set(column, { ...blankColumn(), allowedValues: values })
+  }
+
+  /** Recompute `requiredSinceMigration` from the column's current
+   *  notNull/hasDefault state. Called after every change to either flag.
+   *  A column becomes "required" the moment it is NOT NULL with no
+   *  DEFAULT; it stops being required the moment either flag flips the
+   *  other way, at which point the origin migration is forgotten (it is
+   *  no longer the cause of anything). */
+  const recomputeRequired = (table: string, column: string, migrationName: string): void => {
+    const t = ensureTable(table)
+    const col = t.columns.get(column)
+    if (!col) return
+    const nowRequired = col.notNull && !col.hasDefault
+    if (nowRequired) {
+      // Only stamp the migration name the moment the column transitions
+      // INTO the required state, so re-processing an already-required
+      // column (e.g. a second ADD COLUMN clause in the same statement)
+      // does not overwrite the true origin with a later file.
+      if (!col.requiredSinceMigration) col.requiredSinceMigration = migrationName
+    } else {
+      col.requiredSinceMigration = null
+    }
+  }
+
+  const setColumnNotNull = (table: string, column: string, notNull: boolean, migrationName: string): void => {
+    const t = ensureTable(table)
+    const existing = t.columns.get(column)
+    if (existing) existing.notNull = notNull
+    else t.columns.set(column, { ...blankColumn(), notNull })
+    recomputeRequired(table, column, migrationName)
+  }
+
+  const setColumnHasDefault = (table: string, column: string, hasDefault: boolean, migrationName: string): void => {
+    const t = ensureTable(table)
+    const existing = t.columns.get(column)
+    if (existing) existing.hasDefault = hasDefault
+    else t.columns.set(column, { ...blankColumn(), hasDefault })
+    recomputeRequired(table, column, migrationName)
+  }
+
+  /** Scan a column definition fragment — everything after the column
+   *  name, up to (but not including) any trailing CHECK — for `NOT
+   *  NULL` and `DEFAULT`. Deliberately excludes the CHECK portion: a
+   *  nullable-shape CHECK reads `col IS NULL OR col IN (...)`, and the
+   *  substring "NOT NULL" never appears there, but a cross-column CHECK
+   *  elsewhere in this repo could in principle contain "IS NOT NULL",
+   *  which must not be mistaken for a column-level NOT NULL. */
+  const detectNotNullAndDefault = (defText: string): { notNull: boolean; hasDefault: boolean } => {
+    const checkIdx = defText.search(/\bCHECK\s*\(/i)
+    const preCheck = checkIdx === -1 ? defText : defText.slice(0, checkIdx)
+    return {
+      notNull: /\bNOT\s+NULL\b/i.test(preCheck),
+      hasDefault: /\bDEFAULT\b/i.test(preCheck),
+    }
   }
 
   const renameTable = (from: string, to: string): void => {
@@ -317,7 +406,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
   /** One entry of a CREATE TABLE's top-level-split column list: either a
    *  column definition, or a table-level CHECK/CONSTRAINT/PRIMARY
    *  KEY/UNIQUE/FOREIGN KEY entry. */
-  const processColumnListSegment = (table: string, segment: string): void => {
+  const processColumnListSegment = (table: string, segment: string, migrationName: string): void => {
     const trimmed = segment.trim()
     if (!trimmed) return
     if (/^(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|EXCLUDE)\b/i.test(trimmed)) return
@@ -347,6 +436,15 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     const column = colMatch[1]!
     setColumnDeclared(table, column)
     const rest = trimmed.slice(colMatch[0].length)
+    // PRIMARY KEY inline on the column (e.g. `id uuid PRIMARY KEY`) is
+    // NOT NULL by definition even though the words "NOT NULL" never
+    // appear — most of this repo's PK columns also carry a DEFAULT
+    // (gen_random_uuid()), so they are not flagged as required, but the
+    // NOT NULL flag itself should still be accurate.
+    const { notNull: explicitNotNull, hasDefault } = detectNotNullAndDefault(rest)
+    const notNull = explicitNotNull || /\bPRIMARY\s+KEY\b/i.test(rest)
+    setColumnNotNull(table, column, notNull, migrationName)
+    setColumnHasDefault(table, column, hasDefault, migrationName)
     const checkIdx = rest.search(/\bCHECK\s*\(/i)
     if (checkIdx !== -1) {
       const openIdx = rest.indexOf('(', checkIdx)
@@ -356,7 +454,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     }
   }
 
-  const processAlterClause = (table: string, clause: string): void => {
+  const processAlterClause = (table: string, clause: string, migrationName: string): void => {
     const c = clause.trim()
 
     const rename = /^RENAME\s+TO\s+"?(\w+)"?/i.exec(c)
@@ -365,11 +463,32 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
       return
     }
 
+    const alterColumnNotNull = /^ALTER\s+COLUMN\s+"?(\w+)"?\s+(SET|DROP)\s+NOT\s+NULL/i.exec(c)
+    if (alterColumnNotNull) {
+      setColumnNotNull(table, alterColumnNotNull[1]!, alterColumnNotNull[2]!.toUpperCase() === 'SET', migrationName)
+      return
+    }
+
+    const alterColumnDefault = /^ALTER\s+COLUMN\s+"?(\w+)"?\s+SET\s+DEFAULT\b/i.exec(c)
+    if (alterColumnDefault) {
+      setColumnHasDefault(table, alterColumnDefault[1]!, true, migrationName)
+      return
+    }
+
+    const alterColumnDropDefault = /^ALTER\s+COLUMN\s+"?(\w+)"?\s+DROP\s+DEFAULT\b/i.exec(c)
+    if (alterColumnDropDefault) {
+      setColumnHasDefault(table, alterColumnDropDefault[1]!, false, migrationName)
+      return
+    }
+
     const addColumn = /^ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?\s+([\s\S]*)$/i.exec(c)
     if (addColumn) {
       const column = addColumn[1]!
       setColumnDeclared(table, column)
       const rest = addColumn[2]!
+      const { notNull, hasDefault } = detectNotNullAndDefault(rest)
+      setColumnNotNull(table, column, notNull, migrationName)
+      setColumnHasDefault(table, column, hasDefault, migrationName)
       const checkIdx = rest.search(/\bCHECK\s*\(/i)
       if (checkIdx !== -1) {
         const openIdx = rest.indexOf('(', checkIdx)
@@ -444,7 +563,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
           const t = ensureTable(table)
           t.exists = true
           if (bal) {
-            for (const seg of topLevelSplit(bal.inner, ',')) processColumnListSegment(table, seg)
+            for (const seg of topLevelSplit(bal.inner, ',')) processColumnListSegment(table, seg, file.name)
           }
         }
         continue
@@ -459,7 +578,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
           )
         if (head) {
           const table = head[1]!.toLowerCase()
-          for (const clause of topLevelSplit(head[2]!, ',')) processAlterClause(table, clause)
+          for (const clause of topLevelSplit(head[2]!, ',')) processAlterClause(table, clause, file.name)
         }
         continue
       }
@@ -471,6 +590,10 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     tableExists: (table) => tables.get(table.toLowerCase())?.exists === true,
     columnDeclared: (table, column) => tables.get(table.toLowerCase())?.columns.get(column)?.declared === true,
     allowedValues: (table, column) => tables.get(table.toLowerCase())?.columns.get(column)?.allowedValues ?? null,
+    columnRequired: (table, column) =>
+      tables.get(table.toLowerCase())?.columns.get(column)?.requiredSinceMigration != null,
+    columnRequiredSince: (table, column) =>
+      tables.get(table.toLowerCase())?.columns.get(column)?.requiredSinceMigration ?? null,
   }
 }
 

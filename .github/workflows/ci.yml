@@ -258,6 +258,9 @@ jobs:
       - name: Tangential-pool guard — nothing under src/ inserts into the deprecated tangential_signals (wave 9 W68)
         run: node scripts/check-no-tangential-writes.mjs
 
+      - name: Seed-SQL guard — every seed INSERT matches the migrations (W74)
+        run: npx tsx scripts/validate-seed-sql.ts
+
       # --- Consolidation governance (FIX-PLAN Layer B/C/D) ------------------
       # ENFORCING since 2026-06-11 (Phase 0 §0.9 flip executed — was left
       # `continue-on-error: true` at the 2026-05-29 ratification "until
