@@ -21,11 +21,11 @@ INSERT INTO organisations (id, name, plan_tier) VALUES
 INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_metro, noaa_station_id, briefing_email, address_line1, city, state, zip, latitude, longitude) VALUES
   ('22222222-2222-2222-2222-222222222201', 'Hawthorne Manor', 'hawthorne-manor', '11111111-1111-1111-1111-111111111111', 'enterprise', 'active', 'US-VA-584', 'USW00093738', 'events@hawthornemanor.com', '4200 Hawthorne Estate Dr', 'Culpeper', 'VA', '22701', 38.4735, -77.9966);
 INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_metro, noaa_station_id, briefing_email, address_line1, city, state, zip, latitude, longitude) VALUES
-  ('22222222-2222-2222-2222-222222222202', 'Crestwood Farm', 'crestwood-farm', '11111111-1111-1111-1111-111111111111', 'intelligence', 'active', 'US-VA-584', 'USW00093738', 'hello@crestwoodfarm.com', '1200 Ivy Creek Ln', 'Charlottesville', 'VA', '22902', 38.0293, -78.4767);
+  ('22222222-2222-2222-2222-222222222202', 'Crestwood Farm', 'crestwood-farm', '11111111-1111-1111-1111-111111111111', 'growth', 'active', 'US-VA-584', 'USW00093738', 'hello@crestwoodfarm.com', '1200 Ivy Creek Ln', 'Charlottesville', 'VA', '22902', 38.0293, -78.4767);
 INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_metro, noaa_station_id, briefing_email, address_line1, city, state, zip, latitude, longitude) VALUES
   ('22222222-2222-2222-2222-222222222203', 'The Glass House', 'the-glass-house', '11111111-1111-1111-1111-111111111111', 'enterprise', 'active', 'US-VA-556', 'USW00013740', 'info@theglasshouse.com', '500 E Broad St', 'Richmond', 'VA', '23219', 37.5407, -77.4360);
 INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_metro, noaa_station_id, briefing_email, address_line1, city, state, zip, latitude, longitude) VALUES
-  ('22222222-2222-2222-2222-222222222204', 'Rose Hill Gardens', 'rose-hill-gardens', '11111111-1111-1111-1111-111111111111', 'starter', 'trial', 'US-DC-511', 'USW00013743', NULL, '44 Rose Hill Dr', 'Leesburg', 'VA', '20176', 39.1157, -77.5636);
+  ('22222222-2222-2222-2222-222222222204', 'Rose Hill Gardens', 'rose-hill-gardens', '11111111-1111-1111-1111-111111111111', 'solo', 'trial', 'US-DC-511', 'USW00013743', NULL, '44 Rose Hill Dr', 'Leesburg', 'VA', '20176', 39.1157, -77.5636);
 
 -- ============================================
 -- 3. VENUE CONFIG (branding per venue)
