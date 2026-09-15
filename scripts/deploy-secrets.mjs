@@ -7,6 +7,7 @@
  *
  *   node scripts/deploy-secrets.mjs            dry run: says what it would do
  *   node scripts/deploy-secrets.mjs --apply    does it
+ *   node scripts/deploy-secrets.mjs --apply --only calendly   one step only (cron | calendly | stripe)
  *
  * What it does, in order:
  *   1. CRON_SECRET: replaces the 21-character literal with 32 random bytes
@@ -35,6 +36,9 @@ import { spawnSync } from 'node:child_process'
 import { createClient } from '@supabase/supabase-js'
 
 const APPLY = process.argv.includes('--apply')
+// --only calendly (or cron, stripe): run one step, leave the others alone.
+const ONLY = (() => { const i = process.argv.indexOf('--only'); return i >= 0 ? process.argv[i + 1] : null })()
+const want = (step) => !ONLY || ONLY === step
 const RIXEY_VENUE_ID = 'f3d10226-4c5c-47ad-b89b-98ad63842492'
 const PROD_REF = 'jsxxgwprxuqgcauzlxcb'
 const WEBHOOK_URL = 'https://bloom-house-iota.vercel.app/api/webhooks/calendly'
@@ -97,12 +101,15 @@ async function main() {
   console.log(`\nMode: ${APPLY ? 'APPLY' : 'dry run'}\n`)
 
   // 1 and 2: cron secrets
-  console.log('1. CRON_SECRET (rotate to 32 random bytes)')
-  setEnv('CRON_SECRET', hex32())
-  console.log('2. CRON_SECRET_DESTRUCTIVE')
-  setEnv('CRON_SECRET_DESTRUCTIVE', hex32())
+  if (want('cron')) {
+    console.log('1. CRON_SECRET (rotate to 32 random bytes)')
+    setEnv('CRON_SECRET', hex32())
+    console.log('2. CRON_SECRET_DESTRUCTIVE')
+    setEnv('CRON_SECRET_DESTRUCTIVE', hex32())
+  }
 
   // 3: Calendly subscription + user URI stamp
+  if (want('calendly')) {
   console.log('3. CALENDLY_WEBHOOK_SECRET (new subscription, our own signing key)')
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
   const { data: vc, error: vcErr } = await sb
@@ -171,9 +178,13 @@ async function main() {
     }
   }
 
+  }
+
   // 4: Stripe placeholder that fails closed
-  console.log('4. STRIPE_WEBHOOK_SECRET (Stripe not wired; random value so the route fails closed)')
-  setEnv('STRIPE_WEBHOOK_SECRET', `nostripe_${hex32()}`)
+  if (want('stripe')) {
+    console.log('4. STRIPE_WEBHOOK_SECRET (Stripe not wired; random value so the route fails closed)')
+    setEnv('STRIPE_WEBHOOK_SECRET', `nostripe_${hex32()}`)
+  }
 
   console.log(`\n${APPLY ? 'Done. Now: npm run preflight' : 'Dry run only. Rerun with --apply.'}\n`)
 }
