@@ -83,7 +83,11 @@ export const SECTIONS: SectionDef[] = [
   { slug: 'allergies',       finalisationKey: 'allergies',       dataTable: 'allergy_registry' },
   { slug: 'guest-care',      finalisationKey: 'guest_care',      dataTable: 'guest_care_notes' },
   { slug: 'rooms',           finalisationKey: 'rooms',           dataTable: 'bedroom_assignments' },
-  { slug: 'seating',         finalisationKey: 'seating',         dataTable: 'seating_assignments' },
+  // seating_tables, not seating_assignments: migration 094 dropped the
+  // latter, so every couple sidebar load HEAD-counted a table that no
+  // longer exists and got 404 (§27 journey, 2026-09-15). The seating
+  // page writes seating_tables (couple-readable since 226).
+  { slug: 'seating',         finalisationKey: 'seating',         dataTable: 'seating_tables' },
   { slug: 'table-map',       finalisationKey: 'table_map',       dataTable: 'table_map_layouts' },
   { slug: 'tables',          finalisationKey: 'tables',          dataTable: 'wedding_tables' },
   { slug: 'ceremony-chairs', finalisationKey: 'ceremony_chairs', dataTable: 'ceremony_order' },

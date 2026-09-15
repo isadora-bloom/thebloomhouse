@@ -40,34 +40,30 @@ export default function CoupleRegisterPage() {
   // Load venue branding
   useEffect(() => {
     async function loadBranding() {
-      const supabase = createClient()
-
-      const { data: venue } = await supabase
-        .from('venues')
-        .select('id, name, slug')
-        .eq('slug', slug)
-        .single()
-
-      if (!venue) {
-        setBranding({
-          venueName: 'Wedding Portal',
-          logoUrl: null,
-          portalTagline: null,
-        })
+      // Branding comes from /api/couple/branding, not from the browser's own
+      // Supabase client: the anon key can only read the demo venues
+      // (migration 392), so a real venue's signed-out page answered 406
+      // and showed "Wedding Portal" (§27 journey, 2026-09-15).
+      const fallback = { venueName: 'Wedding Portal', logoUrl: null, portalTagline: null }
+      if (!slug) {
+        setBranding(fallback)
         return
       }
-
-      const { data: config } = await supabase
-        .from('venue_config')
-        .select('business_name, logo_url, portal_tagline')
-        .eq('venue_id', venue.id)
-        .single()
-
-      setBranding({
-        venueName: config?.business_name || venue.name,
-        logoUrl: config?.logo_url || null,
-        portalTagline: config?.portal_tagline || null,
-      })
+      try {
+        const res = await fetch(`/api/couple/branding?slug=${encodeURIComponent(slug)}`)
+        if (!res.ok) {
+          setBranding(fallback)
+          return
+        }
+        const data = (await res.json()) as VenueBranding
+        setBranding({
+          venueName: data.venueName || fallback.venueName,
+          logoUrl: data.logoUrl ?? null,
+          portalTagline: data.portalTagline ?? null,
+        })
+      } catch {
+        setBranding(fallback)
+      }
     }
 
     loadBranding()

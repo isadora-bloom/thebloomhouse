@@ -1379,15 +1379,21 @@ function CalendlyIntegrationSection({ venueId }: { venueId: string | null | unde
     }
     let cancelled = false
     async function load() {
-      const { data } = await supabase
-        .from('venue_config')
-        .select('calendly_link, calendly_tokens')
-        .eq('venue_id', venueId!)
-        .maybeSingle()
-      if (cancelled) return
-      setCalendlyLink((data?.calendly_link as string | null) ?? '')
-      const tokens = data?.calendly_tokens as { access_token?: string } | null
-      setHasStoredToken(!!tokens?.access_token)
+      // Through the API, not the browser client: migration 413 revoked
+      // authenticated SELECT on venue_config's token columns, so reading
+      // calendly_tokens here answered 403 on every load (2026-09-15).
+      // The page only needs to know whether a token is on file.
+      try {
+        const res = await fetch('/api/settings/integrations/calendly', { cache: 'no-store' })
+        const json = res.ok
+          ? ((await res.json()) as { calendlyLink: string; hasStoredToken: boolean })
+          : null
+        if (cancelled) return
+        setCalendlyLink(json?.calendlyLink ?? '')
+        setHasStoredToken(!!json?.hasStoredToken)
+      } catch {
+        if (cancelled) return
+      }
       setLoading(false)
     }
     load()
@@ -1401,19 +1407,20 @@ function CalendlyIntegrationSection({ venueId }: { venueId: string | null | unde
     setSaving(true)
     setMessage(null)
     try {
-      const update: Record<string, unknown> = {
-        calendly_link: calendlyLink.trim() || null,
-        updated_at: new Date().toISOString(),
+      // Only overwrite tokens if a new value was entered; the route
+      // leaves calendly_tokens alone when accessToken is empty.
+      const res = await fetch('/api/settings/integrations/calendly', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calendlyLink: calendlyLink.trim() || null,
+          accessToken: accessToken.trim() || undefined,
+        }),
+      })
+      if (!res.ok) {
+        const json = (await res.json().catch(() => null)) as { error?: string } | null
+        throw new Error(json?.error ?? `Request failed (${res.status})`)
       }
-      // Only overwrite tokens if a new value was entered
-      if (accessToken.trim()) {
-        update.calendly_tokens = { access_token: accessToken.trim() }
-      }
-      const { error } = await supabase
-        .from('venue_config')
-        .update(update)
-        .eq('venue_id', venueId)
-      if (error) throw error
       if (accessToken.trim()) {
         setHasStoredToken(true)
         setAccessToken('')
@@ -1812,8 +1819,9 @@ function SendingDomainSection({ venueId }: { venueId: string | null | undefined 
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
-          <label className="block text-sm font-medium text-sage-700 mb-1">Your domain</label>
+          <label htmlFor="sending-domain-domain" className="block text-sm font-medium text-sage-700 mb-1">Your domain</label>
           <input
+            id="sending-domain-domain"
             type="text"
             value={domainInput}
             onChange={(e) => setDomainInput(e.target.value)}
@@ -1823,8 +1831,9 @@ function SendingDomainSection({ venueId }: { venueId: string | null | undefined 
           <p className="text-xs text-sage-500 mt-1">The domain your website and email already live on.</p>
         </div>
         <div>
-          <label className="block text-sm font-medium text-sage-700 mb-1">Name couples see</label>
+          <label htmlFor="sending-domain-from-name" className="block text-sm font-medium text-sage-700 mb-1">Name couples see</label>
           <input
+            id="sending-domain-from-name"
             type="text"
             value={fromNameInput}
             onChange={(e) => setFromNameInput(e.target.value)}

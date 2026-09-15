@@ -23,7 +23,12 @@ export default defineConfig({
   // A broken node_modules surfaces as 500s deep in the app; check it first.
   globalSetup: './e2e/global-setup.ts',
   testMatch: ['sections/**/*.spec.ts', 'pending/**/*.spec.ts'],
-  timeout: 60_000,
+  // 150s, not 60s: the app runs under `next dev --webpack` and the first
+  // request to the platform shell or the couple portal compiles it, which
+  // took over 60s on the 2026-09-15 runs and failed the first test of a
+  // section on time alone. Later navigations are fast; the budget is for
+  // the compile, and navigationTimeout below is raised for the same reason.
+  timeout: 150_000,
   expect: { timeout: 10_000 },
   retries: 1,
   workers: 2,
@@ -34,8 +39,11 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-    navigationTimeout: 30_000,
-    actionTimeout: 15_000,
+    navigationTimeout: 90_000,
+    // 45s covers the first-compile of an API route under the dev server
+    // (the expired contract link answered in 8.5s cold and 0.3s warm on
+    // 2026-09-15, and 15s was not enough with a second worker compiling).
+    actionTimeout: 45_000,
   },
   projects: [
     {

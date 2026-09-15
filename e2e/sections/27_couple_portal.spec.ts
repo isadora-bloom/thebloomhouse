@@ -181,7 +181,11 @@ test.describe("§27 A couple's portal", () => {
               .maybeSingle<{ used_at: string | null }>()
             return data?.used_at ?? null
           },
-          { timeout: 30_000, message: 'the invitation was never marked used' }
+          // 90s, not 30s: the register route's first hit under `next dev
+          // --webpack` answered 200 in 37s on 2026-09-15, 34s of it
+          // compile, and the poll gave up first. Same budget as
+          // navigationTimeout in playwright.config.ts.
+          { timeout: 90_000, message: 'the invitation was never marked used' }
         )
         .not.toBeNull()
     })

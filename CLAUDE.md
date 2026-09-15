@@ -114,3 +114,13 @@ Structured logger at `lib/observability/logger.ts` (T1-G) emits JSON-line events
 
 ## Heat scoring
 Heat-map dedup (2026-05-01 fix) — `tour_requested` / `high_commitment_signal` / `family_mentioned` / `high_specificity` / `tour_cancelled` / `not_interested_signal` are FIRE-ONCE-PER-WEDDING. Reopen-aware: if `weddings.lost_at` is more recent than the existing event, dedup is bypassed (allows fresh fire on a re-engaged lead). `dedup-fire-once-events.ts` is the maintenance script for cleaning up legacy multi-fires + tour_completed-after-cancellation false positives.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

@@ -74,7 +74,10 @@ describe('roleRank', () => {
     expect(roleRank('org_admin')).toBeGreaterThan(roleRank('venue_manager'))
     expect(roleRank('venue_manager')).toBeGreaterThan(roleRank('coordinator'))
     expect(roleRank('coordinator')).toBeGreaterThan(roleRank('readonly'))
-    expect(roleRank('manager')).toBe(roleRank('venue_manager'))
+    // 'manager' has never been a user_profiles.role value; it was a
+    // phantom in this ladder until 2026-09-15 and now ranks with the
+    // unknowns.
+    expect(roleRank('manager')).toBe(-1)
   })
 
   it('ranks an unknown role below everything, so an invite for it is refused', () => {

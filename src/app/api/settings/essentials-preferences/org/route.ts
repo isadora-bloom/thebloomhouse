@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refuseDemo, getPlatformAuth } from '@/lib/api/auth-helpers'
+import { PLATFORM_ROLES } from '@/lib/auth/roles'
 import { ESSENTIALS_LEVELS, type EssentialsLevel } from '@/lib/hooks/use-essentials-level'
 import { apiError } from '@/lib/api/api-error'
 
@@ -25,7 +26,7 @@ interface OrgPrefsRow {
   updated_at: string
 }
 
-const ROLES_THAT_CAN_WRITE = new Set(['coordinator', 'manager', 'org_admin', 'super_admin'])
+const ROLES_THAT_CAN_WRITE = new Set<string>(PLATFORM_ROLES)
 
 export async function GET() {
   const auth = await getPlatformAuth()

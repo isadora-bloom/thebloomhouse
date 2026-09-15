@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { MANAGER_ROLES } from '@/lib/auth/roles'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { isConfiguredPriceId, planTierForPriceId } from '@/lib/billing/plans'
 import { appUrl } from '@/lib/app-url'
@@ -82,8 +83,7 @@ export async function POST(request: NextRequest) {
     // start a subscription, open the billing portal or read what the venue
     // pays — coordinators included, and a coordinator is often somebody the
     // venue hired last month. Restricted to the roles that own the account.
-    const billingRoles = ['org_admin', 'super_admin', 'venue_manager', 'manager']
-    if (!billingRoles.includes(profile.role as string)) {
+    if (!(MANAGER_ROLES as readonly string[]).includes(profile.role as string)) {
       return NextResponse.json(
         { error: 'Billing is managed by your venue manager or organisation admin.' },
         { status: 403 }

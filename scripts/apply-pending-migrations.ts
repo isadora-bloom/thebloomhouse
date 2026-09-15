@@ -136,6 +136,14 @@ const WAVE_MIGRATIONS: Pending[] = [
     file: '413_venue_config_token_columns_authenticated.sql',
     why: '411 follow-up: the three venue_config token columns were still SELECTable by authenticated',
   },
+  {
+    file: '414_auth_users_seed_null_tokens.sql',
+    why: 'Seeded auth.users rows carried NULL in the token and metadata columns GoTrue scans as non-null, so auth.admin.listUsers failed past page size 10 on production and the e2e project, and findAuthUserByEmail always returned null. Data repair only, idempotent, no DDL to probe for. Already applied by hand to the e2e project on 2026-09-15',
+  },
+  {
+    file: '415_policies_reading_auth_users.sql',
+    why: 'Seven policies from 030/031/243 selected from auth.users inside their predicate; authenticated cannot read that table, so the predicate errored and PostgREST answered 403 to EVERY authenticated query on ceremony_chair_plans, table_map_layouts and the brand_assets couple read (§27 journey, 2026-09-15). Replaced with can_access_wedding / couple_user_wedding_id. check-live-policies reports any policy mentioning auth.users',
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */

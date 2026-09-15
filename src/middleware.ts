@@ -9,6 +9,7 @@ import {
   demoTokenCookieOptions,
   demoHintCookieOptions,
 } from '@/lib/services/demo-token'
+import { isPlatformRole } from '@/lib/auth/roles'
 
 // Routes that never require authentication
 // /vendor/[token] is the vendor portal: token-gated on its own route, opened from an email, no session (W73 found it landing on /login).
@@ -383,8 +384,10 @@ export async function middleware(request: NextRequest) {
       .eq('id', user.id)
       .single()
 
-    const platformRoles = ['super_admin', 'org_admin', 'venue_manager', 'coordinator', 'readonly']
-    if (!profile || !platformRoles.includes(profile.role)) {
+    // Same admitted set as getPlatformAuth, from the same constant. The
+    // two used to disagree: this list knew 'venue_manager', the API gate
+    // did not, so a manager passed here and got 401 on the next request.
+    if (!profile || !isPlatformRole(profile.role)) {
       // User exists but doesn't have a platform role
       const loginUrl = request.nextUrl.clone()
       loginUrl.pathname = '/login'

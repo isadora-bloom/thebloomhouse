@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import { consumerRequesterRole } from '@/lib/auth/roles'
 import { exportUser } from '@/lib/services/compliance/portability'
 import { checkRateLimit } from '@/lib/rate-limit'
 
@@ -38,7 +39,7 @@ export async function POST() {
       venue_id: auth.venueId,
       requester_user_id: auth.userId,
       requester_email: requesterEmail,
-      requester_role: auth.role === 'manager' ? 'manager' : auth.role === 'org_admin' ? 'org_admin' : auth.role === 'super_admin' ? 'super_admin' : 'coordinator',
+      requester_role: consumerRequesterRole(auth.role),
       request_type: 'portability',
       scope: 'self',
       status: 'processing',

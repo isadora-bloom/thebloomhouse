@@ -290,13 +290,47 @@ describe('validateSeedInsert — schema qualification', () => {
     expect(validateSeedInsert(inserts[0]!, f)[0]!.kind).toBe('check-violation')
   })
 
-  it('is out of scope for a non-public schema (auth.users)', () => {
+  it('holds auth.users to the columns GoTrue scans as non-null', () => {
+    // A hand-written auth.users row that leaves these NULL breaks
+    // auth.admin.listUsers for every caller (2026-09-15, migration 414).
     const f = facts(FIXTURE_MIGRATIONS)
     const inserts = parseSeedInserts(
       'fixture.sql',
       `INSERT INTO auth.users (id, email) VALUES ('u1', 'nobody@example.com');`,
     )
     expect(inserts[0]!.schema).toBe('auth')
+    const findings = validateSeedInsert(inserts[0]!, f)
+    expect(findings.map((x) => x.column).sort()).toEqual(
+      [
+        'confirmation_token',
+        'email_change',
+        'email_change_token_new',
+        'raw_app_meta_data',
+        'raw_user_meta_data',
+        'recovery_token',
+      ].sort(),
+    )
+    expect(findings.every((x) => x.kind === 'missing-required-column')).toBe(true)
+  })
+
+  it('accepts an auth.users row that sets every GoTrue column', () => {
+    const f = facts(FIXTURE_MIGRATIONS)
+    const inserts = parseSeedInserts(
+      'fixture.sql',
+      `INSERT INTO auth.users (id, email, confirmation_token, recovery_token, email_change,
+         email_change_token_new, raw_app_meta_data, raw_user_meta_data)
+       VALUES ('u1', 'nobody@example.com', '', '', '', '', '{"provider":"email","providers":["email"]}', '{}');`,
+    )
+    expect(validateSeedInsert(inserts[0]!, f)).toHaveLength(0)
+  })
+
+  it('is out of scope for any other non-public schema', () => {
+    const f = facts(FIXTURE_MIGRATIONS)
+    const inserts = parseSeedInserts(
+      'fixture.sql',
+      `INSERT INTO storage.buckets (id, name) VALUES ('b1', 'b1');`,
+    )
+    expect(inserts[0]!.schema).toBe('storage')
     expect(validateSeedInsert(inserts[0]!, f)).toHaveLength(0)
   })
 })

@@ -170,8 +170,11 @@ export function CoupleTopBar({
             <Printer className="w-4 h-4" />
           </button>
 
-          {/* 5. Notifications */}
-          <CoupleNotificationBell base={base} />
+          {/* 5. Notifications. Only once the couple context has resolved a
+              wedding, i.e. there is a session: the bell polls an
+              authenticated route, and on the signed-out pages (login,
+              register, password reset) every poll was a 401 (2026-09-15). */}
+          {weddingId && <CoupleNotificationBell base={base} />}
 
           {/* 6. Account */}
           <CoupleUserMenu />

@@ -39,9 +39,14 @@ import type { NextConfig } from 'next'
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
+  // The couple portal loads the venue's chosen font pair from Google
+  // Fonts (src/config/fonts.ts, linked from src/app/couple/[slug]/
+  // layout.tsx). The S5 headers shipped without these two hosts, so
+  // every couple page fell back to system fonts and logged a CSP
+  // violation. Found by the §27 journey on 2026-09-15.
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
+  "font-src 'self' data: https://fonts.gstatic.com",
   "media-src 'self' data: blob: https:",
   "connect-src 'self' https: wss:",
   "worker-src 'self' blob:",

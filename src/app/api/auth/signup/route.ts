@@ -142,16 +142,23 @@ export async function POST(request: NextRequest) {
 
     // 3. Create user_profile with org_admin role, NO venue_id yet
     const nameParts = (fullName || '').split(' ')
+    // Upsert: migration 061's on_auth_user_created trigger has already
+    // written a readonly, org-less row for this id, so an insert here
+    // was 23505 and the whole signup rolled back (2026-09-15, same class
+    // as couple/register and team/accept).
     const { data: profile, error: profileError } = await supabase
       .from('user_profiles')
-      .insert({
-        id: userId,
-        venue_id: null,
-        org_id: org.id,
-        role: 'org_admin',
-        first_name: nameParts[0] || null,
-        last_name: nameParts.slice(1).join(' ') || null,
-      })
+      .upsert(
+        {
+          id: userId,
+          venue_id: null,
+          org_id: org.id,
+          role: 'org_admin',
+          first_name: nameParts[0] || null,
+          last_name: nameParts.slice(1).join(' ') || null,
+        },
+        { onConflict: 'id' }
+      )
       .select('id')
       .single()
 

@@ -272,12 +272,24 @@ export async function POST(request: NextRequest) {
     // Without it the couple session resolves to "anon-but-authed" and sees
     // no rows, and the 2-account cap above cannot see them either. This
     // used to log and carry on, then return success. It no longer does.
-    const { error: profileErr } = await supabase.from('user_profiles').insert({
-      id: authData.user.id,
-      venue_id: wedding.venue_id,
-      wedding_id: wedding.id,
-      role: 'couple',
-    })
+    //
+    // Upsert, not insert. Migration 061's on_auth_user_created trigger
+    // gives every new auth user a readonly, org-less profile row the
+    // moment createUser returns, so the row already exists here and a
+    // plain insert hit 23505, rolled the auth user back, released the
+    // invite and answered 500 "Could not finish setting up your account"
+    // for every couple since 2026-04-21. Found by the §27 journey on
+    // 2026-09-15. The pkey is id, so this is a real upsert (no partial
+    // unique index in the way).
+    const { error: profileErr } = await supabase.from('user_profiles').upsert(
+      {
+        id: authData.user.id,
+        venue_id: wedding.venue_id,
+        wedding_id: wedding.id,
+        role: 'couple',
+      },
+      { onConflict: 'id' }
+    )
 
     if (profileErr) {
       console.error('[COUPLE REGISTER] Profile error:', profileErr)

@@ -309,7 +309,7 @@ let absent = 0
 
 function mark(status, label, detail) {
   if (status === 'OK') ok++
-  else if (status === 'NEEDS 411') needs++
+  else if (status.startsWith('NEEDS ')) needs++
   else if (status === 'ABSENT') absent++
   else unknown++
   results.push({ status, label, detail })
@@ -476,6 +476,33 @@ if (twilio.error) {
 } else {
   mark(twilio.value === 'present' ? 'OK' : 'NEEDS 411', 'twilio_number_claims table',
     'one phone number, one venue')
+}
+
+// ---------------------------------------------------------------------------
+// No policy predicate may read auth.users (migration 415)
+//
+// The authenticated role cannot SELECT auth.users, so a policy that does
+// raises inside its own predicate and PostgREST answers 403 to every
+// authenticated query on that table, for every role. 030, 031 and 243
+// shipped seven such policies; 415 replaced them. This keeps the shape
+// from coming back.
+// ---------------------------------------------------------------------------
+
+const authUsersRefs = await readScalar(
+  'policies reading auth.users',
+  `SELECT string_agg(tablename || '.' || policyname, ', ' ORDER BY tablename, policyname) INTO r
+     FROM pg_policies
+    WHERE schemaname = 'public'
+      AND (coalesce(qual, '') || ' ' || coalesce(with_check, '')) ~ 'auth\\.users';`,
+)
+if (authUsersRefs.error) {
+  mark('UNKNOWN', 'policies reading auth.users', `could not read: ${authUsersRefs.error}`)
+} else {
+  mark(
+    authUsersRefs.value ? 'NEEDS 415' : 'OK',
+    'no policy predicate reads auth.users',
+    authUsersRefs.value || 'none',
+  )
 }
 
 // ---------------------------------------------------------------------------

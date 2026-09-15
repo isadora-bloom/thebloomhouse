@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import { consumerRequesterRole } from '@/lib/auth/roles'
 import { checkRateLimit } from '@/lib/rate-limit'
 
 /**
@@ -46,14 +47,9 @@ export async function POST() {
     )
   }
 
-  const requesterRole =
-    auth.role === 'manager'
-      ? 'manager'
-      : auth.role === 'org_admin'
-      ? 'org_admin'
-      : auth.role === 'super_admin'
-      ? 'super_admin'
-      : 'coordinator'
+  // consumer_requests.requester_role has its own vocabulary (migration
+  // 231); the mapper owns the venue_manager -> manager translation.
+  const requesterRole = consumerRequesterRole(auth.role)
 
   const { data: row, error } = await supabase
     .from('consumer_requests')

@@ -12,13 +12,13 @@
 -- We need auth.users entries for RLS (even though RLS is disabled for demo,
 -- the FK constraint requires them). Insert into auth.users first.
 
-INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at, instance_id, aud, role)
+INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at, instance_id, aud, role, confirmation_token, recovery_token, email_change, email_change_token_new, raw_app_meta_data)
 VALUES
-  ('33333333-3333-3333-3333-333333333305', 'grace@hawthornemanor.com', '{"first_name":"Grace","last_name":"Kim"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
-  ('33333333-3333-3333-3333-333333333306', 'ben@hawthornemanor.com', '{"first_name":"Ben","last_name":"Torres"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
-  ('33333333-3333-3333-3333-333333333307', 'lena@crestwoodfarm.com', '{"first_name":"Lena","last_name":"Hart"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
-  ('33333333-3333-3333-3333-333333333308', 'marcus@theglasshouse.com', '{"first_name":"Marcus","last_name":"Rivera"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
-  ('33333333-3333-3333-3333-333333333309', 'emma@rosehillgardens.com', '{"first_name":"Emma","last_name":"Walsh"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated')
+  ('33333333-3333-3333-3333-333333333305', 'grace@hawthornemanor.com', '{"first_name":"Grace","last_name":"Kim"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
+  ('33333333-3333-3333-3333-333333333306', 'ben@hawthornemanor.com', '{"first_name":"Ben","last_name":"Torres"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
+  ('33333333-3333-3333-3333-333333333307', 'lena@crestwoodfarm.com', '{"first_name":"Lena","last_name":"Hart"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
+  ('33333333-3333-3333-3333-333333333308', 'marcus@theglasshouse.com', '{"first_name":"Marcus","last_name":"Rivera"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
+  ('33333333-3333-3333-3333-333333333309', 'emma@rosehillgardens.com', '{"first_name":"Emma","last_name":"Walsh"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}')
 ON CONFLICT (id) DO NOTHING;
 
 -- Now add their profiles

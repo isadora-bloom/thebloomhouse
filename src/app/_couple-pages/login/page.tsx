@@ -76,14 +76,12 @@ export default function CoupleLoginPage() {
           return
         }
 
-        const supabase = createClient()
-        const { data: venue } = await supabase
-          .from('venues')
-          .select('id, name, slug')
-          .eq('slug', slug)
-          .single()
-
-        if (!venue) {
+        // Branding comes from /api/couple/branding, not from the browser's own
+        // Supabase client: the anon key can only read the demo venues
+        // (migration 392), so a real venue's signed-out page answered 406
+        // and showed "Wedding Portal" (§27 journey, 2026-09-15).
+        const res = await fetch(`/api/couple/branding?slug=${encodeURIComponent(slug)}`)
+        if (!res.ok) {
           setBranding({
             venueName: 'Wedding Portal',
             logoUrl: null,
@@ -91,17 +89,15 @@ export default function CoupleLoginPage() {
           })
           return
         }
-
-        const { data: config } = await supabase
-          .from('venue_config')
-          .select('business_name, logo_url, portal_tagline')
-          .eq('venue_id', venue.id)
-          .single()
-
+        const data = (await res.json()) as {
+          venueName: string
+          logoUrl: string | null
+          portalTagline: string | null
+        }
         setBranding({
-          venueName: config?.business_name || venue.name,
-          logoUrl: config?.logo_url || null,
-          portalTagline: config?.portal_tagline || null,
+          venueName: data.venueName || 'Wedding Portal',
+          logoUrl: data.logoUrl ?? null,
+          portalTagline: data.portalTagline ?? null,
         })
       } catch (err) {
         console.warn('[login] branding load failed:', err)

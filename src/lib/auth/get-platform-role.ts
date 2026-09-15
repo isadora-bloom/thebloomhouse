@@ -18,13 +18,12 @@ import { cache } from 'react'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { isDemoMode } from '@/lib/api/auth-helpers'
+import type { UserRole } from '@/lib/auth/roles'
 
-export type PlatformRole =
-  | 'coordinator'
-  | 'manager'
-  | 'org_admin'
-  | 'super_admin'
-  | null
+// Any value user_profiles.role can hold, or null when signed out. The
+// union used to list 'manager', which no row carries; the real venue
+// role is 'venue_manager'. See src/lib/auth/roles.ts.
+export type PlatformRole = UserRole | null
 
 async function _getPlatformRole(): Promise<PlatformRole> {
   // Demo cookie -> always 'coordinator'. Demo accounts cannot reach

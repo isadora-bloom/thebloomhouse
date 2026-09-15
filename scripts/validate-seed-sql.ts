@@ -380,11 +380,50 @@ function dedupe(findings: SeedFinding[]): SeedFinding[] {
   return out
 }
 
+/**
+ * The auth.users columns GoTrue scans into Go strings and jsonb it
+ * unmarshals. They have no DEFAULT, so a hand-written INSERT that leaves
+ * them out stores NULL, and GoTrue then fails every admin listing that
+ * reaches the row: `auth.admin.listUsers` answered "Database error
+ * finding users" past a page size of 10 on both projects (2026-09-15),
+ * which broke findAuthUserByEmail and so every team invitation for an
+ * existing address. Migration 414 repaired the rows; this rule stops a
+ * seed putting them back. `auth.admin.createUser` sets all of them.
+ */
+export const AUTH_USER_REQUIRED_COLUMNS = [
+  'confirmation_token',
+  'recovery_token',
+  'email_change',
+  'email_change_token_new',
+  'raw_app_meta_data',
+  'raw_user_meta_data',
+] as const
+
 export function validateSeedInsert(insert: SeedInsert, facts: SchemaFacts): SeedFinding[] {
   const findings: SeedFinding[] = []
   const { file, statementIndex, table } = insert
 
-  // Out of scope: not the public schema this reader knows (auth.users et al).
+  // auth.users is the one non-public table a seed writes, and the only
+  // thing this reader can hold it to is the shape GoTrue needs.
+  if (insert.schema === 'auth' && table === 'users') {
+    for (const column of AUTH_USER_REQUIRED_COLUMNS) {
+      if (insert.columns.includes(column)) continue
+      findings.push({
+        kind: 'missing-required-column',
+        file,
+        statementIndex,
+        table: 'auth.users',
+        column,
+        message:
+          `${file}:${statementIndex} INSERT INTO auth.users leaves ${column} NULL. GoTrue reads it ` +
+          `as a non-null value and one such row breaks auth.admin.listUsers for every caller; ` +
+          `set it ('' for the token columns, '{}' or the provider object for the jsonb ones).`,
+      })
+    }
+    return findings
+  }
+
+  // Out of scope: any other non-public schema.
   if (insert.schema && insert.schema !== 'public') return findings
 
   if (!facts.tableExists(table)) {

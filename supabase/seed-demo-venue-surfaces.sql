@@ -39,20 +39,20 @@
 -- assignment dropdown has more than one name in it, and a readonly
 -- account for the "what can this role not do" journey.
 
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at)
-SELECT '33333333-3333-3333-3333-333333333310', 'dana@crestwoodcollection.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now()
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data)
+SELECT '33333333-3333-3333-3333-333333333310', 'dana@crestwoodcollection.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}'
 WHERE NOT EXISTS (SELECT 1 FROM auth.users WHERE id = '33333333-3333-3333-3333-333333333310');
 
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at)
-SELECT '33333333-3333-3333-3333-333333333311', 'priya@hawthornemanor.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now()
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data)
+SELECT '33333333-3333-3333-3333-333333333311', 'priya@hawthornemanor.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}'
 WHERE NOT EXISTS (SELECT 1 FROM auth.users WHERE id = '33333333-3333-3333-3333-333333333311');
 
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at)
-SELECT '33333333-3333-3333-3333-333333333312', 'accounts@crestwoodcollection.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now()
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data)
+SELECT '33333333-3333-3333-3333-333333333312', 'accounts@crestwoodcollection.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}'
 WHERE NOT EXISTS (SELECT 1 FROM auth.users WHERE id = '33333333-3333-3333-3333-333333333312');
 
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at)
-SELECT '33333333-3333-3333-3333-333333333313', 'noor@theglasshouse.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now()
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data)
+SELECT '33333333-3333-3333-3333-333333333313', 'noor@theglasshouse.example.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}'
 WHERE NOT EXISTS (SELECT 1 FROM auth.users WHERE id = '33333333-3333-3333-3333-333333333313');
 
 -- org_admin: no venue_id, because the role is org-wide.

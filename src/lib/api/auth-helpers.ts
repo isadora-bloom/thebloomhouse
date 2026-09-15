@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
+import { isPlatformRole } from '@/lib/auth/roles'
 
 // ---------------------------------------------------------------------------
 // Demo mode constants — used when bloom_demo cookie is set
@@ -86,8 +87,11 @@ export async function getPlatformAuth() {
 
   if (!profile) return null
 
-  const platformRoles = ['coordinator', 'manager', 'org_admin', 'super_admin']
-  if (!platformRoles.includes(profile.role)) return null
+  // The admitted set lives in src/lib/auth/roles.ts, next to the DB
+  // CHECK it mirrors. This line used to carry its own list with a role
+  // name that does not exist ('manager') and without the one that does
+  // ('venue_manager'), which locked every venue manager out of the API.
+  if (!isPlatformRole(profile.role)) return null
 
   // Venue-scoped roles (coordinator, manager) MUST have a venue_id. For
   // org-level roles (org_admin, super_admin), we fall back to the first
@@ -353,34 +357,9 @@ export async function findAuthUserByEmail(
   return null
 }
 
-/**
- * Seniority ladder for the roles a team invitation can carry. Higher
- * number = more authority. Used to stop an org_admin minting an
- * invitation for a role above their own.
- */
-export const ROLE_RANK: Readonly<Record<string, number>> = {
-  readonly: 0,
-  coordinator: 1,
-  manager: 2,
-  venue_manager: 2,
-  org_admin: 3,
-  super_admin: 4,
-}
-
-export function roleRank(role: string | null | undefined): number {
-  return ROLE_RANK[role ?? ''] ?? -1
-}
-
-/** Roles allowed to change org- or venue-wide configuration. */
-export const ADMIN_ROLES = ['org_admin', 'super_admin'] as const
-
-/** Admin roles plus the venue-level manager, for billing and venue settings. */
-export const MANAGER_ROLES = [
-  'org_admin',
-  'super_admin',
-  'venue_manager',
-  'manager',
-] as const
+// Role vocabulary. Defined in src/lib/auth/roles.ts (edge-safe, no
+// server imports) and re-exported here so existing imports keep working.
+export { ROLE_RANK, roleRank, ADMIN_ROLES, MANAGER_ROLES } from '@/lib/auth/roles'
 
 // ---------------------------------------------------------------------------
 // Common error responses

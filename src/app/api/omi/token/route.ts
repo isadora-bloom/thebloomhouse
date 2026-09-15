@@ -22,21 +22,15 @@
 
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { isPlatformRole } from '@/lib/auth/roles'
 import { createServiceClient } from '@/lib/supabase/service'
 import crypto from 'node:crypto'
 import { apiError } from '@/lib/api/api-error'
 
-const ALLOWED_ROLES = new Set([
-  'coordinator',
-  'manager',
-  'org_admin',
-  'super_admin',
-])
-
 export async function GET() {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!ALLOWED_ROLES.has(auth.role)) {
+  if (!isPlatformRole(auth.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
@@ -64,7 +58,7 @@ export async function GET() {
 export async function POST() {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!ALLOWED_ROLES.has(auth.role)) {
+  if (!isPlatformRole(auth.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
   if (auth.isDemo) {
@@ -101,7 +95,7 @@ export async function POST() {
 export async function PATCH(request: Request) {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!ALLOWED_ROLES.has(auth.role)) {
+  if (!isPlatformRole(auth.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

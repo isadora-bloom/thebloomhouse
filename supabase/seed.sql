@@ -60,14 +60,14 @@ INSERT INTO venue_ai_config (id, venue_id, ai_name, ai_emoji, warmth_level, form
 -- ============================================
 -- 5. AUTH USERS + USER PROFILES (4 coordinators)
 -- ============================================
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at) VALUES
-  ('33333333-3333-3333-3333-333333333301', 'sarah@hawthornemanor.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now());
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at) VALUES
-  ('33333333-3333-3333-3333-333333333302', 'jake@crestwoodfarm.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now());
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at) VALUES
-  ('33333333-3333-3333-3333-333333333303', 'maya@theglasshouse.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now());
-INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at) VALUES
-  ('33333333-3333-3333-3333-333333333304', 'olivia@rosehillgardens.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now());
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data) VALUES
+  ('33333333-3333-3333-3333-333333333301', 'sarah@hawthornemanor.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}');
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data) VALUES
+  ('33333333-3333-3333-3333-333333333302', 'jake@crestwoodfarm.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}');
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data) VALUES
+  ('33333333-3333-3333-3333-333333333303', 'maya@theglasshouse.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}');
+INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at, recovery_token, email_change, email_change_token_new, raw_app_meta_data, raw_user_meta_data) VALUES
+  ('33333333-3333-3333-3333-333333333304', 'olivia@rosehillgardens.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now(), '', '', '', '{"provider":"email","providers":["email"]}', '{}');
 
 INSERT INTO user_profiles (id, venue_id, org_id, role, first_name, last_name) VALUES
   ('33333333-3333-3333-3333-333333333301', '22222222-2222-2222-2222-222222222201', '11111111-1111-1111-1111-111111111111', 'venue_manager', 'Sarah', 'Chen');

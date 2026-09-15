@@ -267,33 +267,40 @@ export async function POST(request: NextRequest) {
       userId = newUser.user.id
     }
 
-    // 3. Check if user already has a profile in this org
+    // 3. Reconcile the profile. Migration 061's on_auth_user_created
+    // trigger writes a readonly, org-less profile for every auth user the
+    // moment the row lands, so "no profile yet" never happens for a new
+    // account: the old org-filtered lookup missed that row, took the
+    // insert branch, and hit 23505 for every new invitee (2026-09-15).
+    // Read by id alone, then: org-less or same org -> upsert to the
+    // invitation's org, venue and role; another org -> refuse, since a
+    // person has one profile and an invitation token must not move it.
     const { data: existingProfile } = await supabase
       .from('user_profiles')
-      .select('id')
+      .select('id, org_id')
       .eq('id', userId!)
-      .eq('org_id', invitation.org_id as string)
       .maybeSingle()
 
-    if (existingProfile) {
-      // User already in this org — just update role if needed and mark invitation accepted
-      await supabase
-        .from('user_profiles')
-        .update({
-          role: invitation.role,
-          venue_id: invitation.venue_id || undefined,
-        })
-        .eq('id', userId!)
-        .eq('org_id', invitation.org_id as string)
-    } else {
-      // Create user_profile
-      const profileData: Record<string, unknown> = {
-        id: userId!,
-        org_id: invitation.org_id,
-        venue_id: invitation.venue_id || null,
-        role: invitation.role,
-      }
+    const existingOrg = (existingProfile?.org_id as string | null | undefined) ?? null
+    if (existingOrg && existingOrg !== invitation.org_id) {
+      return NextResponse.json(
+        { error: 'This account already belongs to another organisation.' },
+        { status: 409 }
+      )
+    }
 
+    const profileData: Record<string, unknown> = {
+      id: userId!,
+      org_id: invitation.org_id,
+      role: invitation.role,
+    }
+    // An org-level invitation carries no venue; keep whatever venue an
+    // existing profile already has rather than blanking it.
+    if (invitation.venue_id) profileData.venue_id = invitation.venue_id
+
+    if (!existingOrg) {
+      // Fresh (trigger-made) profile: fill the name in. A profile that is
+      // already in this org keeps the name it has.
       if (firstName && lastName) {
         profileData.first_name = firstName
         profileData.last_name = lastName
@@ -302,15 +309,15 @@ export async function POST(request: NextRequest) {
         profileData.first_name = parts[0] || null
         profileData.last_name = parts.slice(1).join(' ') || null
       }
+    }
 
-      const { error: profileError } = await supabase
-        .from('user_profiles')
-        .insert(profileData)
+    const { error: profileError } = await supabase
+      .from('user_profiles')
+      .upsert(profileData, { onConflict: 'id' })
 
-      if (profileError) {
-        console.error('Failed to create user_profile:', profileError)
-        return NextResponse.json({ error: 'Failed to create user profile.' }, { status: 500 })
-      }
+    if (profileError) {
+      console.error('Failed to write user_profile:', profileError)
+      return NextResponse.json({ error: 'Failed to create user profile.' }, { status: 500 })
     }
 
     // 4. Mark invitation as accepted

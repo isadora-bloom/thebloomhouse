@@ -17,18 +17,18 @@
 -- user_profiles.id has a FK to auth.users(id), so we must create
 -- shadow auth rows first (same pattern as seed-team-data.sql).
 
-INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at, instance_id, aud, role)
+INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at, instance_id, aud, role, confirmation_token, recovery_token, email_change, email_change_token_new, raw_app_meta_data)
 VALUES
   -- HAWTHORNE MANOR
-  ('33333333-3333-3333-3333-333333333310', 'jordan@hawthornemanor.com', '{"first_name":"Jordan","last_name":"Ellis"}',  now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
-  ('33333333-3333-3333-3333-333333333311', 'bex@hawthornemanor.com',    '{"first_name":"Bex","last_name":"Hollis"}',    now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
+  ('33333333-3333-3333-3333-333333333310', 'jordan@hawthornemanor.com', '{"first_name":"Jordan","last_name":"Ellis"}',  now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
+  ('33333333-3333-3333-3333-333333333311', 'bex@hawthornemanor.com',    '{"first_name":"Bex","last_name":"Hollis"}',    now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
   -- CRESTWOOD FARM
-  ('33333333-3333-3333-3333-333333333312', 'sam@crestwoodfarm.com',     '{"first_name":"Sam","last_name":"Wyatt"}',     now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
+  ('33333333-3333-3333-3333-333333333312', 'sam@crestwoodfarm.com',     '{"first_name":"Sam","last_name":"Wyatt"}',     now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
   -- THE GLASS HOUSE
-  ('33333333-3333-3333-3333-333333333313', 'nia@theglasshouse.com',     '{"first_name":"Nia","last_name":"Adeyemi"}',   now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
-  ('33333333-3333-3333-3333-333333333314', 'max@theglasshouse.com',     '{"first_name":"Max","last_name":"Pearce"}',    now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
+  ('33333333-3333-3333-3333-333333333313', 'nia@theglasshouse.com',     '{"first_name":"Nia","last_name":"Adeyemi"}',   now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
+  ('33333333-3333-3333-3333-333333333314', 'max@theglasshouse.com',     '{"first_name":"Max","last_name":"Pearce"}',    now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}'),
   -- ROSE HILL GARDENS
-  ('33333333-3333-3333-3333-333333333315', 'dee@rosehillgardens.com',   '{"first_name":"Dee","last_name":"Langford"}',  now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated')
+  ('33333333-3333-3333-3333-333333333315', 'dee@rosehillgardens.com',   '{"first_name":"Dee","last_name":"Langford"}',  now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '', '', '', '', '{"provider":"email","providers":["email"]}')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO user_profiles (id, venue_id, org_id, role, first_name, last_name) VALUES

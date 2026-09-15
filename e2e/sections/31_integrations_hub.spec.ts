@@ -107,6 +107,11 @@ async function signIn(page: Page): Promise<void> {
 test.describe('§31 Integrations hub honesty', () => {
   test('every hub card is on the page and every one of them goes somewhere', async ({ page }) => {
     test.skip(!HAVE, NO_CREDS)
+    // Thirteen destinations, each compiled on first visit under
+    // `next dev --webpack`; that alone ran past the 150s budget on
+    // 2026-09-15. slow() triples it. The compile is the harness's cost,
+    // not the page's.
+    test.slow()
     const j = hub(page)
 
     await j.step('open the hub', async () => {
@@ -331,7 +336,10 @@ test.describe('§31 Integrations hub honesty', () => {
       // Built from the request origin, not from an env var, so assert
       // the path rather than a host the branch may not know about.
       await expect(page.getByText('/api/webhooks/instagram', { exact: false })).toBeVisible()
-      await expect(page.getByText('OAuth redirect URI')).toBeVisible()
+      // exact: the setup checklist below the field also says "Valid OAuth
+      // redirect URIs", and a substring match resolves to both (strict
+      // mode violation, first run 2026-09-15).
+      await expect(page.getByText('OAuth redirect URI', { exact: true })).toBeVisible()
     })
 
     await j.end()

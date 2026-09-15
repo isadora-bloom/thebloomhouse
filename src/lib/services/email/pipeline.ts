@@ -13,6 +13,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { PLATFORM_ROLES } from '@/lib/auth/roles'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import {
   shouldAutoIgnore,
@@ -684,7 +685,7 @@ async function teamEmailsForVenue(
       .from('user_profiles')
       .select('id')
       .eq('venue_id', venueId)
-      .in('role', ['coordinator', 'manager', 'org_admin', 'group_admin', 'super_admin'])
+      .in('role', [...PLATFORM_ROLES])
     for (const t of (team ?? []) as Array<{ id: string }>) {
       const { data } = await supabase.auth.admin.getUserById(t.id)
       const e = (data?.user?.email ?? '').toLowerCase().trim()
