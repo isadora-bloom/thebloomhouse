@@ -74,6 +74,78 @@ whatever was in the prompt — a couple's name, an email address, a phone
 number. Edit those out. `npm run check:no-secrets` will catch a key; it
 will not catch a real person.
 
+## The recording list
+
+Every prompt version journeys 26 to 32 can reach, traced from the route
+handler through the service to the `callAI` / `callAIJson` / `callAIVision`
+call. Grep `promptVersion` and `BRAIN_PROMPT_VERSION` if you want to
+re-derive it.
+
+`placeholder` means a schema-valid file is committed with
+`"recordedAt": null` so the stub answers with the right SHAPE before
+anyone has recorded the right WORDS. Replace them; do not assert on their
+prose.
+
+| Prompt version | Journey | Call | Shape | State |
+|---|---|---|---|---|
+| `couple-chat.prompt.v2.1` | 27 | `callAI` | prose | placeholder |
+| `couple-file-extraction.prompt.v1` | 27 (only on an attachment) | `callAIVision` | prose | placeholder |
+| `planning-extraction.prompt.v1.0` | 27 (every Sage turn) | `callAIJson` | **array** of `{category, content, confidence}` | placeholder (`[]`) |
+| `escalation-detector.prompt.v2` | 27 (every Sage turn) | `callAI`, validated | `{escalation_requested: boolean, confidence_0_100?, reasoning?}` | placeholder |
+| `seating-import-col-detect-v1` | 27 (only on a seating import) | `callAIJson` | `{table, seat, name, relationship, notes, allergies, table_notes, rsvp}`, 0-based indices or null | placeholder |
+| `reviews.paste.v1` | 28 | `callAIJson` | `{reviews: [{reviewer_name, rating, body, review_date, source, title}]}` | placeholder |
+| `review-language.prompt.v1.0` | 28 (fire-and-forget after import) | `callAIJson` | `{phrases: [{phrase, theme, sentiment}]}` | placeholder |
+| `couple-sage-preview.prompt.v1` | 32, and §29's rate-limit test | `callAI` | prose | placeholder |
+| `couple-onboarding-test.prompt.v1` | 30 (the test-draft step) | `callAI` | prose | placeholder |
+| `crm-import.ai-mapped.prompt.v1.0` | 26 / 30, only if the `ai_mapped` adapter is chosen | `callAIJson` | `{mappings: [{csv_header, bloom_field, confidence, reason}]}` | placeholder (empty) |
+| `intel-brain.prompt.v2.1` | 28, only with `NLQ_LEGACY=1` | `callAI` | prose | placeholder |
+
+Reached by journeys 26 and 30 only through the cron work the import
+enqueues, so they matter if the run drives the cron and not otherwise. No
+placeholder is committed, because a wrong-shaped guess is worse than the
+generic answer: `identity-reconstruction.prompt.v2`,
+`candidate-ai-adjudicator.prompt.v1.1`, `identity.phase-b.llm-judge.v1`,
+`profile-enrichment.v1`, `channel-role-classifier.prompt.v2`,
+`inquiry-intent-judge.prompt.v2`, `lifecycle.signal.v1.0`.
+
+Journeys that reach no model at all: 31 (`/settings/integrations` and
+every page under it has zero `callAI` call sites), and the deterministic
+half of 26 — the Dubsado, generic-CSV, tour-scheduler and web-form
+adapters are parsers, not prompts.
+
+### Three traps
+
+**1. `/intel/nlq` is not stubbed at all.** The live Ask Your Data path is
+`askIntel` → `callAITools` (`src/lib/ai/tools.ts`), and the stub hook
+exists only in `callAI`, `callAIJson` and `callAIVision`
+(`src/lib/ai/client.ts`). So `ask-intel.tools.prompt.v1.1` cannot be
+fixtured, and a question asked under `AI_E2E_STUB=1` still makes a real,
+billed, multi-turn tool-calling request. §28 tags those two tests
+`@live-model` and skips them unless `E2E_LIVE_MODEL=1`. The fix is a
+`isStubActive()` branch in `callAITools`; until then this is a hole in the
+stub, not a hole in the tests.
+
+**2. Some constants are dead as fixture keys.** `buildCoordinatorPrompt`
+returns a version from its own `PROMPT_VERSIONS` map, and THAT is what
+reaches the call and the filename — not the exported
+`*_PROMPT_VERSION` constant next to the call site, which in eleven cases
+is a version ahead. Name a fixture after the map value. The same applies
+in reverse to `re-engagement-drafter`, where the call site's own constant
+(`v1.1`) wins over the map entry (`v2.0`).
+
+**3. One key, two shapes.** `data-detection.prompt.v1.0`,
+`couple-contract.prompt.v1` and `portal-quick-add.prompt.v1.0` are each
+passed by two or more callers that parse incompatible answers (an object
+and an array, or a JSON call and a prose one). One file cannot satisfy
+both, so none is committed for them: the generic empty answer fails more
+honestly than a fixture that is right for one caller and wrong for the
+other. Splitting the key is the real fix.
+
+A file name is derived from the version with everything outside
+`[A-Za-z0-9._-]` replaced by `_`, so
+`calibration-narrator/v1@2026-05-11` would be
+`calibration-narrator_v1_2026-05-11.json`.
+
 ## Rules for what lives here
 
 - No API keys, no tokens, no service-role JWTs. The secrets guard scans

@@ -1,0 +1,7 @@
+{
+  "promptVersion": "escalation-detector.prompt.v2",
+  "taskType": "escalation_detector",
+  "model": null,
+  "recordedAt": null,
+  "text": "{\"escalation_requested\": false, \"confidence_0_100\": 5, \"reasoning\": \"Placeholder fixture. Nothing in the message asks for a person.\"}"
+}
