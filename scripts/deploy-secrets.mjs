@@ -194,7 +194,13 @@ async function main() {
     else if (k.startsWith('eyJ')) console.log('  .env.local still holds a legacy JWT key; rotate in Supabase first. Skipping.')
     else {
       setEnv('SUPABASE_SERVICE_ROLE_KEY', k)
-      console.log('  then: redeploy (vercel redeploy --prod, or push), and disable the legacy JWT keys in Supabase.')
+      // The browser key moves with it: NEXT_PUBLIC_SUPABASE_ANON_KEY holds
+      // the publishable key now (public by design), so the legacy JWT pair
+      // can be disabled together afterwards.
+      const pub = env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      if (pub && pub.startsWith('sb_publishable_')) setEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', pub)
+      else console.log('  NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local is not a publishable key; leaving the Vercel value alone')
+      console.log('  then: redeploy (vercel redeploy --prod, or push), and only then disable the legacy JWT keys in Supabase.')
     }
   }
 
