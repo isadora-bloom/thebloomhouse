@@ -280,8 +280,8 @@ ALTER TABLE public.channel_intel_snapshots ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "channel_intel_snapshots_select"
   ON public.channel_intel_snapshots;
-CREATE POLICY "channel_intel_snapshots_select"
-  ON public.channel_intel_snapshots
+DROP POLICY IF EXISTS "channel_intel_snapshots_select" ON public.channel_intel_snapshots;
+CREATE POLICY "channel_intel_snapshots_select" ON public.channel_intel_snapshots
   FOR SELECT
   TO authenticated
   USING (
@@ -297,8 +297,8 @@ CREATE POLICY "channel_intel_snapshots_select"
 
 DROP POLICY IF EXISTS "channel_intel_snapshots_insert"
   ON public.channel_intel_snapshots;
-CREATE POLICY "channel_intel_snapshots_insert"
-  ON public.channel_intel_snapshots
+DROP POLICY IF EXISTS "channel_intel_snapshots_insert" ON public.channel_intel_snapshots;
+CREATE POLICY "channel_intel_snapshots_insert" ON public.channel_intel_snapshots
   FOR INSERT
   TO authenticated
   WITH CHECK (
@@ -314,8 +314,8 @@ CREATE POLICY "channel_intel_snapshots_insert"
 
 DROP POLICY IF EXISTS "demo_anon_select_snapshots"
   ON public.channel_intel_snapshots;
-CREATE POLICY "demo_anon_select_snapshots"
-  ON public.channel_intel_snapshots
+DROP POLICY IF EXISTS "demo_anon_select_snapshots" ON public.channel_intel_snapshots;
+CREATE POLICY "demo_anon_select_snapshots" ON public.channel_intel_snapshots
   FOR SELECT TO anon
   USING (venue_id IN (SELECT id FROM public.venues WHERE is_demo = true));
 
@@ -323,8 +323,8 @@ ALTER TABLE public.channel_presentation_exports ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "channel_presentation_exports_select"
   ON public.channel_presentation_exports;
-CREATE POLICY "channel_presentation_exports_select"
-  ON public.channel_presentation_exports
+DROP POLICY IF EXISTS "channel_presentation_exports_select" ON public.channel_presentation_exports;
+CREATE POLICY "channel_presentation_exports_select" ON public.channel_presentation_exports
   FOR SELECT
   TO authenticated
   USING (
@@ -340,8 +340,8 @@ CREATE POLICY "channel_presentation_exports_select"
 
 DROP POLICY IF EXISTS "channel_presentation_exports_insert"
   ON public.channel_presentation_exports;
-CREATE POLICY "channel_presentation_exports_insert"
-  ON public.channel_presentation_exports
+DROP POLICY IF EXISTS "channel_presentation_exports_insert" ON public.channel_presentation_exports;
+CREATE POLICY "channel_presentation_exports_insert" ON public.channel_presentation_exports
   FOR INSERT
   TO authenticated
   WITH CHECK (
@@ -361,15 +361,15 @@ CREATE POLICY "channel_presentation_exports_insert"
 -- the endpoint's suspenders.
 DROP POLICY IF EXISTS "channel_presentation_exports_public_share"
   ON public.channel_presentation_exports;
-CREATE POLICY "channel_presentation_exports_public_share"
-  ON public.channel_presentation_exports
+DROP POLICY IF EXISTS "channel_presentation_exports_public_share" ON public.channel_presentation_exports;
+CREATE POLICY "channel_presentation_exports_public_share" ON public.channel_presentation_exports
   FOR SELECT TO anon
   USING (share_token IS NOT NULL);
 
 DROP POLICY IF EXISTS "demo_anon_select_exports"
   ON public.channel_presentation_exports;
-CREATE POLICY "demo_anon_select_exports"
-  ON public.channel_presentation_exports
+DROP POLICY IF EXISTS "demo_anon_select_exports" ON public.channel_presentation_exports;
+CREATE POLICY "demo_anon_select_exports" ON public.channel_presentation_exports
   FOR SELECT TO anon
   USING (venue_id IN (SELECT id FROM public.venues WHERE is_demo = true));
 
@@ -774,8 +774,8 @@ CREATE POLICY "venue_agency_engagements_service" ON public.venue_agency_engageme
 
 DROP POLICY IF EXISTS "demo_anon_select_venue_agency_engagements"
   ON public.venue_agency_engagements;
-CREATE POLICY "demo_anon_select_venue_agency_engagements"
-  ON public.venue_agency_engagements
+DROP POLICY IF EXISTS "demo_anon_select_venue_agency_engagements" ON public.venue_agency_engagements;
+CREATE POLICY "demo_anon_select_venue_agency_engagements" ON public.venue_agency_engagements
   FOR SELECT TO anon
   USING (venue_id IN (SELECT id FROM public.venues WHERE is_demo = true));
 
@@ -1396,8 +1396,8 @@ ON CONFLICT (id) DO UPDATE
 
 DROP POLICY IF EXISTS "agency_documents_storage_service_all"
   ON storage.objects;
-CREATE POLICY "agency_documents_storage_service_all"
-  ON storage.objects
+DROP POLICY IF EXISTS "agency_documents_storage_service_all" ON storage.objects;
+CREATE POLICY "agency_documents_storage_service_all" ON storage.objects
   FOR ALL
   TO service_role
   USING (bucket_id = 'agency-documents')
@@ -1890,8 +1890,8 @@ ALTER TABLE public.agency_document_downloads ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "agency_document_downloads_select"
   ON public.agency_document_downloads;
-CREATE POLICY "agency_document_downloads_select"
-  ON public.agency_document_downloads
+DROP POLICY IF EXISTS "agency_document_downloads_select" ON public.agency_document_downloads;
+CREATE POLICY "agency_document_downloads_select" ON public.agency_document_downloads
   FOR SELECT TO authenticated
   USING (
     agency_id IN (SELECT id FROM public.marketing_agencies)
@@ -1900,8 +1900,8 @@ CREATE POLICY "agency_document_downloads_select"
 
 DROP POLICY IF EXISTS "agency_document_downloads_service"
   ON public.agency_document_downloads;
-CREATE POLICY "agency_document_downloads_service"
-  ON public.agency_document_downloads
+DROP POLICY IF EXISTS "agency_document_downloads_service" ON public.agency_document_downloads;
+CREATE POLICY "agency_document_downloads_service" ON public.agency_document_downloads
   FOR ALL TO service_role
   USING (true) WITH CHECK (true);
 
@@ -4720,9 +4720,13 @@ DROP POLICY IF EXISTS "venue_config_org_insert" ON public.venue_config;
 DROP POLICY IF EXISTS "venue_config_org_update" ON public.venue_config;
 DROP POLICY IF EXISTS "venue_config_org_delete" ON public.venue_config;
 
+DROP POLICY IF EXISTS "venue_config_read" ON public.venue_config;
+
 CREATE POLICY "venue_config_read" ON public.venue_config
   FOR SELECT TO authenticated
   USING (public.can_access_venue(venue_id));
+
+DROP POLICY IF EXISTS "venue_config_org_insert" ON public.venue_config;
 
 CREATE POLICY "venue_config_org_insert" ON public.venue_config
   FOR INSERT TO authenticated
@@ -4734,6 +4738,8 @@ CREATE POLICY "venue_config_org_insert" ON public.venue_config
          AND up.role IN ('org_admin', 'venue_manager', 'super_admin')
     )
   );
+
+DROP POLICY IF EXISTS "venue_config_org_update" ON public.venue_config;
 
 CREATE POLICY "venue_config_org_update" ON public.venue_config
   FOR UPDATE TO authenticated
@@ -4753,6 +4759,8 @@ CREATE POLICY "venue_config_org_update" ON public.venue_config
          AND up.role IN ('org_admin', 'venue_manager', 'super_admin')
     )
   );
+
+DROP POLICY IF EXISTS "venue_config_org_delete" ON public.venue_config;
 
 CREATE POLICY "venue_config_org_delete" ON public.venue_config
   FOR DELETE TO authenticated

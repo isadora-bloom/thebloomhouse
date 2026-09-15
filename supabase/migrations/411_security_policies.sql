@@ -1111,9 +1111,13 @@ DROP POLICY IF EXISTS "venue_config_org_insert" ON public.venue_config;
 DROP POLICY IF EXISTS "venue_config_org_update" ON public.venue_config;
 DROP POLICY IF EXISTS "venue_config_org_delete" ON public.venue_config;
 
+DROP POLICY IF EXISTS "venue_config_read" ON public.venue_config;
+
 CREATE POLICY "venue_config_read" ON public.venue_config
   FOR SELECT TO authenticated
   USING (public.can_access_venue(venue_id));
+
+DROP POLICY IF EXISTS "venue_config_org_insert" ON public.venue_config;
 
 CREATE POLICY "venue_config_org_insert" ON public.venue_config
   FOR INSERT TO authenticated
@@ -1125,6 +1129,8 @@ CREATE POLICY "venue_config_org_insert" ON public.venue_config
          AND up.role IN ('org_admin', 'venue_manager', 'super_admin')
     )
   );
+
+DROP POLICY IF EXISTS "venue_config_org_update" ON public.venue_config;
 
 CREATE POLICY "venue_config_org_update" ON public.venue_config
   FOR UPDATE TO authenticated
@@ -1144,6 +1150,8 @@ CREATE POLICY "venue_config_org_update" ON public.venue_config
          AND up.role IN ('org_admin', 'venue_manager', 'super_admin')
     )
   );
+
+DROP POLICY IF EXISTS "venue_config_org_delete" ON public.venue_config;
 
 CREATE POLICY "venue_config_org_delete" ON public.venue_config
   FOR DELETE TO authenticated
