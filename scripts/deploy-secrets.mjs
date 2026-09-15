@@ -55,7 +55,12 @@ function hex32() {
 }
 
 function vercel(args, input) {
-  const r = spawnSync('vercel', args, { input, encoding: 'utf8', shell: process.platform === 'win32' })
+  // On Windows the CLI is vercel.cmd, which needs a shell; pass one quoted
+  // command string rather than args-plus-shell (Node warns about the latter).
+  const cmd = process.platform === 'win32' ? `vercel ${args.map((a) => `"${a}"`).join(' ')}` : null
+  const r = cmd
+    ? spawnSync(cmd, { input, encoding: 'utf8', shell: true })
+    : spawnSync('vercel', args, { input, encoding: 'utf8' })
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
   return { ok: r.status === 0, out: out.replace(/[0-9a-f]{40,}/gi, '<redacted>') }
 }
