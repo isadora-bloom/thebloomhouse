@@ -355,6 +355,13 @@ async function seedAshcombe(sb: SupabaseClient): Promise<string> {
       plan_tier: 'growth',
       status: 'active',
       is_demo: false,
+      // A real place, so anything keyed on location (weather, climate
+      // norms, the DC-proxy radius) has something to work with.
+      // Charlottesville, VA.
+      city: 'Charlottesville',
+      state: 'VA',
+      latitude: 38.0293,
+      longitude: -78.4767,
     },
     { onConflict: 'id' }
   )
@@ -415,6 +422,148 @@ async function seedAshcombe(sb: SupabaseClient): Promise<string> {
   )
   if (wedErr) throw new Error(`weddings: ${wedErr.message}`)
   notes.push('wedding')
+
+  // Two tables, so the seating page mounts the board (§27 "the seating
+  // page renders the board"). With no seating_tables row the page shows
+  // its own "No tables yet" card and the board, with the two test ids
+  // the journey asserts, never renders. Fixed ids: the upsert is a no-op
+  // on a re-seed.
+  const { error: tablesErr } = await sb.from('seating_tables').upsert(
+    [
+      {
+        id: 'a5c0b0e0-0000-4000-8000-000000000040',
+        venue_id: ASHCOMBE.venueId,
+        wedding_id: ASHCOMBE.weddingId,
+        table_name: 'Table 1',
+        table_type: 'round',
+        capacity: 8,
+        sort_order: 1,
+      },
+      {
+        id: 'a5c0b0e0-0000-4000-8000-000000000041',
+        venue_id: ASHCOMBE.venueId,
+        wedding_id: ASHCOMBE.weddingId,
+        table_name: 'Table 2',
+        table_type: 'round',
+        capacity: 8,
+        sort_order: 2,
+      },
+    ],
+    { onConflict: 'id' }
+  )
+  if (tablesErr) throw new Error(`seating_tables: ${tablesErr.message}`)
+  notes.push('two seating tables')
+
+  // One real row in every couple-portal section table (the same list the
+  // sidebar counts in src/lib/services/couple/section-status.ts), so each
+  // page renders its populated state rather than an empty card, and the
+  // sidebar has amber sections to show. Added 2026-09-15 after the seating
+  // journey found the seed only carried what the first journeys asked
+  // for. Column names and CHECK vocabularies come from the migrations via
+  // scripts/demo-reseed/schema-facts; the seed validator (W74) keeps them
+  // honest. Fixed ids from ...0042 upwards; every upsert is a no-op on a
+  // re-seed. Not seeded: contracts (the signing fixtures below own that
+  // table) and borrow_selections (needs a catalog row this venue does not
+  // have).
+  const fid = (n: number) => `a5c0b0e0-0000-4000-8000-0000000000${String(n).padStart(2, '0')}`
+  const scoped = { venue_id: ASHCOMBE.venueId, wedding_id: ASHCOMBE.weddingId }
+  const portalRows: Array<[string, Record<string, unknown>[]]> = [
+    ['wedding_details', [{ id: fid(42), ...scoped, ceremony_location: 'outside', wedding_party_count: 6 }]],
+    ['budget_items', [
+      { id: fid(43), ...scoped, category: 'Venue', item_name: 'Full day hire', budgeted: 21000, committed: 21000, paid: 5000, sort_order: 1 },
+      { id: fid(44), ...scoped, category: 'Flowers', item_name: 'Ceremony arch and tables', budgeted: 2400, committed: 0, paid: 0, sort_order: 2 },
+    ]],
+    ['timeline', [
+      { id: fid(45), ...scoped, time: '14:00', duration_minutes: 30, title: 'Ceremony', category: 'ceremony', sort_order: 1 },
+      { id: fid(46), ...scoped, time: '18:00', duration_minutes: 90, title: 'Dinner', category: 'reception', sort_order: 2 },
+    ]],
+    ['ceremony_order', [{ id: fid(47), ...scoped, participant_name: 'Officiant', role: 'officiant', sort_order: 1 }]],
+    ['rehearsal_dinner', [{ id: fid(48), ...scoped, location_name: 'The Old Mill', date: '2027-06-11', start_time: '18:30', guest_count: 24 }]],
+    ['booked_vendors', [{ id: fid(49), ...scoped, vendor_type: 'photographer', vendor_name: 'Ashcombe Light Photography', is_booked: true }]],
+    ['bar_planning', [{ id: fid(50), ...scoped, bar_type: 'beer_wine', guest_count: 110, bartender_count: 2 }]],
+    ['makeup_schedule', [{ id: fid(51), ...scoped, person_name: 'Partner one', role: 'partner', hair_time: '09:00', makeup_time: '10:00', sort_order: 1 }]],
+    ['decor_inventory', [{ id: fid(52), ...scoped, item_name: 'Brass lanterns', category: 'tables', quantity: 12, source: 'personal' }]],
+    ['photo_library', [{ id: fid(53), ...scoped, image_url: 'https://placehold.co/1200x800/e8e4dc/6b6b6b?text=Ashcombe+Barn', caption: 'The barn at golden hour', is_website: true }]],
+    ['shuttle_schedule', [{ id: fid(54), ...scoped, route_name: 'Hotel to barn', pickup_location: 'The Ashcombe Inn', dropoff_location: 'Ashcombe Barn', pickup_time: '13:00', seat_count: 30, sort_order: 1 }]],
+    ['staffing_assignments', [{ id: fid(55), ...scoped, role: 'bartender', count: 2, hours: 6 }]],
+    ['guest_list', [
+      { id: fid(56), ...scoped, first_name: 'Ada', last_name: 'Wren', email: 'ada.wren@example.test', rsvp_status: 'attending', group_name: 'Family' },
+      { id: fid(57), ...scoped, first_name: 'Ben', last_name: 'Okafor', email: 'ben.okafor@example.test', rsvp_status: 'attending', group_name: 'Friends', has_plus_one: true, plus_one_name: 'Sam Okafor' },
+      { id: fid(58), ...scoped, first_name: 'Cleo', last_name: 'Hart', email: 'cleo.hart@example.test', rsvp_status: 'pending', group_name: 'Work' },
+      { id: fid(59), ...scoped, first_name: 'Dev', last_name: 'Patel', email: 'dev.patel@example.test', rsvp_status: 'declined', group_name: 'Friends' },
+    ]],
+    ['rsvp_config', [{ id: fid(60), ...scoped, ask_meal_choice: true, ask_dietary: true, rsvp_deadline: '2027-05-01' }]],
+    ['wedding_party', [{ id: fid(61), ...scoped, name: 'Ada Wren', role: 'Maid of honour', side: 'partner1', sort_order: 1 }]],
+    ['allergy_registry', [{ id: fid(62), ...scoped, guest_name: 'Cleo Hart', allergy_type: 'Tree nuts', severity: 'severe', is_important: true }]],
+    ['guest_care_notes', [{ id: fid(63), ...scoped, guest_name: 'Ada Wren', care_type: 'mobility', note: 'Aisle seat, near the exit.' }]],
+    // guests is text[] (migration 009), the only array column in this fill.
+    ['bedroom_assignments', [{ id: fid(64), ...scoped, room_name: 'The Hayloft', guests: ['Ada Wren'], notes: 'Ground floor requested.' }]],
+    ['table_map_layouts', [{ id: fid(65), wedding_id: ASHCOMBE.weddingId, elements: [] }]],
+    ['wedding_tables', [{ id: fid(66), ...scoped, guest_count: 110, table_shape: 'round', guests_per_table: 8, linen_color: 'ivory', is_draft: false }]],
+    ['wedding_worksheets', [{ id: fid(67), ...scoped, section: 'priorities', content: 'Food, then music, then flowers.' }]],
+    ['wedding_website_settings', [{ id: fid(68), ...scoped, slug: 'ashcombe-e2e-couple', is_published: false, theme: 'classic', couple_names: 'The E2E Couple', partner1_name: 'Partner One', partner2_name: 'Partner Two', venue_name: ASHCOMBE.venueName, wedding_date: '2027-06-12' }]],
+  ]
+  for (const [table, rows] of portalRows) {
+    const { error } = await sb.from(table).upsert(rows, { onConflict: 'id' })
+    if (error) throw new Error(`${table}: ${error.message}`)
+  }
+  notes.push(`${portalRows.length} couple-portal section tables filled`)
+
+  // The spine. Every couple-facing read that matters goes through the
+  // couples row, not the legacy weddings row: the day-outlook card takes
+  // the wedding date from it, the register route checks the couple's
+  // addresses on it, and a wedding with no couples row is exactly the
+  // legacy shape the identity doctrine retired. Written through the
+  // real mirror writer (the same one mintWedding calls), never a direct
+  // insert, so the seed stays inside the one-writer rule. Imported
+  // dynamically for the same reason liveReseedWriters is: the branch
+  // credentials have to be on process.env before the module builds a
+  // client.
+  const { mirrorCoupleFromWedding } = await import('../src/lib/services/identity/mirror-couple')
+  const mirrored = await mirrorCoupleFromWedding({
+    venueId: ASHCOMBE.venueId,
+    weddingId: ASHCOMBE.weddingId,
+    supabase: sb,
+    correlationId: 'e2e-seed:ashcombe',
+  })
+  if (!mirrored.coupleId) throw new Error('couples: mirrorCoupleFromWedding wrote no row for the Ashcombe wedding')
+  notes.push('couples row (spine mirror)')
+
+  // Climate norms for the wedding month, so the couple's day-outlook card
+  // has its "typical" mode (the forecast mode needs a date inside 14
+  // days, which a seeded wedding never is). Production fills this table
+  // from a decade of Open-Meteo history via the climate-norms backfill;
+  // the values here are plausible for Charlottesville in June and are
+  // fixture data, not something a journey asserts on. Keyed on
+  // (venue_id, month_num, hour_local), so a re-seed rewrites in place.
+  const weddingMonth = 6
+  const normRows = Array.from({ length: 24 }, (_, hour) => {
+    const daytime = hour >= 10 && hour <= 20
+    return {
+      venue_id: ASHCOMBE.venueId,
+      month_num: weddingMonth,
+      hour_local: hour,
+      recent_temp_avg_f: daytime ? 82 : 66,
+      recent_temp_p10_f: daytime ? 72 : 58,
+      recent_temp_p90_f: daytime ? 91 : 73,
+      recent_precip_avg_in: 0.14,
+      recent_precip_prob_pct: daytime ? 28 : 18,
+      recent_sample_count: 300,
+      prior_temp_avg_f: daytime ? 80 : 64,
+      prior_precip_avg_in: 0.12,
+      prior_precip_prob_pct: daytime ? 25 : 16,
+      prior_sample_count: 300,
+      recent_window_start: '2016-01-01',
+      recent_window_end: '2025-12-31',
+      prior_window_start: '2006-01-01',
+      prior_window_end: '2015-12-31',
+    }
+  })
+  const { error: normsErr } = await sb
+    .from('weather_climate_norms')
+    .upsert(normRows, { onConflict: 'venue_id,month_num,hour_local' })
+  if (normsErr) throw new Error(`weather_climate_norms: ${normsErr.message}`)
+  notes.push('June climate norms')
 
   const { error: invErr } = await sb.from('couple_invites').upsert(
     {
@@ -553,6 +702,7 @@ async function findAuthUser(sb: SupabaseClient, email: string): Promise<string |
 
 async function main() {
   const apply = process.argv.includes('--apply')
+  const skipReseed = process.argv.includes('--skip-reseed')
 
   const env = loadE2EEnv()
   // Belt and braces: loadE2EEnv has already refused, this says so again
@@ -598,13 +748,16 @@ async function main() {
     )
   }
 
+  // Ashcombe before the reseed. Every journey depends on Ashcombe; only
+  // §28's populated-venue half depends on the reseed, and the reseed is
+  // the long, network-heavy step: on 2026-09-15 it failed twice on a
+  // flaky link ("TypeError: fetch failed") and Ashcombe, which came
+  // after it, was never written at all. The two are independent (the
+  // reseed deletes only the four demo venues' rows), so the part the
+  // suite cannot run without goes first. --skip-reseed leaves the demo
+  // venues as they are for a quick Ashcombe-only pass.
   const steps: Step[] = [
     ...DEMO_SQL_FILES.map((f) => sqlStep(f)),
-    {
-      name: 'Reseed the Crestwood spine through linkSignal',
-      detail: reseedPlanLines(),
-      run: runReseed,
-    },
     {
       name: 'Seed Ashcombe Barn',
       detail: [
@@ -619,6 +772,15 @@ async function main() {
       ],
       run: seedAshcombe,
     },
+    ...(skipReseed
+      ? []
+      : [
+          {
+            name: 'Reseed the Crestwood spine through linkSignal',
+            detail: reseedPlanLines(),
+            run: runReseed,
+          },
+        ]),
   ]
 
   console.log('')

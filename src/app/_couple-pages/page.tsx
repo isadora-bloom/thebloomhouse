@@ -389,6 +389,17 @@ export default function CoupleDashboard() {
     if (contextLoading || !WEDDING_ID) return
     const wid: string = WEDDING_ID
     const vid: string | null = venueId
+    // Set on unmount. Leaving the page mid-load aborts the fetches below,
+    // which surfaces as "TypeError: Failed to fetch" and was logged as a
+    // dashboard failure on every quick navigation away (§27, 2026-09-15).
+    let cancelled = false
+    // A full navigation never runs this effect's cleanup, so the flag has
+    // to be set from the document itself: pagehide fires before the
+    // browser cancels the in-flight requests.
+    const onPageHide = () => {
+      cancelled = true
+    }
+    window.addEventListener('pagehide', onPageHide)
     async function loadDashboard() {
       const supabase = createClient()
 
@@ -673,13 +684,18 @@ export default function CoupleDashboard() {
           fetchErrors,
         })
       } catch (err) {
+        if (cancelled) return
         console.error('Failed to load couple dashboard:', err)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     loadDashboard()
+    return () => {
+      cancelled = true
+      window.removeEventListener('pagehide', onPageHide)
+    }
   }, [WEDDING_ID, contextLoading, venueId])
 
   if (loading || contextLoading) {

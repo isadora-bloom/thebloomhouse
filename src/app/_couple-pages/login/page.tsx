@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
 /**
@@ -38,7 +37,6 @@ interface VenueBranding {
 }
 
 export default function CoupleLoginPage() {
-  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -148,8 +146,15 @@ export default function CoupleLoginPage() {
 
     // Redirect to couple dashboard. On the path-based portal that is
     // /couple/<slug>; on the subdomain portal the root is already theirs.
-    router.push(currentSlug ? `/couple/${currentSlug}` : '/')
-    router.refresh()
+    //
+    // A full navigation, not router.push. In a production build the top
+    // bar's dashboard link is prefetched while still signed out, the
+    // middleware answers that prefetch with a redirect to /couple/login,
+    // and the client router replays the cached redirect after sign-in,
+    // so the couple was sent straight back to the login page (§27 on the
+    // built bundle, 2026-09-15; dev never prefetches, so it never showed).
+    // A document load re-runs the middleware with the new session cookie.
+    window.location.assign(currentSlug ? `/couple/${currentSlug}` : '/')
   }
 
   const venueName = branding?.venueName || 'Your Venue'

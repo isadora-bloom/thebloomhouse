@@ -84,7 +84,8 @@ export async function POST(request: NextRequest) {
     // venueId is resolved below — body value is only trusted for authenticated
     // (non-demo) callers. Demo callers have their venueId bound to the signed
     // token payload so a starter-tier coordinator cannot pass their real venue.
-    const { weddingId, message, fileUrl, contractId, currentSection } = body
+    const { message, fileUrl, contractId, currentSection } = body
+    let weddingId = body.weddingId as string | undefined
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json(
@@ -120,9 +121,26 @@ export async function POST(request: NextRequest) {
     const demoTokenResult = verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value)
     const demo = demoTokenResult.ok
 
-    const venueId: string = demoTokenResult.ok
+    let venueId: string = demoTokenResult.ok
       ? demoTokenResult.payload.demo_venue_id
       : (body.venueId as string | undefined) ?? ''
+
+    // The session knows the venue; the body is only a claim the AUTHZ
+    // block below checks against it. When the client has not resolved
+    // its venue yet (the couple portal's context loads it from the
+    // browser after the page is interactive, and §27's first message on
+    // the built bundle went out before it had) fall back to the session
+    // rather than refusing a message from a signed-in couple.
+    if (!venueId && !demo) {
+      const couple = await getCoupleAuth()
+      if (couple) {
+        venueId = couple.venueId
+        weddingId ??= couple.weddingId
+      } else {
+        const platform = await getPlatformAuth()
+        if (platform && !platform.isDemo) venueId = platform.venueId
+      }
+    }
 
     if (!venueId) {
       return NextResponse.json(

@@ -112,10 +112,30 @@ const nextConfig: NextConfig = {
   // the signing page at /join/contract/[token] must not be frameable and
   // neither must anything else.
   async headers() {
+    // The E2E harness serves a production build over plain http on
+    // localhost:3100 (e2e/dev-server.ts sets E2E_HARNESS=1 for the build).
+    // Chromium honours Strict-Transport-Security from that first response,
+    // upgrades every later request to https, and the run dies in
+    // ERR_SSL_PROTOCOL_ERROR (2026-09-15). Everything else in the block
+    // stays as shipped; the unit test still reads SECURITY_HEADERS whole.
+    //
+    // `upgrade-insecure-requests` goes for the same reason: a production
+    // bundle prefetches links, the middleware answers a prefetch of a
+    // signed-out page with a redirect, and Chromium upgrades the redirect
+    // target to https://localhost:3100. Dev never prefetches, which is why
+    // the dev runs never saw it. Both directives are for the real host.
+    const headers =
+      process.env.E2E_HARNESS === '1'
+        ? SECURITY_HEADERS.filter((h) => h.key !== 'Strict-Transport-Security').map((h) =>
+            h.key === 'Content-Security-Policy'
+              ? { ...h, value: h.value.replace(/;\s*upgrade-insecure-requests/, '') }
+              : h
+          )
+        : SECURITY_HEADERS
     return [
       {
         source: '/:path*',
-        headers: SECURITY_HEADERS,
+        headers,
       },
     ]
   },

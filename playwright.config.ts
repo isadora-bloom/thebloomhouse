@@ -82,7 +82,9 @@ export default defineConfig({
         command: `npx tsx e2e/dev-server.ts`,
         url: `http://localhost:${LOCAL_PORT}/welcome`,
         reuseExistingServer: true,
-        timeout: 180_000,
+        // The launcher builds before it serves (E2E-PLAN: build then start),
+        // and a cold `next build --webpack` is minutes, not seconds.
+        timeout: 900_000,
         stdout: 'ignore',
         stderr: 'pipe',
         env: {

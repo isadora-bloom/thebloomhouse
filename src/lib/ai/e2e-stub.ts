@@ -100,13 +100,21 @@ export function fixtureFileName(promptVersion: string): string {
 let fsMod: typeof import('node:fs') | null = null
 let pathMod: typeof import('node:path') | null = null
 
+// Server-only, loaded on first use. The ignore comments matter: this
+// module is reachable from client components (canonical.ts is imported
+// by several 'use client' files and it imports ai/tools, which imports
+// this), and a bundler that follows these imports for the browser bundle
+// fails on the `node:` scheme. `next build --webpack` did exactly that on
+// 2026-09-15 ("Reading from node:path is not handled by plugins"). Turbopack
+// tolerated it, which is why the Vercel build never saw it. The stub is
+// inert in the browser regardless: isStubActive reads a server env var.
 async function nodeFs() {
-  if (!fsMod) fsMod = await import('node:fs')
+  if (!fsMod) fsMod = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ 'node:fs')
   return fsMod
 }
 
 async function nodePath() {
-  if (!pathMod) pathMod = await import('node:path')
+  if (!pathMod) pathMod = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ 'node:path')
   return pathMod
 }
 

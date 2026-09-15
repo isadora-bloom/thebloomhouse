@@ -222,8 +222,11 @@ test.describe("§27 A couple's portal", () => {
     })
 
     await j.step('the dashboard renders', async () => {
+      // 60s: the dashboard runs a dozen sequential reads against the remote
+      // branch before the greeting renders, and on a slow link (hotspot,
+      // 2026-09-15) 30s was not enough.
       await expect(page.getByRole('heading', { name: /^Welcome, /, level: 1 })).toBeVisible({
-        timeout: 30_000,
+        timeout: 60_000,
       })
     })
 
@@ -379,8 +382,11 @@ test.describe("§27 A couple's portal", () => {
     await j.step('open the dashboard', async () => {
       await signInAsCouple(page)
       await page.goto(`/couple/${SLUG}`)
+      // 60s: the dashboard runs a dozen sequential reads against the remote
+      // branch before the greeting renders, and on a slow link (hotspot,
+      // 2026-09-15) 30s was not enough.
       await expect(page.getByRole('heading', { name: /^Welcome, /, level: 1 })).toBeVisible({
-        timeout: 30_000,
+        timeout: 60_000,
       })
     })
 
