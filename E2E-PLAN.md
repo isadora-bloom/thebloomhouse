@@ -28,7 +28,14 @@ that one client.
   production schema and then brought to migrations 395 to 412 with
   `npx tsx scripts/apply-pending-migrations.ts --env .env.test --apply` (storage half of 411 in
   the SQL editor if the runner cannot own `storage.objects`). Read-only proof it is right:
-  `scripts/check-live-policies.mjs` against `.env.test` must print OK on every line.
+  `scripts/check-live-policies.mjs` against `.env.test` must print OK on every line, and
+  `npm run check:schema-drift -- --env .env.test` must print "no drift". The pending list is
+  hand-kept against production's history; on 2026-09-15 the branch passed it while missing
+  17 tables and 40 columns (291, 304 to 310, 369 to 394 in part). Apply what drift names with
+  `MIGRATION_ENV_FILE=.env.test npx tsx scripts/run-migration.ts <file> --skip-storage`
+  (storage.objects policies are printed for the SQL editor; `supabase/308-storage-steps-for-sql-editor.sql`
+  and `411-storage-steps-for-sql-editor.sql` hold them), `--continue` for the batch RLS
+  migration 383 whose six retired tables never existed on the branch.
 - Seed: the Crestwood demo set (`supabase/seed.sql` plus `seed-demo-rich.ts`,
   `seed-marketing-spend-records.sql`, `seed-commitments-demo.sql`, `seed-contracts-demo.sql`,
   `seed-ad-connections-demo.sql`), one real-shaped venue ("Ashcombe Barn", not a demo flag, with

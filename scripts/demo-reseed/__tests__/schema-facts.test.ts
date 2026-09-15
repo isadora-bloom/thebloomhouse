@@ -308,3 +308,97 @@ describe('sortMigrationFiles', () => {
     ])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Provenance (schema-drift, 2026-09-15): which migration introduced what,
+// and the two shapes that made production look drifted when it was not.
+// ---------------------------------------------------------------------------
+
+describe('provenance: createdIn / declaredIn', () => {
+  it('stamps the creating migration on the table and every inline column', () => {
+    const f = facts([
+      { name: '010_a.sql', sql: 'CREATE TABLE public.t (id uuid PRIMARY KEY, name text);' },
+      { name: '020_b.sql', sql: 'ALTER TABLE public.t ADD COLUMN IF NOT EXISTS extra text;' },
+    ])
+    const t = f.tables.get('t')!
+    expect(t.createdIn).toBe('010_a.sql')
+    expect(t.columns.get('id')!.declaredIn).toBe('010_a.sql')
+    expect(t.columns.get('extra')!.declaredIn).toBe('020_b.sql')
+  })
+
+  it('a table renamed away and the renamed-to table are both attributed', () => {
+    const f = facts([
+      { name: '010_a.sql', sql: 'CREATE TABLE public.old_name (id uuid);' },
+      { name: '040_b.sql', sql: 'ALTER TABLE public.old_name RENAME TO new_name;' },
+    ])
+    expect(f.tableExists('old_name')).toBe(false)
+    expect(f.tables.get('new_name')!.createdIn).toBe('040_b.sql')
+    expect(f.tables.get('new_name')!.columns.get('id')!.declaredIn).toBe('010_a.sql')
+  })
+})
+
+describe('RENAME COLUMN (085, 121, 122)', () => {
+  it('moves the column fact under the new name and forgets the old one', () => {
+    // 085_identity_resolution.sql: client_a_id -> person_a_id
+    const f = facts([
+      { name: '009_a.sql', sql: 'CREATE TABLE public.client_match_queue (id uuid, client_a_id uuid NOT NULL);' },
+      { name: '085_b.sql', sql: 'ALTER TABLE public.client_match_queue RENAME COLUMN client_a_id TO person_a_id;' },
+    ])
+    expect(f.columnDeclared('client_match_queue', 'client_a_id')).toBe(false)
+    expect(f.columnDeclared('client_match_queue', 'person_a_id')).toBe(true)
+    expect(f.columnRequired('client_match_queue', 'person_a_id')).toBe(true)
+    expect(f.tables.get('client_match_queue')!.columns.get('person_a_id')!.declaredIn).toBe('085_b.sql')
+  })
+
+  it('sees the rename inside a guarded DO block (122_audio_capture_abstraction)', () => {
+    const f = facts([
+      { name: '082_a.sql', sql: 'CREATE TABLE public.tours (id uuid, omi_session_id text);' },
+      {
+        name: '122_b.sql',
+        sql: [
+          'DO $$',
+          'BEGIN',
+          "  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tours' AND column_name = 'omi_session_id') THEN",
+          '    ALTER TABLE public.tours RENAME COLUMN omi_session_id TO session_id;',
+          '  END IF;',
+          'END $$;',
+        ].join('\n'),
+      },
+    ])
+    expect(f.columnDeclared('tours', 'omi_session_id')).toBe(false)
+    expect(f.columnDeclared('tours', 'session_id')).toBe(true)
+  })
+})
+
+describe('a column known only through a CHECK constraint name is not declared', () => {
+  it('215_pricing_v2: user_profiles_plan_tier_check inside a guarded DO block declares nothing', () => {
+    const f = facts([
+      { name: '001_a.sql', sql: 'CREATE TABLE public.user_profiles (id uuid);' },
+      {
+        name: '215_b.sql',
+        sql: [
+          'DO $$ BEGIN',
+          "  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'plan_tier') THEN",
+          "    EXECUTE $sql$ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_plan_tier_check CHECK (plan_tier IN ('solo', 'growth'))$sql$;",
+          '  END IF;',
+          'END $$;',
+        ].join('\n'),
+      },
+    ])
+    expect(f.columnDeclared('user_profiles', 'plan_tier')).toBe(false)
+    // The CHECK is still remembered, so a seed that does write the column is checked.
+    expect(f.allowedValues('user_profiles', 'plan_tier')).toEqual(['solo', 'growth'])
+  })
+
+  it('059_sage_identity: a length CHECK named <table>_<expr>_check does not mint a column', () => {
+    const f = facts([
+      { name: '001_a.sql', sql: 'CREATE TABLE public.venue_ai_config (id uuid, ai_purposes text[]);' },
+      {
+        name: '059_b.sql',
+        sql: 'ALTER TABLE public.venue_ai_config ADD CONSTRAINT venue_ai_config_ai_purposes_length_check CHECK (array_length(ai_purposes, 1) <= 6);',
+      },
+    ])
+    expect(f.columnDeclared('venue_ai_config', 'ai_purposes_length')).toBe(false)
+    expect(f.columnDeclared('venue_ai_config', 'ai_purposes')).toBe(true)
+  })
+})

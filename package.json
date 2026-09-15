@@ -37,6 +37,7 @@
     "check:demo-writes": "node scripts/check-demo-refused-on-writes.mjs",
     "check:tangential-writes": "node scripts/check-no-tangential-writes.mjs",
     "check:seed-sql": "tsx scripts/validate-seed-sql.ts",
+    "check:schema-drift": "tsx scripts/schema-drift.ts",
     "check:governance": "npm run check:cleanup-budget && npm run check:rls-venue && npm run check:storage-scoped && npm run check:legacy-reads && npm run check:platform-handles && npm run check:wedding-fk-fresh && npm run check:browser-benchmark && npm run check:cron-auth-helper && npm run check:no-secrets && npm run check:demo-writes && npm run check:tangential-writes && npm run check:seed-sql && npm run test:golden:dry",
     "gen:sitemap": "node scripts/gen-sitemap.mjs",
     "test:golden:dry": "tsx tests/golden/run-golden-cases.ts --dry",

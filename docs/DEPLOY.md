@@ -28,7 +28,12 @@ This is `scripts/deploy-preflight.mjs` (W71). It checks, read-only:
   `src/lib/services/demo-token.ts`. Never a hand-typed list, so a rename
   or a raised floor in those files is caught automatically.
 - **Database**: a dry run of `apply-pending-migrations.ts` against
-  production.
+  production (d1), and schema drift (d2): every table and column the whole
+  migration tree declares must be live, derived from the migrations and
+  PostgREST's OpenAPI root, not from a hand-kept list. `npm run
+  check:schema-drift` (add `--env .env.test` for the E2E project) prints
+  the missing pieces and the ordered migrations to apply. Found 2026-09-15
+  when the E2E project was 17 tables and 40 columns behind with d1 green.
 - **Types**: whether `types.generated.ts` predates the newest migration
   (informational).
 - **Governance**: the last `npm run check:governance` on this head.

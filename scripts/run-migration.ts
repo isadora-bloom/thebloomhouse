@@ -3,6 +3,9 @@
  *
  * Usage:
  *   npx tsx scripts/run-migration.ts supabase/migrations/196_tour_temporal.sql
+ *   MIGRATION_ENV_FILE=.env.test npx tsx scripts/run-migration.ts <file>   # another project
+ *   npx tsx scripts/run-migration.ts <file> --skip-storage   # set storage.objects policies aside
+ *   npx tsx scripts/run-migration.ts <file> --continue       # log failures, keep going, exit 1 at the end
  *
  * Requires migration 198_exec_sql_rpc.sql to be applied first (one-time
  * paste into the Supabase SQL editor).
@@ -76,10 +79,30 @@ async function main() {
     }
     return s.slice(i)
   }
-  const statements = all.filter((s) => !TX_CONTROL_RE.test(stripLeadingNoise(s)))
-  const skipped = all.length - statements.length
+  const noTx = all.filter((s) => !TX_CONTROL_RE.test(stripLeadingNoise(s)))
+  const skipped = all.length - noTx.length
+  // --skip-storage: statements that define policies on storage.objects
+  // fail through exec_sql with "must be owner of table objects" (the RPC
+  // runs as postgres, storage.objects is owned by supabase_storage_admin).
+  // 308 and 411 both carry them. Rather than abort the whole migration on
+  // the first one, set them aside and print them at the end for the SQL
+  // editor, where the dashboard role owns the storage schema.
+  const SKIP_STORAGE = process.argv.includes('--skip-storage')
+  const CONTINUE = process.argv.includes('--continue')
+  const failed: Array<{ idx: number; state: string; error: string; preview: string }> = []
+  const STORAGE_POLICY_RE = /\b(?:CREATE|DROP|ALTER)\s+POLICY\b[\s\S]*?\bON\s+storage\.objects\b/i
+  const deferred: string[] = []
+  const statements = SKIP_STORAGE
+    ? noTx.filter((s) => {
+        if (STORAGE_POLICY_RE.test(stripLeadingNoise(s))) { deferred.push(s); return false }
+        return true
+      })
+    : noTx
   console.log(`Migration: ${path}`)
-  console.log(`Parsed: ${statements.length} top-level statement(s)${skipped > 0 ? ` (${skipped} BEGIN/COMMIT skipped)` : ''}`)
+  console.log(
+    `Parsed: ${statements.length} top-level statement(s)${skipped > 0 ? ` (${skipped} BEGIN/COMMIT skipped)` : ''}` +
+      (deferred.length > 0 ? ` (${deferred.length} storage.objects policy statement(s) set aside for the SQL editor)` : ''),
+  )
 
   const env = loadEnv()
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {
@@ -104,6 +127,14 @@ async function main() {
     if (!result || !result.ok) {
       console.error(`  ✗ SQL failed (${dt}ms): [${result?.state ?? '?'}] ${result?.error ?? 'unknown'}`)
       console.error(`    statement was:\n${stmt}`)
+      // --continue: an idempotent batch migration (383's per-table RLS
+      // block) fails on a relation one project never had, and everything
+      // after it would be skipped. Record the failure and carry on; the
+      // exit code still says it was not clean.
+      if (CONTINUE) {
+        failed.push({ idx: idx + 1, state: result?.state ?? '?', error: result?.error ?? 'unknown', preview })
+        continue
+      }
       process.exit(1)
     }
     okCount++
@@ -111,6 +142,16 @@ async function main() {
   }
 
   console.log(`\nDone. ${okCount}/${statements.length} statements applied.`)
+  if (failed.length > 0) {
+    console.log(`\n${failed.length} statement(s) FAILED and were skipped (--continue):`)
+    for (const f of failed) console.log(`  [${f.idx}] [${f.state}] ${f.error}\n      ${f.preview}`)
+    process.exitCode = 1
+  }
+  if (deferred.length > 0) {
+    console.log(`\n${deferred.length} statement(s) NOT applied (storage.objects policies). Paste these into the SQL editor:\n`)
+    for (const d of deferred) console.log(`${d.trim().replace(/;?$/, ';')}\n`)
+    console.log('Then: node scripts/check-live-policies.mjs --env <the same env file>')
+  }
 }
 
 main().catch((e) => {

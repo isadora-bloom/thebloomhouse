@@ -336,6 +336,37 @@ function checkMigrations() {
   }
 }
 
+// d2. Schema drift: every table and column the migrations declare is live.
+// d1 probes a hand-kept list of recent migrations; this one derives the
+// expectation from the whole migration tree, so a project whose history
+// skipped an older migration (the E2E project was 17 tables behind while
+// d1 was green) cannot pass by accident.
+function checkSchemaDrift() {
+  const result = run('npx', ['tsx', 'scripts/schema-drift.ts', '--json'], { timeout: 120_000 })
+  let parsed = null
+  try {
+    parsed = JSON.parse(result.stdout)
+  } catch {
+    parsed = null
+  }
+  if (!parsed) {
+    const reason = (result.stderr.trim() || result.stdout.trim() || result.error?.message || `exit ${result.status}`).slice(0, 400)
+    report('d2', 'FAIL', `\`npx tsx scripts/schema-drift.ts\` could not run: ${reason}`)
+    return
+  }
+  const missing = parsed.missingTables.length + parsed.missingColumns.length
+  if (missing === 0) {
+    report('d2', 'PASS', `schema drift: every migration-declared table and column is live on ${parsed.project}.`)
+  } else {
+    report(
+      'd2',
+      'FAIL',
+      `${parsed.missingTables.length} table(s) and ${parsed.missingColumns.length} column(s) declared by migrations are absent on ${parsed.project}. ` +
+        `Apply, in order: ${parsed.migrationsToApply.join(', ')} (\`npm run check:schema-drift\` for the detail).`,
+    )
+  }
+}
+
 // ---------------------------------------------------------------------------
 // e. Types freshness (informational)
 // ---------------------------------------------------------------------------
@@ -377,6 +408,7 @@ checkGit()
 const { orgId } = checkVercelLink()
 checkSecrets(Boolean(orgId))
 checkMigrations()
+checkSchemaDrift()
 checkTypesFresh()
 checkGovernance()
 

@@ -86,6 +86,11 @@ export interface ColumnFact {
    *  cite as the cause of its NOT NULL violation. `null` when the
    *  column is not currently in that state. */
   requiredSinceMigration: string | null
+  /** The migration file that first declared this column (CREATE TABLE
+   *  column list or ADD COLUMN). A live database missing the column is
+   *  missing at least this migration. `null` only for columns known
+   *  solely through a CHECK constraint on an undeclared column. */
+  declaredIn: string | null
 }
 
 export interface TableFact {
@@ -93,6 +98,10 @@ export interface TableFact {
    *  and no later migration drops it or renames it away. */
   exists: boolean
   columns: Map<string, ColumnFact>
+  /** The migration file whose CREATE TABLE (or RENAME TO) most recently
+   *  brought the table into existence under this name. `null` when the
+   *  table is only known through ALTERs or was never created. */
+  createdIn: string | null
 }
 
 export interface SchemaFacts {
@@ -309,10 +318,14 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
    *  the name does not fit the `<table>_<col>_check` convention. */
   const constraintColumn = new Map<string, string>()
 
+  /** Name of the migration file being processed; stamped onto every
+   *  table and column the moment it comes into existence. */
+  let currentMigration: string | null = null
+
   const ensureTable = (name: string): TableFact => {
     let t = tables.get(name)
     if (!t) {
-      t = { exists: false, columns: new Map() }
+      t = { exists: false, columns: new Map(), createdIn: null }
       tables.set(name, t)
     }
     return t
@@ -324,20 +337,28 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     notNull: false,
     hasDefault: false,
     requiredSinceMigration: null,
+    declaredIn: currentMigration,
   })
 
   const setColumnDeclared = (table: string, column: string): void => {
     const t = ensureTable(table)
     const existing = t.columns.get(column)
-    if (existing) existing.declared = true
-    else t.columns.set(column, blankColumn())
+    if (existing) {
+      existing.declared = true
+      if (!existing.declaredIn) existing.declaredIn = currentMigration
+    } else t.columns.set(column, blankColumn())
   }
 
   const setColumnCheck = (table: string, column: string, values: string[] | null): void => {
     const t = ensureTable(table)
     const existing = t.columns.get(column)
     if (existing) existing.allowedValues = values
-    else t.columns.set(column, { ...blankColumn(), allowedValues: values })
+    // A column known only through a CHECK constraint name is not
+    // declared: `<table>_<col>_check` is a naming convention, and a
+    // guarded ALTER inside a DO block can name a column the table never
+    // gained (215's user_profiles_plan_tier_check). Declared means a
+    // CREATE TABLE column list or an ADD COLUMN said so.
+    else t.columns.set(column, { ...blankColumn(), declared: false, declaredIn: null, allowedValues: values })
   }
 
   /** Recompute `requiredSinceMigration` from the column's current
@@ -396,11 +417,11 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
 
   const renameTable = (from: string, to: string): void => {
     const src = tables.get(from)
-    tables.set(from, { exists: false, columns: src?.columns ?? new Map() })
+    tables.set(from, { exists: false, columns: src?.columns ?? new Map(), createdIn: src?.createdIn ?? null })
     const dst = tables.get(to)
     const merged = new Map(dst?.columns ?? [])
     if (src) for (const [k, v] of src.columns) merged.set(k, v)
-    tables.set(to, { exists: true, columns: merged })
+    tables.set(to, { exists: true, columns: merged, createdIn: currentMigration })
   }
 
   /** One entry of a CREATE TABLE's top-level-split column list: either a
@@ -460,6 +481,19 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
     const rename = /^RENAME\s+TO\s+"?(\w+)"?/i.exec(c)
     if (rename) {
       renameTable(table, rename[1]!.toLowerCase())
+      return
+    }
+
+    // RENAME COLUMN old TO new: the fact moves with the column, and the
+    // new name counts as declared by this migration (a live database
+    // still carrying the old name is missing this migration). Handles the
+    // DO-block form too, since the ALTER is found anywhere in the statement.
+    const renameColumn = /^RENAME\s+(?:COLUMN\s+)?"?(\w+)"?\s+TO\s+"?(\w+)"?/i.exec(c)
+    if (renameColumn) {
+      const t = ensureTable(table)
+      const moved = t.columns.get(renameColumn[1]!)
+      t.columns.delete(renameColumn[1]!)
+      t.columns.set(renameColumn[2]!, moved ? { ...moved, declared: true, declaredIn: migrationName } : blankColumn())
       return
     }
 
@@ -539,6 +573,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
   }
 
   for (const file of files) {
+    currentMigration = file.name
     const sql = stripLineComments(file.sql)
     for (const stmt of splitStatements(sql)) {
       const dropIdx = stmt.search(/\bDROP\s+TABLE\b/i)
@@ -561,6 +596,7 @@ export function buildSchemaFacts(files: readonly MigrationFile[]): SchemaFacts {
           const openIdx = createIdx + head.index + head[0].length - 1
           const bal = extractBalanced(stmt, openIdx)
           const t = ensureTable(table)
+          if (!t.exists) t.createdIn = file.name
           t.exists = true
           if (bal) {
             for (const seg of topLevelSplit(bal.inner, ',')) processColumnListSegment(table, seg, file.name)
