@@ -175,29 +175,29 @@ SELECT '66666666-0000-4000-8000-000000000003', '22222222-2222-2222-2222-22222222
 WHERE NOT EXISTS (SELECT 1 FROM google_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222204');
 
 INSERT INTO meta_ads_connections (id, venue_id, ad_account_id, ad_account_name, token_env_key, status, connected_at, last_synced_at)
-SELECT '66666666-0000-4000-8000-000000000011', '22222222-2222-2222-2222-222222222201', '100200300', 'Hawthorne Manor', 'META_ADS_ACCESS_TOKEN', 'connected', now() - interval '150 days', now() - interval '9 hours'
+SELECT '66666666-0000-4000-8000-000000000011', '22222222-2222-2222-2222-222222222201', '100200300', 'Hawthorne Manor', 'META_ADS_VENUE_HAWTHORNE_MANOR', 'connected', now() - interval '150 days', now() - interval '9 hours'
 WHERE NOT EXISTS (SELECT 1 FROM meta_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222201');
 
 INSERT INTO meta_ads_connections (id, venue_id, ad_account_id, ad_account_name, token_env_key, status, status_reason, connected_at)
-SELECT '66666666-0000-4000-8000-000000000012', '22222222-2222-2222-2222-222222222204', '100200304', 'Rose Hill Gardens', 'META_ADS_ACCESS_TOKEN', 'revoked', 'The venue disconnected it from the Meta side', now() - interval '200 days'
+SELECT '66666666-0000-4000-8000-000000000012', '22222222-2222-2222-2222-222222222204', '100200304', 'Rose Hill Gardens', 'META_ADS_VENUE_ROSE_HILL_GARDENS', 'revoked', 'The venue disconnected it from the Meta side', now() - interval '200 days'
 WHERE NOT EXISTS (SELECT 1 FROM meta_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222204');
 
 INSERT INTO meta_ads_connections (id, venue_id, ad_account_id, ad_account_name, token_env_key, status)
-SELECT '66666666-0000-4000-8000-000000000013', '22222222-2222-2222-2222-222222222203', '100200303', 'The Glass House', 'META_ADS_ACCESS_TOKEN', 'pending'
+SELECT '66666666-0000-4000-8000-000000000013', '22222222-2222-2222-2222-222222222203', '100200303', 'The Glass House', 'META_ADS_VENUE_THE_GLASS_HOUSE', 'pending'
 WHERE NOT EXISTS (SELECT 1 FROM meta_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222203');
 
 INSERT INTO tiktok_ads_connections (id, venue_id, advertiser_id, advertiser_name, currency, token_env_key, status, connected_at, last_synced_at)
-SELECT '66666666-0000-4000-8000-000000000021', '22222222-2222-2222-2222-222222222201', '7100200300400', 'Hawthorne Manor', 'USD', 'TIKTOK_ADS_ACCESS_TOKEN', 'connected', now() - interval '60 days', now() - interval '14 hours'
+SELECT '66666666-0000-4000-8000-000000000021', '22222222-2222-2222-2222-222222222201', '7100200300400', 'Hawthorne Manor', 'USD', 'TIKTOK_ADS_VENUE_HAWTHORNE_MANOR', 'connected', now() - interval '60 days', now() - interval '14 hours'
 WHERE NOT EXISTS (SELECT 1 FROM tiktok_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222201');
 
 INSERT INTO tiktok_ads_connections (id, venue_id, advertiser_id, advertiser_name, currency, token_env_key, status)
-SELECT '66666666-0000-4000-8000-000000000022', '22222222-2222-2222-2222-222222222202', '7100200300401', 'Crestwood Farm', 'USD', 'TIKTOK_ADS_ACCESS_TOKEN', 'pending'
+SELECT '66666666-0000-4000-8000-000000000022', '22222222-2222-2222-2222-222222222202', '7100200300401', 'Crestwood Farm', 'USD', 'TIKTOK_ADS_VENUE_CRESTWOOD_FARM', 'pending'
 WHERE NOT EXISTS (SELECT 1 FROM tiktok_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222202');
 
 INSERT INTO tiktok_ads_connections (id, venue_id, advertiser_id, advertiser_name, currency, token_env_key, status, status_reason, last_error_at, last_error_message)
-SELECT '66666666-0000-4000-8000-000000000023', '22222222-2222-2222-2222-222222222203', '7100200300402', 'The Glass House', 'USD', 'TIKTOK_ADS_ACCESS_TOKEN', 'error', 'The advertiser id is not on this token', now() - interval '4 days', '40001: permission denied for advertiser_id'
+SELECT '66666666-0000-4000-8000-000000000023', '22222222-2222-2222-2222-222222222203', '7100200300402', 'The Glass House', 'USD', 'TIKTOK_ADS_VENUE_THE_GLASS_HOUSE', 'error', 'The advertiser id is not on this token', now() - interval '4 days', '40001: permission denied for advertiser_id'
 WHERE NOT EXISTS (SELECT 1 FROM tiktok_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222203');
 
 INSERT INTO tiktok_ads_connections (id, venue_id, advertiser_id, advertiser_name, currency, token_env_key, status)
-SELECT '66666666-0000-4000-8000-000000000024', '22222222-2222-2222-2222-222222222204', '7100200300403', 'Rose Hill Gardens', 'USD', 'TIKTOK_ADS_ACCESS_TOKEN', 'revoked'
+SELECT '66666666-0000-4000-8000-000000000024', '22222222-2222-2222-2222-222222222204', '7100200300403', 'Rose Hill Gardens', 'USD', 'TIKTOK_ADS_VENUE_ROSE_HILL_GARDENS', 'revoked'
 WHERE NOT EXISTS (SELECT 1 FROM tiktok_ads_connections WHERE venue_id = '22222222-2222-2222-2222-222222222204');

@@ -70,6 +70,8 @@ describe('parseCheckExpr', () => {
     expect(parseCheckExpr("trigger_type IN ('post_tour', 'ghosted')")).toEqual({
       column: 'trigger_type',
       values: ['post_tour', 'ghosted'],
+      pattern: null,
+      patternCaseInsensitive: false,
     })
   })
 
@@ -77,11 +79,78 @@ describe('parseCheckExpr', () => {
     expect(parseCheckExpr("explanation_source IS NULL\n  OR explanation_source IN ('ai', 'template', 'rule')")).toEqual({
       column: 'explanation_source',
       values: ['ai', 'template', 'rule'],
+      pattern: null,
+      patternCaseInsensitive: false,
     })
   })
 
-  it('returns null for a CHECK that is not an IN-list', () => {
+  it('returns null for a CHECK that is neither an IN-list nor a regex', () => {
     expect(parseCheckExpr('end_date > start_date')).toBeNull()
+  })
+
+  // W75: the regex shapes migrations 124 and 140 write in plain text.
+  it('parses "col ~ \'regex\'"', () => {
+    expect(parseCheckExpr("geo_scope ~ '^[a-z]+(?:_[a-z0-9]+){0,2}$'")).toEqual({
+      column: 'geo_scope',
+      values: null,
+      pattern: '^[a-z]+(?:_[a-z0-9]+){0,2}$',
+      patternCaseInsensitive: false,
+    })
+  })
+
+  it('parses the nullable "col IS NULL OR col ~ \'regex\'" shape', () => {
+    expect(parseCheckExpr("code_extension IS NULL OR code_extension ~ '^[A-Z]$'")).toEqual({
+      column: 'code_extension',
+      values: null,
+      pattern: '^[A-Z]$',
+      patternCaseInsensitive: false,
+    })
+  })
+
+  it('flags "~*" as case-insensitive', () => {
+    expect(parseCheckExpr("slug ~* '^[a-z-]+$'")?.patternCaseInsensitive).toBe(true)
+  })
+})
+
+describe('buildSchemaFacts — regex CHECK (W75)', () => {
+  it('records the pattern and constraint name, and DROP CONSTRAINT clears only that fact', () => {
+    const f = facts([
+      {
+        name: '001.sql',
+        sql: `
+          CREATE TABLE weddings (
+            id uuid PRIMARY KEY,
+            status text CHECK (status IN ('lead', 'booked')),
+            code_extension text
+          );
+          ALTER TABLE weddings ADD CONSTRAINT weddings_code_extension_shape
+            CHECK (code_extension IS NULL OR code_extension ~ '^[A-Z]$');
+        `,
+      },
+    ])
+    const col = f.tables.get('weddings')!.columns.get('code_extension')!
+    expect(col.pattern).toBe('^[A-Z]$')
+    expect(col.patternConstraint).toBe('weddings_code_extension_shape')
+    expect(col.allowedValues).toBeNull()
+    expect(f.allowedValues('weddings', 'status')).toEqual(['lead', 'booked'])
+
+    const dropped = facts([
+      {
+        name: '001.sql',
+        sql: `
+          CREATE TABLE weddings (id uuid PRIMARY KEY, code_extension text);
+          ALTER TABLE weddings ADD CONSTRAINT weddings_code_extension_shape
+            CHECK (code_extension ~ '^[A-Z]$');
+          ALTER TABLE weddings ADD CONSTRAINT weddings_code_extension_check
+            CHECK (code_extension IN ('A', 'B'));
+          ALTER TABLE weddings DROP CONSTRAINT weddings_code_extension_shape;
+        `,
+      },
+    ])
+    const after = dropped.tables.get('weddings')!.columns.get('code_extension')!
+    expect(after.pattern).toBeNull()
+    expect(after.patternConstraint).toBeNull()
+    expect(after.allowedValues).toEqual(['A', 'B'])
   })
 })
 

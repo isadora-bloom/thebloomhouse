@@ -29,8 +29,12 @@
 -- about something else, which is exactly why it gets read once and
 -- forgotten.
 
+-- W75: the column is `full_body` (migration 002), not `body`, and
+-- `signal_class` has been NOT NULL with no DEFAULT since migration 192.
+-- Both were invisible to check:seed-sql while it skipped SELECT-shaped
+-- inserts; this statement would have failed at runtime as written.
 INSERT INTO public.interactions (
-  id, venue_id, wedding_id, person_id, type, direction, subject, body, timestamp
+  id, venue_id, wedding_id, person_id, type, direction, subject, full_body, timestamp, signal_class
 )
 SELECT
   '66666666-6666-6666-6666-666666000950',
@@ -41,7 +45,8 @@ SELECT
   'inbound',
   'Re: seating chart',
   'Thanks for sending the seating chart over, that all looks right to us. One other thing while I remember: we''re having a groom''s cake as well as the wedding cake. My uncle is driving it down on the Friday, so we''ll need somewhere to put it. Nothing fancy, just a small table off to the side.',
-  '2026-04-18 14:20:00+00'
+  '2026-04-18 14:20:00+00',
+  'touchpoint'
 WHERE NOT EXISTS (
   SELECT 1 FROM public.interactions WHERE id = '66666666-6666-6666-6666-666666000950'
 );

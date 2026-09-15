@@ -108,10 +108,55 @@ describe('parseSeedInserts', () => {
     expect(parsed[0]!.rows[0]![3]).toContain('ARRAY[')
   })
 
-  it('skips an INSERT ... SELECT statement (no VALUES clause)', () => {
+  // W75: the seed files' idempotent idiom. W74 skipped it, and the seven
+  // token_env_key writes that failed migration 411's regex CHECK at
+  // --apply were all this shape.
+  it('parses an INSERT ... SELECT <literals> WHERE NOT EXISTS (...) as one row', () => {
     const sql = `INSERT INTO venues (id, name, plan_tier) SELECT 'v1', 'Test', 'solo' WHERE NOT EXISTS (SELECT 1 FROM venues WHERE id = 'v1');`
     const inserts = parseSeedInserts('fixture.sql', sql)
-    expect(inserts).toHaveLength(0)
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0]!.rows).toEqual([["'v1'", "'Test'", "'solo'"]])
+  })
+
+  it('parses a multi-line SELECT list with expressions, stopping at the top-level WHERE', () => {
+    const sql = `
+      INSERT INTO venues (id, name, plan_tier)
+      SELECT
+        '66666666-0000-4000-8000-000000000011',
+        'Hawthorne Manor',
+        'solo'
+      WHERE NOT EXISTS (SELECT 1 FROM venues WHERE id = '66666666-0000-4000-8000-000000000011');
+    `
+    const inserts = parseSeedInserts('fixture.sql', sql)
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0]!.rows[0]).toHaveLength(3)
+    expect(classifySeedValue(inserts[0]!.rows[0]![2]!)).toEqual({ kind: 'string', value: 'solo' })
+  })
+
+  it('keeps literals from a SELECT ... FROM list and treats column references as other', () => {
+    const sql = `INSERT INTO venues (id, name, plan_tier) SELECT v.id, v.name, 'solo' FROM venues v WHERE v.id = 'x';`
+    const inserts = parseSeedInserts('fixture.sql', sql)
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0]!.rows[0]).toEqual(['v.id', 'v.name', "'solo'"])
+    expect(classifySeedValue('v.id').kind).toBe('other')
+  })
+
+  it('skips SELECT * (no positional list to map)', () => {
+    const sql = `INSERT INTO venues (id, name, plan_tier) SELECT * FROM venues_staging;`
+    expect(parseSeedInserts('fixture.sql', sql)).toHaveLength(0)
+  })
+
+  it('does not lose the statements after a comment containing an apostrophe', () => {
+    // W74 split on ';' before stripping comments, so "venue's" opened a
+    // quote that never closed and swallowed every later statement.
+    const sql = `
+      INSERT INTO venues (id, name, plan_tier) VALUES ('v1', 'One', 'solo');
+      -- the venue's own From header; two hazards in one comment
+      INSERT INTO venues (id, name, plan_tier) VALUES ('v2', 'Two', 'growth');
+    `
+    const inserts = parseSeedInserts('fixture.sql', sql)
+    expect(inserts.map((i) => i.rows[0]![0])).toEqual(["'v1'", "'v2'"])
+    expect(inserts[1]!.statementIndex).toBe(2)
   })
 
   it('gives every statement (including non-inserts) a 1-based index in file order', () => {
