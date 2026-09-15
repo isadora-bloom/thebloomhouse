@@ -80,6 +80,14 @@ function makeFakeClient(
         calls.push(call)
         return Promise.resolve({ data: null, error: null })
       },
+      // Aux rows carry deterministic ids and are upserted so a rerun is
+      // idempotent; the fake records them like inserts.
+      upsert: (row: unknown) => {
+        call.op = 'upsert'
+        call.payload = row
+        calls.push(call)
+        return Promise.resolve({ data: null, error: null })
+      },
       update: (patch: unknown) => {
         call.op = 'update'
         call.payload = patch
@@ -557,9 +565,9 @@ describe("applyReseed — mode: 'aux-only'", () => {
     })
 
     expect(result.errors).toEqual([])
-    const inserts = calls.filter((c) => c.op === 'insert')
+    const inserts = calls.filter((c) => c.op === 'insert' || c.op === 'upsert')
     expect(inserts.length).toBeGreaterThan(0)
-    // Every row the applier actually inserted for this story must carry
+    // Every row the applier actually wrote for this story must carry
     // the resolved wedding id, not the plan's <wedding:key> placeholder.
     for (const call of inserts) {
       const rows = Array.isArray(call.payload) ? call.payload : [call.payload]
