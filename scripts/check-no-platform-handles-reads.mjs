@@ -54,6 +54,9 @@ function walk(dir) {
       walk(full)
     } else if (st.isFile()) {
       if (!/\.(ts|tsx|mjs|js)$/.test(entry)) continue
+      // The generated Supabase types describe the column; they do not read
+      // it. Counting them made the ratchet rise on every regeneration.
+      if (entry.endsWith('.generated.ts')) continue
       scan(full)
     }
   }
