@@ -39,6 +39,11 @@ function isPlatformRoute(pathname: string): boolean {
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
+  // Forwarded to server components as a request header: a layout cannot
+  // otherwise see which of its routes is rendering. The /admin gate uses
+  // it to let operators onto the import surface while keeping the
+  // engineering pages elevated-only.
+  request.headers.set('x-pathname', pathname)
   let response = NextResponse.next({ request })
 
   // -----------------------------------------------------------------------
@@ -151,7 +156,9 @@ export async function middleware(request: NextRequest) {
     const cookieOpts = {
       path: '/',
       maxAge: 86400,
-      secure: process.env.NODE_ENV === 'production',
+      // Same rule as demoTokenCookieOptions: never Secure under the E2E
+      // harness, which serves the production build over http://localhost.
+      secure: process.env.NODE_ENV === 'production' && process.env.E2E_HARNESS !== '1',
       sameSite: 'lax' as const,
     }
     response.cookies.set('bloom_demo', demoCookies.bloom_demo, cookieOpts)

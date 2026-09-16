@@ -127,9 +127,11 @@ test.describe('§29 Security regressions (S1 to S5)', () => {
   test('a demo session is refused on a mutating route', async ({ browser }) => {
     const context = await browser.newContext()
     try {
-      // GET /demo/ takes the rewrite, which sets bloom_demo plus the
-      // signed demo token on the context.
-      const entry = await context.request.get('/demo/')
+      // A path UNDER /demo/ takes the rewrite, which sets bloom_demo plus
+      // the signed demo token on the context. `/demo/` itself is 308'd to
+      // `/demo`, the entry page, whose cookies come from its Server Action
+      // button and never from a GET (built bundle, 2026-09-15).
+      const entry = await context.request.get('/demo/agent/inbox')
       expect(entry.status(), 'GET /demo/ should render the demo dashboard').toBeLessThan(400)
       const cookies = await context.cookies()
       expect(
@@ -346,11 +348,21 @@ test.describe('§29 Security regressions (S1 to S5)', () => {
   // -------------------------------------------------------------------------
 
   test('every response carries the security headers', async ({ request }) => {
+    // The harness serves the production build over http://localhost and
+    // next.config.ts drops Strict-Transport-Security there on purpose
+    // (E2E_HARNESS=1): a browser that has seen HSTS upgrades every later
+    // request to https://localhost and the run dies. Against a real host
+    // the header is asserted like the rest.
+    const baseURL = String(test.info().project.use.baseURL ?? '')
+    const localHarness = /^https?:\/\/localhost(:\d+)?/.test(baseURL)
+    const expected = localHarness
+      ? SECURITY_HEADERS.filter((n) => n !== 'strict-transport-security')
+      : SECURITY_HEADERS
     const paths = ['/welcome', '/login', '/api/public/demo-snapshot', '/demo/api/agent/send']
     for (const path of paths) {
       const res = await request.get(path, { failOnStatusCode: false })
       const headers = res.headers()
-      for (const name of SECURITY_HEADERS) {
+      for (const name of expected) {
         expect(headers[name], `${path} is missing ${name}`).toBeTruthy()
       }
       expect(headers['x-frame-options']).toBe('DENY')
@@ -376,6 +388,15 @@ test.describe('§29 Security regressions (S1 to S5)', () => {
     const sb = adminClient()
     try {
       const graph = await seedBasicGraph(ctx)
+      // The guests page hides Print and Export until the wedding is
+      // within 60 days (Tier-B #63), and the helper's wedding is further
+      // out than that. Thirty days from now keeps the button on the page.
+      const soon = new Date(Date.now() + 30 * 86400e3).toISOString().slice(0, 10)
+      const { error: dateErr } = await sb
+        .from('weddings')
+        .update({ wedding_date: soon })
+        .eq('id', graph.wedding.weddingId)
+      if (dateErr) throw new Error(`could not move the wedding date: ${dateErr.message}`)
       await sb.from('wedding_config').upsert(
         { venue_id: graph.venueId, wedding_id: graph.wedding.weddingId, plated_meal: true },
         { onConflict: 'venue_id,wedding_id' }

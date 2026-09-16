@@ -268,7 +268,10 @@ export function verifyDemoToken(token: string | null | undefined): DemoVerifyRes
 export function demoTokenCookieOptions() {
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    // Not under the E2E harness: it serves a production build over plain
+    // http://localhost, and a browser drops a Secure cookie there, so the
+    // demo identity never took (§29 on the built bundle, 2026-09-15).
+    secure: process.env.NODE_ENV === 'production' && process.env.E2E_HARNESS !== '1',
     sameSite: 'lax' as const,
     maxAge: DEMO_TOKEN_MAX_AGE_SECONDS,
     path: '/',
@@ -283,7 +286,10 @@ export function demoTokenCookieOptions() {
 export function demoHintCookieOptions() {
   return {
     httpOnly: false,
-    secure: process.env.NODE_ENV === 'production',
+    // Not under the E2E harness: it serves a production build over plain
+    // http://localhost, and a browser drops a Secure cookie there, so the
+    // demo identity never took (§29 on the built bundle, 2026-09-15).
+    secure: process.env.NODE_ENV === 'production' && process.env.E2E_HARNESS !== '1',
     sameSite: 'lax' as const,
     maxAge: DEMO_TOKEN_MAX_AGE_SECONDS,
     path: '/',

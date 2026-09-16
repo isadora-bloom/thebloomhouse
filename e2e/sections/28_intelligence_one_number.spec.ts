@@ -80,7 +80,12 @@ function intel(page: Page): Journey {
 
 /** Put the demo identity on the context, then go somewhere real. */
 async function asDemo(page: Page): Promise<void> {
-  await page.goto('/demo/')
+  // A path UNDER /demo/ takes the middleware rewrite, which mints the
+  // signed demo token and the hint cookie. `/demo/` itself 308s to the
+  // entry page at `/demo`, whose cookies come only from its Server Action
+  // button, so a plain visit left the browser signed out and every
+  // demo-venue test below landed on /login (built bundle, 2026-09-15).
+  await page.goto('/demo/agent/inbox')
   await page.waitForLoadState('domcontentloaded')
 }
 
@@ -103,10 +108,28 @@ function normaliseDuration(text: string): { n: number; unit: 'm' | 'h' | 'd' } |
 
 /** A window of page text around a label, for a card with no test id. */
 async function textAround(page: Page, label: string, span = 260): Promise<string> {
+  // innerText applies CSS text-transform, so a label the card renders in
+  // small caps comes back as "MEDIAN FIRST RESPONSE" and an exact-case
+  // search misses it (the ROI page, 2026-09-15). Match case-insensitively
+  // and return the window from the rendered text.
   const body = await page.locator('body').innerText()
-  const at = body.indexOf(label)
+  const at = body.toLowerCase().indexOf(label.toLowerCase())
   if (at === -1) return ''
   return body.slice(at, at + span)
+}
+
+/** Every window around every occurrence of the label, in page order. */
+async function textAroundAll(page: Page, label: string, span = 260): Promise<string[]> {
+  const body = await page.locator('body').innerText()
+  const lower = body.toLowerCase()
+  const needle = label.toLowerCase()
+  const out: string[] = []
+  let at = lower.indexOf(needle)
+  while (at !== -1) {
+    out.push(body.slice(at, at + span))
+    at = lower.indexOf(needle, at + needle.length)
+  }
+  return out
 }
 
 test.describe('§28 Intelligence, one number per question', () => {
@@ -240,10 +263,27 @@ test.describe('§28 Intelligence, one number per question', () => {
       })
       // The card has no test id, so read a window of the page around its
       // label rather than guessing at the DOM shape around the value.
-      const window = await textAround(page, 'Median First Response')
-      expect(window, 'the ROI page has no Median First Response card').not.toBe('')
-      const fromRoi = normaliseDuration(window)
-      expect(fromRoi, `no median on the ROI card. Around the label:\n${window}`).not.toBeNull()
+      // The label appears twice on the page: on the card, followed by the
+      // value, and as a column heading of the per-venue table, followed
+      // by the next headings. Take the first window that carries a
+      // duration rather than the first window (2026-09-15).
+      //
+      // Polled: the heading renders before the cards' values arrive, and a
+      // single read caught the skeleton (labels only) on 2026-09-15.
+      let windows: string[] = []
+      let fromRoi: ReturnType<typeof normaliseDuration> = null
+      await expect
+        .poll(
+          async () => {
+            windows = await textAroundAll(page, 'Median First Response')
+            fromRoi = windows.map(normaliseDuration).find((v) => v !== null) ?? null
+            return fromRoi
+          },
+          { timeout: 30_000, intervals: [1000] }
+        )
+        .not.toBeNull()
+      expect(windows.length, 'the ROI page has no Median First Response card').toBeGreaterThan(0)
+      expect(fromRoi, `no median on the ROI card. Around the label:\n${windows.join('\n---\n')}`).not.toBeNull()
 
       // Both are `getCohortFunnel().responseTime`. One reader, one
       // number: if these disagree, two surfaces are computing it.
@@ -364,7 +404,9 @@ test.describe('§28 Intelligence, one number per question', () => {
 
     await j.step('the page says it is off, and says where the switch is', async () => {
       await expect(
-        page.getByText('Benchmarks are switched off for your venue', { exact: false })
+        // The heading, not any text: the paragraph under it repeats the
+        // sentence and a text match resolves to both (strict mode, 2026-09-15).
+        page.getByRole('heading', { name: 'Benchmarks are switched off for your venue' })
       ).toBeVisible({ timeout: 30_000 })
       // The gate message has to name the switch and what sharing means,
       // or the coordinator cannot make the decision it is asking for.
@@ -437,7 +479,10 @@ test.describe('§28 Intelligence, one number per question', () => {
 
     await j.step('save them', async () => {
       await page.getByRole('button', { name: /^Save \d+ reviews?$/ }).click()
-      await expect(page.getByText(/Imported \d+ reviews?\./)).toBeVisible({ timeout: 180_000 })
+      // At least one. `\d+` matched "Imported 0 reviews." for a whole run
+      // while every insert was failing a NOT NULL on review_date
+      // (2026-09-15); a save that lands nothing is a failure here.
+      await expect(page.getByText(/Imported [1-9]\d* reviews?\./)).toBeVisible({ timeout: 180_000 })
     })
 
     await j.step('sentiment is scored on the saved rows', async () => {

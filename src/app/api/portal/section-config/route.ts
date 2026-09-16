@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { ensurePortalSectionConfig } from '@/lib/services/portal/section-defaults'
 import {
   getPlatformAuth,
   assertCanAccessVenue,
@@ -45,6 +46,12 @@ export async function GET(request: NextRequest) {
     const activeOnly = searchParams.get('active') === 'true'
 
     const supabase = createServiceClient()
+    // A venue with no rows gets the defaults on first read. Nothing else
+    // ever inserted them for a real venue (only the demo seed did), so
+    // section settings and the portal preview were empty for every
+    // venue that was not Crestwood (2026-09-15). Migration 416 did the
+    // same for venues that already existed.
+    await ensurePortalSectionConfig(supabase, venueId)
     let query = supabase
       .from('portal_section_config')
       .select('*')

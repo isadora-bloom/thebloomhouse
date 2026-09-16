@@ -343,10 +343,11 @@ export default function JoinPage() {
             <form onSubmit={acceptAsNewUser} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-sage-700 mb-1">
+                  <label htmlFor="join-first-name" className="block text-sm font-medium text-sage-700 mb-1">
                     First Name
                   </label>
                   <input
+                    id="join-first-name"
                     type="text"
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
@@ -356,10 +357,11 @@ export default function JoinPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-sage-700 mb-1">
+                  <label htmlFor="join-last-name" className="block text-sm font-medium text-sage-700 mb-1">
                     Last Name
                   </label>
                   <input
+                    id="join-last-name"
                     type="text"
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
@@ -386,10 +388,11 @@ export default function JoinPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-sage-700 mb-1">
+                <label htmlFor="join-password" className="block text-sm font-medium text-sage-700 mb-1">
                   Password
                 </label>
                 <input
+                  id="join-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -400,10 +403,11 @@ export default function JoinPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-sage-700 mb-1">
+                <label htmlFor="join-confirm-password" className="block text-sm font-medium text-sage-700 mb-1">
                   Confirm Password
                 </label>
                 <input
+                  id="join-confirm-password"
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}

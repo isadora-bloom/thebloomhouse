@@ -386,7 +386,15 @@ async function seedAshcombe(sb: SupabaseClient): Promise<string> {
   if (aiErr && !/duplicate/i.test(aiErr.message)) notes.push(`venue_ai_config warning: ${aiErr.message}`)
 
   for (const account of ACCOUNTS) {
-    const password = generatePassword()
+    // Keep the password the env file already holds. The seed used to
+    // mint a fresh one on every --apply, so each re-run silently broke
+    // every platform login in .env.test until the operator re-pasted
+    // the print-out; on 2026-09-15 four re-seeds in one afternoon did
+    // exactly that to sections 26, 28, 29 and 30. A password is only
+    // generated when the env has none.
+    const envKey = account.role === 'venue_manager' ? 'E2E_MANAGER_PASSWORD' : `E2E_${account.role.toUpperCase()}_PASSWORD`
+    const fromEnv = process.env[envKey]?.trim()
+    const password = fromEnv && fromEnv.length >= 12 ? fromEnv : generatePassword()
     const userId = await upsertAuthUser(sb, account.email, password)
     const { error: profErr } = await sb.from('user_profiles').upsert(
       {
@@ -564,6 +572,59 @@ async function seedAshcombe(sb: SupabaseClient): Promise<string> {
     .upsert(normRows, { onConflict: 'venue_id,month_num,hour_local' })
   if (normsErr) throw new Error(`weather_climate_norms: ${normsErr.message}`)
   notes.push('June climate norms')
+
+  // Three recent inquiries, through the real writer. /today's "since you
+  // were last here" strip is a spine-only reader (couples, touchpoints,
+  // drafts, admin_notifications) and renders its all-zero state on a
+  // venue with nothing in the window, which is what §26 hit on a fresh
+  // Ashcombe (2026-09-15). linkSignal is the one writer for the spine
+  // (identity doctrine), so the inquiries are linked exactly as an
+  // inbound email would be, never inserted. Three keeps Ashcombe well
+  // under the 25-couple floor §28's not-enough-data refusal depends on.
+  // Fixed external ids: linkSignal dedupes on them, so a re-seed is a
+  // no-op here too. Vocabulary mirrors scripts/demo-reseed/generate.ts:
+  // a gmail inquiry is channel 'gmail', action 'reply', tier 'high'.
+  const { linkSignal } = await import('../src/lib/spine/cascade')
+  const { emailToNormalizedSignal } = await import('../src/lib/services/identity/email-to-signal')
+  const inquiries = [
+    { key: 'e2e-ashcombe-inquiry-0001', name: 'Nora Bell', email: 'nora.bell@example.test', daysAgo: 2, body: 'Hi! We are looking at June 2027 for around 120 guests. Is the barn available, and what does a full day cost?' },
+    { key: 'e2e-ashcombe-inquiry-0002', name: 'Theo Marsh', email: 'theo.marsh@example.test', daysAgo: 1, body: 'We visited a friend\'s wedding at Ashcombe last summer and loved it. Could we book a tour for a Saturday in October?' },
+    { key: 'e2e-ashcombe-inquiry-0003', name: 'Priya Lang', email: 'priya.lang@example.test', daysAgo: 0, body: 'Do you allow outside caterers? We have a family cook we would love to use. Around 80 guests, spring 2028.' },
+  ]
+  let linked = 0
+  for (const q of inquiries) {
+    const occurredAt = new Date(Date.now() - q.daysAgo * 86400e3 - 90 * 60e3).toISOString()
+    const base = emailToNormalizedSignal({
+      email: { messageId: q.key, threadId: q.key, subject: `${q.name} — wedding inquiry` },
+      interactionId: q.key,
+      emailDate: occurredAt,
+      rawFromName: q.name,
+      rawFromEmail: q.email,
+      signalTier: 'high',
+      resolvedEmail: q.email,
+      resolvedName: q.name,
+      channelOverride: 'gmail',
+      actionTypeOverride: 'reply',
+      fullBody: q.body,
+    })
+    const result = await linkSignal({
+      supabase: sb,
+      venueId: ASHCOMBE.venueId,
+      signal: { ...base, author_class: 'couple', raw_payload: { ...base.raw_payload, e2e_seed: true, direction: 'inbound' } },
+      bypassCache: true,
+      source: 'e2e-seed',
+    })
+    if (!result.duplicate) linked++
+  }
+  notes.push(`${linked} new inquiries linked (${inquiries.length - linked} already there)`)
+
+  // Portal section config, through the same writer the section-config
+  // route uses on first read. Without rows the coordinator's section
+  // settings and the wedding portal preview are both empty (§26,
+  // 2026-09-15); with them the preview renders one accordion per section.
+  const { ensurePortalSectionConfig } = await import('../src/lib/services/portal/section-defaults')
+  const sectionsWritten = await ensurePortalSectionConfig(sb, ASHCOMBE.venueId)
+  notes.push(sectionsWritten > 0 ? `${sectionsWritten} portal sections` : 'portal sections already there')
 
   const { error: invErr } = await sb.from('couple_invites').upsert(
     {

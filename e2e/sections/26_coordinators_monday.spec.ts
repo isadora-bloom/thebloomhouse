@@ -54,6 +54,15 @@ const NO_CREDS = missingCredsReason('COORDINATOR')
 const DUBSADO_FIXTURE = 'src/lib/services/crm-import/__tests__/fixtures/dubsado-projects.csv'
 const IMPORTED_COUPLE_FIRST = 'Rosalind'
 const IMPORTED_COUPLE_LAST = 'Fairweather'
+/**
+ * The fixture's "Lead" row. Rosalind's project is Active with a booked
+ * date, so the import lands her as `booked`, and /agent/leads shows only
+ * the unbooked stages (LEAD_LIST_STAGES in lead-board-view.ts) — she is
+ * on the pipeline, by design, not on leads. The leads half of the journey
+ * therefore looks for the couple the import leaves unbooked (2026-09-15;
+ * the old assertion matched the "No leads match" copy instead).
+ */
+const LEAD_COUPLE_LAST = 'Nair'
 
 /** The four blocks of the strip, and where each one goes deeper. */
 const STRIP_BLOCKS: ReadonlyArray<{ label: string; href: string }> = [
@@ -282,7 +291,24 @@ test.describe("§26 A coordinator's Monday", () => {
     await j.step('attach the fixture', async () => {
       // The input is visually hidden inside its label, so set the files
       // on the input rather than clicking through a file chooser.
-      await page.locator('input[type="file"]').first().setInputFiles(DUBSADO_FIXTURE)
+      //
+      // The fixture on disk opens with a block of '#' provenance lines
+      // that only the unit tests strip (loadFixtureCsv). A real Dubsado
+      // export has no such lines, the shared CSV parser treats the first
+      // line as the header, and the adapter correctly refused the raw
+      // file ("missing required column(s)", 2026-09-15). Upload what a
+      // coordinator would: the export without the test-only preamble.
+      const fs = await import('node:fs')
+      const raw = fs.readFileSync(DUBSADO_FIXTURE, 'utf8')
+      const csv = raw
+        .split(/\r?\n/)
+        .filter((line) => !line.startsWith('#'))
+        .join('\n')
+      await page.locator('input[type="file"]').first().setInputFiles({
+        name: 'dubsado-projects.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(csv, 'utf8'),
+      })
     })
 
     await j.step('check before import shows the pre-flight diff', async () => {
@@ -351,9 +377,12 @@ test.describe("§26 A coordinator's Monday", () => {
       // than hoping the first page holds them.
       const search = page.getByPlaceholder('Search leads...')
       if (await search.isVisible().catch(() => false)) {
-        await search.fill(IMPORTED_COUPLE_LAST)
+        await search.fill(LEAD_COUPLE_LAST)
       }
-      await expect(page.getByText(IMPORTED_COUPLE_LAST, { exact: false }).first()).toBeVisible({
+      // A card, not any text: `No leads match "Nair".` contains the name
+      // too and used to satisfy this assertion while the board was empty.
+      await expect(page.getByText(/No leads match/)).toHaveCount(0, { timeout: 20_000 })
+      await expect(page.getByText(LEAD_COUPLE_LAST, { exact: false }).first()).toBeVisible({
         timeout: 20_000,
       })
     })
@@ -494,6 +523,12 @@ test.describe("§26 A coordinator's Monday", () => {
       // them (`Table assigned: n/total`).
       await page.goto(`/portal/weddings/${SEEDED.ashcombeWeddingId}/portal`)
       await page.waitForLoadState('domcontentloaded')
+      // The preview is one accordion per configured section and only the
+      // first opens by default; the guest table sits inside "Guest List &
+      // RSVP", which has to be expanded before its rows exist on the page.
+      const guestsSection = page.getByRole('button', { name: /Guest List & RSVP/ })
+      await expect(guestsSection).toBeVisible({ timeout: 30_000 })
+      await guestsSection.click()
       const row = page.locator('tr', { hasText: GUEST_LAST }).first()
       await expect(row).toBeVisible({ timeout: 30_000 })
       await expect(row).toContainText(TABLE_NAME)

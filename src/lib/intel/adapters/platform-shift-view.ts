@@ -101,7 +101,13 @@ function buildRow(series: PlatformShiftSeries): PlatformShiftRowView {
  *  there isn't enough to compare. */
 function buildHeadline(result: PlatformShiftResult, rows: PlatformShiftRowView[]): string {
   if (!result.enoughData) {
-    return result.reason ?? 'No platform engagement data yet.'
+    // Plain copy, never `result.reason`: that string is the tool-source's
+    // diagnosis ("No marketing_metric rows for any tracked platform ...")
+    // and it reached the /intel/sources card verbatim until 2026-09-15.
+    // Engineering vocabulary on a coordinator surface is the leak
+    // benchmark.ts warns about; the reason stays on the result for the
+    // Ask-your-data tool, which is who it was written for.
+    return 'No platform engagement data yet.'
   }
 
   const comparable = rows.filter(

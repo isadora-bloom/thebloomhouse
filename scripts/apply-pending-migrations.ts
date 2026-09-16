@@ -144,6 +144,10 @@ const WAVE_MIGRATIONS: Pending[] = [
     file: '415_policies_reading_auth_users.sql',
     why: 'Seven policies from 030/031/243 selected from auth.users inside their predicate; authenticated cannot read that table, so the predicate errored and PostgREST answered 403 to EVERY authenticated query on ceremony_chair_plans, table_map_layouts and the brand_assets couple read (§27 journey, 2026-09-15). Replaced with can_access_wedding / couple_user_wedding_id. check-live-policies reports any policy mentioning auth.users',
   },
+  {
+    file: '416_portal_section_config_defaults.sql',
+    why: 'Every venue with no portal_section_config rows gets the 32 defaults (the demo seed was the only writer, so section settings and the portal preview were empty for every real venue, §26 2026-09-15). Same values as src/lib/services/portal/section-defaults.ts, which the section-config route applies on first read from now on',
+  },
 ]
 
 /** Never applied to production (found by W11's schema-truth check). */

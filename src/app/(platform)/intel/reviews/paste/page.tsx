@@ -80,6 +80,14 @@ export default function ReviewsPastePage() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
+      const summary = json.summary as { inserted?: number; errors?: string[] } | undefined
+      if (summary && (summary.inserted ?? 0) === 0 && (summary.errors?.length ?? 0) > 0) {
+        // Nothing landed. Say why, and keep the extracted rows on the page
+        // so they can be corrected, rather than clearing them under a
+        // cheerful "Imported 0 reviews" (the review_date NOT NULL case
+        // hid behind exactly that on 2026-09-15).
+        throw new Error(`Nothing was imported. ${summary.errors![0]}`)
+      }
       setImported({ ...json.summary, phrases_extracted: json.phrases_extracted })
       setReviews([])
       setText('')

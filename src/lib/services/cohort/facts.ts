@@ -55,13 +55,33 @@ export interface CoupleFacts {
   outcome: 'booked' | 'ghost' | 'in_progress'
 }
 
-/** A touchpoint counts as a "messageable" inbound — an inquiry the
- *  venue can reply to in writing — iff its action_type is the gmail
- *  inbound verb. A Calendly tour_booked is inbound but self-service:
- *  treating it as an inquiry-to-respond-to inflates the response-time
- *  median by days and inverts the bookers-vs-ghosters comparison. */
+/** The inbound verbs that are a message the venue can answer in writing,
+ *  in the vocabulary progression.ts maps: a Gmail reply, a Knot or
+ *  WeddingWire relay inquiry, a website form submission, an SMS, an
+ *  Instagram DM. A Calendly tour_booked is inbound but self-service and
+ *  stays out: treating it as an inquiry-to-respond-to inflates the
+ *  response-time median by days and inverts the bookers-vs-ghosters
+ *  comparison.
+ *
+ *  Until 2026-09-15 only 'reply' counted, so every couple who arrived
+ *  through the Knot, WeddingWire or the website had no first
+ *  messageable inbound, their reply never registered, and the venue's
+ *  response-time median was computed from the Gmail-origin minority
+ *  alone (6 of the demo venue's 24 answered couples). The surface's own
+ *  copy, "the first message a couple sends that could be answered", was
+ *  right; the predicate was not. */
+const MESSAGEABLE_INBOUND_ACTIONS: ReadonlySet<string> = new Set([
+  'reply',
+  'inquiry',
+  'inquiry_form',
+  'inquiry_form_submitted',
+  'message',
+  'sms_inbound',
+  'ig_dm',
+])
+
 export function isMessageableInbound(tp: TouchpointRow): boolean {
-  return tp.action_type === 'reply'
+  return MESSAGEABLE_INBOUND_ACTIONS.has(tp.action_type)
 }
 
 export function buildCoupleFacts(data: CohortData): CoupleFacts[] {

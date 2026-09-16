@@ -104,7 +104,10 @@ export async function createTestOrg(
     .from('organisations')
     .insert({
       name,
-      plan_tier: opts.planTier ?? 'intelligence',
+      // 'growth', not 'intelligence': migration 215 replaced the tier
+      // vocabulary (pre_opening | solo | growth | multi | enterprise) and
+      // the venues CHECK refused every helper-made venue (§29, 2026-09-15).
+      plan_tier: opts.planTier ?? 'growth',
     })
     .select('id')
     .single()
@@ -139,7 +142,10 @@ export async function createTestVenue(
       name,
       slug,
       org_id: opts.orgId,
-      plan_tier: opts.planTier ?? 'intelligence',
+      // 'growth', not 'intelligence': migration 215 replaced the tier
+      // vocabulary (pre_opening | solo | growth | multi | enterprise) and
+      // the venues CHECK refused every helper-made venue (§29, 2026-09-15).
+      plan_tier: opts.planTier ?? 'growth',
       status: opts.status ?? 'active',
     })
     .select('id, slug')

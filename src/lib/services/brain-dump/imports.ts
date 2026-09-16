@@ -339,7 +339,13 @@ export async function importReviews(args: {
         rating,
         body: r.body,
         title: r.title ?? null,
-        review_date: r.review_date ?? null,
+        // reviews.review_date is NOT NULL (migration 031). The paste
+        // extractor returns null when the text carries no date, which is
+        // most pasted reviews, and every one of those inserts failed here
+        // and was reported as "Imported 0 reviews" (§28, 2026-09-15). The
+        // import day is the best date we have and is what a reader would
+        // assume; the raw row keeps whatever the source said.
+        review_date: r.review_date ?? new Date().toISOString().slice(0, 10),
         raw_import_row: r.raw_row ?? null,
       })
       .select('id')

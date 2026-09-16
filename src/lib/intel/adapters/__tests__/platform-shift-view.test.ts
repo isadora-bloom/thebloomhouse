@@ -35,7 +35,12 @@ describe('buildPlatformShiftView', () => {
     const result = computePlatformShift([], TODAY, 3)
     const view = buildPlatformShiftView(result)
     expect(view.enoughData).toBe(false)
-    expect(view.headline).toBe(result.reason)
+    // Plain copy on the card. The tool-source's diagnosis
+    // ("No marketing_metric rows ...") stays on the result for the
+    // Ask-your-data tool and must not be the coordinator's headline.
+    expect(view.headline).toBe('No platform engagement data yet.')
+    expect(result.reason).toMatch(/marketing_metric/)
+    expect(view.headline).not.toMatch(/marketing_metric/)
     expect(view.rows.every((r) => !r.hasData)).toBe(true)
   })
 

@@ -693,11 +693,21 @@ export default function AdminPortalViewerPage() {
         sectionRes,
       ] = await Promise.all([
         supabase.from('people').select('*').eq('wedding_id', weddingId),
-        supabase.from('timeline').select('*').eq('wedding_id', weddingId).order('due_date', { ascending: true }),
+        // sort_order, not due_date: timeline has no due_date column (that is
+        // checklist_items), so this read answered 400 on every load of the
+        // portal preview (§26, 2026-09-15).
+        supabase.from('timeline').select('*').eq('wedding_id', weddingId).order('sort_order', { ascending: true }),
         supabase.from('budget_items').select('*').eq('wedding_id', weddingId).order('category'),
         supabase.from('checklist_items').select('*').eq('wedding_id', weddingId),
         supabase.from('guest_list').select('*').eq('wedding_id', weddingId).order('last_name'),
-        supabase.from('portal_section_config').select('*').eq('venue_id', venueId).neq('visibility', 'off').order('sort_order'),
+        // Through the section-config route, not the table: the route gives
+        // a venue its default rows on first read (section-defaults.ts), so
+        // a new venue's preview is never the "no sections" card it was
+        // until 2026-09-15. The route filters visibility 'off' with
+        // active=true and orders by sort_order, as the raw read did.
+        fetch(`/api/portal/section-config?venue_id=${encodeURIComponent(venueId)}&active=true`)
+          .then(async (r) => (r.ok ? ((await r.json()) as { data: SectionConfig[] }) : { data: [] as SectionConfig[] }))
+          .catch(() => ({ data: [] as SectionConfig[] })),
       ])
 
       setPeople((peopleRes.data ?? []) as Person[])
@@ -720,7 +730,10 @@ export default function AdminPortalViewerPage() {
     fetchData()
   }, [fetchData])
 
-  const coupleNames = people.length > 0 ? getCoupleNames(people) : 'Loading...'
+  // 'Loading...' only while the reads are in flight. A wedding with no
+  // people rows used to wear that word as its name for good (§26 on a
+  // fresh venue, 2026-09-15), which reads as a page that never finished.
+  const coupleNames = people.length > 0 ? getCoupleNames(people) : loading ? 'Loading...' : 'Unnamed couple'
 
   // Render content for a specific section
   function renderSectionContent(section: SectionConfig) {
