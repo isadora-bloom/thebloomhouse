@@ -29,6 +29,11 @@
  *     once the trial has expired with no subscription
  *   - src/lib/services/billing/capacity-enforcement.ts — picks which
  *     CAPACITY_LIMITS row applies to a never-subscribed venue
+ *
+ * Since 2026-09-17 an expired trial also FREEZES the account (migration
+ * 417). That is not decided here: public.venue_is_frozen() in the
+ * database is the rule, and src/lib/services/billing/venue-freeze.ts is
+ * how the app asks it.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -65,6 +70,7 @@ interface VenueBillingRow {
   subscription_status: string | null
   stripe_subscription_id: string | null
   trial_ends_at: string | null
+  billing_exempt?: boolean | null
 }
 
 const KNOWN_TIERS = new Set<PlanTier>(['pre_opening', 'solo', 'growth', 'multi', 'enterprise'])
@@ -77,9 +83,9 @@ function coerceTier(value: string | null): PlanTier {
  * Reads the venue's billing row and resolves the honest state. Never
  * throws — a lookup failure resolves to "not on trial, not expired" so a
  * DB hiccup never blocks the platform (the failure IS logged by the
- * caller's own error handling where relevant); callers that need to fail
- * closed (there are none today — trial expiry only ever narrows a UI
- * banner and auto-send, never a hard block) should check `venue: null`.
+ * caller's own error handling where relevant). The hard block on an
+ * expired trial is the freeze (venue-freeze.ts, migration 417), which
+ * doesn't read this.
  */
 export async function resolveBillingState(
   venueId: string,
@@ -111,7 +117,7 @@ export async function resolveBillingState(
   try {
     const result = await client
       .from('venues')
-      .select('plan_tier, subscription_status, stripe_subscription_id, trial_ends_at')
+      .select('plan_tier, subscription_status, stripe_subscription_id, trial_ends_at, billing_exempt')
       .eq('id', venueId)
       .limit(1)
     data = result.data
@@ -124,7 +130,8 @@ export async function resolveBillingState(
   if (!row) return empty
 
   const storedTier = coerceTier(row.plan_tier)
-  const isTrial = !row.stripe_subscription_id
+  // A billing_exempt venue (Rixey, free forever) is never on trial.
+  const isTrial = !row.stripe_subscription_id && row.billing_exempt !== true
   const trialEndsAt = row.trial_ends_at ?? null
 
   let trialExpired = false

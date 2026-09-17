@@ -23,7 +23,7 @@ Checked in code on 2026-09-17.
 - **`/super-admin`** has four pages. The overview counts venues by status (active, trial, suspended, churned) and by tier, reading `venues`, `organisations`, `weddings` and `api_costs`. `pipeline-health` shows messages in per venue, drafts waiting, the auto-send queue, errors in the last 24 hours and Gmail sync state. There are also `observability` and `consumer-requests` (privacy requests) pages.
 - **Accounts:** `organisations` (name, owner, plan tier, Stripe customer), `venues` (status, tier, Stripe subscription and status, `trial_ends_at`), `venue_groups` with a parent group for hierarchies (migration 234).
 - **People:** `user_profiles` with roles `super_admin`, `org_admin`, `venue_manager`, `coordinator`, `readonly`, `couple`. Team invitations (049), couple invites (391).
-- **Money:** Stripe checkout and portal routes, `stripe_events` (every webhook, full payload), `billing-state.ts` (trial banner, auto-send off after trial), `dunning.ts`, `capacity-enforcement.ts` (it notices a venue went over its plan's limits and tells them, never blocks).
+- **Money:** Stripe checkout and portal routes, `stripe_events` (every webhook, full payload), `billing-state.ts` (trial banner), `venue-freeze.ts` + migration 417 (account frozen after the trial), `dunning.ts`, `capacity-enforcement.ts` (it notices a venue went over its plan's limits and tells them, never blocks).
 - **Cost:** `api_costs`, one row per AI call, per venue, with model, tokens, cost and prompt version.
 - **Onboarding:** `onboarding_projects` with `readiness_passed_at` (the 5-day setup project).
 - **Activity:** `activity_log`.
@@ -196,7 +196,7 @@ Fits weeks 1 to 4 of `ISADORA-PLAN.md`.
 
 Answered by Isadora, 2026-09-17:
 
-1. **Trials stay.** The 14-day trial in the code is right. The pricing page on thebloomhouse.ai, which says there's no free trial, is the thing out of step.
+1. **Trials stay.** The 14-day trial in the code is right. The pricing page on thebloomhouse.ai, which says there's no free trial, is the thing out of step. **Changed 17 Sep:** when the trial ends with no subscription the whole account freezes, not just auto-send. Everyone can still sign in and look; nothing updates anywhere (migration 417, branch `trial-freeze`). The admin panel needs a way for staff to extend a trial, since that is the only way to unfreeze a venue without Stripe.
 2. **Staff roles:** Bloom's own staff, not roles inside a customer's organisation. Isadora and Phil start as Founder.
 3. **Billing is Stripe, one subscription per organisation,** with its venues counted on it.
 4. **Enterprise is billed through Stripe too** (Stripe invoices), so all money sits in one place.

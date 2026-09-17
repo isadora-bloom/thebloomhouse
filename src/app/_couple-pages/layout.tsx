@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
+import { PortalReadOnlyNotice } from '@/components/couple/portal-read-only-notice'
+import { isVenueFrozen } from '@/lib/services/billing/venue-freeze'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 import { CoupleAiNameProvider } from '@/lib/hooks/use-couple-context'
 import { FloatingSage } from '@/components/couple/floating-sage'
@@ -104,6 +106,7 @@ export default async function CoupleLayout({
 }) {
   const branding = await getVenueBranding()
   const slug = (await resolveVenueSlug()) ?? ''
+  const frozen = await isVenueFrozen(branding.venueId)
   const fontUrl = getFontUrl(branding.fontPairKey)
   const fontVars = getFontVars(branding.fontPairKey)
 
@@ -136,11 +139,12 @@ export default async function CoupleLayout({
             base=""
             weddingDate={branding.weddingDate}
           >
+            {frozen && <PortalReadOnlyNotice venueName={branding.venueName} />}
             {children}
           </CoupleShell>
           {/* Floating assistant on every page; the path-based layout had it, the
               subdomain layout never did (W16 finding, 2026-09-09). */}
-          <FloatingSage venueSlug={slug} />
+          {!frozen && <FloatingSage venueSlug={slug} />}
         </CoupleAiNameProvider>
       </div>
     </>

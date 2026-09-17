@@ -308,12 +308,11 @@ export async function checkAutoSendEligible(
   }
 
   // Check 0a-bis: Trial expiry (W18, Nov-plan wave 2). A venue that has
-  // never subscribed and is past trial_ends_at keeps everything else
-  // working (nothing else in the product blocks on trial state) but does
-  // NOT get autonomous sending — that's the one behaviour with real
-  // downside if left on for an unpaying venue indefinitely. Drafts still
-  // get written for manual coordinator send; only the auto-send path is
-  // affected. See src/lib/services/billing/billing-state.ts.
+  // never subscribed and is past trial_ends_at gets no autonomous sending.
+  // Since migration 417 such a venue is frozen outright (no drafts, no
+  // sends, no writes; see billing/venue-freeze.ts), so this check is now
+  // belt and braces, and it states the reason plainly in the eligibility
+  // result.
   if (await isTrialExpiredNoSub(venueId)) {
     return {
       eligible: false,

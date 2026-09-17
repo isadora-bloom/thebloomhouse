@@ -51,6 +51,7 @@
  */
 
 import { logEvent } from '@/lib/observability/logger'
+import { isVenueFrozen } from '@/lib/services/billing/venue-freeze'
 
 export interface SendEmailInput {
   to: string | string[]
@@ -175,6 +176,13 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     const error = 'sendEmail called with no recipients'
     console.warn(`[email] ${error}`)
     return { ok: false, error }
+  }
+
+  // Frozen venue (trial ended, no subscription, migration 417): no mail
+  // on its behalf. venueId null is platform mail and always goes.
+  if (venueId && (await isVenueFrozen(venueId))) {
+    console.warn(`[email] Refusing to send for frozen venue ${venueId}`)
+    return { ok: false, error: 'venue_frozen' }
   }
 
   const { from, fallbackReason } = await resolveFrom(venueId, input.fromName)

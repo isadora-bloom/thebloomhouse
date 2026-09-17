@@ -15,6 +15,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { writeOrLog } from '@/lib/db/write-or-log'
+import { isVenueFrozen } from '@/lib/services/billing/venue-freeze'
 import { htmlToText } from '@/lib/utils/html-text'
 
 // ---------------------------------------------------------------------------
@@ -1332,6 +1333,14 @@ export async function sendEmail(
   const { isUnsendableAddress } = await import('@/lib/services/identity/body-extract')
   if (isUnsendableAddress(to)) {
     console.warn(`[gmail] Refusing to send to unsendable address: ${to}`)
+    return null
+  }
+
+  // Frozen venue (trial ended, no subscription, migration 417): nothing
+  // goes out. Refused before the send, not after it: the trigger would
+  // refuse the "sent" marker, and an unmarked send goes again next tick.
+  if (await isVenueFrozen(venueId)) {
+    console.warn(`[gmail] Refusing to send for frozen venue ${venueId}`)
     return null
   }
 

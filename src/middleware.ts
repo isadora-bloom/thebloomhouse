@@ -10,6 +10,7 @@ import {
   demoHintCookieOptions,
 } from '@/lib/services/demo-token'
 import { isPlatformRole, READ_ONLY_ROLES } from '@/lib/auth/roles'
+import { VENUE_FROZEN_CODE, VENUE_FROZEN_MESSAGE } from '@/lib/services/billing/venue-freeze-constants'
 
 // Routes that never require authentication
 // /vendor/[token] is the vendor portal: token-gated on its own route, opened from an email, no session (W73 found it landing on /login).
@@ -31,6 +32,14 @@ function isPublicRoute(pathname: string): boolean {
   // Static file extensions
   if (/\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|woff2?)$/.test(pathname)) return true
   return false
+}
+
+// API writes a frozen venue may still make: paying, signing in and out,
+// and inbound webhooks (which carry no user session anyway).
+const FREEZE_EXEMPT_API_PREFIXES = ['/api/stripe/', '/api/billing/', '/api/auth/', '/api/webhooks/']
+
+function isFreezeExemptApi(pathname: string): boolean {
+  return FREEZE_EXEMPT_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))
 }
 
 function isPlatformRoute(pathname: string): boolean {
@@ -339,6 +348,15 @@ export async function middleware(request: NextRequest) {
   // per route would be 372 chances to forget one. The profile read only
   // happens for a write with a session, so reads pay nothing.
   // -----------------------------------------------------------------------
+  // The same spot refuses writes for a frozen venue (trial ended, no
+  // subscription, migration 417). The database refuses them anyway; this
+  // turns a trigger error halfway through a route, possibly after a model
+  // call, into a clear 402 before the route runs. Billing, sign-in and
+  // webhooks stay open so a frozen venue can pay and be unfrozen. Bloom
+  // staff (super_admin) are let through here and still meet the trigger.
+  // The scope cookie can only add a venue to check, never remove the
+  // profile's own, so forging it can't get a frozen user past this.
+  // -----------------------------------------------------------------------
   if (
     user &&
     pathname.startsWith('/api/') &&
@@ -346,7 +364,7 @@ export async function middleware(request: NextRequest) {
   ) {
     const { data: writer } = await supabase
       .from('user_profiles')
-      .select('role')
+      .select('role, venue_id')
       .eq('id', user.id)
       .maybeSingle()
     if (writer && READ_ONLY_ROLES.has(writer.role as string)) {
@@ -354,6 +372,21 @@ export async function middleware(request: NextRequest) {
         { error: 'Forbidden: this account is read-only' },
         { status: 403 },
       )
+    }
+    if (writer && writer.role !== 'super_admin' && !isFreezeExemptApi(pathname)) {
+      const venueIds = new Set<string>()
+      if (writer.venue_id) venueIds.add(writer.venue_id as string)
+      const scopedVenue = request.cookies.get('bloom_venue')?.value
+      if (scopedVenue) venueIds.add(scopedVenue)
+      for (const venueId of venueIds) {
+        const { data: frozen } = await supabase.rpc('venue_is_frozen', { p_venue_id: venueId })
+        if (frozen === true) {
+          return NextResponse.json(
+            { error: VENUE_FROZEN_MESSAGE, code: VENUE_FROZEN_CODE },
+            { status: 402 },
+          )
+        }
+      }
     }
   }
 

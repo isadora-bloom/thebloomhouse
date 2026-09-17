@@ -62,6 +62,20 @@ describe('resolveBillingState', () => {
     expect(state.effectiveCapacity).toEqual(CAPACITY_LIMITS.solo)
   })
 
+  it('treats a billing_exempt venue (free forever) as never on trial, with its own tier', async () => {
+    const client = fakeClient({
+      plan_tier: 'growth',
+      subscription_status: null,
+      stripe_subscription_id: null,
+      trial_ends_at: new Date(Date.now() - 90 * DAY_MS).toISOString(),
+      billing_exempt: true,
+    })
+    const state = await resolveBillingState('venue-exempt', client)
+    expect(state.isTrial).toBe(false)
+    expect(state.trialExpired).toBe(false)
+    expect(state.effectiveCapacity).toEqual(CAPACITY_LIMITS.growth)
+  })
+
   it('a never-subscribed venue with a future trial_ends_at is on trial but not expired', async () => {
     const client = fakeClient({
       plan_tier: 'solo',
