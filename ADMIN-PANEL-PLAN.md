@@ -31,7 +31,7 @@ Checked in code on 2026-09-17.
 ### Two problems in what exists
 
 1. **Bloom staff and customers are the same kind of user.** `/super-admin` lets in anyone whose `user_profiles.role` is `super_admin`. That's the same table and the same list of roles as a venue's own coordinators. At 200 venues this needs to be separate: a Bloom staff member is not a member of any venue, and nothing a venue does (inviting, changing roles) should ever be able to produce one. There's also only one staff level, so Finance and Support would see and do the same things.
-2. **The pricing page and the code disagree about trials.** Pricing v2 says no free trial, and every signup goes through a conversation. The database gives every new venue a 14-day trial, after which a banner appears and auto-send switches off. Decide which one is true before the billing screens get built on top of it.
+2. **The pricing page and the code disagree about trials.** Pricing v2 says no free trial, and every signup goes through a conversation. The database gives every new venue a 14-day trial, after which a banner appears and auto-send switches off. Decided 17 Sep: the trial stays, so the pricing page is what needs changing.
 
 ## Who uses it
 
@@ -63,7 +63,7 @@ The page staff open every morning. Short, and it only shows what needs someone.
 
 - **Signups** since yesterday and this week.
 - **Setup stuck:** venues in onboarding with no progress for 3 or more days.
-- **Money needing attention:** failed payments, cards expiring this month, subscriptions set to cancel, trials ending in the next 7 days (if trials stay).
+- **Money needing attention:** failed payments, cards expiring this month, subscriptions set to cancel, trials ending in the next 7 days.
 - **Broken for a venue right now:** Gmail disconnected, Calendly or OpenPhone failing, sending domain unverified, a pipeline with no messages in for 24 hours when it normally has dozens.
 - **Error spikes:** a venue whose errors today are well above its usual.
 - **Going quiet:** venues whose logins or activity dropped sharply over two weeks. This is the early warning for losing them.
@@ -177,19 +177,21 @@ Fits weeks 1 to 4 of `ISADORA-PLAN.md`.
 2. **Accounts, people and Today:** mostly reading tables that exist. This is the part that answers "who has signed up".
 3. **Usage:** the `usage_daily` roll-up, then the usage screens. Backfilled from `api_costs`, the spine and the logs so it doesn't start from zero.
 4. **Billing:** the Stripe snapshot, revenue, failed payments, founding members, then the billing actions.
-5. **Health and support tools:** the integration grid, then view as venue, then the account actions.
+5. **Health and support tools:** the integration grid, then view as venue, then the account actions. Staff alerts go through a bell in the panel and Bloom's own email, not Slack.
 6. **Platform switches** last.
 
 ## To test it properly
 
 200 venues can't be tested on Rixey and four demo venues. The test project needs a seeded spread: individual venues and groups with a two-level hierarchy, every status, every tier, a few founding members, failed payments, broken integrations, quiet venues and busy ones. Enough rows that paging and search are real.
 
-## Decisions for Isadora
+## Decisions
 
-1. **Trials:** the pricing page says none, the code gives 14 days. Which is true?
-2. **Staff roles:** do the six roles above match how Bloom will actually be staffed? Who is in which on day one?
-3. **Billing for groups:** one Stripe subscription per organisation, or one per venue? The code stores a subscription on each venue and a Stripe customer on the organisation.
-4. **Enterprise invoicing:** through Stripe subscriptions, or invoiced by hand?
-5. **Alerts:** should the Today items also go out by email or Slack, and to whom?
-6. **View as venue:** is a notice in the venue's activity enough, or do they have to agree first?
-7. **Health colour:** what makes a venue red? A starting suggestion is a failing integration for over 24 hours, a failed payment, or activity down more than half over two weeks.
+Answered by Isadora, 2026-09-17:
+
+1. **Trials stay.** The 14-day trial in the code is right. The pricing page on thebloomhouse.ai, which says there's no free trial, is the thing out of step.
+2. **Staff roles:** these are Bloom's own staff, not roles inside a customer's organisation. Customers already have theirs (org admin, venue manager, coordinator, read-only, couple). Isadora asked what the six are; confirm once she's read the table above.
+3. **Billing is Stripe.** Still open: one subscription per organisation, or one per venue, for groups.
+4. **Enterprise invoicing:** not decided yet.
+5. **Alerts are built into Bloom.** No Slack or other outside tools. Today's items show in the panel, and a staff notification bell and a daily email digest from Bloom itself carry the urgent ones.
+6. **View as venue: a notice is enough.** The venue sees an entry in its activity. It doesn't have to agree first.
+7. **What makes a venue red:** to be worked out together. The suggestion (integration failing over 24 hours, a failed payment, activity down by half over two weeks) stands until then.

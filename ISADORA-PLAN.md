@@ -7,7 +7,7 @@
 
 - **Everything is merged into Bloom by 8 November.** ContractHouse and the vendor network both.
 - **The vendor network is built standalone first**, like ContractHouse. It already has a start: the private GitHub repo `isadora-bloom/vendor_bloom` holds one file, `vendor-network-schema.sql` (January 2026, 16 tables: vendors, categories, styles, personality traits, specialties, languages, bookings, day preferences, seasonal blocks, availability cache, venue relationships, venue history). No app yet. The Rixey portal's vendor records from August are the other half.
-- **The admin panel is for everyone at Bloom**, not just Isadora. So it needs staff roles from the start.
+- **The admin panel is for everyone at Bloom**, not just Isadora. So it needs staff roles from the start. The 14-day trial stays, billing is Stripe, alerts are built into Bloom (no Slack), a notice is enough when staff view a venue.
 - **The test venue gets 3 or 4 anonymised Rixey couples.**
 - **Real Rixey clients move onto Bloom from 2027 weddings onwards.** Assumption until confirmed: 2026 weddings finish on the Rixey portal and ContractHouse as they are, so the ContractHouse merge only has to carry 2027-and-later contracts and payments across.
 
@@ -40,7 +40,7 @@ From week 2 to week 4 there are three agent builds running at once (admin panel,
 - [ ] **Read the Rixey portal.** Two outputs (the vendor list and a first portal comparison are done, see `audits/2026-09-17-vendor-network-side-by-side.md` and `audits/2026-09-17-rixey-portal-vs-bloom-portal.md`; the table-by-table data map is still to do):
   - *Data map:* where couples, guests, timelines, messages, Sage chats and planning notes live, and where each lands in Bloom.
   - *Vendor steal-list:* records, booked history, contracts, aliases, recommend toggle, directory, merge questions. Take as is, take the idea, or leave it.
-- [ ] **Vendor design.** Put the January schema next to the steal-list and write one design. The January schema was drawn before the Rixey records existed, so it needs updating. It also needs `venue_id` and `wedding_id` keys that line up with Bloom's, so the merge in week 7 is joining tables, not translating them.
+- [x] **Vendor design.** Done 17 Sep: `vendor_bloom/DESIGN.md` and `supabase/migrations/001_vendor_network.sql` (parsed, not yet run). Next: Isadora creates the Supabase project. Put the January schema next to the steal-list and write one design. The January schema was drawn before the Rixey records existed, so it needs updating. It also needs `venue_id` and `wedding_id` keys that line up with Bloom's, so the merge in week 7 is joining tables, not translating them.
 - [ ] **ContractHouse audit.** List what's broken and what's left from v1 (late payment reminders, certificate of completion PDF, co-signer) before fixing anything. It's live for Rixey, so nothing is tested against its production database.
 - [x] **Admin panel spec.** Written: `ADMIN-PANEL-PLAN.md`, with seven decisions waiting. Registrations (venues, users, couples, when), billing (plan, Stripe status, trial, failed payments), usage (AI spend from `api_costs`, emails processed, active users). Staff roles, since it's for everyone at Bloom. Start from what `/super-admin` shows.
 
