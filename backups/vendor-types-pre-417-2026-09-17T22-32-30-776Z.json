@@ -1,0 +1,175 @@
+{
+  "taken_at": "2026-09-17T22:32:30.778Z",
+  "project": "https://jsxxgwprxuqgcauzlxcb.supabase.co",
+  "why": "Pre-image of vendor_recommendations.vendor_type before migration 417 folds synonyms onto canonical keys.",
+  "rows": [
+    {
+      "id": "8871698c-2243-4723-9e16-cd53a9707fd2",
+      "venue_id": "22222222-2222-2222-2222-222222222203",
+      "vendor_name": "Atrium Florals",
+      "vendor_type": "florals"
+    },
+    {
+      "id": "d2000001-0000-0000-0000-000000000001",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "BBQ Company",
+      "vendor_type": "caterer"
+    },
+    {
+      "id": "91b5804b-37e4-440c-97d7-a290ed01b4bf",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Beats & Beats DJ",
+      "vendor_type": "dj"
+    },
+    {
+      "id": "ae367785-5a47-4ebc-a139-91d6a64bca8c",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Blue Ridge Shuttle Co.",
+      "vendor_type": "transportation"
+    },
+    {
+      "id": "86216c43-7c0b-42b6-889c-2d387a7a6ee3",
+      "venue_id": "22222222-2222-2222-2222-222222222202",
+      "vendor_name": "Blue Ridge Transport",
+      "vendor_type": "transportation"
+    },
+    {
+      "id": "199e6a38-3031-459e-b1a3-3fd9933c8f61",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Blush & Brush Hair Studio",
+      "vendor_type": "hair_makeup"
+    },
+    {
+      "id": "bd1c899d-b227-4815-96e1-89aeccf5ee7e",
+      "venue_id": "22222222-2222-2222-2222-222222222203",
+      "vendor_name": "Cinematic Story Films",
+      "vendor_type": "videography"
+    },
+    {
+      "id": "bb872479-5a6c-4ebd-ae60-102c0e2f760f",
+      "venue_id": "22222222-2222-2222-2222-222222222202",
+      "vendor_name": "Daisy Lane Photo",
+      "vendor_type": "photography"
+    },
+    {
+      "id": "d2000001-0000-0000-0000-000000000005",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "DJ Marcus",
+      "vendor_type": "dj"
+    },
+    {
+      "id": "81a4b950-2f2d-402e-8a8d-26c1d4114278",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Emma Clarke Photography",
+      "vendor_type": "photography"
+    },
+    {
+      "id": "31005aed-3966-462a-a163-26a09bd4ee71",
+      "venue_id": "22222222-2222-2222-2222-222222222204",
+      "vendor_name": "Garden Lane Catering",
+      "vendor_type": "catering"
+    },
+    {
+      "id": "ea4a6658-1b6e-4bea-837a-294f38e3bcfd",
+      "venue_id": "22222222-2222-2222-2222-222222222203",
+      "vendor_name": "Gareth Cole Photography",
+      "vendor_type": "photography"
+    },
+    {
+      "id": "3c3aedf6-19a8-4da6-84bb-d344344aee52",
+      "venue_id": "22222222-2222-2222-2222-222222222203",
+      "vendor_name": "Grand Touring Limos",
+      "vendor_type": "transportation"
+    },
+    {
+      "id": "4344d7ad-5a04-4e74-874d-f6a2bdb1bbbe",
+      "venue_id": "22222222-2222-2222-2222-222222222202",
+      "vendor_name": "Hayloft Catering Co.",
+      "vendor_type": "catering"
+    },
+    {
+      "id": "af9be21c-8f11-4851-ba28-8b3d7f921f3d",
+      "venue_id": "22222222-2222-2222-2222-222222222204",
+      "vendor_name": "Honeycomb DJ",
+      "vendor_type": "dj"
+    },
+    {
+      "id": "d2000001-0000-0000-0000-000000000002",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Lens & Light Studio",
+      "vendor_type": "photographer"
+    },
+    {
+      "id": "09eb9ffd-1987-4790-b1a9-0f9fc5a0e6ee",
+      "venue_id": "22222222-2222-2222-2222-222222222203",
+      "vendor_name": "Lumen DJ",
+      "vendor_type": "dj"
+    },
+    {
+      "id": "d2000001-0000-0000-0000-000000000004",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Mobile Bar Co",
+      "vendor_type": "bartender"
+    },
+    {
+      "id": "79017e5b-a33b-43fe-aaa4-2abf066c06e1",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Rev. James Hartley",
+      "vendor_type": "officiant"
+    },
+    {
+      "id": "57351f67-267a-4dc1-bcde-52d2f6704f8f",
+      "venue_id": "22222222-2222-2222-2222-222222222204",
+      "vendor_name": "Rosa Bell Photography",
+      "vendor_type": "photography"
+    },
+    {
+      "id": "26029328-d244-4e16-8884-81b1040923be",
+      "venue_id": "22222222-2222-2222-2222-222222222202",
+      "vendor_name": "Sam DJ Co.",
+      "vendor_type": "dj"
+    },
+    {
+      "id": "62c8aa67-f022-4ba8-a74a-6289eda410a3",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "The Oak Table Catering",
+      "vendor_type": "caterer"
+    },
+    {
+      "id": "635c4817-83b9-4c2e-b06a-01e5fe751331",
+      "venue_id": "22222222-2222-2222-2222-222222222204",
+      "vendor_name": "The Quartet",
+      "vendor_type": "music"
+    },
+    {
+      "id": "97cf87af-1c0a-4592-bd68-df5ec7e9fc56",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "The Sweet Occasion",
+      "vendor_type": "cake"
+    },
+    {
+      "id": "de04a17a-0db6-4bf0-a092-cbae32c066a5",
+      "venue_id": "22222222-2222-2222-2222-222222222202",
+      "vendor_name": "Three Pines Florals",
+      "vendor_type": "florals"
+    },
+    {
+      "id": "d2000001-0000-0000-0000-000000000003",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Valley Blooms",
+      "vendor_type": "florist"
+    },
+    {
+      "id": "e715dc46-9502-410f-aeef-2d21fdb4b26b",
+      "venue_id": "22222222-2222-2222-2222-222222222201",
+      "vendor_name": "Wildflower & Co.",
+      "vendor_type": "florist"
+    },
+    {
+      "id": "5e32310d-73c5-4be9-bc76-1c7026332f8c",
+      "venue_id": "22222222-2222-2222-2222-222222222204",
+      "vendor_name": "Wisteria & Vine",
+      "vendor_type": "florals"
+    }
+  ]
+}

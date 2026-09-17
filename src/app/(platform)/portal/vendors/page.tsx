@@ -1,6 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import {
+  VENDOR_ATTRIBUTES,
+  VENDOR_TYPE_KEYS,
+  normaliseVendorType,
+  vendorTypeLabel,
+} from '@/lib/vendors/vendor-types'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
@@ -33,6 +39,10 @@ interface Vendor {
   is_preferred: boolean
   click_count: number
   created_at: string
+  // Couple-facing filters and badges (migration 417).
+  is_local: boolean | null
+  is_budget_friendly: boolean | null
+  has_multiple_events: boolean | null
 }
 
 interface VendorForm {
@@ -43,6 +53,9 @@ interface VendorForm {
   website: string
   description: string
   preferred: boolean
+  isLocal: boolean
+  isBudgetFriendly: boolean
+  hasMultipleEvents: boolean
 }
 
 const EMPTY_FORM: VendorForm = {
@@ -53,25 +66,21 @@ const EMPTY_FORM: VendorForm = {
   website: '',
   description: '',
   preferred: false,
+  isLocal: false,
+  isBudgetFriendly: false,
+  hasMultipleEvents: false,
 }
 
-const VENDOR_TYPES = [
-  'Photographer',
-  'Videographer',
-  'Florist',
-  'DJ',
-  'Band',
-  'Caterer',
-  'Baker',
-  'Officiant',
-  'Hair & Makeup',
-  'Planner',
-  'Rentals',
-  'Lighting',
-  'Transportation',
-  'Stationer',
-  'Other',
-]
+/**
+ * The dropdown used to offer Title Case labels and write them straight
+ * into vendor_type, while the couple page keyed its labels on lowercase
+ * snake_case. Every vendor added here showed up to couples as "Other".
+ * The options now carry the canonical key as their value.
+ */
+const VENDOR_TYPE_OPTIONS = VENDOR_TYPE_KEYS.map((key) => ({
+  key,
+  label: vendorTypeLabel(key),
+}))
 
 // ---------------------------------------------------------------------------
 // Supabase client
@@ -82,24 +91,27 @@ const VENDOR_TYPES = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Keyed on the canonical vendor_type, so a legacy spelling still lands. */
 function typeConfig(type: string): { bg: string; text: string } {
   const map: Record<string, { bg: string; text: string }> = {
-    Photographer:     { bg: 'bg-purple-50',   text: 'text-purple-700' },
-    Videographer:     { bg: 'bg-indigo-50',   text: 'text-indigo-700' },
-    Florist:          { bg: 'bg-rose-50',     text: 'text-rose-700' },
-    DJ:               { bg: 'bg-sky-50',      text: 'text-sky-700' },
-    Band:             { bg: 'bg-violet-50',   text: 'text-violet-700' },
-    Caterer:          { bg: 'bg-orange-50',   text: 'text-orange-700' },
-    Baker:            { bg: 'bg-amber-50',    text: 'text-amber-700' },
-    Officiant:        { bg: 'bg-teal-50',     text: 'text-teal-700' },
-    'Hair & Makeup':  { bg: 'bg-pink-50',     text: 'text-pink-700' },
-    Planner:          { bg: 'bg-emerald-50',  text: 'text-emerald-700' },
-    Rentals:          { bg: 'bg-cyan-50',     text: 'text-cyan-700' },
-    Lighting:         { bg: 'bg-gold-50',     text: 'text-gold-700' },
-    Transportation:   { bg: 'bg-sage-100',    text: 'text-sage-700' },
-    Stationer:        { bg: 'bg-lime-50',     text: 'text-lime-700' },
+    photographer:   { bg: 'bg-purple-50',   text: 'text-purple-700' },
+    videographer:   { bg: 'bg-indigo-50',   text: 'text-indigo-700' },
+    florist:        { bg: 'bg-rose-50',     text: 'text-rose-700' },
+    dj:             { bg: 'bg-sky-50',      text: 'text-sky-700' },
+    band:           { bg: 'bg-violet-50',   text: 'text-violet-700' },
+    music:          { bg: 'bg-violet-50',   text: 'text-violet-700' },
+    caterer:        { bg: 'bg-orange-50',   text: 'text-orange-700' },
+    baker:          { bg: 'bg-amber-50',    text: 'text-amber-700' },
+    bartender:      { bg: 'bg-cyan-50',     text: 'text-cyan-700' },
+    officiant:      { bg: 'bg-teal-50',     text: 'text-teal-700' },
+    hair_makeup:    { bg: 'bg-pink-50',     text: 'text-pink-700' },
+    planner:        { bg: 'bg-emerald-50',  text: 'text-emerald-700' },
+    rentals:        { bg: 'bg-cyan-50',     text: 'text-cyan-700' },
+    lighting:       { bg: 'bg-gold-50',     text: 'text-gold-700' },
+    transportation: { bg: 'bg-sage-100',    text: 'text-sage-700' },
+    stationery:     { bg: 'bg-lime-50',     text: 'text-lime-700' },
   }
-  return map[type] ?? { bg: 'bg-sage-50', text: 'text-sage-600' }
+  return map[normaliseVendorType(type)] ?? { bg: 'bg-sage-50', text: 'text-sage-600' }
 }
 
 // ---------------------------------------------------------------------------
@@ -162,13 +174,22 @@ function VendorCard({
       {/* Type badge */}
       <div className="flex items-center gap-2 flex-wrap mb-3">
         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.bg} ${config.text}`}>
-          {vendor.vendor_type}
+          {vendorTypeLabel(vendor.vendor_type)}
         </span>
         {vendor.is_preferred && (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gold-100 text-gold-700">
             Preferred
           </span>
         )}
+        {/* The same badges the couple sees, so this page shows what they get */}
+        {VENDOR_ATTRIBUTES.filter((a) => a.badgeLabel && a.test(vendor)).map((a) => (
+          <span
+            key={a.key}
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${a.badgeClass}`}
+          >
+            {a.badgeLabel}
+          </span>
+        ))}
         {vendor.click_count > 0 && (
           <span className="inline-flex items-center gap-1 text-xs text-sage-500">
             <MousePointerClick className="w-3 h-3" />
@@ -230,6 +251,7 @@ function VendorModal({
   onSave,
   onClose,
   saving,
+  saveError,
   isEditing,
 }: {
   form: VendorForm
@@ -237,6 +259,7 @@ function VendorModal({
   onSave: () => void
   onClose: () => void
   saving: boolean
+  saveError: string | null
   isEditing: boolean
 }) {
   return (
@@ -286,11 +309,17 @@ function VendorModal({
               className="w-full px-3 py-2 bg-warm-white border border-border rounded-lg text-sm text-sage-900 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 transition-colors"
             >
               <option value="">Select type...</option>
-              {VENDOR_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
+              {VENDOR_TYPE_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
                 </option>
               ))}
+              {/* A stored spelling outside the canonical set keeps its
+                  place in the dropdown, so editing a name does not
+                  silently recategorise the vendor. */}
+              {form.type && !VENDOR_TYPE_KEYS.includes(form.type) && (
+                <option value={form.type}>{vendorTypeLabel(form.type)}</option>
+              )}
             </select>
           </div>
 
@@ -374,10 +403,49 @@ function VendorModal({
               </span>
             </div>
           </div>
+
+          {/* What couples can filter on. Migration 417 / Rixey parity. */}
+          <div className="pt-2 border-t border-border">
+            <p className="text-sm font-medium text-sage-700 mb-1">
+              What couples can filter on
+            </p>
+            <p className="text-xs text-sage-500 mb-3">
+              Each one becomes a filter at the top of the couple&apos;s vendor list, and a
+              badge on this vendor&apos;s card.
+            </p>
+            <div className="space-y-2">
+              {(
+                [
+                  ['isLocal', 'Local to the venue'],
+                  ['isBudgetFriendly', 'Budget-friendly'],
+                  ['hasMultipleEvents', 'Has worked here more than once'],
+                ] as const
+              ).map(([key, label]) => (
+                <label
+                  key={key}
+                  className="flex items-center gap-2.5 text-sm text-sage-700 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={form[key]}
+                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.checked }))}
+                    className="w-4 h-4 rounded border-border text-sage-600 focus:ring-sage-300"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-border">
+        <div className="flex flex-col gap-3 p-6 border-t border-border">
+          {saveError && (
+            <p className="text-sm text-red-600" role="alert">
+              {saveError}
+            </p>
+          )}
+          <div className="flex items-center justify-end gap-3">
           <button
             onClick={onClose}
             className="px-4 py-2 text-sm font-medium text-sage-600 bg-sage-50 rounded-lg hover:bg-sage-100 transition-colors"
@@ -391,6 +459,7 @@ function VendorModal({
           >
             {saving ? 'Saving...' : isEditing ? 'Save Changes' : 'Add Vendor'}
           </button>
+          </div>
         </div>
       </div>
     </div>
@@ -414,6 +483,7 @@ export default function VendorsPage() {
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null)
   const [form, setForm] = useState<VendorForm>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
@@ -448,6 +518,7 @@ export default function VendorsPage() {
   function openCreateModal() {
     setEditingVendor(null)
     setForm(EMPTY_FORM)
+    setSaveError(null)
     setModalOpen(true)
   }
 
@@ -455,12 +526,17 @@ export default function VendorsPage() {
     setEditingVendor(vendor)
     setForm({
       name: vendor.vendor_name,
-      type: vendor.vendor_type,
+      // Normalise on the way into the form so opening and saving an old
+      // row quietly migrates its spelling.
+      type: normaliseVendorType(vendor.vendor_type),
       email: vendor.contact_email ?? '',
       phone: vendor.contact_phone ?? '',
       website: vendor.website_url ?? '',
       description: vendor.description ?? '',
       preferred: vendor.is_preferred,
+      isLocal: vendor.is_local === true,
+      isBudgetFriendly: vendor.is_budget_friendly === true,
+      hasMultipleEvents: vendor.has_multiple_events === true,
     })
     setModalOpen(true)
   }
@@ -469,6 +545,7 @@ export default function VendorsPage() {
     setModalOpen(false)
     setEditingVendor(null)
     setForm(EMPTY_FORM)
+    setSaveError(null)
   }
 
   async function handleSave() {
@@ -478,14 +555,18 @@ export default function VendorsPage() {
     const payload = {
       venue_id: VENUE_ID,
       vendor_name: form.name.trim(),
-      vendor_type: form.type,
+      vendor_type: normaliseVendorType(form.type),
       contact_email: form.email.trim() || null,
       contact_phone: form.phone.trim() || null,
       website_url: form.website.trim() || null,
       description: form.description.trim() || null,
       is_preferred: form.preferred,
+      is_local: form.isLocal,
+      is_budget_friendly: form.isBudgetFriendly,
+      has_multiple_events: form.hasMultipleEvents,
     }
 
+    setSaveError(null)
     try {
       if (editingVendor) {
         const { error: updateErr } = await supabase
@@ -505,22 +586,32 @@ export default function VendorsPage() {
       closeModal()
       fetchData()
     } catch (err) {
+      // The modal stays open on failure and used to say nothing at all,
+      // so a coordinator who ticked a box and hit Save could not tell
+      // whether it had landed. Theme 1 of the parity audit, staff side.
       console.error('Failed to save vendor:', err)
+      setSaveError(
+        err instanceof Error ? err.message : 'Could not save this vendor. Try again.'
+      )
     } finally {
       setSaving(false)
     }
   }
 
   // ---- Filter + sort ----
-  const vendorTypes = Array.from(new Set(vendors.map((v) => v.vendor_type))).sort()
+  const vendorTypes = Array.from(new Set(vendors.map((v) => normaliseVendorType(v.vendor_type))))
+    .sort((a, b) => vendorTypeLabel(a).localeCompare(vendorTypeLabel(b)))
 
   const filteredVendors = vendors.filter((v) => {
-    if (typeFilter !== 'all' && v.vendor_type !== typeFilter) return false
+    if (typeFilter !== 'all' && normaliseVendorType(v.vendor_type) !== typeFilter) return false
     if (!searchQuery.trim()) return true
     const q = searchQuery.toLowerCase()
     return (
       v.vendor_name.toLowerCase().includes(q) ||
+      // Both the stored value and its label, so "photography" still finds
+      // a row now folded to photographer.
       v.vendor_type.toLowerCase().includes(q) ||
+      vendorTypeLabel(v.vendor_type).toLowerCase().includes(q) ||
       (v.description ?? '').toLowerCase().includes(q)
     )
   })
@@ -586,7 +677,7 @@ export default function VendorsPage() {
                   : 'bg-sage-100 text-sage-700 hover:bg-sage-200'
               )}
             >
-              {type}
+              {vendorTypeLabel(type)}
             </button>
           ))}
         </div>
@@ -621,7 +712,7 @@ export default function VendorsPage() {
             {searchQuery
               ? `No vendors match "${searchQuery}". Try a different search.`
               : typeFilter !== 'all'
-                ? `No ${typeFilter} vendors found. Try a different filter.`
+                ? `No ${vendorTypeLabel(typeFilter)} vendors found. Try a different filter.`
                 : 'Add your first vendor recommendation to help couples find the best pros for their day.'}
           </p>
           {!searchQuery && typeFilter === 'all' && (
@@ -654,6 +745,7 @@ export default function VendorsPage() {
           onSave={handleSave}
           onClose={closeModal}
           saving={saving}
+          saveError={saveError}
           isEditing={!!editingVendor}
         />
       )}

@@ -38,6 +38,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { getSageTaskPrompt } from '@/config/prompts/task-prompts-sage'
 import { formatBrainBlock, type AutoContextNote } from '@/lib/services/identity/auto-context-loader'
+import { wrapUntrustedContent } from '@/lib/security/prompt-sanitize'
 import {
   formatProfileReflectionBlock,
   scopeProfileForReflection,
@@ -297,6 +298,107 @@ interface WeddingContext {
     pinned: boolean
     source: string
   }>
+  /** What the couple has curated on their inspiration board. Their own
+   *  captions and tags only — the images are never fetched. */
+  inspo: InspoContext
+}
+
+/** Captions + tag frequencies derived from `inspo_gallery`. */
+export interface InspoContext {
+  /** Images on the board, including ones the couple never captioned. */
+  total: number
+  /** Most recent captions, newest first, trimmed and de-duplicated. */
+  captions: string[]
+  /** Tags they reach for most, commonest first. */
+  tags: Array<{ tag: string; count: number }>
+}
+
+const INSPO_ROW_LIMIT = 60
+const INSPO_MAX_CAPTIONS = 12
+const INSPO_MAX_CAPTION_CHARS = 140
+const INSPO_MAX_TAGS = 10
+
+/**
+ * Turn raw `inspo_gallery` rows into the slice worth spending prompt
+ * budget on: the newest captions, and the tags they lean on.
+ *
+ * Pure so the shaping is testable without a database. Rows arrive
+ * newest-first from the caller.
+ */
+export function deriveInspoContext(
+  rows: Array<{ caption: string | null; tags: string[] | null }> | null | undefined
+): InspoContext {
+  const empty: InspoContext = { total: 0, captions: [], tags: [] }
+  if (!rows || rows.length === 0) return empty
+
+  const captions: string[] = []
+  const seen = new Set<string>()
+  const tagCounts = new Map<string, number>()
+
+  for (const row of rows) {
+    const caption = (row.caption ?? '').replace(/\s+/g, ' ').trim()
+    // A board is mostly pictures. Untitled saves still count towards the
+    // total, they just have nothing to say.
+    if (caption) {
+      const key = caption.toLowerCase()
+      if (!seen.has(key) && captions.length < INSPO_MAX_CAPTIONS) {
+        seen.add(key)
+        captions.push(
+          caption.length > INSPO_MAX_CAPTION_CHARS
+            ? `${caption.slice(0, INSPO_MAX_CAPTION_CHARS - 1).trimEnd()}…`
+            : caption
+        )
+      }
+    }
+    for (const raw of row.tags ?? []) {
+      const tag = (raw ?? '').trim().toLowerCase()
+      if (!tag) continue
+      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+    }
+  }
+
+  const tags = Array.from(tagCounts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+    .slice(0, INSPO_MAX_TAGS)
+
+  return { total: rows.length, captions, tags }
+}
+
+/**
+ * Render the inspiration board for the prompt, or '' when the board is
+ * empty.
+ *
+ * The captions are the couple's own free text, so they go in the
+ * untrusted-data envelope like any other user content. The warning
+ * about not having seen the images is deliberate and load-bearing: the
+ * likeliest way this block makes Sage dishonest is a model that reads
+ * "candlelit tables" and starts admiring a photo it never opened.
+ */
+export function formatInspoBlock(inspo: InspoContext): string {
+  if (inspo.total === 0) return ''
+
+  const lines: string[] = [
+    `Inspiration board: ${inspo.total} image${inspo.total === 1 ? '' : 's'} saved on their /inspo page.`,
+  ]
+
+  if (inspo.tags.length > 0) {
+    const tagList = inspo.tags.map((t) => `${t.tag} (${t.count})`).join(', ')
+    lines.push(`What they save most: ${tagList}.`)
+  }
+
+  if (inspo.captions.length > 0) {
+    lines.push(
+      'Their own captions on recent saves. You have NOT seen the images, only these words:',
+      'use them to know what the couple is drawn to, never to describe, praise or judge a',
+      'picture. If they ask what you think of an image, say plainly that you can read their',
+      'notes but cannot see the photo.',
+      wrapUntrustedContent(inspo.captions.map((c) => `- ${c}`).join('\n'), 'inspo_captions')
+        .wrapped
+    )
+  }
+
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +506,23 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
     source: r.source,
   }))
 
+  // Inspiration board — Theme 3 of the Rixey→Bloom parity audit
+  // (2026-07-26), "AI context propagation dropped". The couple captions
+  // and tags every image they save, and none of it reached Sage, so
+  // someone who had spent an evening building a board of candlelit
+  // tables still got a generic answer about lighting.
+  //
+  // Captions and tags only. The images themselves are never fetched.
+  // Scoped on wedding_id like the timeline / budget / checklist reads
+  // above: a wedding belongs to one venue, and this is the service
+  // client, so there is no venue_id to add.
+  const { data: inspoRows } = await supabase
+    .from('inspo_gallery')
+    .select('caption, tags')
+    .eq('wedding_id', weddingId)
+    .order('created_at', { ascending: false })
+    .limit(INSPO_ROW_LIMIT)
+
   return {
     coupleName: partner1
       ? `${partner1.first_name} ${partner1.last_name}`
@@ -421,6 +540,9 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
     checklistTotal: checklistTotal ?? 0,
     checklistComplete: checklistComplete ?? 0,
     autoContext,
+    inspo: deriveInspoContext(
+      inspoRows as Array<{ caption: string | null; tags: string[] | null }> | null
+    ),
   }
 }
 
@@ -697,6 +819,14 @@ export async function generateSageResponse(
       parts.push(
         `Checklist: ${weddingContext.checklistComplete}/${weddingContext.checklistTotal} complete`
       )
+    }
+
+    // What they have pinned to their inspiration board. Shaped and
+    // wrapped by formatInspoBlock, which is where the "you have not seen
+    // the images" rail lives.
+    const inspoBlock = formatInspoBlock(weddingContext.inspo)
+    if (inspoBlock) {
+      parts.push(inspoBlock)
     }
 
     // Soft context (coordinator + AI knowledge of this couple). Pulled

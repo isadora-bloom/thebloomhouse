@@ -6,6 +6,13 @@ import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import { safeHref } from '@/lib/utils/safe-url'
 import {
+  VENDOR_ATTRIBUTES,
+  hasLiveOffer,
+  normaliseVendorType,
+  vendorTypeColor,
+  vendorTypeLabel,
+} from '@/lib/vendors/vendor-types'
+import {
   Store,
   Star,
   Mail,
@@ -40,32 +47,26 @@ interface VendorRecommendation {
   special_offer: string | null
   offer_expires_at: string | null
   portfolio_photos: string[] | null
+  // Venue-set attributes (migration 417). Filters at the top of the page,
+  // badges on the card.
+  is_local: boolean | null
+  is_budget_friendly: boolean | null
+  has_multiple_events: boolean | null
 }
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const VENDOR_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
-  caterer: { label: 'Caterer', color: '#2D8A4E' },
-  photographer: { label: 'Photographer', color: '#5D7A7A' },
-  videographer: { label: 'Videographer', color: '#7D8471' },
-  florist: { label: 'Florist', color: '#B8908A' },
-  dj: { label: 'DJ / Music', color: '#A6894A' },
-  band: { label: 'Band', color: '#8B6914' },
-  officiant: { label: 'Officiant', color: '#6B7280' },
-  planner: { label: 'Planner', color: '#3B82F6' },
-  baker: { label: 'Cake / Bakery', color: '#D97706' },
-  rentals: { label: 'Rentals / Decor', color: '#7C3AED' },
-  hair_makeup: { label: 'Hair & Makeup', color: '#EC4899' },
-  transportation: { label: 'Transportation', color: '#0891B2' },
-  lighting: { label: 'Lighting', color: '#F59E0B' },
-  stationery: { label: 'Stationery', color: '#6366F1' },
-  other: { label: 'Other', color: '#9CA3AF' },
-}
-
+/**
+ * Labels and colours come from `@/lib/vendors/vendor-types`, which the
+ * staff editor reads too. This page used to keep its own map keyed on
+ * exact strings, and `photography` / `florals` / `catering` / `cake` all
+ * fell through it to "Other" — 13 of the 28 live rows, each sitting in an
+ * "Other" pill beside the correctly-labelled one.
+ */
 function getTypeConfig(type: string) {
-  return VENDOR_TYPE_CONFIG[type] || VENDOR_TYPE_CONFIG.other
+  return { label: vendorTypeLabel(type), color: vendorTypeColor(type) }
 }
 
 // ---------------------------------------------------------------------------
@@ -83,9 +84,7 @@ function VendorCard({ vendor }: { vendor: VendorRecommendation }) {
     vendor.facebook_url ||
     photos.length > 1
 
-  const isOfferActive =
-    vendor.special_offer &&
-    (!vendor.offer_expires_at || new Date(vendor.offer_expires_at) >= new Date())
+  const isOfferActive = hasLiveOffer(vendor)
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden transition-all">
@@ -139,6 +138,19 @@ function VendorCard({ vendor }: { vendor: VendorRecommendation }) {
                   Preferred
                 </span>
               )}
+              {/* Venue-set trust badges. The offer has its own callout
+                  further down the card, so it is filterable but badgeless. */}
+              {VENDOR_ATTRIBUTES.filter((a) => a.badgeLabel && a.test(vendor)).map((a) => (
+                <span
+                  key={a.key}
+                  className={cn(
+                    'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold',
+                    a.badgeClass
+                  )}
+                >
+                  {a.badgeLabel}
+                </span>
+              ))}
             </div>
           </div>
         </div>
@@ -295,6 +307,8 @@ export default function PreferredVendorsPage() {
   const [vendors, setVendors] = useState<VendorRecommendation[]>([])
   const [loading, setLoading] = useState(true)
   const [activeType, setActiveType] = useState<string>('all')
+  const [search, setSearch] = useState('')
+  const [activeAttributes, setActiveAttributes] = useState<Record<string, boolean>>({})
 
   const supabase = createClient()
 
@@ -321,17 +335,59 @@ export default function PreferredVendorsPage() {
   }, [venueId, fetchVendors])
 
   // ---- Derived data ----
-  const vendorTypes = Array.from(new Set(vendors.map((v) => v.vendor_type))).sort()
+  // Everything downstream groups and filters on the canonical key, so a
+  // venue that typed "photography" and a venue that typed "photographer"
+  // land in one category instead of two pills.
+  const typeOf = (v: VendorRecommendation) => normaliseVendorType(v.vendor_type)
+
+  const vendorTypes = Array.from(new Set(vendors.map(typeOf))).sort((a, b) =>
+    vendorTypeLabel(a).localeCompare(vendorTypeLabel(b))
+  )
+
+  // Only offer a toggle for an attribute some vendor actually has, so the
+  // row does not advertise a filter that returns nothing. Ported from
+  // Rixey's TOGGLES.filter(...) behaviour.
+  const availableAttributes = VENDOR_ATTRIBUTES.filter((a) => vendors.some((v) => a.test(v)))
+  const activeAttributeKeys = availableAttributes
+    .filter((a) => activeAttributes[a.key])
+    .map((a) => a.key)
+  const term = search.trim().toLowerCase()
+  const hasActiveFilter = activeType !== 'all' || activeAttributeKeys.length > 0 || term !== ''
 
   const filteredVendors = vendors.filter((v) => {
-    if (activeType !== 'all' && v.vendor_type !== activeType) return false
+    if (activeType !== 'all' && typeOf(v) !== activeType) return false
+    // Toggles are AND, matching Rixey: each one narrows further.
+    for (const key of activeAttributeKeys) {
+      const attribute = VENDOR_ATTRIBUTES.find((a) => a.key === key)
+      if (attribute && !attribute.test(v)) return false
+    }
+    if (term) {
+      const haystack = [
+        v.vendor_name,
+        vendorTypeLabel(v.vendor_type),
+        v.description,
+        v.bio,
+        v.pricing_info,
+        v.special_offer,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      if (!haystack.includes(term)) return false
+    }
     return true
   })
 
-  // Group by type, sorted alphabetically within each group
+  const clearFilters = () => {
+    setActiveType('all')
+    setActiveAttributes({})
+    setSearch('')
+  }
+
+  // Group by canonical type, sorted alphabetically within each group
   const groupedVendors: Record<string, VendorRecommendation[]> = {}
   for (const v of filteredVendors) {
-    const type = v.vendor_type
+    const type = typeOf(v)
     if (!groupedVendors[type]) groupedVendors[type] = []
     groupedVendors[type].push(v)
   }
@@ -358,6 +414,47 @@ export default function PreferredVendorsPage() {
         </p>
       </div>
 
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search vendors by name, type, or what they offer"
+          aria-label="Search vendors"
+          className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-0"
+          style={{ ['--tw-ring-color' as string]: 'var(--couple-secondary)' }}
+        />
+      </div>
+
+      {/* Attribute toggles — only those some vendor actually has */}
+      {availableAttributes.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {availableAttributes.map((a) => {
+            const isOn = activeAttributes[a.key] === true
+            return (
+              <button
+                key={a.key}
+                onClick={() =>
+                  setActiveAttributes((prev) => ({ ...prev, [a.key]: !prev[a.key] }))
+                }
+                aria-pressed={isOn}
+                className={cn(
+                  'px-3 py-1.5 text-xs font-medium rounded-full border transition-colors',
+                  isOn
+                    ? 'text-white border-transparent'
+                    : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                )}
+                style={isOn ? { backgroundColor: 'var(--couple-secondary)' } : undefined}
+              >
+                {a.filterLabel}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {/* Category Filter — horizontal scrollable pills */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <button
@@ -374,13 +471,13 @@ export default function PreferredVendorsPage() {
         </button>
         {vendorTypes.map((type) => {
           const config = getTypeConfig(type)
-          const count = vendors.filter((v) => v.vendor_type === type).length
+          const count = vendors.filter((v) => typeOf(v) === type).length
           const isActive = activeType === type
 
           return (
             <button
               key={type}
-              onClick={() => setActiveType(type)}
+              onClick={() => setActiveType(isActive ? 'all' : type)}
               className={cn(
                 'px-3 py-1.5 text-xs font-medium rounded-full transition-colors',
                 isActive
@@ -395,6 +492,15 @@ export default function PreferredVendorsPage() {
         })}
       </div>
 
+      {/* How much of the directory is showing. Only worth saying once a
+          filter is narrowing it. */}
+      {!loading && vendors.length > 0 && hasActiveFilter && (
+        <p className="text-xs text-gray-400">
+          {filteredVendors.length} of {vendors.length} vendor
+          {vendors.length === 1 ? '' : 's'}
+        </p>
+      )}
+
       {/* Vendor Cards */}
       {loading ? (
         <div className="space-y-4">
@@ -402,7 +508,7 @@ export default function PreferredVendorsPage() {
             <div key={i} className="h-40 bg-gray-100 rounded-xl animate-pulse" />
           ))}
         </div>
-      ) : filteredVendors.length === 0 ? (
+      ) : vendors.length === 0 ? (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
           <Store
             className="w-12 h-12 mx-auto mb-4"
@@ -417,6 +523,30 @@ export default function PreferredVendorsPage() {
           <p className="text-gray-500 text-sm">
             Your venue will add recommended vendors here soon.
           </p>
+        </div>
+      ) : filteredVendors.length === 0 ? (
+        /* An empty directory and an over-narrow filter used to share this
+           panel, so a couple who ticked two toggles was told their venue
+           had not added anyone. */
+        <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
+          <Store
+            className="w-12 h-12 mx-auto mb-4"
+            style={{ color: 'var(--couple-primary)', opacity: 0.3 }}
+          />
+          <h3
+            className="text-lg font-semibold mb-2"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            No vendors match that
+          </h3>
+          <p className="text-gray-500 text-sm mb-4">Try clearing a filter.</p>
+          <button
+            onClick={clearFilters}
+            className="px-4 py-2 text-xs font-medium rounded-full text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: 'var(--couple-secondary)' }}
+          >
+            Clear filters
+          </button>
         </div>
       ) : activeType !== 'all' ? (
         /* Flat grid when filtered by specific type */

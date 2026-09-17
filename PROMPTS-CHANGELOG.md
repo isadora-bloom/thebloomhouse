@@ -11,6 +11,12 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-17 (Couple chat — the inspiration board reaches Sage, v2.1 → v2.2)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| sage-brain (`src/lib/services/brain/sage.ts`, block built by `formatInspoBlock`) | `couple-chat.prompt.v2.1` | `couple-chat.prompt.v2.2` | The WEDDING CONTEXT section now ends with the couple's `/inspo` board: how many images they have saved, the tags they reach for most with counts, and up to 12 of their newest captions in the `lib/security/prompt-sanitize` untrusted-data envelope. Closes Theme 3 ("AI context propagation dropped") of the 2026-07-26 Rixey parity audit, where a couple could caption a board of candlelit tables and still get a generic answer about lighting. The captions carry an explicit rail: Sage has read their words and has NOT seen the images, so it must not describe, praise or judge a picture, and must say so plainly if asked what it thinks of one. Shaping is capped (60 rows read, 12 captions, 140 chars each, 10 tags) so a couple with a 50-image board cannot crowd out the rest of the prompt. Behavioural impact: answers about palette, decor and florals get specific for couples who use the board; couples with an empty board see no change, because the block is omitted entirely. |
+
 ## 2026-09-16 (Inquiry brain — prior touches off the spine, v1.6 → v1.7)
 
 | brain | from | to | change |
