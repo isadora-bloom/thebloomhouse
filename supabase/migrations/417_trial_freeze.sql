@@ -14,7 +14,11 @@
 -- mail, but this file is the guarantee.
 --
 -- The rule lives in one place, public.venue_is_frozen():
---   not a demo venue, no stripe_subscription_id, trial_ends_at has passed.
+--   not a demo venue, not billing_exempt, no stripe_subscription_id,
+--   trial_ends_at has passed.
+--
+-- billing_exempt marks a venue that never pays and never freezes. Rixey
+-- Manor is free forever (Isadora, 2026-09-17), and it is set here.
 -- A cancelled or past-due subscription is NOT a freeze; that stays with
 -- require-plan.ts.
 --
@@ -37,6 +41,12 @@
 --
 -- Idempotent. No BEGIN/COMMIT (per migration convention).
 
+ALTER TABLE public.venues
+  ADD COLUMN IF NOT EXISTS billing_exempt boolean NOT NULL DEFAULT false;
+
+COMMENT ON COLUMN public.venues.billing_exempt IS
+  'Free forever: never on trial, never frozen, never asked to pay. Set by Bloom staff with the service key only (trg_venue_freeze refuses it from signed-in users). Rixey Manor since 2026-09-17.';
+
 CREATE OR REPLACE FUNCTION public.venue_is_frozen(p_venue_id uuid)
 RETURNS boolean
 LANGUAGE sql
@@ -49,6 +59,7 @@ AS $fn$
       FROM public.venues v
      WHERE v.id = p_venue_id
        AND COALESCE(v.is_demo, false) = false
+       AND v.billing_exempt = false
        AND v.stripe_subscription_id IS NULL
        AND v.trial_ends_at IS NOT NULL
        AND v.trial_ends_at <= now()
@@ -59,7 +70,7 @@ REVOKE ALL ON FUNCTION public.venue_is_frozen(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.venue_is_frozen(uuid) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.venue_is_frozen(uuid) IS
-  'True when the venue''s trial has ended with no Stripe subscription (and it is not a demo venue). The single definition of a frozen account; see migration 417.';
+  'True when the venue''s trial has ended with no Stripe subscription (and it is neither a demo venue nor billing_exempt). The single definition of a frozen account; see migration 417.';
 
 -- SQLSTATE PT402 makes PostgREST answer HTTP 402, so a browser write from
 -- a frozen venue fails as "payment required", not as a generic 400. The
@@ -139,7 +150,7 @@ AS $fn$
 DECLARE
   billing_cols text[] := ARRAY[
     'stripe_subscription_id', 'stripe_customer_id', 'subscription_status',
-    'plan_tier', 'past_due_since', 'trial_ends_at', 'is_demo'
+    'plan_tier', 'past_due_since', 'trial_ends_at', 'is_demo', 'billing_exempt'
   ];
   lifecycle_cols text[] := ARRAY['status', 'archived_at', 'updated_at'];
   jwt_role text := COALESCE(
@@ -178,6 +189,7 @@ BEGIN
       NEW.stripe_subscription_id := NULL;
       NEW.subscription_status := NULL;
       NEW.is_demo := false;
+      NEW.billing_exempt := false;
       NEW.trial_ends_at := now() + interval '14 days';
     END IF;
     RETURN NEW;
@@ -196,6 +208,15 @@ DROP TRIGGER IF EXISTS trg_venue_freeze ON public.venues;
 CREATE TRIGGER trg_venue_freeze
   BEFORE INSERT OR UPDATE OR DELETE ON public.venues
   FOR EACH ROW EXECUTE FUNCTION public.enforce_venue_freeze_on_venues();
+
+-- Rixey Manor is free forever (production id, as in
+-- scripts/backfill-rixey-history.ts; projects copied from production
+-- share it). After the venues trigger so billing_exempt is a billing
+-- column when this runs, which lets it through on an already-frozen row.
+UPDATE public.venues
+   SET billing_exempt = true
+ WHERE id = 'f3d10226-4c5c-47ad-b89b-98ad63842492'
+   AND billing_exempt = false;
 
 -- Every other public table with a venue_id column, minus the plumbing
 -- list above. Done as a loop so a table added later can be picked up by

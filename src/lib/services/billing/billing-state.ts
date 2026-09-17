@@ -70,6 +70,7 @@ interface VenueBillingRow {
   subscription_status: string | null
   stripe_subscription_id: string | null
   trial_ends_at: string | null
+  billing_exempt?: boolean | null
 }
 
 const KNOWN_TIERS = new Set<PlanTier>(['pre_opening', 'solo', 'growth', 'multi', 'enterprise'])
@@ -116,7 +117,7 @@ export async function resolveBillingState(
   try {
     const result = await client
       .from('venues')
-      .select('plan_tier, subscription_status, stripe_subscription_id, trial_ends_at')
+      .select('plan_tier, subscription_status, stripe_subscription_id, trial_ends_at, billing_exempt')
       .eq('id', venueId)
       .limit(1)
     data = result.data
@@ -129,7 +130,8 @@ export async function resolveBillingState(
   if (!row) return empty
 
   const storedTier = coerceTier(row.plan_tier)
-  const isTrial = !row.stripe_subscription_id
+  // A billing_exempt venue (Rixey, free forever) is never on trial.
+  const isTrial = !row.stripe_subscription_id && row.billing_exempt !== true
   const trialEndsAt = row.trial_ends_at ?? null
 
   let trialExpired = false
