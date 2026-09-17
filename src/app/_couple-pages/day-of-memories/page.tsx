@@ -38,9 +38,12 @@ export default function DayOfMemoriesPage() {
     const supabase = createClient()
     const { data } = await supabase
       .from('day_of_media')
-      .select('id, category, url, storage_path, filename, mime_type, size_bytes, caption, created_at')
+      .select('id, category, url, storage_path, filename, mime_type, size_bytes, caption, sort_order, created_at')
       .eq('wedding_id', weddingId)
-      .order('created_at', { ascending: false })
+      // Same order the venue arranges on their side. Without sort_order
+      // here, their reordering was invisible to the couple.
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true })
     setItems((data ?? []) as DayOfMediaRow[])
     setLoading(false)
   }, [weddingId])

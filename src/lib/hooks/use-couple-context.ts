@@ -9,6 +9,13 @@ export interface CoupleContext {
   venueId: string | null
   weddingId: string | null
   /**
+   * The signed-in auth user's id, or null in demo mode and before the
+   * async resolve finishes. Present so a page can tell its own rows
+   * apart from the other partner's, which is what the inspiration
+   * board's delete rule needs.
+   */
+  userId: string | null
+  /**
    * Per-venue AI assistant name from venue_ai_config.ai_name. Every
    * user-visible "Ask ..." / "Chat with ..." string in the couple portal
    * must read from here so white-label venues (Oakwood: "Ivy", etc.)
@@ -111,6 +118,10 @@ export function useCoupleContext(): CoupleContext {
   const [weddingDate, setWeddingDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(!initialDemo)
   const [isDemo, setIsDemo] = useState(initialDemo)
+  // The signed-in auth user, where there is one. Demo mode has none.
+  // Used to stamp authorship on couple uploads so a page can tell whose
+  // row it is looking at; see inspo_gallery.uploaded_by.
+  const [userId, setUserId] = useState<string | null>(null)
 
   // Keep in step if a navigation swaps the seeded value.
   useEffect(() => {
@@ -159,6 +170,7 @@ export function useCoupleContext(): CoupleContext {
       // Resolve the wedding for the signed-in couple.
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
+        setUserId(user.id)
         // user_profiles is the truth here. Migration 226's RLS helper
         // couple_user_wedding_id() reads user_profiles.wedding_id, so
         // every row the couple can actually see is scoped by it. This
@@ -218,5 +230,5 @@ export function useCoupleContext(): CoupleContext {
     }
   }, [isDemo, venueId, weddingId])
 
-  return { slug, venueId, weddingId, aiName, venueName, weddingDate, loading, isDemo }
+  return { slug, venueId, weddingId, userId, aiName, venueName, weddingDate, loading, isDemo }
 }

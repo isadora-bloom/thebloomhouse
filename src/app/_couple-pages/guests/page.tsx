@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { exportToCsv } from '@/lib/utils/csv-export'
+import { countMatches, planGuestImport } from '@/lib/services/couple/guest-import'
 import { TagChip } from '@/components/couple/tag-chip'
 import { TagPicker } from '@/components/couple/tag-picker'
 
@@ -218,17 +219,6 @@ function parseCsv(input: string): string[][] {
     .filter((r) => r.some((v) => v !== ''))
 }
 
-/** Map free-text RSVP values onto the app's statuses; null = leave default. */
-function normalizeRsvp(value: string): string | null {
-  const s = value.trim().toLowerCase()
-  if (!s) return null
-  if (['yes', 'y', 'attending', 'accepted', 'accept', 'confirmed', 'will attend', 'coming'].includes(s)) return 'attending'
-  if (['no', 'n', 'declined', 'decline', 'not attending', 'regrets', 'cant attend', "can't attend", 'not coming'].includes(s)) return 'declined'
-  if (['maybe', 'tentative', 'unsure'].includes(s)) return 'maybe'
-  if (['pending', 'invited', 'no response', 'awaiting'].includes(s)) return 'pending'
-  return null
-}
-
 const EMPTY_FORM: GuestFormData = {
   first_name: '',
   last_name: '',
@@ -320,6 +310,14 @@ export default function GuestListPage() {
   const [csvData, setCsvData] = useState<CsvRow[]>([])
   const [csvHeaders, setCsvHeaders] = useState<string[]>([])
   const [csvMapping, setCsvMapping] = useState<Record<string, string>>({})
+  const [importing, setImporting] = useState(false)
+  const [importSummary, setImportSummary] = useState<{
+    added: number
+    updated: number
+    unchanged: number
+    duplicateRowsInFile: number
+    failed: number
+  } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const supabase = createClient()
@@ -559,6 +557,12 @@ export default function GuestListPage() {
     return [...tables].sort()
   }, [guests])
 
+  // How much of the pending CSV is already on the list, for the preview.
+  const csvPreviewCounts = useMemo(
+    () => countMatches({ rows: csvData, mapping: csvMapping, existing: guests }),
+    [csvData, csvMapping, guests]
+  )
+
   // ---- Guest CRUD ----
   function openAddGuest() {
     setForm(EMPTY_FORM)
@@ -784,49 +788,52 @@ export default function GuestListPage() {
   }
 
   async function importCsv() {
-    const toInsert = csvData.map((row) => {
-      const guest: Record<string, unknown> = {
-        venue_id: venueId,
-        wedding_id: weddingId,
-        rsvp_status: 'pending',
-        has_plus_one: false,
-        invitation_sent: false,
-      }
-      Object.entries(csvMapping).forEach(([csvHeader, field]) => {
-        if (row[csvHeader]) guest[field] = row[csvHeader]
-      })
-
-      // Synthetic: split a combined "name" column into first / last.
-      if (typeof guest._full_name === 'string') {
-        const parts = guest._full_name.trim().split(/\s+/)
-        if (!guest.first_name && parts.length) guest.first_name = parts[0]
-        if (!guest.last_name && parts.length > 1) guest.last_name = parts.slice(1).join(' ')
-        delete guest._full_name
-      }
-
-      // Synthetic: interpret a plus-one column (a name or yes/true counts as yes).
-      if (guest._plus_one !== undefined) {
-        const s = String(guest._plus_one).trim().toLowerCase()
-        guest.has_plus_one = s !== '' && !['no', 'n', 'false', '0'].includes(s)
-        delete guest._plus_one
-      }
-
-      // Normalise free-text RSVP values onto the app's statuses.
-      if (typeof guest.rsvp_status === 'string') {
-        guest.rsvp_status = normalizeRsvp(guest.rsvp_status) ?? 'pending'
-      }
-
-      if (!guest.first_name) guest.first_name = 'Unknown'
-      return guest
+    // Match against what is already on file instead of inserting blindly.
+    // Re-importing a corrected spreadsheet used to double the list; the
+    // matching and the supplied-columns-only patching live in
+    // lib/services/couple/guest-import.ts, where the tests are.
+    const plan = planGuestImport({
+      rows: csvData,
+      mapping: csvMapping,
+      existing: guests,
+      venueId: venueId!,
+      weddingId: weddingId!,
     })
 
-    if (toInsert.length > 0) {
-      await writeOrLog(supabase.from('guest_list').insert(toInsert), { op: 'guest_list.insert', venueId })
+    setImporting(true)
+    let failed = 0
+
+    if (plan.inserts.length > 0) {
+      const res = await writeOrLog(supabase.from('guest_list').insert(plan.inserts), {
+        op: 'guest_list.insert',
+        venueId,
+      })
+      if (res.error) failed += plan.inserts.length
     }
+
+    // Updates go one at a time: PostgREST has no multi-row patch with
+    // different values per row, and a guest list is small enough that the
+    // round trips are cheaper than the machinery to avoid them.
+    for (const update of plan.updates) {
+      const res = await writeOrLog(
+        supabase.from('guest_list').update(update.fields).eq('id', update.id),
+        { op: 'guest_list.update', venueId }
+      )
+      if (res.error) failed++
+    }
+
+    setImporting(false)
     setShowCsvModal(false)
     setCsvData([])
     setCsvHeaders([])
     setCsvMapping({})
+    setImportSummary({
+      added: plan.inserts.length,
+      updated: plan.updates.length,
+      unchanged: plan.unchanged,
+      duplicateRowsInFile: plan.duplicateRowsInFile,
+      failed,
+    })
     fetchGuests()
   }
 
@@ -995,6 +1002,44 @@ export default function GuestListPage() {
   // ---- Main Render ----
   return (
     <div className="space-y-6">
+      {/* What the last import actually did. An import used to finish in
+          silence, which is how a doubled guest list goes unnoticed. */}
+      {importSummary && (
+        <div
+          className={cn(
+            'rounded-xl border p-4 text-sm flex items-start justify-between gap-4',
+            importSummary.failed > 0
+              ? 'bg-red-50 border-red-100 text-red-800'
+              : 'bg-green-50 border-green-100 text-green-800'
+          )}
+          role="status"
+        >
+          <p>
+            {[
+              importSummary.added > 0 ? `${importSummary.added} added` : null,
+              importSummary.updated > 0 ? `${importSummary.updated} updated` : null,
+              importSummary.unchanged > 0
+                ? `${importSummary.unchanged} already up to date`
+                : null,
+              importSummary.duplicateRowsInFile > 0
+                ? `${importSummary.duplicateRowsInFile} repeated row${importSummary.duplicateRowsInFile === 1 ? '' : 's'} in the file skipped`
+                : null,
+              importSummary.failed > 0 ? `${importSummary.failed} failed to save` : null,
+            ]
+              .filter(Boolean)
+              .join(', ') || 'Nothing to import from that file'}
+            .
+          </p>
+          <button
+            onClick={() => setImportSummary(null)}
+            className="shrink-0 opacity-60 hover:opacity-100"
+            aria-label="Dismiss import summary"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -2073,6 +2118,16 @@ export default function GuestListPage() {
               )}
             </div>
 
+            {/* Say what the import will do before it does it. Matching is on
+                email where the file has one, on first + last name otherwise. */}
+            {csvPreviewCounts.matching > 0 && (
+              <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-sm text-amber-800">
+                {csvPreviewCounts.matching} of these {csvPreviewCounts.matching === 1 ? 'is' : 'are'}{' '}
+                already on your list and will be updated rather than added again. Only the columns
+                in this file get touched, so an RSVP you already have is safe.
+              </div>
+            )}
+
             <div className="flex justify-end gap-3 pt-2">
               <button
                 onClick={() => setShowCsvModal(false)}
@@ -2082,10 +2137,15 @@ export default function GuestListPage() {
               </button>
               <button
                 onClick={importCsv}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
+                disabled={importing}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >
-                Import {csvData.length} Guests
+                {importing
+                  ? 'Importing…'
+                  : csvPreviewCounts.matching > 0
+                    ? `Import ${csvPreviewCounts.newGuests} new, update ${csvPreviewCounts.matching}`
+                    : `Import ${csvPreviewCounts.newGuests} Guests`}
               </button>
             </div>
           </div>

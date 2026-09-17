@@ -382,13 +382,22 @@ export default function WorksheetsPage() {
         await saveSection(section.key)
       }
 
-      // Create admin notification
+      // Create admin notification.
+      //
+      // priority matters: it defaults to 'normal' (migration 207) and the
+      // notification bell only reads 'high' and 'urgent'
+      // (components/shell/notification-bell.tsx). So this notice existed
+      // but reached nobody unless a coordinator happened to open the full
+      // notifications page. The couple pressed a button that says it goes
+      // to the team, which is about as explicit a request for attention
+      // as the portal has.
       await writeOrLog(supabase.from('admin_notifications').insert({
         venue_id: venueId,
         wedding_id: weddingId,
         type: 'worksheet_submitted',
         title: 'Worksheets submitted',
         body: 'The couple has submitted their wedding worksheets for review.',
+        priority: 'high',
       }), { op: 'admin_notifications.insert', venueId })
 
       setSentToTeam(true)

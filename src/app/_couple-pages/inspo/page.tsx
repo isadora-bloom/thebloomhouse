@@ -29,6 +29,8 @@ interface InspoImage {
   caption: string | null
   tags: string[] | null
   created_at: string
+  /** Who pinned it. Null on anything saved before migration 419, and in demo. */
+  uploaded_by: string | null
 }
 
 interface UploadFormData {
@@ -63,7 +65,7 @@ const TAG_OPTIONS = [
 // ---------------------------------------------------------------------------
 
 export default function InspoGalleryPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { venueId, weddingId, userId, loading: contextLoading } = useCoupleContext()
   const [images, setImages] = useState<InspoImage[]>([])
   const [loading, setLoading] = useState(true)
   const [showUpload, setShowUpload] = useState(false)
@@ -77,6 +79,7 @@ export default function InspoGalleryPage() {
   const [filePreview, setFilePreview] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -217,6 +220,11 @@ export default function InspoGalleryPage() {
         image_url: publicUrl,
         caption: form.caption.trim() || null,
         tags: tags.length > 0 ? tags : null,
+        // Authorship was never recorded, though the column has existed
+        // since migration 004. Without it nothing could tell whose pin
+        // was whose, so either partner could delete the other's. Null in
+        // demo mode, where there is no auth user. Migration 419.
+        uploaded_by: userId,
       }), { op: 'inspo_gallery.insert', venueId })
 
       setForm(EMPTY_FORM)
@@ -231,9 +239,36 @@ export default function InspoGalleryPage() {
   }
 
   // ---- Delete ----
+  /**
+   * Your own pins, and anything saved before authorship was recorded.
+   *
+   * The X used to show on every card and the delete had no owner check at
+   * all, in the client or in the policy, so either partner could clear
+   * the other's board. Rixey restricts it to the uploader or the venue.
+   * Rows with no `uploaded_by` predate migration 419 and stay deletable,
+   * otherwise the fix would strand 102 existing images with no way to
+   * remove them. Demo mode has no auth user, so it keeps the old
+   * behaviour.
+   */
+  function canDelete(img: InspoImage): boolean {
+    if (!userId) return true
+    return img.uploaded_by === null || img.uploaded_by === userId
+  }
+
   async function handleDelete(id: string) {
     if (!confirm('Remove this image from the gallery?')) return
-    await supabase.from('inspo_gallery').delete().eq('id', id)
+    const { error } = await supabase.from('inspo_gallery').delete().eq('id', id)
+    if (error) {
+      // The policy is the real gate, so say so rather than leaving the
+      // image sitting there looking undeleted for no stated reason. This
+      // gets its own notice because uploadError only renders inside the
+      // upload modal, which is shut by the time anyone deletes anything.
+      setDeleteError(
+        'That image could not be removed. Whoever saved it can remove it, or the venue can.'
+      )
+      return
+    }
+    setDeleteError(null)
     if (lightboxImage?.id === id) setLightboxImage(null)
     fetchImages()
   }
@@ -251,6 +286,22 @@ export default function InspoGalleryPage() {
 
   return (
     <div className="space-y-6">
+      {deleteError && (
+        <div
+          className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-start justify-between gap-3"
+          role="alert"
+        >
+          <span>{deleteError}</span>
+          <button
+            onClick={() => setDeleteError(null)}
+            className="shrink-0 opacity-60 hover:opacity-100"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -412,12 +463,15 @@ export default function InspoGalleryPage() {
                     >
                       <ZoomIn className="w-4 h-4" />
                     </button>
-                    <button
-                      onClick={() => handleDelete(img.id)}
-                      className="w-8 h-8 rounded-full bg-white/90 flex items-center justify-center text-red-500 hover:bg-white transition-colors shadow-sm"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    {canDelete(img) && (
+                      <button
+                        onClick={() => handleDelete(img.id)}
+                        className="w-8 h-8 rounded-full bg-white/90 flex items-center justify-center text-red-500 hover:bg-white transition-colors shadow-sm"
+                        aria-label="Remove this image"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

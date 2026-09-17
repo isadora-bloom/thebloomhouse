@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import { Camera, Film, MessageSquare, Trash2, Upload, Loader2, ExternalLink } from 'lucide-react'
+import { ArrowDown, ArrowUp, Camera, Film, MessageSquare, Trash2, Upload, Loader2, ExternalLink } from 'lucide-react'
 import { safeHref } from '@/lib/utils/safe-url'
 
 const BUCKET = 'day-of-media'
@@ -60,6 +60,8 @@ export function DayOfMemoriesTab({ weddingId, venueId }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState<Category | null>(null)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
+  const [reordering, setReordering] = useState<string | null>(null)
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
@@ -69,7 +71,11 @@ export function DayOfMemoriesTab({ weddingId, venueId }: Props) {
       .from('day_of_media')
       .select('id, category, url, storage_path, filename, mime_type, size_bytes, caption, sort_order, created_at')
       .eq('wedding_id', weddingId)
-      .order('created_at', { ascending: false })
+      // sort_order was written at insert and never read, so the arrange
+      // buttons below had no effect on anything. Explicit order first,
+      // upload time as the tiebreak.
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true })
 
     if (loadErr) {
       setError(loadErr.message)
@@ -85,42 +91,99 @@ export function DayOfMemoriesTab({ weddingId, venueId }: Props) {
     load()
   }, [load])
 
-  async function handleUpload(category: Category, file: File) {
-    if (!file) return
-    if (file.size > 200 * 1024 * 1024) {
-      setError('File too large (200 MB max).')
-      return
-    }
+  /**
+   * Upload a whole selection, one file at a time, and keep going when one
+   * of them fails.
+   *
+   * This took a single file per click. A coordinator with forty photos
+   * from the day clicked forty times, and the moment one file was too big
+   * or the connection dropped, the message replaced whatever the last one
+   * said. Each file now stands or falls on its own and the failures are
+   * named at the end, because "3 of 40 failed" is only useful if you know
+   * which three.
+   */
+  async function handleUpload(category: Category, files: File[]) {
+    if (files.length === 0) return
     setUploading(category)
     setError(null)
+    setProgress({ done: 0, total: files.length })
+
     const supabase = createClient()
-    try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const path = `${venueId}/${weddingId}/${crypto.randomUUID()}-${safeName}`
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, { contentType: file.type || undefined, cacheControl: '3600' })
-      if (upErr) throw upErr
+    // Carry on from the highest order in play, so a new batch lands after
+    // whatever is already arranged rather than on top of it.
+    let nextOrder = items.reduce((max, item) => Math.max(max, item.sort_order ?? 0), -1) + 1
+    const failures: string[] = []
 
-      const { error: insErr } = await supabase.from('day_of_media').insert({
-        venue_id: venueId,
-        wedding_id: weddingId,
-        category,
-        url: publicUrl(path),
-        storage_path: path,
-        filename: file.name,
-        mime_type: file.type || null,
-        size_bytes: file.size,
-        sort_order: items.length,
-      })
-      if (insErr) throw insErr
+    for (const [index, file] of files.entries()) {
+      try {
+        if (file.size > 200 * 1024 * 1024) {
+          throw new Error('over the 200 MB limit')
+        }
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const path = `${venueId}/${weddingId}/${crypto.randomUUID()}-${safeName}`
+        const { error: upErr } = await supabase.storage
+          .from(BUCKET)
+          .upload(path, file, { contentType: file.type || undefined, cacheControl: '3600' })
+        if (upErr) throw upErr
 
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed.')
-    } finally {
-      setUploading(null)
+        const { error: insErr } = await supabase.from('day_of_media').insert({
+          venue_id: venueId,
+          wedding_id: weddingId,
+          category,
+          url: publicUrl(path),
+          storage_path: path,
+          filename: file.name,
+          mime_type: file.type || null,
+          size_bytes: file.size,
+          sort_order: nextOrder,
+        })
+        if (insErr) throw insErr
+        nextOrder++
+      } catch (err) {
+        failures.push(`${file.name} (${err instanceof Error ? err.message : 'failed'})`)
+      } finally {
+        setProgress({ done: index + 1, total: files.length })
+      }
     }
+
+    if (failures.length > 0) {
+      const succeeded = files.length - failures.length
+      setError(
+        `${succeeded} of ${files.length} uploaded. These did not: ${failures.join('; ')}.`
+      )
+    }
+
+    await load()
+    setProgress(null)
+    setUploading(null)
+  }
+
+  async function move(item: DayOfMediaRow, direction: -1 | 1) {
+    const index = items.findIndex((i) => i.id === item.id)
+    const swapWith = items[index + direction]
+    if (!swapWith) return
+
+    // Write both rows' positions from their on-screen index, so a set of
+    // legacy rows that all share sort_order 0 still separates cleanly.
+    const supabase = createClient()
+    setReordering(item.id)
+    const updates = items.map((row, i) => {
+      if (i === index) return { id: row.id, sort_order: index + direction }
+      if (i === index + direction) return { id: row.id, sort_order: index }
+      return { id: row.id, sort_order: i }
+    })
+    for (const u of updates) {
+      const { error: updErr } = await supabase
+        .from('day_of_media')
+        .update({ sort_order: u.sort_order })
+        .eq('id', u.id)
+      if (updErr) {
+        setError(`Could not reorder: ${updErr.message}`)
+        break
+      }
+    }
+    await load()
+    setReordering(null)
   }
 
   async function saveCaption(id: string) {
@@ -199,22 +262,26 @@ export function DayOfMemoriesTab({ weddingId, venueId }: Props) {
               <div className="flex items-center gap-2 text-xs text-sage-600 mt-1">
                 {isBusy ? (
                   <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading…
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />{' '}
+                    {progress && progress.total > 1
+                      ? `Uploading ${progress.done} of ${progress.total}…`
+                      : 'Uploading…'}
                   </>
                 ) : (
                   <>
-                    <Upload className="w-3.5 h-3.5" /> Click or drop a file
+                    <Upload className="w-3.5 h-3.5" /> Click or drop files
                   </>
                 )}
               </div>
               <input
                 type="file"
                 accept={ACCEPT_BY_CATEGORY[cat]}
+                multiple
                 className="hidden"
                 disabled={!!uploading}
                 onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) handleUpload(cat, f)
+                  const chosen = Array.from(e.target.files ?? [])
+                  if (chosen.length > 0) handleUpload(cat, chosen)
                   e.currentTarget.value = ''
                 }}
               />
@@ -235,7 +302,7 @@ export function DayOfMemoriesTab({ weddingId, venueId }: Props) {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {items.map((item) => {
+            {items.map((item, index) => {
               const Icon = CATEGORY_META[item.category].icon
               const isImage = item.mime_type?.startsWith('image/')
               const draftCaption = captionDrafts[item.id]
@@ -261,6 +328,27 @@ export function DayOfMemoriesTab({ weddingId, venueId }: Props) {
                       <span>{CATEGORY_META[item.category].label}</span>
                       <span>·</span>
                       <span>{formatBytes(item.size_bytes)}</span>
+                      {/* Arrange. This is the order the couple sees. */}
+                      <span className="ml-auto flex items-center gap-0.5">
+                        <button
+                          onClick={() => move(item, -1)}
+                          disabled={index === 0 || reordering !== null}
+                          className="p-1 rounded hover:bg-sage-50 disabled:opacity-30 disabled:hover:bg-transparent"
+                          title="Move earlier"
+                          aria-label="Move earlier"
+                        >
+                          <ArrowUp className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => move(item, 1)}
+                          disabled={index === items.length - 1 || reordering !== null}
+                          className="p-1 rounded hover:bg-sage-50 disabled:opacity-30 disabled:hover:bg-transparent"
+                          title="Move later"
+                          aria-label="Move later"
+                        >
+                          <ArrowDown className="w-3 h-3" />
+                        </button>
+                      </span>
                     </div>
                     <textarea
                       value={captionValue}
