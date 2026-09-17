@@ -79,3 +79,26 @@ Bloom's portal has more sections than any of them (32 defaults, from bar plannin
 - Timeline Genius: [collaboration](https://blog.timelinegenius.com/how-to-collaborate-on-your-wedding-day-timelines-with-vendors-team-members-and-clients/)
 - RSVPify: [guest list app](https://rsvpify.com/guest-list-app/)
 - Losava: [AI planning tools compared](https://www.losava.com/blog/best-ai-wedding-planning-tools-2026)
+
+## Second look: what actually helps, and what just adds pressure
+
+Isadora's test, 17 Sep: the portal must not panic or pressure people. Read against that, half the list above is borrowed from products whose business is engagement, and the mechanics that drive engagement are the ones that drive dread. Zola's twelve-month countdown with push notifications is the most effective planning tool on the market and the most stressful thing a couple can install.
+
+**Keep, because both sides feel it and nobody is chased:**
+- Live venue documents (5). The couple reads what the venue wrote, always current, no version anxiety. The venue stops answering "did you get my email".
+- Fewer sections, released when they're relevant (3). Thirty-two sections on day one says "you are behind on thirty-two things". Show the five that matter at booking, and let the venue release the rest as the wedding approaches. This is the single biggest calm-down available and it costs a permission level, not a feature.
+- Where things stand, not "needs you" (1, reframed). No red dots, no counts of overdue. A short calm strip: what the venue is waiting on (rarely more than one thing), the next dated moment, and, most of the time, "Nothing needed from you right now" as a first-class state. The venue benefit is real: fewer chasing emails. The couple benefit is knowing they are not behind.
+- A soft close, not a lock (2, reframed). "Changes close on the 5th; after that, message us and we'll make them for you." The venue gets a stable plan for the day; the couple never meets a refused save.
+- RSVP done properly (8). Fewer texts from the couple to their guests, fewer from guests to the couple. Reminders to guests are the couple's call, and normal.
+- Collaborators the couple invites (12). A mother who can see the seating chart without borrowing a login is a small kindness that removes a recurring argument.
+- Hide a timeline item from one person (7). Cheap, and the kind of thing couples tell each other about.
+- Notification restraint (6). The rule is fewer, not better formatted: a notification only when the venue did something for you or needs exactly one thing.
+
+**Cut or change, because they pressure:**
+- The countdown checklist (4). A generated list of a hundred dated tasks is the panic machine. The venue has perhaps five real asks (final count, balance, insurance certificate, vendor list, the timeline) and they already have dates. Show those five, with the reason beside each, and make everything else undated and optional. Assigning tasks to one partner: skip; it invites blame.
+- Completeness percentages and per-section tick counts (Rixey, 14 Sep). A page that says 40% complete is a page that says you are 60% behind. Drop the percentage. A quiet tick when the venue has what it needs is enough.
+- "What past couples spent" in the budget (11). It reads as a comparison, and comparisons are the thing couples come to a venue to escape. Keep the pre-fill from the contract; drop the benchmark.
+- Sage proposing actions (13). Worth building, later, with one rule first: Sage never says "you haven't", only "want me to". An offer removes work; a reminder adds it. Until that rule is written into the prompt and tested, leave Sage answering rather than nudging.
+- Guest messaging from the list (9) and the real-room floor plan (10). Useful, not calming, not urgent. Wait for the road test to show whether couples want them.
+
+**The honest ranking for the road test:** 5, 3, 1-reframed, 2-reframed, 8, 12, 7, 6. Then stop and watch real couples before doing anything else.
