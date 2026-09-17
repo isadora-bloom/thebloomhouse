@@ -51,7 +51,7 @@ From week 2 to week 4 there are three agent builds running at once (admin panel,
 
 - [ ] **Vendor network app.** Stand up `vendor_bloom` with the same stack as ContractHouse (Next 16, Supabase, Tailwind, shadcn), so both merges look alike. It needs its own Supabase project, which you create.
 - [ ] **Admin panel** build starts.
-- [ ] **ContractHouse fixes** start, against a test copy of its database.
+- [x] **ContractHouse fixes** started 17 Sep, straight against its database since it only holds test contracts: every item in the audit's broken list, co-signer, certificate of completion, signed-copy email, Stripe Connect collect-then-transfer, tests and CI, plus a UIX pass. Left: cross-venue clause library, Stripe keys on Vercel, the merge itself.
 - [ ] **Export the 3 or 4 most complete Rixey couples.** The raw export stays local and never goes into git. Every email address and phone number (couples, guests, family, vendors) swapped for a safe test one, so nothing can notify a real person. Everything else as it is.
 - [ ] **Load them into the test Supabase project** as their own venue, with a coordinator login and a couple login. After the next E2E run, check the venue survived.
 - [ ] **Page spreadsheet**, generated from the route list (`scripts/gen-sitemap.mjs`): page, who sees it, nav location or orphan, blank columns for verdict and notes.
