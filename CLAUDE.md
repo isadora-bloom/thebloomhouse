@@ -13,7 +13,12 @@ Unified wedding venue intelligence platform. Three product areas (Agent, Intelli
 ## Who owns what (decided 2026-09-17)
 Two people work on this repo. Check whose area a change falls in before making it.
 - **Phil:** the Agent and Intel.
-- **Isadora:** admin panel; ContractHouse (getting it ready to merge in); road testing the client portal; a page-by-page UIX pass as a venue would see it; later, possibly the vendor network.
+- **Isadora:**
+  - Admin panel for The Bloom House as a business: who has registered, billing, usage. Not the identity tooling under `/admin`.
+  - Contracts: Bloom's native contracts (W57, migration 409) are to be deleted. The standalone `contracthouse` repo gets made solid and then merged in, because it is much further along. Don't build on W57.
+  - Road testing the client portal on historic Rixey portal data with identifying details changed, walked through as both the venue and the couple.
+  - A page-by-page UIX pass as a venue would see it, worked from a spreadsheet of every page.
+  - Vendor network: start by seeing what can be taken from the Rixey portal. Like ContractHouse, it merges into Bloom once solid.
 
 If work in one person's area needs a change in the other's, stop and say so. Don't make it quietly. Phil works on his own branch through PRs, Isadora mostly on `consolidation`.
 
