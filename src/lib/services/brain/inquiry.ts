@@ -54,7 +54,7 @@ import { pickSource, type EvidenceEntry } from '@/lib/services/identity/pick-fro
  * token in the inbound body. See `formatTourDateGuidance` for the
  * per-tour rule and the `## TODAY:` block injection sites.
  */
-export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.6'
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.7'
 
 /**
  * 2026-05-12 — Tour-state awareness.
@@ -320,6 +320,13 @@ export interface InquiryDraftOptions {
     from: string
     subject: string
     body: string
+    /**
+     * When the inquiry arrived (ISO). Prior-touch warmth reads the couple's
+     * ribbon strictly before this instant, so the inquiry's own touchpoint
+     * is not counted as a prior touch. Omitted by the harness and admin
+     * entry points, where "now" is the cutoff (2026-09-16).
+     */
+    receivedAt?: string
   }
   extractedData: {
     questions: string[]
@@ -977,7 +984,9 @@ export async function generateInquiryDraft(
   }
 
   try {
-    const intelContext = await buildSageIntelligenceContext(venueId, personId)
+    const intelContext = await buildSageIntelligenceContext(venueId, personId, {
+      before: options.inquiry.receivedAt,
+    })
     if (intelContext) {
       contextBlock += `\n\n${intelContext}`
     }

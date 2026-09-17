@@ -11,6 +11,12 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-16 (Inquiry brain — prior touches off the spine, v1.6 → v1.7)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| inquiry-brain (`src/lib/services/brain/inquiry.ts`, block built in `src/lib/services/intel/sage-intelligence.ts`) | `inquiry-brain.prompt.v1.6` | `inquiry-brain.prompt.v1.7` | The PRIOR TOUCHPOINTS block used to read the person-keyed reader (`tangential_signals` + `interactions`), which migration 400 had emptied at the writers, so a couple whose Instagram comment converged on them by handle still got a cold open. It now reads the couple's ribbon (`touchpoints` plus fragments promoted onto the couple) through `loadCouplePriorTouchesForPerson`, the narration is channel-first ("Instagram: commented on the autumn ceremony post (Sep 7)"), and the instruction is concrete: the opening sentence must acknowledge the history and name the platform, overriding the marketplace-relay line that says to acknowledge the channel lightly. Counts and dates stay out of the draft. `InquiryDraftOptions.inquiry.receivedAt` is the ribbon cutoff so the inquiry's own touchpoint is not counted as prior. Behavioural impact: warm couples get a specific opener; cold ones are unchanged. Section 22 gap 2 asserts it. |
+
 ## 2026-09-14 (Ingestion security audit, workstream S4a — untrusted-content wrapping)
 
 | brain | from | to | change |

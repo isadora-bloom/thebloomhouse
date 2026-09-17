@@ -22,6 +22,9 @@
  *     synthetic email. Returns the PipelineResult.
  *   - generate_inquiry_draft: invokes inquiry-brain directly with the
  *     provided InquiryDraftOptions. Returns the DraftResult shape.
+ *   - link_signal: hands a NormalizedSignal to linkSignal, the spine's one
+ *     writer. Returns the LinkResult.
+ *   - mirror_couple: mirrors a legacy weddings row onto couples.
  *   - compute_weekly_learned: invokes weekly-learned for the venue.
  *   - apply_daily_decay: runs the heat-mapping decay + cooling warnings
  *     + auto-mark-lost pass for the venue. Returns the DecaySummary.
@@ -41,6 +44,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { createServiceClient } from '@/lib/supabase/service'
+import type { NormalizedSignal } from '@/lib/services/identity/sources/types'
 import { isCronSecretConfigured, verifyCronAuth } from '@/lib/cron-auth'
 import { apiError } from '@/lib/api/api-error'
 
@@ -67,7 +72,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  let payload: { action?: string; venueId?: string; email?: Record<string, unknown>; options?: Record<string, unknown> }
+  let payload: {
+    action?: string
+    venueId?: string
+    weddingId?: string
+    email?: Record<string, unknown>
+    options?: Record<string, unknown>
+    signal?: Record<string, unknown>
+  }
   try {
     payload = await request.json()
   } catch {
@@ -89,6 +101,39 @@ export async function POST(request: NextRequest) {
         connectionId?: string; labels?: string[]; headers?: Record<string, string>
       }
       const result = await processIncomingEmail(venueId, email)
+      return NextResponse.json({ ok: true, result })
+    }
+
+    if (action === 'link_signal') {
+      // The one writer for the identity spine. A spec that needs a prior
+      // signal on file (a fragment carrying a handle, a touchpoint on a
+      // couple) asks the linker for it rather than inserting rows, the
+      // same call the vision and CSV adapters make.
+      const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+      const signal = payload.signal as unknown as NormalizedSignal | undefined
+      if (!signal?.external_id || !signal.channel || !signal.occurred_at) {
+        return NextResponse.json({ error: 'signal.external_id, channel and occurred_at are required' }, { status: 400 })
+      }
+      const result = await linkSignal({
+        supabase: createServiceClient(),
+        venueId,
+        signal,
+        bypassCache: true,
+        source: 'test-harness',
+        correlationId: 'test-harness',
+      })
+      return NextResponse.json({ ok: true, result })
+    }
+
+    if (action === 'mirror_couple') {
+      // Boards read the spine. A test that seeds legacy weddings rows needs
+      // couples rows to see them, and the only sanctioned way to write one
+      // is the mirror writer mintWedding itself calls (identity doctrine:
+      // one writer). Exposed here so a spec never imports src/ directly.
+      const { mirrorCoupleFromWedding } = await import('@/lib/services/identity/mirror-couple')
+      const weddingId = String(payload.weddingId ?? '')
+      if (!weddingId) return NextResponse.json({ error: 'weddingId is required' }, { status: 400 })
+      const result = await mirrorCoupleFromWedding({ venueId, weddingId, supabase: createServiceClient(), correlationId: 'test-harness' })
       return NextResponse.json({ ok: true, result })
     }
 

@@ -219,6 +219,8 @@ test.describe('§13 Phase 2 — Client Lifecycle + Availability', () => {
       .from('tours')
       .insert({
         venue_id: venueId,
+        // 192 dropped the column default: every writer classifies.
+        signal_class: 'unclassified',
         wedding_id: wedding.weddingId,
         scheduled_at: new Date().toISOString(),
         tour_type: 'in_person',

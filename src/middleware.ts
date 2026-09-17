@@ -9,7 +9,7 @@ import {
   demoTokenCookieOptions,
   demoHintCookieOptions,
 } from '@/lib/services/demo-token'
-import { isPlatformRole } from '@/lib/auth/roles'
+import { isPlatformRole, READ_ONLY_ROLES } from '@/lib/auth/roles'
 
 // Routes that never require authentication
 // /vendor/[token] is the vendor portal: token-gated on its own route, opened from an email, no session (W73 found it landing on /login).
@@ -77,7 +77,13 @@ export async function middleware(request: NextRequest) {
   // e.g. /demo/agent/inbox → /agent/inbox (with bloom_demo=true cookie)
   // This makes every demo page crawlable without JS / manual cookie setup.
   // -----------------------------------------------------------------------
-  if (pathname.startsWith('/demo/')) {
+  // /demo/exit is the route that ENDS a demo (src/app/demo/exit/route.ts).
+  // It sits under the same prefix as the crawlable rewrite, which used to
+  // catch it, rewrite it to /exit (a 404) and re-issue every demo cookie
+  // on the way out, so the banner's X and the sign-out menu never cleared
+  // the HttpOnly token: the S5 fix had never once run (§20 scenario 3,
+  // 2026-09-16). It is a real route, not a demo page; let it through.
+  if (pathname.startsWith('/demo/') && pathname !== '/demo/exit') {
     const realPath = pathname.replace(/^\/demo/, '') || '/'
 
     // /demo/api/... must never rewrite onto an API route. The rewrite
@@ -239,9 +245,16 @@ export async function middleware(request: NextRequest) {
   // 2026-05-08 fix: pre-fix middleware only checked the legacy cookie, so
   // /demo entry (which sets the new pair) hit the no-auth branch and bounced
   // through /welcome → /login redirect loops.
+  // The signed token counts as demo shape here as well. The middleware
+  // cannot verify it (no node:crypto on this runtime) and does not need
+  // to: presence is enough to know the request is carrying a demo
+  // identity, and with a real session that identity has to go, or the
+  // server-side readers (which DO verify it) would answer for Hawthorne
+  // while the user is signed in as themselves (2026-09-16).
   const isDemo =
     request.cookies.get('bloom_demo')?.value === 'true' ||
-    request.cookies.get('bloom_demo_hint')?.value === '1'
+    request.cookies.get('bloom_demo_hint')?.value === '1' ||
+    !!request.cookies.get('bloom_demo_token')?.value
   if (isDemo && !user) {
     return response
   }
@@ -318,6 +331,32 @@ export async function middleware(request: NextRequest) {
   // -----------------------------------------------------------------------
   // 3. Public routes — pass through
   // -----------------------------------------------------------------------
+  // -----------------------------------------------------------------------
+  // Readonly write guard. The one place "read-only" is enforced: a
+  // signed-in readonly profile may GET anything its venue can see, and
+  // may not mutate through the API. Checked here because 372 routes call
+  // getPlatformAuth and only 7 add a role check of their own; a guard
+  // per route would be 372 chances to forget one. The profile read only
+  // happens for a write with a session, so reads pay nothing.
+  // -----------------------------------------------------------------------
+  if (
+    user &&
+    pathname.startsWith('/api/') &&
+    !['GET', 'HEAD', 'OPTIONS'].includes(request.method)
+  ) {
+    const { data: writer } = await supabase
+      .from('user_profiles')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle()
+    if (writer && READ_ONLY_ROLES.has(writer.role as string)) {
+      return NextResponse.json(
+        { error: 'Forbidden: this account is read-only' },
+        { status: 403 },
+      )
+    }
+  }
+
   if (isPublicRoute(pathname)) {
     return response
   }

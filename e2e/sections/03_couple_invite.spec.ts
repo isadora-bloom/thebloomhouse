@@ -18,19 +18,17 @@ import { loginAs } from '../helpers/auth'
  * Covers:
  *   1. Coordinator POSTs /api/portal/invite-couple. Resend is intercepted
  *      (or falls back to console log when RESEND_API_KEY is absent). The
- *      response surfaces a `registerUrl` containing `?code=<eventCode>`,
+ *      response surfaces a `registerUrl` carrying the invitation token,
  *      and `weddings.couple_invited_at` is stamped.
- *   2. Couple POSTs /api/couple/register with the event code. The response
- *      is 200, a Supabase auth user is created with role=couple, the people
- *      row is linked by email, and `weddings.couple_registered_at` is set.
+ *   2. (Retired 2026-09-15) registration by event code. The register
+ *      flow is invite-token gated and is covered by §27.
  *   3. Venue isolation: couple A logging into venue A cannot fetch venue B's
  *      wedding data. (Asserted by middleware path guard + data lookup.)
  *   4. Couple cannot reach platform routes `/agent`, `/intel`, `/portal`,
  *      `/settings`, `/onboarding`, `/setup` — middleware bounces them.
  *   5. The couple portal dashboard renders after registration (proves the
  *      end-to-end sign-in + people→wedding linkage works).
- *   6. Manual link fallback: a couple handed the registration URL directly
- *      (with `?code=…`) can register without ever receiving the email.
+ *   6. (Retired 2026-09-15) manual `?code=` link; see §27.
  *
  * Strategy:
  *   - Resend interception: when RESEND_API_KEY is set, we hook
@@ -82,7 +80,10 @@ async function createInvitableWedding(
       role: 'partner1',
       first_name: 'Invite',
       last_name: `Couple-${ctx.testId}`,
-      email: null,
+      // The invite route reads the partner email off the spine, not the
+      // request body ("No partner email on file" otherwise), so the seed
+      // gives partner 1 one (2026-09-15).
+      email: `couple-${ctx.testId}@test.thebloomhouse.com`,
     })
     .select('id')
     .single()
@@ -102,7 +103,7 @@ test.describe('§3 Couple Invitation & Portal Access', () => {
     await cleanup(ctx)
   })
 
-  test('coordinator invite → registerUrl contains event code; wedding stamped couple_invited_at', async ({
+  test('coordinator invite → registerUrl carries the invitation token; wedding stamped couple_invited_at', async ({
     page,
     context,
   }) => {
@@ -125,8 +126,11 @@ test.describe('§3 Couple Invitation & Portal Access', () => {
       })
     })
 
-    // Need a page to carry the route handler + origin.
-    await page.goto('/welcome', { waitUntil: 'domcontentloaded' })
+    // The invite route is authenticated (S1): sign in as the venue's
+    // coordinator before posting. Registering the coordinator here keeps
+    // this test self-contained.
+    const coordinator = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
+    await loginAs(page, 'coordinator', { email: coordinator.email, password: coordinator.password })
     const resp = await page.request.post('/api/portal/invite-couple', {
       data: {
         weddingId,
@@ -140,7 +144,11 @@ test.describe('§3 Couple Invitation & Portal Access', () => {
     const payload = await resp.json()
     expect(payload.success).toBe(true)
     expect(payload.eventCode).toBe(eventCode)
-    expect(payload.registerUrl).toContain(`/couple/${slug}/register?code=${eventCode}`)
+    // The link carries partner 1's invitation token, not the event code:
+    // registration is invite-gated (migration 391), and the code is a
+    // display value on the coordinator side only.
+    expect(payload.registerUrl).toContain(`/couple/${slug}/register?invite=`)
+    expect(payload.registerUrl).not.toContain('?code=')
 
     // Wedding row should have couple_invited_at stamped
     const { data: wedding } = await admin()
@@ -155,113 +163,8 @@ test.describe('§3 Couple Invitation & Portal Access', () => {
     // If Resend *was* called, the captured body should reference the code.
     if (resendCalls.length > 0) {
       const concat = resendCalls.map((r) => r.body).join('\n')
-      expect(concat).toContain(eventCode)
+      expect(concat).toContain('/register?invite=')
     }
-  })
-
-  test('couple registers via /api/couple/register with event code', async ({ page }) => {
-    test.setTimeout(90_000)
-    const { orgId } = await createTestOrg(ctx)
-    const { venueId, slug } = await createTestVenue(ctx, { orgId })
-    const { weddingId, eventCode } = await createInvitableWedding(ctx, { venueId })
-
-    const coupleEmail = `couple-${ctx.testId}-reg@test.thebloomhouse.com`
-    const couplePassword = `TestPw!${ctx.testId}A1`
-
-    await page.goto('/welcome', { waitUntil: 'domcontentloaded' })
-    const resp = await page.request.post('/api/couple/register', {
-      data: { email: coupleEmail, password: couplePassword, eventCode, slug },
-    })
-    expect(resp.ok(), `register POST: ${resp.status()} ${await resp.text()}`).toBe(true)
-    const payload = await resp.json()
-    expect(payload.success).toBe(true)
-    expect(payload.weddingId).toBe(weddingId)
-
-    // DB invariants
-    const { data: wedding } = await admin()
-      .from('weddings')
-      .select('couple_registered_at')
-      .eq('id', weddingId)
-      .single()
-    expect(wedding?.couple_registered_at).toBeTruthy()
-
-    // The auth user exists and user_profiles.role === 'couple'.
-    // We find the user_profiles row via venue_id + role=couple; its `id`
-    // is the auth user id. listUsers pagination is unreliable at scale
-    // in this shared Supabase project.
-    const { data: profiles } = await admin()
-      .from('user_profiles')
-      .select('id, role')
-      .eq('venue_id', venueId)
-      .eq('role', 'couple')
-    expect(profiles?.length ?? 0).toBeGreaterThan(0)
-    const profileRow = profiles![0]
-    expect(profileRow.role).toBe('couple')
-    ctx.createdUserIds.push(profileRow.id)
-
-    // The people row for partner1 was updated to carry the registering email
-    const { data: person } = await admin()
-      .from('people')
-      .select('email')
-      .eq('wedding_id', weddingId)
-      .eq('role', 'partner1')
-      .single()
-    expect(person?.email).toBe(coupleEmail)
-  })
-
-  test('duplicate registration is rejected (idempotency)', async ({ page }) => {
-    test.setTimeout(90_000)
-    const { orgId } = await createTestOrg(ctx)
-    const { venueId, slug } = await createTestVenue(ctx, { orgId })
-    const { eventCode } = await createInvitableWedding(ctx, { venueId })
-
-    const coupleEmail = `couple-${ctx.testId}-dup@test.thebloomhouse.com`
-    const couplePassword = `TestPw!${ctx.testId}A1`
-
-    await page.goto('/welcome', { waitUntil: 'domcontentloaded' })
-    const first = await page.request.post('/api/couple/register', {
-      data: { email: coupleEmail, password: couplePassword, eventCode, slug },
-    })
-    expect(first.ok()).toBe(true)
-    // Track created couple user ids for cleanup via user_profiles
-    const { data: dupProfiles } = await admin()
-      .from('user_profiles')
-      .select('id')
-      .eq('venue_id', venueId)
-      .eq('role', 'couple')
-    for (const p of dupProfiles ?? []) ctx.createdUserIds.push(p.id)
-
-    // Second attempt with the same code should be rejected
-    const second = await page.request.post('/api/couple/register', {
-      data: {
-        email: `couple-${ctx.testId}-dup2@test.thebloomhouse.com`,
-        password: couplePassword,
-        eventCode,
-        slug,
-      },
-    })
-    expect(second.ok()).toBe(false)
-    const errBody = await second.json()
-    expect(String(errBody.error).toLowerCase()).toMatch(/already|registered/)
-  })
-
-  test('invalid event code is rejected', async ({ page }) => {
-    test.setTimeout(60_000)
-    const { orgId } = await createTestOrg(ctx)
-    const { slug } = await createTestVenue(ctx, { orgId })
-
-    await page.goto('/welcome', { waitUntil: 'domcontentloaded' })
-    const resp = await page.request.post('/api/couple/register', {
-      data: {
-        email: `nobody-${ctx.testId}@test.thebloomhouse.com`,
-        password: 'Whatever12!',
-        eventCode: 'NOT-A-REAL-CODE',
-        slug,
-      },
-    })
-    expect(resp.ok()).toBe(false)
-    const body = await resp.json()
-    expect(String(body.error).toLowerCase()).toMatch(/invalid|event code/)
   })
 
   test('couple cannot access platform routes (/agent, /intel, /portal, /settings, /onboarding)', async ({
@@ -359,105 +262,9 @@ test.describe('§3 Couple Invitation & Portal Access', () => {
     }
   })
 
-  // Manual-link fallback is flaky: the register form submit sometimes completes
-  // (couple lands on portal) but the DB update to `couple_registered_at` races
-  // against the client-side redirect, and sometimes the click doesn't trigger
-  // the POST at all (likely a React controlled-input timing issue with
-  // Playwright's `fill` before all useState initializers have flushed). The
-  // underlying API path is already proven by the direct POST test above
-  // ("couple registers via /api/couple/register with event code") and by the
-  // page-load assertion below that confirms `?code=` pre-fills the form.
-  // Re-enable the full UI round-trip once the page can be stabilized with a
-  // deterministic "ready" signal.
-  test('manual link fallback: ?code= pre-fills the event code field', async ({ page }) => {
-    test.setTimeout(60_000)
-    const { orgId } = await createTestOrg(ctx)
-    const { venueId, slug } = await createTestVenue(ctx, { orgId })
-    const { eventCode } = await createInvitableWedding(ctx, { venueId })
-
-    await page.goto(`/couple/${slug}/register?code=${eventCode}`, { waitUntil: 'domcontentloaded' })
-    // The event code input is pre-filled from the ?code= query param.
-    const html = await page.content()
-    expect(html).toContain(eventCode)
-    // And the email + password inputs render (sanity check the form is live)
-    await expect(page.locator('input[type="email"]')).toBeVisible()
-    await expect(page.locator('input[type="password"]').first()).toBeVisible()
-    void venueId
-  })
-
-  test.skip('INVESTIGATE: manual link fallback full UI round-trip', async ({ page }) => {
-    test.setTimeout(90_000)
-    const { orgId } = await createTestOrg(ctx)
-    const { venueId, slug } = await createTestVenue(ctx, { orgId })
-    const { eventCode } = await createInvitableWedding(ctx, { venueId })
-
-    // Visit the registration page with the prefilled code
-    await page.goto(`/couple/${slug}/register?code=${eventCode}`, { waitUntil: 'domcontentloaded' })
-
-    // The event code input should be pre-filled from URL
-    const codeInput = page.locator('input').first()
-    // Fall back: find any input that contains the code as default value
-    await expect(async () => {
-      const html = await page.content()
-      expect(html).toContain(eventCode)
-    }).toPass({ timeout: 10_000 })
-    void codeInput // silence TS
-
-    // Fill in the remaining fields and submit
-    const coupleEmail = `couple-${ctx.testId}-manual@test.thebloomhouse.com`
-    const couplePassword = `TestPw!${ctx.testId}A1`
-
-    await page.fill('input[type="email"]', coupleEmail)
-    // The form has two password inputs (password + confirm). Fill both.
-    const passInputs = page.locator('input[type="password"]')
-    await passInputs.nth(0).fill(couplePassword)
-    await passInputs.nth(1).fill(couplePassword)
-
-    // Listen for the register response so we can assert status
-    const registerPromise = page.waitForResponse(
-      (r) => r.url().includes('/api/couple/register') && r.request().method() === 'POST',
-      { timeout: 20_000 }
-    )
-    await page.click('button[type="submit"]')
-    const registerResp = await registerPromise
-    const registerStatus = registerResp.status()
-    let registerBody: unknown = null
-    try {
-      registerBody = await registerResp.json()
-    } catch {
-      registerBody = await registerResp.text().catch(() => null)
-    }
-    expect(
-      registerResp.ok(),
-      `manual register POST ${registerStatus}: ${JSON.stringify(registerBody)}`
-    ).toBe(true)
-    await page.waitForTimeout(2000)
-    const url = page.url()
-    const bodyText = await page.locator('body').innerText()
-    const ok =
-      url === `http://localhost:3000/couple/${slug}` ||
-      url.startsWith(`http://localhost:3000/couple/${slug}`) ||
-      /Account Created/i.test(bodyText) ||
-      /sign in/i.test(bodyText)
-    expect(ok, `expected success state after manual register; url=${url}`).toBe(true)
-
-    // Confirm the wedding was stamped as registered — this is the strongest
-    // DB invariant we can cheaply check after a UI submission, and it
-    // proves the register API executed end-to-end.
-    const { data: w } = await admin()
-      .from('weddings')
-      .select('couple_registered_at')
-      .eq('event_code', eventCode)
-      .single()
-    expect(w?.couple_registered_at, 'wedding.couple_registered_at should be stamped after manual register').toBeTruthy()
-
-    // Best-effort: cleanup any user_profiles row for this venue with role=couple
-    const { data: manualProfiles } = await admin()
-      .from('user_profiles')
-      .select('id')
-      .eq('venue_id', venueId)
-      .eq('role', 'couple')
-    for (const p of manualProfiles ?? []) ctx.createdUserIds.push(p.id)
-  })
+  // Registration by event code was retired: /api/couple/register is gated
+  // on the invitation token (couple_invites.token_hash, migration 391) and
+  // `?code=` no longer pre-fills anything. The register, duplicate,
+  // invalid-token and manual-link cases now live in §27, which drives the
+  // real page with the seeded invitation. Removed 2026-09-15, not skipped.
 })
-

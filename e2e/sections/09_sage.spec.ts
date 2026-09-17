@@ -1,4 +1,4 @@
-import { test, expect, request as pwRequest } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { SupabaseClient } from '@supabase/supabase-js'
 import {
   createContext,
@@ -8,6 +8,7 @@ import {
   cleanup,
   TestContext,
   adminClient,
+  createTestUser,
 } from '../helpers/seed'
 import {
   cleanupRateLimits,
@@ -15,6 +16,7 @@ import {
   seedSageContext,
   testRateLimitPrefix,
 } from '../helpers/sage-seed'
+import { loginAs } from '../helpers/auth'
 
 /**
  * §9 SAGE (couple-facing AI chat)
@@ -299,13 +301,18 @@ test.describe('§9 Sage (couple chat)', () => {
   // d) Rate-limit enforcement end-to-end
   // ---------------------------------------------------------------------------
 
-  test('d) /api/portal/sage returns 429 once the window cap is hit', async ({ baseURL }) => {
+  test('d) /api/portal/sage returns 429 once the window cap is hit', async ({ page }) => {
     if (!(await rateLimitsTableExists())) {
       test.skip(true, 'TODO: migration 207_rate_limit_buckets.sql not applied — endpoint currently falls through to "allow" on RPC error (fail-open on infra error), so 429 cannot be asserted until the migration is run.')
     }
     const { orgId } = await createTestOrg(ctx)
     const { venueId } = await createTestVenue(ctx, { orgId })
     const wedding = await createTestWedding(ctx, { venueId })
+    // The route authenticates before it rate-limits (S-audit ordering): an
+    // anonymous probe is 401, never 429, so the cap is asserted from a
+    // signed-in coordinator (2026-09-15).
+    const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
+    await loginAs(page, 'coordinator', { email: coord.email, password: coord.password })
 
     // The endpoint uses key=`sage:${weddingId || venueId || 'anonymous'}`
     // with limit=20 / windowSec=900. Pre-fill rate_limit_buckets with `limit`
@@ -324,9 +331,8 @@ test.describe('§9 Sage (couple chat)', () => {
     })
     expect(preErr).toBeNull()
 
-    const apiContext = await pwRequest.newContext({ baseURL })
-    try {
-      const res = await apiContext.post('/api/portal/sage', {
+    {
+      const res = await page.request.post('/api/portal/sage', {
         data: {
           venueId,
           weddingId: wedding.weddingId,
@@ -339,8 +345,6 @@ test.describe('§9 Sage (couple chat)', () => {
       expect(retryAfter, 'Retry-After header should be present on 429').toBeTruthy()
       const body = await res.json().catch(() => ({}))
       expect(String(body.error ?? '')).toMatch(/too many|wait/i)
-    } finally {
-      await apiContext.dispose()
     }
   })
 })

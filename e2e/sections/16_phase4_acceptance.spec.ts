@@ -200,6 +200,8 @@ test.describe('§16 Phase 4 — Client quality intelligence', () => {
       .from('tours')
       .insert({
         venue_id: venueId,
+        // 192 dropped the column default: every writer classifies.
+        signal_class: 'unclassified',
         scheduled_at: new Date().toISOString(),
         tour_type: 'in_person',
         outcome: 'booked',
@@ -301,6 +303,8 @@ test.describe('§16 Phase 4 — Client quality intelligence', () => {
       .from('tours')
       .insert({
         venue_id: venueId,
+        // 192 dropped the column default: every writer classifies.
+        signal_class: 'unclassified',
         conducted_by: consultantId,
         scheduled_at: new Date().toISOString(),
         tour_type: 'in_person',

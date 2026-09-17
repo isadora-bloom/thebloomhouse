@@ -44,10 +44,22 @@ export async function loginCoupleResilient(
   await page.waitForSelector('input[type="email"]', { timeout: 20_000 })
   await page.fill('input[type="email"]', opts.email)
   await page.fill('input[type="password"]', opts.password)
+  // waitForURL can reject when the login page's full-page assign interrupts
+  // the navigation it was watching, so its promise is not the verdict; the
+  // URL the page ends on is. A login that never left /login is named here
+  // rather than surfacing later as "guest not on the page" (when the page
+  // was /couple/login/guests all along).
   await Promise.all([
-    page.waitForURL((u) => !u.pathname.endsWith('/login'), { timeout: 30_000 }).catch(() => null),
+    page.waitForURL((u) => !u.pathname.endsWith('/login'), { timeout: 60_000 }).catch(() => null),
     page.click('button[type="submit"]'),
   ])
+  const deadline = Date.now() + 60_000
+  while (new URL(page.url()).pathname.endsWith('/login')) {
+    if (Date.now() > deadline) {
+      throw new Error(`loginCoupleResilient: still on ${page.url()} 60s after submit for ${opts.email}`)
+    }
+    await page.waitForTimeout(500)
+  }
 }
 
 export async function seedChecklistItem(
@@ -125,7 +137,9 @@ export async function seedTimeline(
         name: markerName,
         time: '17:30',
         duration: 30,
-        notes: `[e2e:${ctx.testId}]`,
+        // care_notes: guest_list has no notes column (004); the helper 400d
+      // on every seeded guest until 2026-09-15.
+      care_notes: `[e2e:${ctx.testId}]`,
         phase: 'reception',
         icon: 'star',
       },
@@ -159,7 +173,7 @@ export async function seedGuest(
       first_name: firstName,
       last_name: lastName,
       rsvp_status: 'pending',
-      notes: `[e2e:${ctx.testId}]`,
+      care_notes: `[e2e:${ctx.testId}]`,
     })
     .select('id')
     .single()

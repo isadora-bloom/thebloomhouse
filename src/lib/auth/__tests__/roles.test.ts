@@ -42,6 +42,9 @@ describe('role vocabulary matches the database', () => {
 
   it('the venue manager is admitted and the phantom is not', () => {
     expect(isPlatformRole('venue_manager')).toBe(true)
+    // readonly is admitted; the middleware's write guard is what makes
+    // it read-only (2026-09-15).
+    expect(isPlatformRole('readonly')).toBe(true)
     expect(isPlatformRole('manager')).toBe(false)
     expect(isPlatformRole('couple')).toBe(false)
     expect(isPlatformRole(null)).toBe(false)

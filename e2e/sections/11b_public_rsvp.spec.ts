@@ -39,6 +39,7 @@ async function seedWebsiteWithGuest(ctx: TestContext): Promise<{
   venueId: string
   weddingId: string
   websiteSlug: string
+  shareToken: string
   guestId: string
   guestFirst: string
   guestLast: string
@@ -49,6 +50,10 @@ async function seedWebsiteWithGuest(ctx: TestContext): Promise<{
 
   // Unique website slug, 2-segment for safety.
   const websiteSlug = `e2e-rsvp-${ctx.testId}-${Math.random().toString(36).slice(2, 6)}`
+  // The public search and RSVP actions are gated on share_token (S-audit),
+  // sent as ?t= (the name the route and the /w/[slug] RSVP section use);
+  // the route compares it as sent, so a fixed value keeps the test readable.
+  const shareToken = `e2e-share-${ctx.testId}`
 
   // wedding_website_settings row, published.
   const { error: wsErr } = await admin()
@@ -58,6 +63,7 @@ async function seedWebsiteWithGuest(ctx: TestContext): Promise<{
       wedding_id: wedding.weddingId,
       slug: websiteSlug,
       is_published: true,
+      share_token: shareToken,
       theme: 'classic',
       couple_names: `E2E Couple ${ctx.testId}`,
     })
@@ -86,6 +92,7 @@ async function seedWebsiteWithGuest(ctx: TestContext): Promise<{
     venueId,
     weddingId: wedding.weddingId,
     websiteSlug,
+    shareToken,
     guestId: guestRow!.id,
     guestFirst,
     guestLast,
@@ -117,7 +124,7 @@ test.describe('§11b Public RSVP (built)', () => {
     const seed = await seedWebsiteWithGuest(ctx)
 
     const res = await request.get(
-      `/api/public/wedding-website?slug=${encodeURIComponent(seed.websiteSlug)}&action=search_guest&name=${encodeURIComponent(seed.guestFirst)}`
+      `/api/public/wedding-website?slug=${encodeURIComponent(seed.websiteSlug)}&t=${encodeURIComponent(seed.shareToken)}&action=search_guest&name=${encodeURIComponent(seed.guestFirst)}`
     )
     expect(res.ok(), `search failed: ${res.status()} ${await res.text()}`).toBe(true)
     const body = await res.json()
@@ -132,7 +139,7 @@ test.describe('§11b Public RSVP (built)', () => {
 
     // Submit an RSVP with extended fields so both tables are exercised.
     const res = await request.post(
-      `/api/public/wedding-website?slug=${encodeURIComponent(seed.websiteSlug)}&action=rsvp`,
+      `/api/public/wedding-website?slug=${encodeURIComponent(seed.websiteSlug)}&t=${encodeURIComponent(seed.shareToken)}&action=rsvp`,
       {
         data: {
           guest_id: seed.guestId,
@@ -208,6 +215,12 @@ test.describe('§11b Public RSVP (built)', () => {
     const wedding = await createTestWedding(ctx, { venueId })
 
     const websiteSlug = `e2e-rsvp-${ctx.testId}-${Math.random().toString(36).slice(2, 6)}`
+
+    // The public search and RSVP actions are gated on share_token (S-audit);
+
+    // the route compares it as sent, so a fixed value keeps the test readable.
+
+    const shareToken = `e2e-share-${ctx.testId}`
     await admin()
       .from('wedding_website_settings')
       .insert({
@@ -215,6 +228,7 @@ test.describe('§11b Public RSVP (built)', () => {
         wedding_id: wedding.weddingId,
         slug: websiteSlug,
         is_published: true,
+        share_token: shareToken,
         theme: 'classic',
       })
     const guestFirst = `Quentin${ctx.testId}`
@@ -233,7 +247,7 @@ test.describe('§11b Public RSVP (built)', () => {
 
     // Public RSVP submission — no auth
     const rsvpRes = await request.post(
-      `/api/public/wedding-website?slug=${encodeURIComponent(websiteSlug)}&action=rsvp`,
+      `/api/public/wedding-website?slug=${encodeURIComponent(websiteSlug)}&t=${encodeURIComponent(shareToken)}&action=rsvp`,
       {
         data: {
           guest_id: guestId,

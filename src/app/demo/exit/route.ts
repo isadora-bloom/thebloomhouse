@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { DEMO_TOKEN_COOKIE, DEMO_HINT_COOKIE } from '@/lib/services/demo-token'
+import {
+  DEMO_TOKEN_COOKIE,
+  DEMO_HINT_COOKIE,
+  demoTokenCookieOptions,
+  demoHintCookieOptions,
+} from '@/lib/services/demo-token'
 
 /**
  * POST (or GET) /demo/exit — end a demo session properly.
@@ -23,22 +28,22 @@ import { DEMO_TOKEN_COOKIE, DEMO_HINT_COOKIE } from '@/lib/services/demo-token'
  */
 
 function clearedResponse(res: NextResponse): NextResponse {
-  const expire = {
-    path: '/',
-    maxAge: 0,
-    expires: new Date(0),
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax' as const,
-  }
-  // HttpOnly matches how each was set; a mismatch leaves the original in
-  // place in some browsers.
-  res.cookies.set(DEMO_TOKEN_COOKIE, '', { ...expire, httpOnly: true })
-  res.cookies.set(DEMO_HINT_COOKIE, '', { ...expire, httpOnly: false })
+  // Every attribute matches how the entry set the cookie, from the same
+  // option builders: HttpOnly, SameSite and Secure all have to agree or
+  // the browser keeps the original. Secure in particular is off under
+  // the E2E harness, which serves the production build over plain
+  // http://localhost; a hand-rolled `secure: NODE_ENV === 'production'`
+  // here left the signed token alive after "Exit demo", and the next
+  // sign-in landed on Hawthorne Manor (§20 scenario 3, 2026-09-16).
+  const gone = { maxAge: 0, expires: new Date(0) }
+  res.cookies.set(DEMO_TOKEN_COOKIE, '', { ...demoTokenCookieOptions(), ...gone })
+  res.cookies.set(DEMO_HINT_COOKIE, '', { ...demoHintCookieOptions(), ...gone })
   // The legacy trio too, so one call is the whole job and the client-side
   // helper is belt-and-braces rather than load-bearing.
-  res.cookies.set('bloom_demo', '', { ...expire, httpOnly: false })
-  res.cookies.set('bloom_venue', '', { ...expire, httpOnly: false })
-  res.cookies.set('bloom_scope', '', { ...expire, httpOnly: false })
+  const legacy = { path: '/', sameSite: 'lax' as const, httpOnly: false, ...gone }
+  res.cookies.set('bloom_demo', '', legacy)
+  res.cookies.set('bloom_venue', '', legacy)
+  res.cookies.set('bloom_scope', '', legacy)
   return res
 }
 

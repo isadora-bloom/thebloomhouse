@@ -80,6 +80,36 @@ describe('loadCouplePriorTouches', () => {
     expect(s.touches[0].summary).toBe('Story view on instagram')
   })
 
+  it('lists a fragment promoted onto the couple as a touch, since no touchpoint was written for it', async () => {
+    const sb = makeFakeSupabase({
+      touchpoints: [tp({ id: 'T1', channel: 'knot', action_type: 'inquiry', occurred_at: '2026-09-01T00:00:00Z' })],
+      fragments: [
+        {
+          venue_id: VENUE,
+          channel: 'instagram',
+          identity_hint: '@sarah.highland',
+          occurred_at: '2026-08-10T00:00:00Z',
+          promoted_to_couple_id: COUPLE,
+          raw_payload: { text: 'Commented on the autumn ceremony post' },
+        },
+        // Someone else's fragment, still anonymous.
+        {
+          venue_id: VENUE,
+          channel: 'instagram',
+          identity_hint: '@other',
+          occurred_at: '2026-08-11T00:00:00Z',
+          promoted_to_couple_id: null,
+          raw_payload: null,
+        },
+      ],
+    })
+    const s = await loadCouplePriorTouches(sb, VENUE, COUPLE, { before: BEFORE })
+    expect(s.counts.fragments).toBe(1)
+    expect(s.touches.map((t) => t.kind)).toEqual(['touchpoint', 'fragment'])
+    expect(s.touches[1].summary).toBe('Commented on the autumn ceremony post')
+    expect(s.warmth).toBe('warm')
+  })
+
   it('adds tours only when the couple has a mirrored wedding', async () => {
     const tables = {
       touchpoints: [tp({ id: 'T1' })],

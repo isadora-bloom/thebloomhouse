@@ -14,7 +14,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { getLatestIndicators, calculateDemandScore } from '@/lib/services/intel/fred-demand'
 import { detectTrendDeviations } from '@/lib/services/intel/trends'
-import { getPriorTouches, narrateTouches } from '@/lib/services/intel/prior-touches'
+import { loadCouplePriorTouchesForPerson, narrateCoupleTouches, humanChannel } from '@/lib/intel/readers/prior-touches'
 import { fetchCachedNarrative } from '@/lib/services/brain/journey-narrative'
 import { getLearningContext } from '@/lib/services/learning'
 
@@ -217,27 +217,40 @@ export async function buildWeatherDisclaimer(
  */
 export async function buildSageIntelligenceContext(
   venueId: string,
-  personId?: string | null
+  personId?: string | null,
+  opts: {
+    /** Ribbon cutoff (ISO): the instant the inquiry being drafted arrived,
+     *  so its own touchpoint is not read back as a prior touch. */
+    before?: string
+  } = {},
 ): Promise<string> {
   const supabase = createServiceClient()
   const sections: string[] = []
 
   // --- Prior touchpoints (warmth signal) ---
-  // When we know which person this draft is for, look up prior signals so
-  // Sage can open warm instead of cold. Never throw — a failure here falls
+  // When we know which person this draft is for, read the couple's ribbon
+  // so Sage can open warm instead of cold. The person is only the key: the
+  // couple is the unit, and every prior signal (the Instagram comment that
+  // arrived as a fragment and was promoted by its handle, the Knot view,
+  // the earlier email) is a touchpoint already bound to it. The person-
+  // keyed reader this replaced (2026-09-16) joined the retired tangential
+  // pool and so never saw a fragment. Never throw: a failure here falls
   // back to the existing (cold) path.
   if (personId) {
     try {
-      const summary = await getPriorTouches({ supabase, venueId, personId })
-      if (summary.warmth !== 'cold' && summary.touches.length > 0) {
-        const channels = new Set(summary.touches.map((t) => t.source))
-        const total = summary.touches.length
+      const summary = await loadCouplePriorTouchesForPerson(supabase, venueId, personId, { before: opts.before })
+      if (summary && summary.warmth !== 'cold' && summary.touches.length > 0) {
+        // Channels the couple used BEFORE this message. The message being
+        // drafted is itself on the ribbon when no cutoff was given, so an
+        // email-only history is not "prior" in the sense that matters here.
+        const priorChannels = Array.from(new Set(summary.touches.map((t) => humanChannel(t.source))))
+        const earlier = priorChannels.filter((c) => c !== 'Email')
         const lines = [
-          `PRIOR TOUCHPOINTS (warmth = ${summary.warmth}):`,
-          `- ${narrateTouches(summary)}`,
-          `- Total: ${total} prior signals across ${channels.size} channels.`,
-          '',
-          'Open this email acknowledging the relationship. Do not cold-open.',
+          `## PRIOR TOUCHPOINTS (warmth = ${summary.warmth}):`,
+          `This couple has reached towards the venue before this message: ${narrateCoupleTouches(summary.touches)}.`,
+          earlier.length > 0
+            ? `Your opening sentence must acknowledge that history and NAME the platform (${earlier.join(', ')}), the way a coordinator who remembers them would: "lovely to hear from you again after your comment on Instagram", not "thanks for reaching out". This overrides any source guidance above that says to acknowledge the channel lightly. Never quote counts or dates back to them, and never invent a platform not listed here.`
+            : 'Open by acknowledging that you have heard from them before. Do not cold-open.',
         ]
         sections.push(lines.join('\n'))
       }

@@ -9,8 +9,8 @@ import { adminClient } from '../helpers/seed'
  *   1. End-to-end processIncomingEmail ingest path (real Knot inquiry
  *      synthetic payload)
  *   2. Sage draft warmth: generateInquiryDraft actually produces a
- *      draft that acknowledges prior touchpoints when a person has
- *      matched tangential signals
+ *      draft that acknowledges prior touchpoints when the couple's
+ *      ribbon has them (gap 1's promoted fragment + the inquiry)
  *   3. Heat dashboard rendering (Playwright browser, not DB-only)
  *   4. Weekly learned card rendering + whether a multi-touch bullet
  *      exists (confirms F11 finding from the earlier report)
@@ -35,11 +35,25 @@ function admin(): SupabaseClient {
 }
 
 const BASE_URL = process.env.E2E_BASE_URL || `http://localhost:${process.env.E2E_PORT ?? 3100}`
-const CRON_SECRET = process.env.CRON_SECRET
+// TEST_HARNESS_SECRET gates /api/admin/test-harness; under a production
+// build the CRON_SECRET fallback is off (S2), so the branch env carries it.
+const CRON_SECRET = process.env.TEST_HARNESS_SECRET ?? process.env.CRON_SECRET
 
 async function cleanup() {
   const v = DEMO_VENUE_ID
+  // Spine rows for Sarah: the fragment the harness linked, the couple the
+  // inquiry minted, and their touchpoints. Rows this spec wrote to the
+  // retired tangential pool before 2026-09-16 are swept too.
   await admin().from('tangential_signals').delete().eq('venue_id', v).ilike('source_context', `%${TAG}%`)
+  await admin().from('fragments').delete().eq('venue_id', v).eq('channel', 'instagram').ilike('external_id', `%${TAG}%`)
+  const { data: sarahCouples } = await admin().from('couples').select('id').eq('venue_id', v)
+    .or('primary_contact_email.ilike.sarah.highland%@example.com,handles->>instagram.eq.sarah.highland')
+  const coupleIds = (sarahCouples ?? []).map((c) => c.id)
+  if (coupleIds.length) {
+    await admin().from('touchpoints').delete().in('couple_id', coupleIds)
+    await admin().from('couples').delete().in('id', coupleIds)
+  }
+  await admin().from('touchpoints').delete().eq('venue_id', v).eq('channel', 'instagram').ilike('external_id', `%${TAG}%`)
 
   // Tag-based cleanup (signals + tagged weddings + their children).
   const { data: w } = await admin().from('weddings').select('id').eq('venue_id', v).ilike('notes', `%${TAG}%`)
@@ -88,30 +102,41 @@ test.describe('§22 Phase 8 behavioural integration', () => {
   // GAP 1: Real processIncomingEmail ingest
   // -------------------------------------------------------------------------
 
-  test('gap 1: processIncomingEmail creates wedding + draft for a Knot inquiry', async () => {
-    // Seed Sarah's prior tangential signals so the matching engine has
-    // something to promote when the new person lands.
-    await admin().from('tangential_signals').insert([
-      {
-        venue_id: DEMO_VENUE_ID,
-        signal_type: 'instagram_engagement',
-        extracted_identity: { first_name: 'Sarah', last_name: 'Highland', username: 'sarah.highland', platform: 'instagram' },
-        source_context: `Commented on autumn ceremony post ${TAG}`,
-        signal_date: new Date(Date.now() - 9 * 86400e3).toISOString(),
-        match_status: 'unmatched',
+  test('gap 1: processIncomingEmail creates wedding + draft for a Knot inquiry, and the Instagram fragment converges on the couple', async () => {
+    // Sarah commented on an Instagram post nine days ago. Vision built a
+    // NormalizedSignal for it and the linker filed it as a fragment: a
+    // handle and a display name, no email. Migration 400 retired the
+    // tangential pool, so this is where a pre-identity signal lives now,
+    // and a fragment carrying a handle is promoted the moment that handle
+    // turns up on a couple. The harness calls the same writer the vision
+    // path does; nothing here is inserted by hand.
+    const harness = await pwRequest.newContext({ baseURL: BASE_URL, timeout: 120_000 })
+    const igExternalId = `ig-comment-${TAG}`
+    const linked = await harness.post('/api/admin/test-harness', {
+      headers: { Authorization: `Bearer ${CRON_SECRET}`, 'Content-Type': 'application/json' },
+      data: {
+        action: 'link_signal',
+        venueId: DEMO_VENUE_ID,
+        signal: {
+          external_id: igExternalId,
+          channel: 'instagram',
+          action_type: 'ig_comment',
+          occurred_at: new Date(Date.now() - 9 * 86400e3).toISOString(),
+          signal_tier: 'low',
+          identity_hint: '@sarah.highland',
+          handles: { instagram: 'sarah.highland' },
+          raw_payload: { text: `Commented on autumn ceremony post ${TAG}` },
+        },
       },
-      {
-        venue_id: DEMO_VENUE_ID,
-        signal_type: 'analytics_entry',
-        extracted_identity: { first_name: 'Sarah', last_name: 'H', platform: 'the_knot' },
-        source_context: `Knot profile view ${TAG}`,
-        signal_date: new Date(Date.now() - 5 * 86400e3).toISOString(),
-        match_status: 'unmatched',
-      },
-    ])
+    })
+    const linkedBody = await linked.json()
+    expect(linked.status(), `link_signal answered ${linked.status()}: ${JSON.stringify(linkedBody).slice(0, 300)}`).toBe(200)
+    expect(
+      ['fragment', 'cold_start'],
+      `a handle-only comment should file as a fragment, got ${linkedBody.result?.action} (${linkedBody.result?.reason})`,
+    ).toContain(linkedBody.result?.action)
 
-    const ctx = await pwRequest.newContext({ baseURL: BASE_URL, timeout: 120_000 })
-    const res = await ctx.post('/api/admin/test-harness', {
+    const res = await harness.post('/api/admin/test-harness', {
       headers: { Authorization: `Bearer ${CRON_SECRET}`, 'Content-Type': 'application/json' },
       data: {
         action: 'process_incoming_email',
@@ -122,19 +147,24 @@ test.describe('§22 Phase 8 behavioural integration', () => {
           from: `Sarah H <sarah.highland@example.com>`,
           to: 'hawthorne@example.com',
           subject: `Inquiry from The Knot ${TAG}`,
-          body: `Hi! My name is Sarah Highland and my fiancé is Kevin Brooks. We loved your venue when we saw it on Instagram and have been looking at your website. We're hoping for October 18, 2027 with about 95 guests. Would love to schedule a tour. ${TAG}`,
+          // The profile link is the handle. An inbound email speaks for the
+          // couple, so the pipeline reads it onto the signal (W29).
+          body: `Hi! My name is Sarah Highland and my fiancé is Kevin Brooks. We loved your venue when we saw it on Instagram (we're https://www.instagram.com/sarah.highland/ if it helps) and have been looking at your website. We're hoping for October 18, 2027 with about 95 guests. Would love to schedule a tour. ${TAG}`,
           date: new Date().toISOString(),
         },
       },
     })
     const body = await res.json()
-    await ctx.dispose()
+    await harness.dispose()
 
     expect(res.status(), `admin harness returned ${res.status()}: ${JSON.stringify(body)}`).toBe(200)
     expect(body.ok).toBe(true)
 
     const result = body.result ?? {}
-    // Structured pipeline result checks
+    // Structured pipeline result checks. There is no draft on purpose:
+    // example.com is RFC 2606 reserved, so the draft gate skips it as an
+    // unsendable reply target. That gate used to return early and skip
+    // the spine link too, which is what the assertions below guard.
     expect(result.interactionId, 'interaction should be recorded').toBeTruthy()
     expect(result.classification, 'must classify as something').toBeTruthy()
 
@@ -143,13 +173,27 @@ test.describe('§22 Phase 8 behavioural integration', () => {
       .eq('venue_id', DEMO_VENUE_ID).ilike('email', 'sarah.highland@example.com').maybeSingle()
     expect(person?.id, 'person should exist for sarah.highland@example.com').toBeTruthy()
 
-    // Was Instagram signal promoted via the handle on external_ids?
-    const { data: sigs } = await admin().from('tangential_signals')
-      .select('signal_type, match_status, matched_person_id')
+    // The handle lands on the couple, and the couple is the mirror of the
+    // wedding the pipeline minted (one writer, one couple). maybeSingle
+    // throws if two couples carry the handle, which would be a second
+    // writer, and worth failing on.
+    const { data: couple, error: coupleErr } = await admin().from('couples')
+      .select('id, primary_contact_email, handles, source_wedding_id')
       .eq('venue_id', DEMO_VENUE_ID)
-      .ilike('source_context', `%${TAG}%`)
-    const promoted = (sigs ?? []).filter((s) => s.matched_person_id === person?.id)
-    expect(promoted.length, `at least 1 tangential signal should have promoted to this person; got ${promoted.length} (total ${(sigs ?? []).length})`).toBeGreaterThanOrEqual(1)
+      .contains('handles', { instagram: 'sarah.highland' })
+      .is('merged_into_id', null)
+      .maybeSingle()
+    expect(coupleErr, `couple lookup by handle: ${coupleErr?.message}`).toBeNull()
+    expect(couple?.id, 'a couple on the spine should carry instagram=sarah.highland after the email').toBeTruthy()
+    expect(couple?.source_wedding_id, 'the couple should be the mirror of the wedding the pipeline minted').toBe(person?.wedding_id)
+
+    // The nine-day-old comment is this couple's now, not an anonymous one.
+    const { data: fragment } = await admin().from('fragments')
+      .select('promoted_to_couple_id, promoted_at')
+      .eq('venue_id', DEMO_VENUE_ID).eq('channel', 'instagram').eq('external_id', igExternalId)
+      .maybeSingle()
+    expect(fragment, 'the Instagram fragment should still exist (promotion updates, it does not delete)').toBeTruthy()
+    expect(fragment?.promoted_to_couple_id, 'the Instagram fragment should promote onto the couple by (platform, handle)').toBe(couple?.id)
   })
 
   // -------------------------------------------------------------------------
@@ -165,13 +209,9 @@ test.describe('§22 Phase 8 behavioural integration', () => {
       return
     }
 
-    // Make sure signals are linked so buildSageIntelligenceContext sees
-    // prior touches.
-    await admin().from('tangential_signals').update({
-      matched_person_id: sarah.id,
-      match_status: 'confirmed_match',
-      confidence_score: 0.9,
-    }).eq('venue_id', DEMO_VENUE_ID).ilike('source_context', `%${TAG}%`)
+    // Nothing to link by hand: buildSageIntelligenceContext reads the
+    // couple's ribbon through the person, and gap 1 left the promoted
+    // Instagram fragment and the inquiry itself on it.
 
     const ctx = await pwRequest.newContext({ baseURL: BASE_URL, timeout: 120_000 })
     const res = await ctx.post('/api/admin/test-harness', {
@@ -245,8 +285,10 @@ test.describe('§22 Phase 8 behavioural integration', () => {
         venue_id: DEMO_VENUE_ID,
         status: 'inquiry',
         source: 'the_knot',
-        heat_score: p.heat,
-        temperature_tier: p.tier,
+        // heat_score / temperature_tier left weddings in migration 316: heat
+        // is derived from engagement events on the spine now. The seeded
+        // heat here was never asserted on (only the names are), so the
+        // columns go rather than the test (2026-09-15).
         inquiry_date: new Date().toISOString(),
         notes: `seeded ${TAG}`,
       }).select('id').single()
@@ -263,15 +305,30 @@ test.describe('§22 Phase 8 behavioural integration', () => {
       }
     }
 
+    // Boards read the spine, not legacy weddings rows: a wedding inserted
+    // directly is invisible on /agent/leads until it has a couples row.
+    // Mirror each one through the real writer (the same one mintWedding
+    // calls), never a direct insert (2026-09-15).
+    const harness = await pwRequest.newContext({ baseURL: BASE_URL, timeout: 120_000 })
+    for (const weddingId of weddingIds) {
+      const mirrored = await harness.post('/api/admin/test-harness', {
+        headers: { Authorization: `Bearer ${CRON_SECRET}`, 'Content-Type': 'application/json' },
+        data: { action: 'mirror_couple', venueId: DEMO_VENUE_ID, weddingId },
+      })
+      expect(mirrored.ok(), `mirror_couple answered ${mirrored.status()}`).toBe(true)
+    }
+    await harness.dispose()
+
     const context = await browser.newContext({ baseURL: BASE_URL })
     // Skip the /demo entry flow and set the cookies directly so the
     // test doesn't depend on the Platform button click timing.
-    await context.addCookies([
-      { name: 'bloom_demo', value: 'true', domain: 'localhost', path: '/' },
-      { name: 'bloom_venue', value: DEMO_VENUE_ID, domain: 'localhost', path: '/' },
-      { name: 'bloom_scope', value: JSON.stringify({ level: 'venue', venueId: DEMO_VENUE_ID, orgId: '11111111-1111-1111-1111-111111111111', venueName: 'Hawthorne Manor', companyName: 'The Crestwood Collection' }), domain: 'localhost', path: '/' },
-    ])
+    // Enter the demo the way a visitor does: a path under /demo/ takes the
+    // middleware rewrite, which mints the signed demo token. Hand-set legacy
+    // cookies (bloom_demo=true and friends) are not trusted by any server
+    // read since the HMAC token landed, so every page rendered empty and the
+    // seeded couples were never on screen (2026-09-15).
     const page = await context.newPage()
+    await page.goto('/demo/agent/inbox', { waitUntil: 'domcontentloaded' })
     let bodyForDiag = ''
     let triedPath = ''
     try {
@@ -280,7 +337,7 @@ test.describe('§22 Phase 8 behavioural integration', () => {
       // specific page because the app has multiple heat/lead surfaces.
       // First verify the DB got the 4 seeded rows — separates "insert
       // failed" from "page didn't render them".
-      const { data: dbCheck } = await admin().from('weddings').select('id, heat_score')
+      const { data: dbCheck } = await admin().from('weddings').select('id')
         .in('id', weddingIds)
       const dbCount = (dbCheck ?? []).length
       expect(dbCount, `Expected 4 weddings in DB, got ${dbCount}`).toBe(4)

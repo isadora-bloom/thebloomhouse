@@ -9,6 +9,7 @@ import {
   demoTokenCookieOptions,
   demoHintCookieOptions,
 } from '@/lib/services/demo-token'
+import { createServerSupabaseClient } from '@/lib/supabase/server'
 
 // DEMO_ORG_ID and the Hawthorne venue ID come from seed.sql. Hardcoded here so
 // the scope cookie is set in the same server action that mints the signed token
@@ -19,10 +20,16 @@ async function launchDemoAction(formData: FormData) {
   'use server'
   const destination = (formData.get('destination') as string | null) ?? '/'
 
+  // A signed-in coordinator who opens the demo is signed out first, so the
+  // demo runs as anon and RLS returns Crestwood rows only. Local scope: the
+  // session cookies go, nothing is revoked server-side, and no network call
+  // sits between the click and the redirect. The middleware's "auth wins"
+  // rule stays as the backstop for a tab that re-authenticates later; this
+  // is the front door (2026-09-16, §20 scenarios 1 and 3).
+  const supabase = await createServerSupabaseClient()
+  await supabase.auth.signOut({ scope: 'local' })
+
   // Mint a signed, HttpOnly demo token. JS cannot read or forge this cookie.
-  // Supabase sign-out is NOT done here (server action cannot call the client-
-  // side Supabase client). The middleware clears demo cookies when an auth
-  // session is detected — that remains the auth-collision guard.
   const token = signDemoToken({ demoVenueId: DEMO_VENUE_ID })
 
   const cookieStore = await cookies()

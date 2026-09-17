@@ -1,6 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { SupabaseClient } from '@supabase/supabase-js'
-import { adminClient } from '../helpers/seed'
+import {
+  adminClient,
+  cleanup,
+  createContext,
+  createTestOrg,
+  createTestUser,
+  createTestVenue,
+} from '../helpers/seed'
+import { loginAs } from '../helpers/auth'
 import {
   signGmailOAuthState,
 } from '../../src/lib/services/email/gmail-oauth-state'
@@ -196,20 +204,24 @@ test.describe('§23 Gmail OAuth — state + idempotency + revoke', () => {
     expect(tokens.access_token).toBe('new-access')
   })
 
-  test('c) DELETE /api/gmail/connections/:id/disconnect deletes the row', async ({ request }) => {
-    // Seed a row.
-    const email = 'revoke-target@example.com'
-    const { data: seeded, error: seedErr } = await admin()
-      .from('gmail_connections')
-      .insert({
-        venue_id: DEMO_VENUE_ID,
-        user_id: DEMO_USER_ID,
-        email_address: email,
-        gmail_tokens: {
+  // The disconnect route refuses the demo identity on writes (refuseDemo)
+  // and checks the row's venue against the caller's, so both cases below
+  // act as a real coordinator on a venue of their own rather than through
+  // the demo cookie (2026-09-16).
+  test('c) DELETE /api/gmail/connections/:id/disconnect deletes the row', async ({ page }) => {
+    const ctx = createContext()
+    try {
+      const { orgId } = await createTestOrg(ctx)
+      const { venueId } = await createTestVenue(ctx, { orgId })
+      const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
+      const { data: seeded, error: seedErr } = await admin()
+        .from('gmail_connections')
+        .insert({
+          venue_id: venueId,
+          user_id: coord.userId,
+          email_address: 'revoke-target@example.com',
+          gmail_tokens: {
           access_token: 'fake-access',
-          // No real refresh token — the route still attempts revoke,
-          // Google returns 400, we treat as done. That keeps the test
-          // hermetic (no real network call to Google succeeds).
           refresh_token: 'fake-refresh-' + Date.now(),
           expiry_date: Date.now() + 3600 * 1000,
           token_type: 'Bearer',
@@ -219,46 +231,44 @@ test.describe('§23 Gmail OAuth — state + idempotency + revoke', () => {
         sync_enabled: true,
         status: 'active',
         label: `seed ${TAG}`,
-      })
-      .select('id')
-      .single()
-    expect(seedErr).toBeNull()
-    const connId = seeded!.id as string
+        })
+        .select('id')
+        .single()
+      expect(seedErr, `seed: ${seedErr?.message}`).toBeNull()
+      const connId = seeded!.id as string
 
-    // Hit the route as the demo coordinator (bloom_demo cookie).
-    const res = await request.delete(
-      `${BASE_URL}/api/gmail/connections/${connId}/disconnect`,
-      {
-        headers: { Cookie: 'bloom_demo=true' },
-      },
-    )
-    expect(res.ok()).toBeTruthy()
-    const json = await res.json()
-    expect(json.ok).toBe(true)
+      await loginAs(page, 'coordinator', { email: coord.email, password: coord.password })
+      const res = await page.request.delete(`/api/gmail/connections/${connId}/disconnect`)
+      expect(res.ok(), `disconnect answered ${res.status()}`).toBeTruthy()
+      const json = await res.json()
+      expect(json.ok).toBe(true)
 
-    // Row is gone.
-    const { data: after } = await admin()
-      .from('gmail_connections')
-      .select('id')
-      .eq('id', connId)
-      .maybeSingle()
-    expect(after).toBeNull()
+      const { data: after } = await admin()
+        .from('gmail_connections')
+        .select('id')
+        .eq('id', connId)
+        .maybeSingle()
+      expect(after).toBeNull()
+    } finally {
+      await cleanup(ctx)
+    }
   })
 
-  test('c2) disconnect rejects rows from a different venue (forbidden)', async ({ request }) => {
-    // Seed a row on a venue OTHER than the demo venue, then try to
-    // disconnect it as the demo coordinator. Should 403.
-    // Use a Crestwood sibling venue (also allowlisted but the auth helper
-    // resolves the demo cookie to Hawthorne specifically).
-    const otherVenue = '22222222-2222-2222-2222-222222222202'
-    const email = 'wrong-venue@example.com'
-    const { data: seeded } = await admin()
-      .from('gmail_connections')
-      .insert({
-        venue_id: otherVenue,
-        user_id: DEMO_USER_ID,
-        email_address: email,
-        gmail_tokens: {
+  test('c2) disconnect rejects rows from a different venue (forbidden)', async ({ page }) => {
+    const ctx = createContext()
+    let seededId: string | null = null
+    try {
+      const { orgId } = await createTestOrg(ctx)
+      const { venueId } = await createTestVenue(ctx, { orgId })
+      const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
+      // A row that belongs to the demo venue, not the caller's.
+      const { data: seeded, error: seedErr } = await admin()
+        .from('gmail_connections')
+        .insert({
+          venue_id: DEMO_VENUE_ID,
+          user_id: DEMO_USER_ID,
+          email_address: 'wrong-venue@example.com',
+          gmail_tokens: {
           access_token: 'x',
           refresh_token: 'y',
           expiry_date: Date.now() + 3600 * 1000,
@@ -269,20 +279,22 @@ test.describe('§23 Gmail OAuth — state + idempotency + revoke', () => {
         sync_enabled: true,
         status: 'active',
         label: `seed ${TAG}`,
-      })
-      .select('id')
-      .single()
+        })
+        .select('id')
+        .single()
+      expect(seedErr, `seed: ${seedErr?.message}`).toBeNull()
+      seededId = seeded!.id as string
 
-    const res = await request.delete(
-      `${BASE_URL}/api/gmail/connections/${seeded!.id}/disconnect`,
-      { headers: { Cookie: 'bloom_demo=true' } },
-    )
-    expect(res.status()).toBe(403)
-    const json = await res.json()
-    expect(json.ok).toBe(false)
-    expect(json.reason).toBe('forbidden')
-
-    // Cleanup the other-venue row we seeded.
-    await admin().from('gmail_connections').delete().eq('id', seeded!.id)
+      await loginAs(page, 'coordinator', { email: coord.email, password: coord.password })
+      const res = await page.request.delete(`/api/gmail/connections/${seededId}/disconnect`)
+      expect(res.status()).toBe(403)
+      const json = await res.json()
+      expect(json.ok).toBe(false)
+      expect(json.reason).toBe('forbidden')
+    } finally {
+      if (seededId) await admin().from('gmail_connections').delete().eq('id', seededId)
+      await cleanup(ctx)
+    }
   })
+
 })

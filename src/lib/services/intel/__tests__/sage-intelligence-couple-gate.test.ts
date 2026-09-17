@@ -71,9 +71,10 @@ vi.mock('@/lib/services/intel/trends', () => ({
   ],
 }))
 
-vi.mock('@/lib/services/intel/prior-touches', () => ({
-  getPriorTouches: async () => ({ warmth: 'cold', touches: [] }),
-  narrateTouches: () => '',
+vi.mock('@/lib/intel/readers/prior-touches', () => ({
+  loadCouplePriorTouchesForPerson: async () => null,
+  narrateCoupleTouches: () => '',
+  humanChannel: (s: string) => s,
 }))
 
 vi.mock('@/lib/services/brain/journey-narrative', () => ({

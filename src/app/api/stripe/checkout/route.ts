@@ -22,13 +22,21 @@ import { redactError } from '@/lib/observability/redact'
 
 export async function POST(request: NextRequest) {
   try {
-    if (!isStripeConfigured()) {
+
+    const anonSupabase = await createServerSupabaseClient()
+    const {
+      data: { user },
+    } = await anonSupabase.auth.getUser()
+
+    if (!user) {
       return NextResponse.json(
-        { error: 'Stripe is not configured on this server.' },
-        { status: 500 }
+        { error: 'Authentication required.' },
+        { status: 401 }
       )
     }
-
+    // Body validation after auth and before configuration: an anonymous
+    // caller gets 401 whatever it sends, a signed-in one gets the 400 that
+    // names the field, and only a valid request learns Stripe is off.
     const body = await request.json().catch(() => ({}))
     const { priceId, billingCycle } = body as {
       priceId?: string
@@ -51,19 +59,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unknown priceId.' }, { status: 400 })
     }
 
-    // ---- Auth ----
-    const anonSupabase = await createServerSupabaseClient()
-    const {
-      data: { user },
-    } = await anonSupabase.auth.getUser()
-
-    if (!user) {
+    // After auth, not before: an anonymous caller learns nothing about the
+    // server's configuration, the validation errors keep their 4xx, and a
+    // missing Stripe key is a 503 (unavailable), not a 500 (2026-09-15).
+    if (!isStripeConfigured()) {
       return NextResponse.json(
-        { error: 'Authentication required.' },
-        { status: 401 }
+        { error: 'Stripe is not configured on this server.' },
+        { status: 503 }
       )
     }
-
     // ---- Resolve venue ----
     const serviceSupabase = createServiceClient()
     const { data: profile, error: profileError } = await serviceSupabase

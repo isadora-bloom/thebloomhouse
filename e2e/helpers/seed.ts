@@ -122,7 +122,7 @@ export async function createTestVenue(
     orgId: string
     name?: string
     slug?: string
-    planTier?: 'starter' | 'intelligence' | 'enterprise'
+    planTier?: 'pre_opening' | 'solo' | 'growth' | 'multi' | 'enterprise'
     status?: 'active' | 'trial' | 'suspended' | 'churned'
     /**
      * White-label assistant name for the couple portal + outbound drafts.
@@ -184,6 +184,8 @@ export async function createTestUser(
     role: Role
     orgId?: string
     venueId?: string
+    /** Couples only: the wedding the profile belongs to. */
+    weddingId?: string
     firstName?: string
     lastName?: string
   }
@@ -219,7 +221,7 @@ export async function createTestUser(
 
 async function upsertProfile(
   userId: string,
-  opts: { role: Role; orgId?: string; venueId?: string; firstName?: string; lastName?: string }
+  opts: { role: Role; orgId?: string; venueId?: string; weddingId?: string; firstName?: string; lastName?: string }
 ) {
   const { error } = await admin()
     .from('user_profiles')
@@ -229,6 +231,11 @@ async function upsertProfile(
         role: opts.role,
         org_id: opts.orgId ?? null,
         venue_id: opts.venueId ?? null,
+        // A couple profile needs its wedding: getCoupleAuth and every
+        // couple_read policy key off user_profiles.wedding_id, and a couple
+        // created without it was 401 on every couple API route (§11 i,
+        // 2026-09-15). Omitted keys leave an existing value alone.
+        ...(opts.weddingId ? { wedding_id: opts.weddingId } : {}),
         first_name: opts.firstName ?? 'E2E',
         last_name: opts.lastName ?? opts.role,
       },
@@ -282,6 +289,7 @@ export async function createTestWedding(
     password: opts.couplePassword,
     role: 'couple',
     venueId: opts.venueId,
+    weddingId,
   })
 
   // 3. People row linking couple

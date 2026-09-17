@@ -143,15 +143,13 @@ test.describe('§11 Couple Portal', () => {
         slug,
       })
       await page.goto(`/couple/${slug}/checklist`, { waitUntil: 'domcontentloaded' })
-      // Checklist does an async fetch keyed on weddingId — wait for it.
-      await page.waitForTimeout(6000)
-
-      const html = await page.content()
-      const visible = html.includes(item.title)
-      expect(
-        visible,
+      // Checklist does an async fetch keyed on weddingId. Poll for the row
+      // rather than sleeping a fixed 6s: under two workers on the built
+      // bundle the fetch has outrun that.
+      await expect(
+        page.getByText(item.title).first(),
         `expected checklist page to render "${item.title}" (seeded in checklist_items)`
-      ).toBe(true)
+      ).toBeVisible({ timeout: 45_000 })
 
       // Best-effort toggle: try to flip the checkbox for this row by text.
       // The page renders a clickable completion control next to the title.
@@ -202,34 +200,14 @@ test.describe('§11 Couple Portal', () => {
         slug,
       })
       await page.goto(`/couple/${slug}/budget`, { waitUntil: 'domcontentloaded' })
-      // Known BUG-04A (from §4 spec): budget page useEffect fires with
-      // weddingId=null on first paint. A later render recovers. Give it time.
-      await page.waitForTimeout(8000)
-      // Force a soft re-render by navigating client-side.
-      await page.reload({ waitUntil: 'domcontentloaded' })
-      await page.waitForTimeout(6000)
-
-      const html = await page.content()
-      const found = html.includes(item.itemName) || /4,?321/.test(html)
-      if (!found) {
-        // BUG-04A can make the UI read miss even after reload. Fall back to
-        // a DB round-trip assertion so this subtest still reports budget
-        // data consistency.
-        const { data: rows } = await admin()
-          .from('budget_items')
-          .select('item_name, budgeted')
-          .eq('id', item.id)
-          .single()
-        expect(rows?.item_name).toBe(item.itemName)
-        expect(Number(rows?.budgeted)).toBe(4321)
-        test.info().annotations.push({
-          type: 'bug',
-          description:
-            'BUG-04A: couple budget UI did not render the seeded item_name even after reload. DB read confirmed the row exists. See src/app/_couple-pages/budget/page.tsx useEffect deps.',
-        })
-      } else {
-        expect(found).toBe(true)
-      }
+      // The budget fetch waits for weddingId to resolve (BUG-04A was the
+      // effect firing with null and never again; the page gates on it now).
+      // Poll for the row on screen; no reload, no database fallback: a
+      // couple reads the page, not the table.
+      await expect(
+        page.getByText(item.itemName).first(),
+        `expected budget page to render "${item.itemName}"`
+      ).toBeVisible({ timeout: 45_000 })
     } finally {
       await page.close()
       await context.close()
@@ -260,10 +238,12 @@ test.describe('§11 Couple Portal', () => {
         slug,
       })
       await page.goto(`/couple/${slug}/timeline`, { waitUntil: 'domcontentloaded' })
-      await page.waitForTimeout(8000)
-
-      const html = await page.content()
-      const found = html.includes(seed.markerName)
+      const found = await page
+        .getByText(seed.markerName)
+        .first()
+        .waitFor({ state: 'visible', timeout: 45_000 })
+        .then(() => true)
+        .catch(() => false)
       if (!found) {
         // Authoritative DB check — the page loads from config_json. If the
         // component chose not to render custom events visibly, at least
@@ -314,15 +294,20 @@ test.describe('§11 Couple Portal', () => {
         slug,
       })
       await page.goto(`/couple/${slug}/guests`, { waitUntil: 'domcontentloaded' })
-      await page.waitForTimeout(6000)
-
-      const html = await page.content()
-      const hasFirst = html.includes(guest.firstName)
-      const hasLast = html.includes(guest.lastName)
-      expect(
-        hasFirst || hasLast,
+      // A wedding with no wedding_config row yet is asked how food is
+      // served before the list renders, because the columns depend on the
+      // answer. A couple answers once; this test answers the way they do.
+      const buffet = page.locator('button', { hasText: 'Buffet' }).first()
+      const guestRow = page.getByText(guest.firstName).first()
+      await Promise.race([
+        buffet.waitFor({ state: 'visible', timeout: 45_000 }),
+        guestRow.waitFor({ state: 'visible', timeout: 45_000 }),
+      ]).catch(() => null)
+      if (await buffet.isVisible().catch(() => false)) await buffet.click()
+      await expect(
+        guestRow,
         `expected guests page to include "${guest.firstName} ${guest.lastName}"`
-      ).toBe(true)
+      ).toBeVisible({ timeout: 45_000 })
     } finally {
       await page.close()
       await context.close()
@@ -353,28 +338,13 @@ test.describe('§11 Couple Portal', () => {
         slug,
       })
       await page.goto(`/couple/${slug}/contracts`, { waitUntil: 'domcontentloaded' })
-      await page.waitForTimeout(6000)
-
-      const html = await page.content()
-      const found = html.includes(contract.filename)
-      if (!found) {
-        // Contracts page fetchContracts() uses a useCallback with [supabase]
-        // deps and runs on mount before weddingId resolves (same class of
-        // bug as BUG-04A). Verify the DB row at least exists.
-        const { data: row } = await admin()
-          .from('contracts')
-          .select('id, filename')
-          .eq('id', contract.id)
-          .single()
-        expect(row?.filename).toBe(contract.filename)
-        test.info().annotations.push({
-          type: 'bug',
-          description:
-            'Contracts page did not render the seeded filename on first load. See src/app/_couple-pages/contracts/page.tsx fetchContracts useCallback deps (same pattern as BUG-04A).',
-        })
-      } else {
-        expect(found).toBe(true)
-      }
+      // Poll for the filename; no database fallback. If the contracts page
+      // fetches before weddingId resolves and never again, that is the
+      // page's bug and this test is where it shows.
+      await expect(
+        page.getByText(contract.filename).first(),
+        `expected contracts page to render "${contract.filename}"`
+      ).toBeVisible({ timeout: 45_000 })
     } finally {
       await page.close()
       await context.close()

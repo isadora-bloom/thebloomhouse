@@ -223,8 +223,9 @@ test.describe('§6b Phase 1 Pipeline Hardening', () => {
         venue_id: venueId,
         status: 'inquiry',
         inquiry_date: new Date().toISOString(),
-        heat_score: 0,
-        temperature_tier: 'cool',
+        // heat_score and temperature_tier left weddings in migration 316
+        // (heat lives on the spine now); the insert 400'd on the missing
+        // column until 2026-09-15.
       })
       .select('id')
       .single()

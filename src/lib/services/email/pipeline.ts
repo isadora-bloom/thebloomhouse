@@ -4772,6 +4772,7 @@ export async function processIncomingEmail(
             from: inviteeEmail,
             subject: synthSubject,
             body: synthBody,
+            receivedAt: emailDate,
           },
           extractedData: {
             questions: [],
@@ -5065,6 +5066,7 @@ export async function processIncomingEmail(
           from: fromEmail,
           subject: email.subject,
           body: email.body,
+          receivedAt: emailDate,
         },
         extractedData: {
           questions: classification.extractedData.questions,
@@ -5142,33 +5144,36 @@ export async function processIncomingEmail(
     ? `Re: ${email.subject}`
     : email.subject
 
-  if (draftBody) {
-    // 2026-05-12 — refuse to mint a draft when the reply target is
-    // unsendable. Before this guard, WW shared-relay inbounds (no
-    // personal email + no per-prospect relay) generated drafts to
-    // `authsolic-…@weddingwire.bloom-relay.invalid` that sat in pending
-    // forever — autonomous sender refused `.invalid` at send time, but
-    // the inbox UI still surfaced "Replying to authsolic-…invalid" on
-    // every visit (Zack Hunter, May 12). Better to skip the draft and
-    // surface a coordinator nudge to reply via the platform dashboard.
-    if (isUnsendableAddress(replyTargetEmail)) {
-      log.info('pipeline.draft_skipped_unsendable_target', {
-        event_type: 'draft_gate',
-        outcome: 'skip',
-        data: {
-          interactionId,
-          weddingId,
-          replyTargetEmail,
-          source: detectedSource,
-        },
-      })
-      return {
+  // 2026-05-12 — refuse to mint a draft when the reply target is
+  // unsendable. Before this guard, WW shared-relay inbounds (no
+  // personal email + no per-prospect relay) generated drafts to
+  // `authsolic-…@weddingwire.bloom-relay.invalid` that sat in pending
+  // forever — autonomous sender refused `.invalid` at send time, but
+  // the inbox UI still surfaced "Replying to authsolic-…invalid" on
+  // every visit (Zack Hunter, May 12). Better to skip the draft and
+  // surface a coordinator nudge to reply via the platform dashboard.
+  //
+  // Skipping the draft is ALL this gate does. It used to return here,
+  // which also skipped the main spine link further down, so every
+  // shared-relay inquiry (the exact case it was written for) stayed off
+  // the couple's ribbon: no touchpoint, no handles, no fragment
+  // promotion. An unreachable reply address does not make the couple any
+  // less real (2026-09-16, §22 gap 1).
+  if (draftBody && isUnsendableAddress(replyTargetEmail)) {
+    log.info('pipeline.draft_skipped_unsendable_target', {
+      event_type: 'draft_gate',
+      outcome: 'skip',
+      data: {
         interactionId,
-        draftId: null,
-        classification: emailClassification,
-        autoSent: false,
-      }
-    }
+        weddingId,
+        replyTargetEmail,
+        source: detectedSource,
+      },
+    })
+    draftBody = null
+  }
+
+  if (draftBody) {
     const contextType = brainUsed === 'client' ? 'client' : 'inquiry'
 
     const promptVersionUsed =

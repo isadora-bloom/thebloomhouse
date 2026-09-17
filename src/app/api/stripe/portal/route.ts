@@ -17,12 +17,6 @@ import { redactError } from '@/lib/observability/redact'
 
 export async function POST(request: NextRequest) {
   try {
-    if (!isStripeConfigured()) {
-      return NextResponse.json(
-        { error: 'Stripe is not configured on this server.' },
-        { status: 500 }
-      )
-    }
 
     // ---- Auth ----
     const anonSupabase = await createServerSupabaseClient()
@@ -78,6 +72,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'No billing account yet. Choose a plan on the pricing page first.' },
         { status: 400 }
+      )
+    }
+
+    // After auth and the billing-account check, not before: an anonymous caller learns nothing about the
+    // server's configuration, the validation errors keep their 4xx, and a
+    // missing Stripe key is a 503 (unavailable), not a 500 (2026-09-15).
+    if (!isStripeConfigured()) {
+      return NextResponse.json(
+        { error: 'Stripe is not configured on this server.' },
+        { status: 503 }
       )
     }
 

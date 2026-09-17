@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { getPriorTouches } from '@/lib/services/intel/prior-touches'
+import { loadCouplePriorTouchesForPerson } from '@/lib/intel/readers/prior-touches'
 import { apiError } from '@/lib/api/api-error'
 
 /**
  * GET /api/agent/inbox/prior-touches/:personId
  *
- * Returns the PriorTouchSummary for a given person, so the inbox inquiry
- * card can surface "liked you on Instagram March 14, visited your website
- * 3 times in April, and inquired through The Knot today."
+ * Returns the couple's prior touches for a given person, so the inbox
+ * inquiry card can surface "liked you on Instagram March 14, visited your
+ * website 3 times in April, and inquired through The Knot today."
+ *
+ * The person is the key the inbox row holds; the answer comes off the
+ * spine ribbon through the person's couple (2026-09-16, same move the
+ * lead panel made in W64). A person with no live couple gets the cold
+ * shape, not a 404: "Bloom looked, found nothing" is a real answer.
  *
  * Authenticated + venue-scoped. Person must belong to a venue the caller
  * has access to (same venue or same org for admins). 404 on mismatch.
@@ -65,12 +70,10 @@ export async function GET(
   }
 
   try {
-    const summary = await getPriorTouches({
-      supabase,
-      venueId: personVenueId,
-      personId,
-    })
-    return NextResponse.json(summary)
+    const summary = await loadCouplePriorTouchesForPerson(supabase, personVenueId, personId)
+    return NextResponse.json(
+      summary ?? { coupleId: null, warmth: 'cold', touches: [], counts: { inbound: 0, unstamped: 0, fragments: 0, tours: 0 } },
+    )
   } catch (err) {
     return apiError(err)
   }

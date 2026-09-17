@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
+import { endDemoSession } from '@/lib/demo-cookies'
 import { Settings, LogOut } from 'lucide-react'
 
 interface UserData {
@@ -112,17 +112,9 @@ export function UserMenu({ compact = false }: UserMenuProps) {
   }, [])
 
   async function handleSignOut() {
-    clearDemoCookiesClientSide()
-    // S5 (2026-09-14 security audit, item 12). The helper above cannot
-    // touch bloom_demo_token — it is HttpOnly, so only the server can
-    // expire it, and without this call a demo session survived sign-out
-    // for its full 24 hours on that machine. Failures are swallowed:
-    // signing out must not be blocked by a cookie-clearing round trip.
-    try {
-      await fetch('/demo/exit', { method: 'POST' })
-    } catch {
-      // Nothing to tell the user; the sign-out below still happens.
-    }
+    // S5 (2026-09-14 security audit, item 12): the HttpOnly token only
+    // the server can expire goes with the client-side cookies.
+    await endDemoSession()
     const supabase = createClient()
     await supabase.auth.signOut()
     router.push('/login')

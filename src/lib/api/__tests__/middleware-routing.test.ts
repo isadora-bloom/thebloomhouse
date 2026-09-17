@@ -49,6 +49,15 @@ describe('/demo prefix never reaches the API', () => {
     const res = await get('/demo/apiary')
     expect(res.headers.get('x-middleware-rewrite')).toContain('/apiary')
   })
+
+  it('lets /demo/exit reach its own handler instead of rewriting it as a demo page', async () => {
+    // The rewrite used to catch the exit route, send it to /exit (a 404)
+    // and hand out a fresh set of demo cookies on the way, so no exit
+    // ever cleared the HttpOnly token (2026-09-16).
+    const res = await middleware(new NextRequest('https://app.bloomhouse.ai/demo/exit', { method: 'POST' }))
+    expect(res.headers.get('x-middleware-rewrite')).toBeNull()
+    expect(res.headers.get('set-cookie') ?? '').not.toContain('bloom_demo_token=ey')
+  })
 })
 
 /**

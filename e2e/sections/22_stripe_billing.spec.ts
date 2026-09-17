@@ -69,7 +69,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
   test('POST /api/stripe/checkout — rejects unknown priceId', async ({ browser }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'pre_opening' })
     const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
     const handle = await loginAsApi(
       browser,
@@ -92,7 +92,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
   test('POST /api/stripe/checkout — rejects invalid billingCycle', async ({ browser }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'pre_opening' })
     const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
     const handle = await loginAsApi(
       browser,
@@ -117,7 +117,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
   test('/billing/success — bogus session_id returns 404 (no metadata leak)', async ({ browser }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'pre_opening' })
     const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
     const handle = await loginAsApi(
       browser,
@@ -138,7 +138,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
   test('/billing/success — missing session_id returns 404', async ({ browser }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'pre_opening' })
     const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
     const handle = await loginAsApi(
       browser,
@@ -162,8 +162,10 @@ test.describe('§22 Stripe billing — end-to-end', () => {
   test('POST /api/stripe/portal — 400 when venue has no Stripe customer', async ({ browser }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
-    const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'pre_opening' })
+    // Billing is restricted to MANAGER_ROLES (S-audit): a coordinator is 403
+    // before the billing-account check, so this case acts as the manager.
+    const coord = await createTestUser(ctx, { role: 'venue_manager', orgId, venueId })
     const handle = await loginAsApi(
       browser,
       'coordinator',
@@ -200,7 +202,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
     test('customer.subscription.deleted downgrades venue + writes high-priority notification', async ({ request }) => {
       test.setTimeout(60_000)
       const { orgId } = await createTestOrg(ctx)
-      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
 
       // Stamp a subscription id so the webhook's update has something to clear.
       await admin()
@@ -272,7 +274,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
     test('invoice.payment_failed writes payment_failed notification priority=high', async ({ request }) => {
       test.setTimeout(60_000)
       const { orgId } = await createTestOrg(ctx)
-      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
       const customerId = `cus_e2e_pf_${ctx.testId}`
       await admin()
         .from('venues')
@@ -316,7 +318,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
     test('webhook idempotency — duplicate event id is acked without re-running side effects', async ({ request }) => {
       test.setTimeout(60_000)
       const { orgId } = await createTestOrg(ctx)
-      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
       await admin()
         .from('venues')
         .update({
@@ -393,7 +395,7 @@ test.describe('§22 Stripe billing — end-to-end', () => {
       test.skip(!priceId, 'STRIPE_PRICE_INTELLIGENCE_MONTHLY not set')
 
       const { orgId } = await createTestOrg(ctx)
-      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
+      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'pre_opening' })
       const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
       const handle = await loginAsApi(
         browser,

@@ -32,19 +32,25 @@ export type UserRole = (typeof USER_ROLES)[number]
  * Roles getPlatformAuth admits and the middleware lets onto platform
  * pages.
  *
- * `readonly` is a real DB value and an option on the team invite form,
- * but it is not admitted here. 372 API routes call getPlatformAuth and
- * only 7 add requireRole on top, so admitting it would let a read-only
- * invitee write through the other 365. Until there is a central write
- * guard, a readonly profile is turned away at /login exactly as before
- * this module existed. Flagged for a decision, not decided here.
+ * `readonly` is admitted, and its "read-only" is enforced in ONE place:
+ * the middleware refuses any non-GET request under /api/ from a readonly
+ * profile with 403 (src/middleware.ts, "readonly write guard"). That is
+ * the only way the word means anything: 372 API routes call
+ * getPlatformAuth and only 7 add a role check of their own, so the guard
+ * has to sit in front of all of them. Before 2026-09-15 the role was on
+ * the invite form but refused at login, and E2E §01 ("readonly user can
+ * access /agent") said so.
  */
 export const PLATFORM_ROLES = [
   'super_admin',
   'org_admin',
   'venue_manager',
   'coordinator',
+  'readonly',
 ] as const
+
+/** Roles that may only read. The middleware refuses their API writes. */
+export const READ_ONLY_ROLES: ReadonlySet<string> = new Set(['readonly'])
 export type PlatformRole = (typeof PLATFORM_ROLES)[number]
 
 export function isPlatformRole(role: unknown): role is PlatformRole {

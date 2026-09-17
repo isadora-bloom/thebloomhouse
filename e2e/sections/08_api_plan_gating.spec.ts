@@ -145,49 +145,17 @@ test.describe('§8 Plan Gating — API layer', () => {
   // Starter-tier: every intelligence-gated endpoint must return 403 with
   // error='plan_required' + required_tier='intelligence'.
   // ---------------------------------------------------------------------------
+  // (Retired 2026-09-15) "a lower tier is refused": pricing v2 gives every
+  // tier every feature and gates on capacity only (src/lib/auth/plan-tiers.ts
+  // FEATURE_MATRIX; every requirePlan call in src/app/api asks for
+  // pre_opening). The tests that asserted a 403 plan_required for a low tier
+  // described behaviour the product no longer has, and are deleted rather
+  // than skipped, as E2E-PLAN.md asks.
   for (const ep of ENDPOINTS) {
-    test(`starter-tier blocked: ${ep.name}`, async ({ browser }) => {
+    test(`a paid tier is allowed: ${ep.name}`, async ({ browser }) => {
       test.setTimeout(60_000)
       const { orgId } = await createTestOrg(ctx)
-      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
-      const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
-
-      const handle = await loginAsApi(
-        browser,
-        'coordinator',
-        { email: coord.email, password: coord.password },
-        { venueId }
-      )
-
-      try {
-        const res = await dispatch(handle.request, ep)
-        const status = res.status()
-        const body = await res.json().catch(() => ({}))
-        // BUG-08A: today this is 500 (crash in tierMeetsMinimum import).
-        // Once fixed, require-plan returns 403 for under-tier.
-        expect(
-          [402, 403],
-          `BUG-08A expected 403 plan_required; got status=${status} body=${JSON.stringify(body).slice(0, 200)}`
-        ).toContain(status)
-        expect(body.error).toBe('plan_required')
-        expect(body.required_tier).toBe('intelligence')
-        expect(body.current_tier).toBe('starter')
-      } finally {
-        await handle.close()
-      }
-    })
-  }
-
-  // ---------------------------------------------------------------------------
-  // Intelligence-tier: plan check passes. Request may still fail on validation
-  // (400/404/500) but MUST NOT return the plan-gating shape. The gate passing
-  // means we see getPlatformAuth or business-logic responses.
-  // ---------------------------------------------------------------------------
-  for (const ep of ENDPOINTS) {
-    test(`intelligence-tier allowed: ${ep.name}`, async ({ browser }) => {
-      test.setTimeout(60_000)
-      const { orgId } = await createTestOrg(ctx)
-      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+      const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
       const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
 
       const handle = await loginAsApi(

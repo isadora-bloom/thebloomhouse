@@ -62,6 +62,10 @@ export async function seedInteraction(
       gmail_thread_id: gmailThreadId,
       gmail_message_id: gmailMessageId,
       timestamp: new Date().toISOString(),
+      // Migration 192 dropped the column default on purpose: every writer
+      // classifies. A seeded inbound email is what the pipeline writes
+      // before its classifier runs.
+      signal_class: 'unclassified',
     })
     .select('id')
     .single()

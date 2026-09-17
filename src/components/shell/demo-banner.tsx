@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { Eye, ArrowRight, X } from 'lucide-react'
-import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
+import { endDemoSession } from '@/lib/demo-cookies'
 
 /**
  * Fixed banner at the very top of the page during demo mode.
@@ -12,8 +12,9 @@ import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 export function DemoBanner() {
   const router = useRouter()
 
-  function exitDemo() {
-    clearDemoCookiesClientSide()
+  async function exitDemo() {
+    // The X is an exit like any other: the HttpOnly token goes too.
+    await endDemoSession()
     router.push('/')
   }
 

@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import { Flame, Sparkles, ChevronDown, ChevronUp, Mail, AtSign, Globe, Calendar, Star, Link as LinkIcon, Snowflake } from 'lucide-react'
-import type { PriorTouchSummary, PriorTouch } from '@/lib/services/intel/prior-touches'
+import type { CouplePriorTouches, CouplePriorTouch } from '@/lib/intel/readers/prior-touches'
+
+/** What the route answers: the ribbon summary, coupleId null when the
+ *  person has no live couple yet. */
+type ChipSummary = Pick<CouplePriorTouches, 'warmth' | 'touches' | 'counts'>
 
 interface PriorTouchesChipProps {
   personId: string | null | undefined
@@ -25,7 +29,7 @@ interface PriorTouchesChipProps {
  * chip below only renders when the lookup ran successfully.
  */
 export function PriorTouchesChip({ personId }: PriorTouchesChipProps) {
-  const [summary, setSummary] = useState<PriorTouchSummary | null>(null)
+  const [summary, setSummary] = useState<ChipSummary | null>(null)
   const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
@@ -45,7 +49,7 @@ export function PriorTouchesChip({ personId }: PriorTouchesChipProps) {
           if (!cancelled) setSummary(null)
           return
         }
-        const data = (await res.json()) as PriorTouchSummary
+        const data = (await res.json()) as ChipSummary
         if (!cancelled) setSummary(data)
       } catch {
         // Network error: hide. Same INV-8.5.5 rationale.
@@ -113,7 +117,7 @@ export function PriorTouchesChip({ personId }: PriorTouchesChipProps) {
   )
 }
 
-function TouchRow({ touch }: { touch: PriorTouch }) {
+function TouchRow({ touch }: { touch: CouplePriorTouch }) {
   const dateStr = touch.date
     ? new Date(touch.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : ''
@@ -126,25 +130,25 @@ function TouchRow({ touch }: { touch: PriorTouch }) {
   )
 }
 
-function sourceIcon(source: string, kind: PriorTouch['kind']) {
+function sourceIcon(source: string, kind: CouplePriorTouch['kind']) {
   const s = source.toLowerCase()
   if (s.includes('instagram') || s.includes('facebook') || s.includes('tiktok')) return AtSign
   if (s.includes('website') || s.includes('web')) return Globe
   if (s.includes('knot') || s.includes('wedding_wire') || s.includes('weddingwire') || s.includes('zola')) return LinkIcon
   if (s.includes('review') || s.includes('google') || s.includes('yelp')) return Star
   if (kind === 'tour') return Calendar
-  if (kind === 'interaction' || s === 'email') return Mail
+  if (s === 'gmail' || s === 'email') return Mail
   return Globe
 }
 
 // Plain function, not a component: the compiler would otherwise read
 // `const Icon = sourceIcon(...)` inside a component as creating one per render.
-function renderSourceIcon(source: string, kind: PriorTouch['kind'], className: string) {
+function renderSourceIcon(source: string, kind: CouplePriorTouch['kind'], className: string) {
   const Icon = sourceIcon(source, kind)
   return <Icon className={className} />
 }
 
-function buildNarration(touches: PriorTouch[]): string {
+function buildNarration(touches: CouplePriorTouch[]): string {
   if (touches.length === 0) return ''
   const parts = touches.slice(0, 6).map((t) => {
     const d = t.date ? new Date(t.date) : null

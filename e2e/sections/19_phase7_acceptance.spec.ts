@@ -31,6 +31,12 @@ function admin(): SupabaseClient {
   return _admin
 }
 
+// The app under test listens where the harness put it (playwright.config.ts
+// BASE_URL), never on a literal port: four webhook tests dialled :3000 while
+// the server was on :3100 (2026-09-15).
+const HARNESS_BASE_URL =
+  process.env.E2E_BASE_URL || `http://localhost:${process.env.E2E_PORT ?? 3100}`
+
 test.describe('§19 Phase 7 — Omi integration', () => {
   let ctx: TestContext
   test.beforeEach(() => { ctx = createContext() })
@@ -61,18 +67,22 @@ test.describe('§19 Phase 7 — Omi integration', () => {
     expect(data!.omi_match_window_hours).toBe(4)
   })
 
-  test('082: tours has omi_session_id + transcript_received_at + transcript_extracted + tour_brief_generated_at', async () => {
+  test('082: tours has session_id + transcript_received_at + transcript_extracted + tour_brief_generated_at', async () => {
     const { orgId } = await createTestOrg(ctx)
     const { venueId } = await createTestVenue(ctx, { orgId })
 
     const { data: tour, error } = await admin()
       .from('tours')
       .insert({
+        // 192 dropped the column default: every writer classifies.
+        signal_class: 'unclassified',
         venue_id: venueId,
         scheduled_at: new Date().toISOString(),
         tour_type: 'in_person',
         outcome: 'pending',
-        omi_session_id: `sess-${ctx.testId}`,
+        // session_id: migration 122 renamed omi_session_id when audio capture
+        // went provider-agnostic.
+        session_id: `sess-${ctx.testId}`,
         transcript_received_at: new Date().toISOString(),
         transcript_extracted: {
           attendee_types: ['couple', 'parents'],
@@ -84,10 +94,10 @@ test.describe('§19 Phase 7 — Omi integration', () => {
         },
         tour_brief_generated_at: new Date().toISOString(),
       })
-      .select('id, omi_session_id, transcript_extracted')
+      .select('id, session_id, transcript_extracted')
       .single()
     expect(error, `tours insert with Phase 7 columns rejected: ${error?.message}`).toBeNull()
-    expect(tour!.omi_session_id).toBe(`sess-${ctx.testId}`)
+    expect(tour!.session_id).toBe(`sess-${ctx.testId}`)
     const extracted = tour!.transcript_extracted as { attendee_types: string[] }
     expect(extracted.attendee_types).toContain('parents')
 
@@ -99,7 +109,7 @@ test.describe('§19 Phase 7 — Omi integration', () => {
   // -------------------------------------------------------------------------
 
   test('Task 61: POST /api/omi/webhook rejects bad token with 401', async () => {
-    const ctxReq = await request.newContext({ baseURL: 'http://localhost:3000' })
+    const ctxReq = await request.newContext({ baseURL: HARNESS_BASE_URL })
     const resp = await ctxReq.post('/api/omi/webhook?token=not-a-real-token', {
       data: { session_id: 'x', segments: [{ text: 'hello' }] },
     })
@@ -119,9 +129,11 @@ test.describe('§19 Phase 7 — Omi integration', () => {
     }).eq('venue_id', venueId)
 
     // Create a tour scheduled for now.
-    const { data: tour } = await admin()
+    const { data: tour, error: tourErr } = await admin()
       .from('tours')
       .insert({
+        // 192 dropped the column default: every writer classifies.
+        signal_class: 'unclassified',
         venue_id: venueId,
         scheduled_at: new Date().toISOString(),
         tour_type: 'in_person',
@@ -129,9 +141,10 @@ test.describe('§19 Phase 7 — Omi integration', () => {
       })
       .select('id')
       .single()
+    expect(tourErr, `tour seed: ${tourErr?.message}`).toBeNull()
 
     const sessionId = `sess-${ctx.testId}-1`
-    const ctxReq = await request.newContext({ baseURL: 'http://localhost:3000' })
+    const ctxReq = await request.newContext({ baseURL: HARNESS_BASE_URL })
     const resp = await ctxReq.post(`/api/omi/webhook?token=${token}`, {
       data: {
         session_id: sessionId,
@@ -145,11 +158,11 @@ test.describe('§19 Phase 7 — Omi integration', () => {
     // Verify the tour got the transcript + session id.
     const { data: updated } = await admin()
       .from('tours')
-      .select('transcript, omi_session_id')
+      .select('transcript, session_id')
       .eq('id', tour!.id)
       .single()
     expect((updated!.transcript ?? '').toLowerCase()).toContain('barn')
-    expect(updated!.omi_session_id).toBe(sessionId)
+    expect(updated!.session_id).toBe(sessionId)
 
     // Second segment same session: appends to the same tour.
     const resp2 = await ctxReq.post(`/api/omi/webhook?token=${token}`, {
@@ -183,7 +196,7 @@ test.describe('§19 Phase 7 — Omi integration', () => {
 
     // No tour scheduled — orphan expected.
     const sessionId = `sess-${ctx.testId}-orphan`
-    const ctxReq = await request.newContext({ baseURL: 'http://localhost:3000' })
+    const ctxReq = await request.newContext({ baseURL: HARNESS_BASE_URL })
     const resp = await ctxReq.post(`/api/omi/webhook?token=${token}`, {
       data: {
         session_id: sessionId,
@@ -198,7 +211,7 @@ test.describe('§19 Phase 7 — Omi integration', () => {
       .from('tour_transcript_orphans')
       .select('id, transcript, status')
       .eq('venue_id', venueId)
-      .eq('omi_session_id', sessionId)
+      .eq('session_id', sessionId)
       .single()
     expect(orphan!.status).toBe('pending')
     expect((orphan!.transcript ?? '').toLowerCase()).toContain('orphan')
@@ -220,7 +233,9 @@ test.describe('§19 Phase 7 — Omi integration', () => {
       .insert({
         venue_id: venueId,
         question: 'Do you allow outside catering?',
-        category: 'food',
+        // 'catering': the 298 vocabulary (pricing, availability, logistics,
+        // policy, vendor, ceremony, catering, inclusions, other) has no 'food'.
+        category: 'catering',
         frequency: 1,
         status: 'open',
       })
@@ -303,7 +318,8 @@ test.describe('§19 Phase 7 — Omi integration', () => {
       .from('tour_transcript_orphans')
       .insert({
         venue_id: venueId,
-        omi_session_id: `sess-${ctx.testId}-manual`,
+        // session_id: migration 122 renamed omi_session_id on this table too.
+        session_id: `sess-${ctx.testId}-manual`,
         transcript: 'Manual attach transcript body.',
         segments_count: 1,
         status: 'pending',
@@ -311,9 +327,11 @@ test.describe('§19 Phase 7 — Omi integration', () => {
       .select('id')
       .single()
 
-    const { data: tour } = await admin()
+    const { data: tour, error: tourErr } = await admin()
       .from('tours')
       .insert({
+        // 192 dropped the column default: every writer classifies.
+        signal_class: 'unclassified',
         venue_id: venueId,
         scheduled_at: new Date().toISOString(),
         tour_type: 'in_person',
@@ -321,6 +339,7 @@ test.describe('§19 Phase 7 — Omi integration', () => {
       })
       .select('id')
       .single()
+    expect(tourErr, `tour seed: ${tourErr?.message}`).toBeNull()
 
     // Simulate the PATCH-attach path at the DB level.
     await admin().from('tour_transcript_orphans').update({
@@ -362,18 +381,21 @@ test.describe('§19 Phase 7 — Omi integration', () => {
 
     // Scheduled tours at BOTH venues. Rixey tour should NOT match the Oakwood
     // token — the webhook scopes by venue_config lookup.
-    const { data: rixeyTour } = await admin()
+    // 192 dropped the column default: every writer classifies.
+    const { data: rixeyTour, error: rixeyTourErr } = await admin()
       .from('tours')
-      .insert({ venue_id: rixey.venueId, scheduled_at: new Date().toISOString(), tour_type: 'in_person', outcome: 'pending' })
+      .insert({ venue_id: rixey.venueId, signal_class: 'unclassified', scheduled_at: new Date().toISOString(), tour_type: 'in_person', outcome: 'pending' })
       .select('id')
       .single()
-    const { data: oakwoodTour } = await admin()
+    expect(rixeyTourErr, `tour seed (rixey): ${rixeyTourErr?.message}`).toBeNull()
+    const { data: oakwoodTour, error: oakwoodTourErr } = await admin()
       .from('tours')
-      .insert({ venue_id: oakwood.venueId, scheduled_at: new Date().toISOString(), tour_type: 'in_person', outcome: 'pending' })
+      .insert({ venue_id: oakwood.venueId, signal_class: 'unclassified', scheduled_at: new Date().toISOString(), tour_type: 'in_person', outcome: 'pending' })
       .select('id')
       .single()
+    expect(oakwoodTourErr, `tour seed (oakwood): ${oakwoodTourErr?.message}`).toBeNull()
 
-    const ctxReq = await request.newContext({ baseURL: 'http://localhost:3000' })
+    const ctxReq = await request.newContext({ baseURL: HARNESS_BASE_URL })
     const resp = await ctxReq.post(`/api/omi/webhook?token=${oakwoodToken}`, {
       data: {
         session_id: `sess-${ctx.testId}-wl`,
@@ -387,11 +409,11 @@ test.describe('§19 Phase 7 — Omi integration', () => {
     // Rixey tour must remain untouched.
     const { data: rixeyAfter } = await admin()
       .from('tours')
-      .select('transcript, omi_session_id')
+      .select('transcript, session_id')
       .eq('id', rixeyTour!.id)
       .single()
     expect(rixeyAfter!.transcript ?? '').not.toContain('White-label')
-    expect(rixeyAfter!.omi_session_id).toBeNull()
+    expect(rixeyAfter!.session_id).toBeNull()
 
     // Oakwood AI config carries Ivy (for the white-label brief copy).
     const { data: ai } = await admin()

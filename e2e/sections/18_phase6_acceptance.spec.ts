@@ -253,13 +253,14 @@ test.describe('§18 Phase 6 — External context layer', () => {
 
   test('Task 58: starter-tier venue cannot be coerced to an intelligence write', async () => {
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'pre_opening' })
     const { data } = await admin()
       .from('venues')
       .select('plan_tier')
       .eq('id', venueId)
       .single()
-    expect(data!.plan_tier).toBe('starter')
+    // pre_opening: the lowest tier in the 215 vocabulary (was 'starter').
+    expect(data!.plan_tier).toBe('pre_opening')
     // The runtime guard lives in requirePlan on every /api/intel/* route.
     // This test asserts the DB honors the CHECK constraint on plan_tier.
     const { error: bogus } = await admin()

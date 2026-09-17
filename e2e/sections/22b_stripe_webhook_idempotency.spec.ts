@@ -116,7 +116,7 @@ test.describe('§22b Stripe Webhook Idempotency (state-machine)', () => {
   test('22b-1: first delivery stamps processed_at on stripe_events row', async ({ request }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
 
     const eventId = `evt_22b1_${ctx.testId}`
     const subscriptionId = `sub_22b1_${ctx.testId}`
@@ -162,7 +162,7 @@ test.describe('§22b Stripe Webhook Idempotency (state-machine)', () => {
   test('22b-2: replay of a fully-processed event returns duplicate=true without re-running side-effects', async ({ request }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
 
     const eventId = `evt_22b2_${ctx.testId}`
     const subscriptionId = `sub_22b2_${ctx.testId}`
@@ -220,7 +220,7 @@ test.describe('§22b Stripe Webhook Idempotency (state-machine)', () => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
     // Start on intelligence so we can observe a downgrade.
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
 
     const eventId = `evt_22b3_${ctx.testId}`
     const subscriptionId = `sub_22b3_${ctx.testId}`
@@ -283,7 +283,7 @@ test.describe('§22b Stripe Webhook Idempotency (state-machine)', () => {
   test('22b-4: duplicate webhook delivery does not create a second admin_notification', async ({ request }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
 
     const eventId = `evt_22b4_${ctx.testId}`
     const subscriptionId = `sub_22b4_${ctx.testId}`
@@ -330,7 +330,7 @@ test.describe('§22b Stripe Webhook Idempotency (state-machine)', () => {
   test('22b-5: three deliveries of subscription.deleted leave venue on starter, not toggled back to intelligence', async ({ request }) => {
     test.setTimeout(90_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
 
     const eventId = `evt_22b5_${ctx.testId}`
     const subscriptionId = `sub_22b5_${ctx.testId}`

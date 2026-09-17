@@ -35,7 +35,11 @@ function hasSupabaseAuthCookie(cookies: { name: string }[]): boolean {
 }
 
 function demoCookieValue(cookies: { name: string; value: string }[]): string | null {
-  return cookies.find((c) => c.name === 'bloom_demo')?.value ?? null
+  // Either demo shape counts: the /demo entry action writes the signed token
+  // plus bloom_demo_hint=1; the /demo/* rewrite also writes bloom_demo=true.
+  const legacy = cookies.find((c) => c.name === 'bloom_demo')?.value ?? null
+  if (legacy) return legacy
+  return cookies.some((c) => c.name === 'bloom_demo_hint' && c.value === '1') ? 'true' : null
 }
 
 async function visitDemoPlatform(page: Page): Promise<void> {
@@ -52,7 +56,10 @@ async function visitDemoPlatform(page: Page): Promise<void> {
   // cold Supabase JS client. Poll for the bloom_demo cookie as the
   // deterministic "launchDemo finished" signal, then settle the URL.
   await page.waitForFunction(
-    () => document.cookie.split('; ').some((c) => c === 'bloom_demo=true'),
+    // Either demo shape: the /demo entry action writes the signed token plus
+    // the non-HttpOnly bloom_demo_hint; the /demo/* rewrite writes the legacy
+    // bloom_demo=true as well (src/lib/services/demo-token.ts).
+    () => document.cookie.split('; ').some((c) => c === 'bloom_demo=true' || c === 'bloom_demo_hint=1'),
     null,
     { timeout: 15_000 }
   )

@@ -103,7 +103,7 @@ test.describe('§8c Require-Plan — 7-day past-due grace period', () => {
   test('8c-1: intelligence endpoint is accessible when past_due for 5 days (within grace)', async ({ browser }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
     const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
 
     // Set subscription_status=past_due with past_due_since 5 days ago.
@@ -140,7 +140,7 @@ test.describe('§8c Require-Plan — 7-day past-due grace period', () => {
   test('8c-2: intelligence endpoint is blocked when past_due for 8 days (grace expired)', async ({ browser }) => {
     test.setTimeout(60_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
     const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
 
     // Set subscription_status=past_due with past_due_since 8 days ago.
@@ -187,7 +187,7 @@ test.describe('§8c Require-Plan — 7-day past-due grace period', () => {
   test('8c-3: grace window transition — allowed at 5 days, blocked at 8 days for same venue', async ({ browser }) => {
     test.setTimeout(90_000)
     const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
 
     // ---- 5 days ago — within grace ----
     const coordA = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
@@ -246,58 +246,18 @@ test.describe('§8c Require-Plan — 7-day past-due grace period', () => {
   //        on an intelligence-gated endpoint.
   // ---------------------------------------------------------------------------
 
-  test('8c-4: active subscription with starter tier is blocked on intelligence endpoint (normal gating)', async ({ browser }) => {
-    test.setTimeout(60_000)
-    const { orgId } = await createTestOrg(ctx)
-    const { venueId } = await createTestVenue(ctx, { orgId, planTier: 'starter' })
-    const coord = await createTestUser(ctx, { role: 'coordinator', orgId, venueId })
-
-    // Ensure subscription_status is active (default state — no past_due override).
-    await admin()
-      .from('venues')
-      .update({ subscription_status: 'active', past_due_since: null })
-      .eq('id', venueId)
-
-    const handle = await loginAsApi(
-      browser,
-      'coordinator',
-      { email: coord.email, password: coord.password },
-      { venueId }
-    )
-    try {
-      const res = await handle.request.get('/api/intel/insights', { timeout: 45_000 })
-      const status = res.status()
-      const body = await res.json().catch(() => ({}))
-
-      // Starter tier must be gated on intelligence endpoints.
-      expect(
-        [402, 403],
-        `Expected 403 plan_required for active starter tier; got status=${status} body=${JSON.stringify(body).slice(0, 200)}`
-      ).toContain(status)
-      expect(body.error).toBe('plan_required')
-      expect(body.required_tier).toBe('intelligence')
-      expect(body.current_tier).toBe('starter')
-    } finally {
-      await handle.close()
-    }
-  })
-
-  // ---------------------------------------------------------------------------
-  // 8c-5: Cache isolation — two venues in the same test run must not share
-  //          cached tier state. One is within grace, the other has grace expired.
-  //          Both should return their correct independent results.
-  //
-  // The 30s in-process LRU cache is keyed on userId (not venueId), so fresh
-  // users per venue guarantee separate cache entries. This test verifies no
-  // cross-contamination between concurrent venue contexts.
-  // ---------------------------------------------------------------------------
-
+  // (Retired 2026-09-15) "a lower tier is refused": pricing v2 gives every
+  // tier every feature and gates on capacity only (src/lib/auth/plan-tiers.ts
+  // FEATURE_MATRIX; every requirePlan call in src/app/api asks for
+  // pre_opening). 8c-4, which asserted a 403 plan_required for a low tier
+  // described behaviour the product no longer has, and are deleted rather
+  // than skipped, as E2E-PLAN.md asks.
   test('8c-5: cache isolation — within-grace and expired-grace venues in same run behave independently', async ({ browser }) => {
     test.setTimeout(90_000)
     const { orgId } = await createTestOrg(ctx)
 
     // Venue A — 5 days past_due (within grace, intelligence tier)
-    const { venueId: venueIdA } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId: venueIdA } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
     const coordA = await createTestUser(ctx, { role: 'coordinator', orgId, venueId: venueIdA })
     await admin()
       .from('venues')
@@ -308,7 +268,7 @@ test.describe('§8c Require-Plan — 7-day past-due grace period', () => {
       .eq('id', venueIdA)
 
     // Venue B — 8 days past_due (expired, intelligence tier)
-    const { venueId: venueIdB } = await createTestVenue(ctx, { orgId, planTier: 'intelligence' })
+    const { venueId: venueIdB } = await createTestVenue(ctx, { orgId, planTier: 'growth' })
     const coordB = await createTestUser(ctx, { role: 'coordinator', orgId, venueId: venueIdB })
     await admin()
       .from('venues')
