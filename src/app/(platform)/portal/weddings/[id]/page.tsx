@@ -51,6 +51,8 @@ import { InternalNotesFeed } from './_components/internal-notes-feed'
 import { LifecycleHistory } from './_components/lifecycle-history'
 import { WeddingAddressesSection } from '@/components/portal/wedding-addresses-section'
 import { WeddingPrioritiesWidget } from '@/components/portal/wedding-priorities-widget'
+import { CoupleAsksWidget } from '@/components/portal/couple-asks-widget'
+import { VenueNotesWidget } from '@/components/portal/venue-notes-widget'
 import { WeddingFinalisationsWidget } from '@/components/portal/wedding-finalisations-widget'
 import { WeddingExtractionSummary } from '@/components/portal/wedding-extraction-summary'
 import { ContractLibrary } from '@/components/couple/contract-library'
@@ -542,6 +544,10 @@ function OverviewTab({
       {/* 2026-05-26 — coordinator priorities. Surfaces filled-amber
           stars on the couple's sidebar for the flagged sections. */}
       <WeddingPrioritiesWidget weddingId={wedding.id} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <CoupleAsksWidget weddingId={wedding.id} />
+        <VenueNotesWidget weddingId={wedding.id} />
+      </div>
 
       {/* 2026-05-26 — per-section sign-off. Coordinator confirms
           sections alongside the couple's own Mark Complete. */}

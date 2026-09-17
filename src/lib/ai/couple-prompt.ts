@@ -56,6 +56,10 @@ import {
 // (the v2 jump captures the move from inline assembly to the unified
 // assembler + the new COUPLE_RULES floor).
 export const COUPLE_PROMPT_VERSIONS = {
+  // chat v2.3 (2026-09-17, later the same day): COUPLE_RULES gained a
+  // NO NUDGING section. Sage never tells a couple what they haven't
+  // done or how far behind they are; it offers to do the next thing.
+  //
   // chat v2.2 (2026-09-17): the wedding-context section now carries the
   // couple's inspiration board — their own captions and the tags they
   // use most — with a rail saying Sage has read the words and not seen
@@ -66,7 +70,7 @@ export const COUPLE_PROMPT_VERSIONS = {
   // COUPLE'S NOTES block label so the universal SOFT-CONTEXT NOTES
   // POLICY governs the verbatim-quote rule. Inline "do NOT quote
   // verbatim" hint removed.
-  chat: 'couple-chat.prompt.v2.2',
+  chat: 'couple-chat.prompt.v2.3',
   contract_question: 'couple-contract.prompt.v1',
   event_feedback: 'couple-event-feedback.prompt.v1',
   file_extraction: 'couple-file-extraction.prompt.v1',

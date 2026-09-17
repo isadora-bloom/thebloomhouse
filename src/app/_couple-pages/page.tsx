@@ -27,6 +27,7 @@ import {
 import type { DayOutlookCard } from '@/lib/services/couple-portal/day-outlook'
 import type { CoupleNudge } from '@/lib/intel/adapters/couple-nudge'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
+import { WhereThingsStand } from '@/components/couple/where-things-stand'
 
 /**
  * Round-7 audit fix: owner_photo_url allowlist.
@@ -154,71 +155,14 @@ interface PlanningAlert {
   href: string
 }
 
-function buildAlerts(data: DashboardData, SLUG: string): PlanningAlert[] {
-  const alerts: PlanningAlert[] = []
-  const days = daysUntil(data.weddingDate)
-
-  // 1. Photo
-  if (!data.couplePhotoUrl) {
-    alerts.push({
-      id: 'photo',
-      icon: Camera,
-      title: "Add a couple photo. It'll appear on your website and throughout your portal.",
-      href: `/couple/${SLUG}/couple-photo`,
-    })
-  }
-
-  // 2. Budget
-  if (data.budgetTotal === null || data.budgetTotal === 0) {
-    alerts.push({
-      id: 'budget',
-      icon: DollarSign,
-      title: 'Set your overall budget to start tracking spending.',
-      href: `/couple/${SLUG}/budget`,
-    })
-  }
-
-  // 3. Contracts (wedding_date < 6 months away)
-  if (data.contractsCount === 0 && days !== null && days < 183) {
-    alerts.push({
-      id: 'contracts',
-      icon: FileText,
-      title: "It's a good time to start collecting vendor contracts.",
-      href: `/couple/${SLUG}/contracts`,
-    })
-  }
-
-  // 4. Vendors
-  if (data.bookedVendorsCount === 0) {
-    alerts.push({
-      id: 'vendors',
-      icon: Briefcase,
-      title: 'Add your vendors to keep all your contacts in one place.',
-      href: `/couple/${SLUG}/vendors`,
-    })
-  }
-
-  // 5. Guests (wedding_date < 9 months away)
-  if (data.guestListCount === 0 && days !== null && days < 274) {
-    alerts.push({
-      id: 'guests',
-      icon: Users,
-      title: 'Your guest list is empty. Add guests to unlock seating, shuttle, and more.',
-      href: `/couple/${SLUG}/guests`,
-    })
-  }
-
-  // 6. Checklist (wedding_date < 6 months away)
-  if (data.checklistDone === 0 && days !== null && days < 183) {
-    alerts.push({
-      id: 'checklist',
-      icon: ClipboardList,
-      title: "Your planning checklist hasn't been started yet.",
-      href: `/couple/${SLUG}/checklist`,
-    })
-  }
-
-  return alerts
+function buildAlerts(_data: DashboardData, _SLUG: string): PlanningAlert[] {
+  // Empty on purpose since 2026-09-17. This used to list what the couple
+  // hadn't done yet ("Your guest list is empty", "Your checklist hasn't
+  // been started"), which is pressure dressed as help. Anything the venue
+  // genuinely needs now arrives through couple_asks and shows in
+  // "Where things stand" above. The rendering below stays so a future
+  // gentle prompt has somewhere to go.
+  return []
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +234,7 @@ function timeAgo(dateStr: string): string {
 const ALERT_PRIORITY: AlertId[] = ['photo', 'budget', 'contracts', 'vendors', 'guests', 'checklist']
 
 export default function CoupleDashboard() {
-  const { slug, weddingId, venueId, aiName, loading: contextLoading } = useCoupleContext()
+  const { slug, weddingId, venueId, aiName, venueName, loading: contextLoading } = useCoupleContext()
   const SLUG = slug
   const WEDDING_ID = weddingId
   const [data, setData] = useState<DashboardData | null>(null)
@@ -828,6 +772,15 @@ export default function CoupleDashboard() {
         )}
       </div>
 
+      {WEDDING_ID ? (
+        <WhereThingsStand
+          base={`/couple/${SLUG}`}
+          weddingId={WEDDING_ID}
+          venueName={venueName ?? 'your venue'}
+          weddingDate={data.weddingDate ?? null}
+        />
+      ) : null}
+
       {/* Round-7 audit fix: surface fetch errors so a missing card isn't
           silently rendered as "not filled in." Distinct from the alerts
           strip because it's a system-level message, not a planning task. */}
@@ -1283,26 +1236,14 @@ export default function CoupleDashboard() {
               <span className="text-gray-600">Completion</span>
               <span className="font-medium text-gray-800">{checklistPercent}%</span>
             </div>
-            {data.checklistOverdue > 0 && (
-              <div className="flex justify-between text-sm">
-                <span className="text-red-600 font-medium">Overdue</span>
-                <span className="font-medium text-red-600">{data.checklistOverdue}</span>
-              </div>
-            )}
+            {/* No overdue count and no red bar: a checklist is a list, not
+                a score (Isadora, 2026-09-17). */}
             <div className="mt-2 h-2.5 bg-gray-100 rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
-                style={{
-                  width: `${checklistPercent}%`,
-                  backgroundColor: data.checklistOverdue > 0 ? '#ef4444' : 'var(--couple-primary)',
-                }}
+                style={{ width: `${checklistPercent}%`, backgroundColor: 'var(--couple-primary)' }}
               />
             </div>
-            {data.checklistOverdue > 0 && (
-              <p className="text-xs text-red-500 mt-1">
-                {data.checklistOverdue} item{data.checklistOverdue !== 1 ? 's' : ''} past due date
-              </p>
-            )}
           </div>
         </div>
       </div>

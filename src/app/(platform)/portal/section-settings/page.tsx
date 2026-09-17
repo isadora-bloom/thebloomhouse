@@ -62,6 +62,8 @@ interface SectionConfig {
   icon: string | null
   created_at: string
   updated_at: string
+  /** When the couple first sees the section. null = as soon as it is on. */
+  release_at: string | null
 }
 
 type Visibility = 'both' | 'admin_only' | 'off'
@@ -170,10 +172,12 @@ function SectionCard({
   section,
   modified,
   onVisibilityChange,
+  onReleaseChange,
 }: {
   section: SectionConfig
   modified: boolean
   onVisibilityChange: (key: string, v: Visibility) => void
+  onReleaseChange: (key: string, releaseAt: string | null) => void
 }) {
   const IconComponent = section.icon ? iconMap[section.icon] : Settings
   const isOff = section.visibility === 'off'
@@ -231,12 +235,106 @@ function SectionCard({
               onChange={(v) => onVisibilityChange(section.section_key, v)}
             />
           </div>
+          {section.visibility === 'both' && (
+            <label className="mt-2 flex items-center gap-2 text-xs text-sage-600">
+              <span>Couple sees it from</span>
+              <input
+                type="date"
+                value={section.release_at ? section.release_at.slice(0, 10) : ''}
+                onChange={(e) => onReleaseChange(section.section_key, e.target.value ? `${e.target.value}T00:00:00` : null)}
+                className="rounded border border-border bg-white px-2 py-1 text-xs"
+              />
+              {section.release_at ? (
+                <button type="button" onClick={() => onReleaseChange(section.section_key, null)} className="underline">now</button>
+              ) : (
+                <span className="text-sage-400">now</span>
+              )}
+            </label>
+          )}
         </div>
 
         {/* Sort order */}
         <span className="text-[10px] text-sage-400 tabular-nums shrink-0">
           #{section.sort_order}
         </span>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Soft close: couple edits stop N days before the wedding
+// ---------------------------------------------------------------------------
+
+function SoftCloseCard() {
+  const [days, setDays] = useState<string>('')
+  const [message, setMessage] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/portal/portal-close')
+      .then((r) => (r.ok ? r.json() : { data: null }))
+      .then((j: { data?: { close_days: number | null; message: string | null } | null }) => {
+        setDays(j.data?.close_days === null || j.data?.close_days === undefined ? '' : String(j.data.close_days))
+        setMessage(j.data?.message ?? '')
+        setLoaded(true)
+      })
+      .catch(() => setLoaded(true))
+  }, [])
+
+  async function save() {
+    setBusy(true)
+    setNote(null)
+    const res = await fetch('/api/portal/portal-close', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ close_days: days === '' ? null : Number(days), message }),
+    })
+    setBusy(false)
+    setNote(res.ok ? 'Saved.' : 'That did not save.')
+  }
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-5">
+      <h3 className="text-sm font-semibold text-sage-900 mb-1">When changes close</h3>
+      <p className="text-xs text-sage-600 mb-3 max-w-2xl">
+        Optional. A set number of days before the wedding, the couple&apos;s edits stop and become requests: they still see everything, and a note on their portal asks them to message you for changes. Leave it empty and nothing closes.
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="text-xs text-sage-700">
+          Days before the wedding
+          <input
+            type="number"
+            min={0}
+            max={120}
+            value={days}
+            disabled={!loaded}
+            onChange={(e) => setDays(e.target.value)}
+            placeholder="never"
+            className="mt-1 block w-28 rounded border border-border bg-white px-2 py-1.5 text-sm"
+          />
+        </label>
+        <label className="text-xs text-sage-700 flex-1 min-w-[16rem]">
+          What they read once it has closed (optional)
+          <input
+            value={message}
+            disabled={!loaded}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="We're finalising the plan for your day, so send us any changes and we'll make them for you."
+            className="mt-1 block w-full rounded border border-border bg-white px-2 py-1.5 text-sm"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={save}
+          disabled={!loaded || busy}
+          className="rounded-lg bg-sage-600 text-white px-3 py-1.5 text-sm hover:bg-sage-700 disabled:opacity-50"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        {note ? <span className="text-xs text-sage-600">{note}</span> : null}
       </div>
     </div>
   )
@@ -331,11 +429,20 @@ export default function SectionSettingsPage() {
     setSaved(false)
   }
 
+  const handleReleaseChange = (sectionKey: string, releaseAt: string | null) => {
+    setSections((prev) =>
+      prev.map((s) =>
+        s.section_key === sectionKey ? { ...s, release_at: releaseAt } : s
+      )
+    )
+    setSaved(false)
+  }
+
   const modifiedKeys = new Set(
     sections
       .filter((s) => {
         const orig = originalSections.find((o) => o.section_key === s.section_key)
-        return orig && orig.visibility !== s.visibility
+        return orig && (orig.visibility !== s.visibility || (orig.release_at ?? null) !== (s.release_at ?? null))
       })
       .map((s) => s.section_key)
   )
@@ -353,6 +460,7 @@ export default function SectionSettingsPage() {
         .map((s) => ({
           section_key: s.section_key,
           visibility: s.visibility,
+          release_at: s.release_at ?? null,
         }))
 
       const res = await fetch('/api/portal/section-config?bulk=true', {
@@ -401,7 +509,7 @@ export default function SectionSettingsPage() {
             Portal Sections
           </h1>
           <p className="text-sage-600">
-            Control which sections are visible on the couple&apos;s planning portal — show, hide, or restrict access. Use this to customize the portal experience for different venues or wedding packages.
+            Which sections a couple sees, and from when. Fewer is calmer: start with the handful that matter at booking and open the rest as the wedding gets closer. A section switched off or not yet released is neither in their menu nor reachable by link.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -470,6 +578,9 @@ export default function SectionSettingsPage() {
         </div>
       ) : (
         <>
+          {/* Soft close */}
+          <SoftCloseCard />
+
           {/* Couple Preview */}
           <CouplePreview sections={sections} />
 
@@ -490,6 +601,7 @@ export default function SectionSettingsPage() {
                         section={section}
                         modified={modifiedKeys.has(section.section_key)}
                         onVisibilityChange={handleVisibilityChange}
+                        onReleaseChange={handleReleaseChange}
                       />
                     ))}
                   </div>

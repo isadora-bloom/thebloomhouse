@@ -134,6 +134,7 @@ export default async function CoupleLayout({
             venueName={branding.venueName}
             logoUrl={branding.logoUrl}
             base=""
+            venueSlug={slug}
             weddingDate={branding.weddingDate}
           >
             {children}

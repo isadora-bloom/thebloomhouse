@@ -87,9 +87,12 @@ async function handleCoupleGet(slug: string) {
       return NextResponse.json({ data: [] })
     }
 
+    // Sections the venue has switched on for couples. release_at is
+    // returned so the client can hide a section until its date without
+    // another round trip; the venue side always sees everything.
     const { data, error } = await supabase
       .from('portal_section_config')
-      .select('section_key, label, sort_order, icon')
+      .select('section_key, label, sort_order, icon, release_at')
       .eq('venue_id', venue.id)
       .eq('visibility', 'both')
       .order('sort_order', { ascending: true })
@@ -116,7 +119,7 @@ export async function PATCH(request: NextRequest) {
     if (bulk) {
       // Bulk update: { sections: [{ section_key, visibility, sort_order? }] }
       const { sections } = body as {
-        sections: { section_key: string; visibility: string; sort_order?: number }[]
+        sections: { section_key: string; visibility: string; sort_order?: number; release_at?: string | null }[]
       }
       if (!Array.isArray(sections) || sections.length === 0) {
         return badRequest('sections array is required')
@@ -134,6 +137,7 @@ export async function PATCH(request: NextRequest) {
         }
         if (section.visibility) updates.visibility = section.visibility
         if (section.sort_order !== undefined) updates.sort_order = section.sort_order
+        if (section.release_at !== undefined) updates.release_at = section.release_at
 
         const { data, error } = await supabase
           .from('portal_section_config')
@@ -150,7 +154,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Single update: { section_key, visibility, sort_order? }
-    const { section_key, visibility, sort_order } = body
+    const { section_key, visibility, sort_order, release_at } = body
     if (!section_key) return badRequest('section_key is required')
 
     const validVisibility = ['admin_only', 'both', 'off']
@@ -163,6 +167,7 @@ export async function PATCH(request: NextRequest) {
     }
     if (visibility) updates.visibility = visibility
     if (sort_order !== undefined) updates.sort_order = sort_order
+    if (release_at !== undefined) updates.release_at = release_at
 
     const { data, error } = await supabase
       .from('portal_section_config')

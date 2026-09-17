@@ -155,6 +155,7 @@ export default async function CoupleSlugLayout({
             venueName={branding.venueName}
             logoUrl={branding.logoUrl}
             base={`/couple/${slug}`}
+            venueSlug={slug}
             clientCode={branding.clientCode}
             weddingDate={branding.weddingDate}
           >

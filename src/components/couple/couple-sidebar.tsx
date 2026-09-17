@@ -23,6 +23,7 @@ import {
   type CoordinatorPriority,
 } from '@/lib/services/couple/section-status'
 import { SECTION_STATUS_CHANGED_EVENT } from './mark-section-complete'
+import { isSlugOpen, type OpenSection } from '@/lib/services/couple/section-visibility'
 
 // ---------------------------------------------------------------------------
 // Nav structure - grouped sections per couple portal spec
@@ -170,11 +171,47 @@ const DEFAULT_COLLAPSED = new Set([
   'After Your Wedding',
 ])
 
+/**
+ * Where a couple's own collapse choices are kept.
+ *
+ * Per-viewer convenience, so browser storage is the right home: it never
+ * needs to reach the other partner, another device or the server. Every
+ * read and write is wrapped, because this throws rather than returning
+ * null in a private window or with site data blocked, and a sidebar that
+ * cannot render is a worse outcome than a group that forgot it was shut.
+ */
+const COLLAPSED_STORAGE_KEY = 'bloom.couple.collapsedSections'
+
+function readCollapsed(): Set<string> | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_STORAGE_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return null
+    return new Set(parsed.filter((t): t is string => typeof t === 'string'))
+  } catch {
+    return null
+  }
+}
+
+function writeCollapsed(titles: Set<string>): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...titles]))
+  } catch {
+    // Storage full, blocked, or a private window. Nothing to do about it
+    // and nothing worth telling the couple.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar component
 // ---------------------------------------------------------------------------
 
 interface CoupleSidebarProps {
+  /** The venue's open sections; null while loading. Sections not in it are hidden. */
+  openSections?: OpenSection[] | null
   /** Base path (e.g. "/couple/hawthorne-manor") used to build nav links. */
   base: string
   /** Controlled mobile drawer open state. */
@@ -185,7 +222,7 @@ interface CoupleSidebarProps {
   weddingDate?: string | null
 }
 
-export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: CoupleSidebarProps) {
+export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate, openSections = null }: CoupleSidebarProps) {
   const pathname = usePathname()
   // 2026-05-26 — pulls the authoritative weddingId from CoupleContext
   // rather than from the layout, which only has a demo-mode proxy.
@@ -193,6 +230,16 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
     () => new Set(DEFAULT_COLLAPSED),
   )
+
+  // Restore the couple's own collapse choices AFTER mount, not in the
+  // initialiser. The server renders this component too, and seeding state
+  // from localStorage on the first paint means the server and client
+  // disagree about which groups are shut, which is a hydration mismatch.
+  // One extra paint is the price of not having that.
+  useEffect(() => {
+    const stored = readCollapsed()
+    if (stored) setCollapsedSections(stored)
+  }, [])
 
   // 2026-05-26 — per-section status dots. Loads on mount + on
   // wedding-id change + when MarkSectionCompleteBar dispatches the
@@ -278,7 +325,14 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   // that previously stripped 'After Your Wedding' is gone. The
   // showAfterWedding gate inside buildCoupleSidebarSections already
   // enforces the same condition; the post-filter was dead code.
+  // Only sections the venue has switched on and released. A group with
+  // nothing left in it disappears too.
   const visibleSections = sections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => isSlugOpen(slugFromHref(item.href), openSections)),
+    }))
+    .filter((section) => section.items.length > 0)
 
   // Inject tooltip into Final Review nav item (A1: tooltip-on-hover
   // replaces the inline badge text).
@@ -301,6 +355,7 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
       const next = new Set(prev)
       if (next.has(title)) next.delete(title)
       else next.add(title)
+      writeCollapsed(next)
       return next
     })
   }
@@ -412,11 +467,10 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
                                 green     = couple signed off
                                 confirmed = couple AND coordinator both signed
                                             (dot gets an emerald outer ring) */}
-                          {status && (
+                          {status && status !== 'amber' && (
                             <span
                               className={cn(
                                 'w-2 h-2 rounded-full shrink-0',
-                                status === 'amber' && 'bg-amber-400',
                                 (status === 'green' || status === 'confirmed') && 'bg-emerald-500',
                                 status === 'confirmed' && !active && 'ring-2 ring-emerald-200 ring-offset-1 ring-offset-white',
                                 active && 'ring-1 ring-white/60'

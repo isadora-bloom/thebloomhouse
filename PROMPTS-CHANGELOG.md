@@ -11,6 +11,12 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-09-17 (Couple chat, no nudging, v2.2 to v2.3)
+
+| brain | from | to | change |
+| --- | --- | --- | --- |
+| COUPLE_RULES (`src/config/prompts/couple-rules.ts`), inherited by every couple-facing task | `couple-chat.prompt.v2.2` | `couple-chat.prompt.v2.3` | New NO NUDGING section. Isadora's rule for the whole portal: it must not panic or pressure people. Sage no longer says what a couple hasn't done, how far behind they are, or how many things are outstanding, and never invents urgency; a venue-set date may be stated once when it is the answer. Where something needs doing, Sage offers to do it ("Want me to draft the guest count email?"). When a couple says they are behind, Sage says what is done and offers one next thing. Behavioural impact: fewer reminders, more offers; facts and tone otherwise unchanged. The other five couple tasks inherit the same floor without a version bump because their block did not change shape. |
+
 ## 2026-09-17 (Couple chat — the inspiration board reaches Sage, v2.1 → v2.2)
 
 | brain | from | to | change |

@@ -14,7 +14,6 @@ import {
   Tag,
   Square,
   CheckCircle,
-  AlertTriangle,
   Search,
   ChevronDown,
   ChevronUp,
@@ -192,22 +191,13 @@ function formatDueDate(dateStr: string | null): { text: string; color: string } 
   const diffMs = due.getTime() - now.getTime()
   const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24))
 
-  if (diffDays < 0) {
-    return { text: `${Math.abs(diffDays)}d overdue`, color: 'text-red-600 bg-red-50' }
-  }
-  if (diffDays === 0) {
-    return { text: 'Due today', color: 'text-amber-700 bg-amber-50' }
-  }
-  if (diffDays === 1) {
-    return { text: 'Tomorrow', color: 'text-amber-600 bg-amber-50' }
-  }
-  if (diffDays <= 7) {
-    return { text: `in ${diffDays} days`, color: 'text-blue-600 bg-blue-50' }
-  }
-  if (diffDays <= 14) {
-    return { text: `in ${Math.floor(diffDays / 7)} week${diffDays >= 14 ? 's' : ''}`, color: 'text-gray-500 bg-gray-50' }
-  }
+  // No red, no counting down. A date is a date (Isadora, 2026-09-17:
+  // the portal must not pressure people). Past dates read as "was due",
+  // in the same quiet grey as everything else.
   const formatted = due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  if (diffDays < 0) return { text: `was due ${formatted}`, color: 'text-gray-500 bg-gray-50' }
+  if (diffDays === 0) return { text: 'today', color: 'text-gray-600 bg-gray-50' }
+  if (diffDays === 1) return { text: 'tomorrow', color: 'text-gray-600 bg-gray-50' }
   return { text: formatted, color: 'text-gray-500 bg-gray-50' }
 }
 
@@ -321,7 +311,6 @@ export default function ChecklistPage() {
   // ---- Computed ----
   const totalItems = items.length
   const completedItems = items.filter((i) => i.is_completed).length
-  const overdueItems = items.filter((i) => isOverdue(i)).length
   const progressPercent = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0
 
   // ---- Filtering ----
@@ -630,23 +619,9 @@ export default function ChecklistPage() {
           <span>{completedItems} completed</span>
           <div className="flex items-center gap-4">
             <span>{totalItems - completedItems} remaining</span>
-            {overdueItems > 0 && (
-              <span className="text-red-500 font-medium">{overdueItems} overdue</span>
-            )}
           </div>
         </div>
       </div>
-
-      {/* Overdue Alert */}
-      {overdueItems > 0 && (
-        <div className="flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-          <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
-          <span>
-            <span className="font-semibold">{overdueItems}</span>{' '}
-            task{overdueItems > 1 ? 's' : ''} overdue. Stay on top of your planning.
-          </span>
-        </div>
-      )}
 
       {/* Filter Bar */}
       <div className="flex flex-wrap items-center gap-3">
@@ -783,7 +758,6 @@ export default function ChecklistPage() {
               {/* Tasks */}
               <div className="space-y-2">
                 {categoryItems.map((item) => {
-                  const overdue = isOverdue(item)
                   const dueInfo = formatDueDate(item.due_date)
                   const notesExpanded = expandedNotes.has(item.id)
                   const hasNotes = !!item.description
@@ -793,7 +767,7 @@ export default function ChecklistPage() {
                       <div
                         className={cn(
                           'bg-white rounded-xl border shadow-sm p-4 flex items-start gap-3 group transition-all',
-                          overdue ? 'border-red-200 bg-red-50/30' : 'border-gray-100',
+                          'border-gray-100',
                           item.is_completed && 'opacity-60'
                         )}
                       >
