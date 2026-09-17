@@ -25,6 +25,8 @@ export async function GET() {
       .select('*')
       .eq('venue_id', auth.venueId)
       .eq('wedding_id', auth.weddingId)
+      // W57's generated rows (removed 2026-09-17). ContractHouse sends contracts now.
+      .neq('kind', 'generated')
       .order('created_at', { ascending: false })
 
     if (error) throw error

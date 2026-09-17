@@ -37,7 +37,7 @@ that one client.
   and `411-storage-steps-for-sql-editor.sql` hold them), `--continue` for the batch RLS
   migration 383 whose six retired tables never existed on the branch.
 - Seed: the Crestwood demo set (`supabase/seed.sql` plus `seed-demo-rich.ts`,
-  `seed-marketing-spend-records.sql`, `seed-commitments-demo.sql`, `seed-contracts-demo.sql`,
+  `seed-marketing-spend-records.sql`, `seed-commitments-demo.sql`,
   `seed-ad-connections-demo.sql`), one real-shaped venue ("Ashcombe Barn", not a demo flag, with
   `onboarding_completed`), one org_admin, one coordinator, one manager, one couple invitation.
   Seeding is one script, `scripts/e2e-seed.ts`, dry by default, refusing production.
@@ -65,7 +65,7 @@ console (no errors) and the network (no 4xx or 5xx that the step does not expect
 | 29 | Security regressions | `/demo/api/**` is 404; a demo session is refused on every mutating route the guard lists; `POST /api/team/invite` without a session is 401 and with a coordinator session is 403; each of the eight trusted-id route groups returns 403 or 404 for another venue's id; an authenticated user cannot list another venue's contracts bucket; unsigned Stripe and Calendly deliveries are 503; the six security headers on every response; a CSV export escapes a `=1+1` guest; the preview route returns 429 after its limit; `curl` with `Bearer undefined` is refused | S1 to S5 |
 | 30 | Venue 2 self-serve | org_admin invites a manager for Ashcombe Barn; the manager completes onboarding without a terminal (project steps, CRM import, packages, tour scheduler, web-form import); readiness writer flips; `scripts/isolation-battery.ts` against Crestwood and Ashcombe passes with zero cross-venue rows | W5, W38, the plan's week 4 and week 7 gates |
 | 31 | Integrations hub honesty | every hub card reachable; Dubsado and Aisle Planner say import, not coming soon; the three ad platforms say "not configured" with the variables named; the sending-domain section shows DNS records after a stubbed Resend create; Instagram shows the webhook URL | W28, W54, W55, W53 |
-| 32 | Public surfaces | `/api/public/demo-snapshot` with an allowed origin returns the fixed demo venue and refuses another origin; the wedding website with a site password via POST; the vendor portal token; `/join/contract` token expiry after 30 days (clock-shifted fixture) | W58, S1, S5 |
+| 32 | Public surfaces | `/api/public/demo-snapshot` with an allowed origin returns the fixed demo venue and refuses another origin; the wedding website with a site password via POST; the vendor portal token (the `/join/contract` expiry test went with W57 on 2026-09-17) | W58, S1, S5 |
 
 ## Repair pass on the 33 existing sections
 

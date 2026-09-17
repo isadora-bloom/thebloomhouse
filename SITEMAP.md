@@ -1,8 +1,8 @@
 # The Bloom House — Complete Sitemap
 
 **Stack:** Next.js 16 (App Router) + TypeScript + Supabase
-**Total:** 305 pages, 411 API routes
-**Generated:** 2026-09-14
+**Total:** 303 pages, 415 API routes
+**Generated:** 2026-09-17
 
 ---
 
@@ -15,13 +15,13 @@ Agent, Intel, Portal, Settings, Admin, Onboarding, Setup.
 | _couple-pages | 50 | 0 |
 | admin | 14 | 0 |
 | agent | 24 | 0 |
-| api | 0 | 411 |
+| api | 0 | 414 |
 | billing | 1 | 0 |
 | contact | 1 | 0 |
 | dashboard | 1 | 0 |
 | forgot-password | 1 | 0 |
 | intel | 67 | 0 |
-| join | 2 | 0 |
+| join | 1 | 0 |
 | login | 1 | 0 |
 | onboarding | 8 | 0 |
 | portal | 33 | 0 |
@@ -30,7 +30,7 @@ Agent, Intel, Portal, Settings, Admin, Onboarding, Setup.
 | pulse | 1 | 0 |
 | reset-password | 1 | 0 |
 | sage | 1 | 0 |
-| settings | 31 | 0 |
+| settings | 30 | 0 |
 | setup | 1 | 0 |
 | signup | 1 | 0 |
 | super-admin | 4 | 0 |
@@ -51,7 +51,7 @@ Agent, Intel, Portal, Settings, Admin, Onboarding, Setup.
 | Segment | Pages | Routes |
 |---------|-------|--------|
 | root | 1 | 0 |
-| demo | 1 | 0 |
+| demo | 1 | 1 |
 
 ---
 

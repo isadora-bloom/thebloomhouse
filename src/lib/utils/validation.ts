@@ -86,7 +86,7 @@ export function isValidUrl(url: string): boolean {
 // rewritten.
 //
 // If you need to render untrusted HTML: don't. Escape it
-// (`escapeHtml` in src/lib/services/contracts/templates.ts) or strip it
+// (`escapeHtml` in src/lib/utils/escape-html.ts) or strip it
 // to text (`htmlToText` in src/lib/utils/html-text.ts, which is explicit
 // that it produces TEXT and is not a sanitiser). If a surface genuinely
 // has to render rich HTML from a stranger, that needs a real parser-based

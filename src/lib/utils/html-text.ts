@@ -43,7 +43,7 @@
  *     script execution.
  *
  * Need to render untrusted HTML? Escape it with `escapeHtml`
- * (src/lib/services/contracts/templates.ts), or reach for a real
+ * (src/lib/utils/escape-html.ts), or reach for a real
  * parser-based sanitiser and get the surface reviewed.
  */
 

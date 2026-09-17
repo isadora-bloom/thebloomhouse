@@ -31,7 +31,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
 import { appUrl } from '@/lib/app-url'
 import { randomUUID, createHash } from 'crypto'
-import { escapeHtml } from '@/lib/services/contracts/templates'
+import { escapeHtml } from '@/lib/utils/escape-html'
 import {
   getPlatformAuth,
   unauthorized,

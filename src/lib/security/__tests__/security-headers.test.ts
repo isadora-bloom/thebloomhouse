@@ -71,10 +71,10 @@ describe('security headers', () => {
     }
   })
 
-  it('covers the public contract signing page', async () => {
-    // /join/contract/[token] has no login and takes a typed signature, so
-    // it is the page clickjacking would actually pay off on. The catch-all
-    // matcher has to match it.
+  it('covers the public pages with no login', async () => {
+    // The wedding website and the vendor link pages have no login, so they
+    // are where clickjacking would pay off. The catch-all matcher has to
+    // match them.
     const blocks = await nextConfig.headers!()
     const all = blocks.find((b) => b.source === '/:path*')
     expect(all).toBeTruthy()

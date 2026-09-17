@@ -22,10 +22,9 @@ import type { NextConfig } from 'next'
  *
  * What the policy DOES buy, and what the audit asked for:
  *   - frame-ancestors 'none' — nothing may frame us. This is the clickjack
- *     defence for the public contract signing page at
- *     /join/contract/[token], which has no login and takes a typed
- *     signature, so a transparent overlay on an attacker's page is the
- *     whole attack. X-Frame-Options: DENY below says the same thing again
+ *     defence for the public pages with no login (the wedding website,
+ *     the vendor link pages), where a transparent overlay on an
+ *     attacker's page is the whole attack. X-Frame-Options: DENY below says the same thing again
  *     for older browsers that never learned frame-ancestors.
  *   - object-src 'none' — no Flash/applet/plugin embedding.
  *   - base-uri 'self' — an injected <base> cannot re-point every relative
@@ -109,8 +108,7 @@ const nextConfig: NextConfig = {
   },
   // S5 (2026-09-14): one header block for every route. `/:path*` matches
   // pages, API routes and static assets alike, which is what we want —
-  // the signing page at /join/contract/[token] must not be frameable and
-  // neither must anything else.
+  // no public page may be frameable, and neither may anything else.
   async headers() {
     // The E2E harness serves a production build over plain http on
     // localhost:3100 (e2e/dev-server.ts sets E2E_HARNESS=1 for the build).

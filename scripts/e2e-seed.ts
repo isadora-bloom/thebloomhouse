@@ -65,7 +65,6 @@ const DEMO_SQL_FILES = [
   'supabase/seed.sql',
   'supabase/seed-demo-rich.sql',
   'supabase/seed-marketing-spend-records.sql',
-  'supabase/seed-contracts-demo.sql',
   'supabase/seed-ad-connections-demo.sql',
   // W70 additions. `seed-reviews.sql` was written for wave 8 and never
   // wired into this list, so the branch would have had no reviews at all
@@ -123,27 +122,13 @@ const COUPLE_INVITE_EMAIL = 'e2e-couple@ashcombe.test'
 const COUPLE_INVITE_TOKEN = process.env.E2E_COUPLE_INVITE_TOKEN ?? 'e2e-ashcombe-couple-invite-0001'
 
 /**
- * Two signing links, for journeys 27 and 32 (W73).
- *
- * `contracts.sign_token` holds a sha256 digest, never the plaintext, and
- * `looksLikeToken` rejects anything that is not 32 hex characters before
- * the row is even looked up. So these are fixed 32-hex plaintexts, hashed
- * on the way in, and printed at the end so a spec can hold them without
- * reading the database.
- *
- * The expired one carries `sent_at` 31 days back. The TTL check is
- * `now - sent_at > 30 days`, strictly greater, so 31 is past it and 30
- * would not be. `supabase/seed-contracts-demo.sql` happens to have a row
- * that is stale enough to be expired today, but it drifts with the
- * calendar rather than being 31 days old on purpose; journey 32 wants a
- * fixture that is expired because it was built that way.
+ * One uploaded contract on the Ashcombe wedding, so journey 27's chat can
+ * ask about a stored contract by id. Until 2026-09-17 these were two W57
+ * signing links; W57 went in favour of ContractHouse, and the old expired
+ * row is removed on the next --apply.
  */
-const CONTRACT_LIVE_TOKEN =
-  process.env.E2E_CONTRACT_LIVE_TOKEN ?? '11111111222222223333333344444444'
-const CONTRACT_EXPIRED_TOKEN =
-  process.env.E2E_CONTRACT_EXPIRED_TOKEN ?? 'aaaaaaaabbbbbbbbccccccccdddddddd'
-const CONTRACT_LIVE_ID = 'a5c0b0e0-0000-4000-8000-000000000040'
-const CONTRACT_EXPIRED_ID = 'a5c0b0e0-0000-4000-8000-000000000041'
+const CONTRACT_ID = process.env.E2E_CONTRACT_ID ?? 'a5c0b0e0-0000-4000-8000-000000000040'
+const RETIRED_CONTRACT_ID = 'a5c0b0e0-0000-4000-8000-000000000041'
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex')
@@ -641,84 +626,39 @@ async function seedAshcombe(sb: SupabaseClient): Promise<string> {
   if (invErr) throw new Error(`couple_invites: ${invErr.message}`)
   notes.push('pending couple invitation')
 
-  await seedContractLinks(sb)
-  notes.push('two signing links (live + expired)')
+  await seedContract(sb)
+  notes.push('one uploaded contract')
 
   return notes.join(', ')
 }
 
-/**
- * The two `/join/contract/<token>` fixtures.
- *
- * `toPublicView` refuses a row whose `generated_from` has no snapshot
- * carrying a `venueName` and a `coupleNames` string — it returns the
- * generic "this link is not valid" 404 rather than the expiry message.
- * So the snapshot is written in full, not as a stub, and journey 32's
- * assertion is about expiry rather than about a malformed fixture.
- */
-async function seedContractLinks(sb: SupabaseClient): Promise<void> {
-  const snapshot = {
-    venueName: ASHCOMBE.venueName,
-    coordinatorName: 'Cora Coordinator',
-    coordinatorEmail: 'e2e-coordinator@ashcombe.test',
-    coordinatorPhone: null,
-    currency: 'USD',
-    coupleNames: 'Wren and Ari',
-    weddingDate: '2027-06-12',
-    eventCode: 'AB-0001',
-    guestCount: 110,
-    packageName: 'Full day hire',
-    totalCents: 2_100_000,
-    depositCents: 525_000,
-    paidCents: 0,
-    taxCents: null,
-    gratuityCents: null,
-    checkIn: null,
-    checkOut: null,
-    weddingHours: null,
-    rehearsalHours: null,
-    maxWeddingGuests: 130,
-    maxRehearsalGuests: null,
-    overnights: null,
-    generatedAt: new Date().toISOString(),
-  }
+/** The uploaded contract journey 27's chat asks about. */
+async function seedContract(sb: SupabaseClient): Promise<void> {
+  const { error: retireErr } = await sb.from('contracts').delete().eq('id', RETIRED_CONTRACT_ID)
+  if (retireErr) throw new Error(`contracts (retire): ${retireErr.message}`)
 
-  const thirtyOneDaysAgo = new Date(Date.now() - 31 * 86400e3).toISOString()
-
-  const rows = [
-    {
-      id: CONTRACT_LIVE_ID,
-      venue_id: ASHCOMBE.venueId,
-      wedding_id: ASHCOMBE.weddingId,
-      filename: 'e2e-live-agreement.pdf',
-      kind: 'generated',
-      template_key: 'standard',
-      status: 'sent',
-      sent_at: new Date().toISOString(),
-      viewed_at: null,
-      signed_at: null,
-      signed_name: null,
-      sign_token: sha256Hex(CONTRACT_LIVE_TOKEN),
-      generated_from: { snapshot },
-    },
-    {
-      id: CONTRACT_EXPIRED_ID,
-      venue_id: ASHCOMBE.venueId,
-      wedding_id: ASHCOMBE.weddingId,
-      filename: 'e2e-expired-agreement.pdf',
-      kind: 'generated',
-      template_key: 'standard',
-      status: 'sent',
-      sent_at: thirtyOneDaysAgo,
-      viewed_at: null,
-      signed_at: null,
-      signed_name: null,
-      sign_token: sha256Hex(CONTRACT_EXPIRED_TOKEN),
-      generated_from: { snapshot },
-    },
-  ]
-
-  const { error } = await sb.from('contracts').upsert(rows, { onConflict: 'id' })
+  const { error } = await sb.from('contracts').upsert(
+    [
+      {
+        id: CONTRACT_ID,
+        venue_id: ASHCOMBE.venueId,
+        wedding_id: ASHCOMBE.weddingId,
+        filename: 'e2e-venue-agreement.pdf',
+        kind: 'uploaded',
+        status: 'extracted',
+        template_key: null,
+        generated_from: null,
+        sign_token: null,
+        sent_at: null,
+        viewed_at: null,
+        signed_at: null,
+        signed_name: null,
+        extracted_text:
+          'Venue hire agreement. Full day hire for 110 guests. Total 21,000 USD, deposit 5,250 USD due on signing, balance 30 days before the wedding.',
+      },
+    ],
+    { onConflict: 'id' }
+  )
   if (error) throw new Error(`contracts: ${error.message}`)
 }
 
@@ -828,8 +768,7 @@ async function main() {
         ...ACCOUNTS.map((a) => `${a.role} ${a.email} (auth user + profile + org_id)`),
         `wedding ${ASHCOMBE.weddingId} (2027-06-12, booked)`,
         `pending couple invitation for ${COUPLE_INVITE_EMAIL}, token_hash ${sha256Hex(COUPLE_INVITE_TOKEN).slice(0, 16)}...`,
-        `contract ${CONTRACT_LIVE_ID} — sent today, signable (journey 27)`,
-        `contract ${CONTRACT_EXPIRED_ID} — sent_at 31 days ago, past the 30-day TTL (journey 32)`,
+        `contract ${CONTRACT_ID}, uploaded, for journey 27's chat`,
       ],
       run: seedAshcombe,
     },
@@ -868,8 +807,6 @@ async function main() {
     console.log('  printed once, and reset on every re-run so the print is always current):')
     for (const a of ACCOUNTS) console.log(`       - ${a.role.padEnd(14)} ${a.email}`)
     console.log(`       - couple invite  ${COUPLE_INVITE_EMAIL}  token ${COUPLE_INVITE_TOKEN}`)
-    console.log(`       - contract link  live    /join/contract/${CONTRACT_LIVE_TOKEN}`)
-    console.log(`       - contract link  expired /join/contract/${CONTRACT_EXPIRED_TOKEN}`)
     console.log('')
     console.log('  DRY RUN. No client was built and no statement was sent.')
     console.log('  Re-run with --apply to write to the branch above.')
@@ -914,9 +851,7 @@ async function main() {
   console.log(`    E2E_ASHCOMBE_SLUG=${ASHCOMBE.venueSlug}`)
   console.log(`    E2E_COUPLE_INVITE_EMAIL=${COUPLE_INVITE_EMAIL}`)
   console.log(`    E2E_COUPLE_INVITE_TOKEN=${COUPLE_INVITE_TOKEN}`)
-  console.log(`    E2E_CONTRACT_LIVE_TOKEN=${CONTRACT_LIVE_TOKEN}`)
-  console.log(`    E2E_CONTRACT_LIVE_ID=${CONTRACT_LIVE_ID}`)
-  console.log(`    E2E_CONTRACT_EXPIRED_TOKEN=${CONTRACT_EXPIRED_TOKEN}`)
+  console.log(`    E2E_CONTRACT_ID=${CONTRACT_ID}`)
   console.log('')
   console.log('  Passwords are not stored anywhere else. Lose them and re-run with --apply.')
   console.log('')

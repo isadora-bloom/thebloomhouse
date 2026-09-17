@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email/transport'
 import { mintInviteToken } from '@/lib/services/portal/provision'
 import { appUrl } from '@/lib/app-url'
-import { escapeHtml } from '@/lib/services/contracts/templates'
+import { escapeHtml } from '@/lib/utils/escape-html'
 import { safeHttpUrl } from '@/lib/utils/safe-url'
 import { isValidHexColor } from '@/lib/utils/validation'
 import {

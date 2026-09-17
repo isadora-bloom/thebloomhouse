@@ -61,11 +61,6 @@ import {
   WALKTHROUGH_HEADINGS,
 } from './_components/walkthrough-sections'
 import { CommitmentsQueue, COMMITMENTS_ICON } from './_components/commitments-queue'
-import {
-  ContractGenerationSection,
-  CONTRACT_SECTION_COPY,
-  CONTRACT_SECTION_ICON,
-} from './_components/contract-generation-section'
 import { COMMITMENTS_COPY } from '@/lib/copy/client-terms'
 
 // ---------------------------------------------------------------------------
@@ -2438,21 +2433,6 @@ export default function WeddingProfilePage() {
               venueId={wedding.venue_id}
               onOpenCommunications={() => setActiveTab('communications')}
               onSaved={fetchData}
-            />
-          </CollapsibleSection>
-
-          {/* W57. The contracts section above lists what the couple has  */}
-          {/* put in. This one is the other direction: the agreement the  */}
-          {/* venue sends, built from what they booked, with the trail of */}
-          {/* sent, opened and signed underneath it.                      */}
-          <CollapsibleSection
-            heading={CONTRACT_SECTION_COPY.heading}
-            subheading={CONTRACT_SECTION_COPY.subheading}
-            icon={CONTRACT_SECTION_ICON}
-          >
-            <ContractGenerationSection
-              weddingId={weddingId}
-              weddingStatus={wedding.status}
             />
           </CollapsibleSection>
         </div>

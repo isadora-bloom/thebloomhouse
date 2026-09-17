@@ -1,5 +1,4 @@
 import { test, expect, type Page } from '@playwright/test'
-import { createHash } from 'node:crypto'
 import { adminClient } from '../helpers/seed'
 import { journey, SEEDED, type Journey } from '../helpers/journey'
 
@@ -13,7 +12,8 @@ import { journey, SEEDED, type Journey } from '../helpers/journey'
  * 5,000-character message is refused; seating page; the day-outlook card;
  * the contract link opens on `/join/contract/<token>`, signs once,
  * refuses a second time, carries the frame-denying headers." Proves W1,
- * W43, W44, W52, W57, S4b and S5.
+ * W43, W44, W52 and S4b. The contract-link steps went with W57 on
+ * 2026-09-17: contracts are sent from ContractHouse now.
  *
  * What it needs from the branch (`scripts/e2e-seed.ts --apply` prints it):
  *
@@ -57,25 +57,14 @@ const SLUG = SEEDED.ashcombeSlug
 const COUPLE_EMAIL = SEEDED.coupleInviteEmail
 const COUPLE_PASSWORD = 'E2eCouple!27a'
 
-const LIVE_CONTRACT_TOKEN =
-  process.env.E2E_CONTRACT_LIVE_TOKEN ?? '11111111222222223333333344444444'
-const LIVE_CONTRACT_ID = process.env.E2E_CONTRACT_LIVE_ID ?? 'a5c0b0e0-0000-4000-8000-000000000040'
+/** An uploaded contract on the seeded wedding, for the chat's contractId. */
+const CONTRACT_ID = process.env.E2E_CONTRACT_ID ?? 'a5c0b0e0-0000-4000-8000-000000000040'
 
 /** The cap the route actually enforces. */
 const MAX_MESSAGE_CHARS = 4000
 
 /** `hasChatSignoff`'s own marker — the one string the sign-off must carry. */
 const SIGNOFF_MARKER = 'Type "I\'d like a human"'
-
-/** The six headers `next.config.ts` ships on /:path*. */
-const FRAME_DENYING = {
-  'x-frame-options': 'DENY',
-  'content-security-policy': "frame-ancestors 'none'",
-}
-
-function sha256Hex(value: string): string {
-  return createHash('sha256').update(value).digest('hex')
-}
 
 function couple(page: Page): Journey {
   return journey(page, SECTION, {
@@ -112,21 +101,6 @@ test.describe("§27 A couple's portal", () => {
       .update({ used_at: null })
       .eq('venue_id', SEEDED.ashcombeVenueId)
       .eq('email', COUPLE_EMAIL)
-
-    // Put the signing link back. Signing nulls `sign_token` on purpose
-    // (one use per link), so the fixture has to be re-armed.
-    await sb
-      .from('contracts')
-      .update({
-        status: 'sent',
-        sign_token: sha256Hex(LIVE_CONTRACT_TOKEN),
-        sent_at: new Date().toISOString(),
-        viewed_at: null,
-        signed_at: null,
-        signed_name: null,
-        signed_ip: null,
-      })
-      .eq('id', LIVE_CONTRACT_ID)
 
     // The dashboard package summary renders only when the wedding has a
     // package. With no catalog row the reader falls back to the bare
@@ -332,7 +306,7 @@ test.describe("§27 A couple's portal", () => {
         data: {
           venueId: SEEDED.ashcombeVenueId,
           weddingId: SEEDED.ashcombeWeddingId,
-          contractId: LIVE_CONTRACT_ID,
+          contractId: CONTRACT_ID,
           message: 'Does our contract say anything about fees?',
           fileContext: smuggled,
         },
@@ -406,49 +380,4 @@ test.describe("§27 A couple's portal", () => {
     await j.end()
   })
 
-  // -------------------------------------------------------------------------
-  // The contract link
-  // -------------------------------------------------------------------------
-
-  test('the signing link renders, signs once, and refuses a second signature', async ({ page }) => {
-    const j = couple(page)
-
-    await j.step('the page carries the frame-denying headers', async () => {
-      const res = await page.goto(`/join/contract/${LIVE_CONTRACT_TOKEN}`)
-      expect(res, 'no response for the signing link').toBeTruthy()
-      const headers = res!.headers()
-      expect(headers['x-frame-options']).toBe(FRAME_DENYING['x-frame-options'])
-      expect(headers['content-security-policy'] ?? '').toContain(
-        FRAME_DENYING['content-security-policy']
-      )
-    })
-
-    await j.step('the contract renders', async () => {
-      // /join is public, so this is reachable with no session at all.
-      await expect(page.locator('#signed-name')).toBeVisible({ timeout: 30_000 })
-      await expect(page.getByRole('button', { name: 'I agree' })).toBeVisible()
-    })
-
-    await j.step('sign it once', async () => {
-      await page.fill('#signed-name', 'Wren Ashby')
-      await page.getByRole('button', { name: 'I agree' }).click()
-      await expect(page.getByText('Signed by', { exact: false })).toBeVisible({ timeout: 30_000 })
-    })
-
-    await j.step('a second signature is refused', async () => {
-      // Two guards answer with the same string: `canSign` on the status,
-      // and the conditional-update single-use guard behind it. Signing
-      // also nulls the token, so the API is asked directly rather than
-      // through a page that no longer has a live link.
-      const res = await page.request.post(`/api/contracts/sign/${LIVE_CONTRACT_TOKEN}`, {
-        data: { name: 'Someone Else' },
-        failOnStatusCode: false,
-      })
-      expect([404, 409], `a second signature answered ${res.status()}`).toContain(res.status())
-      const body = (await res.json()) as { error?: string }
-      expect(body.error ?? '').toMatch(/already been signed|not valid/i)
-    })
-
-    await j.end()
-  })
 })

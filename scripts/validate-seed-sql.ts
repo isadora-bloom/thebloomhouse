@@ -98,7 +98,6 @@ export const SEED_SQL_FILES: readonly string[] = [
   'supabase/seed.sql',
   'supabase/seed-demo-rich.sql',
   'supabase/seed-marketing-spend-records.sql',
-  'supabase/seed-contracts-demo.sql',
   'supabase/seed-ad-connections-demo.sql',
   'supabase/seed-reviews.sql',
   'supabase/seed-demo-venue-surfaces.sql',

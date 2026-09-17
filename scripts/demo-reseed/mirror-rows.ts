@@ -609,9 +609,10 @@ export function buildStoryAux(
       })),
   )
 
-  // -- Contracts. The signed one every booking has, plus a second,
-  //    unsigned one on about a third of them (guest count moved, so a
-  //    new agreement went out and is sitting there).
+  // -- Contracts. The agreement every booking has uploaded, plus a revised
+  //    one on about a third of them (guest count moved). Uploads only:
+  //    contracts the venue sends come from ContractHouse since W57 was
+  //    removed on 2026-09-17.
   const contracts: Array<Record<string, unknown>> = [
     {
       id: uuidFrom(rng),
@@ -621,21 +622,8 @@ export function buildStoryAux(
       file_type: 'pdf',
       storage_path: `${story.key}/agreement.pdf`,
       extracted_text: `Wedding agreement between ${story.primaryName} and ${venue.name}.`,
-      kind: 'generated',
-      status: 'signed',
-      template_key: 'standard',
-      generated_from: {
-        snapshot: {
-          venueName: venue.name,
-          guestCount: story.guestCount,
-          totalCents: (story.bookingValue ?? venue.basePrice) * 100,
-        },
-      },
-      sent_at: offsetIso(today, signedDaysAgo + 4, 15 * 60),
-      viewed_at: offsetIso(today, signedDaysAgo + 3, 19 * 60),
-      signed_at: offsetIso(today, signedDaysAgo, 9 * 60),
-      signed_name: story.primaryName,
-      signed_ip: '198.51.100.24',
+      kind: 'uploaded',
+      status: 'extracted',
       created_at: offsetIso(today, signedDaysAgo + 4, 15 * 60),
     },
   ]
@@ -648,13 +636,8 @@ export function buildStoryAux(
       file_type: 'pdf',
       storage_path: `${story.key}/agreement-revised.pdf`,
       extracted_text: 'Revised agreement after the guest count changed.',
-      kind: 'generated',
-      status: 'viewed',
-      template_key: 'standard',
-      generated_from: { snapshot: { venueName: venue.name, guestCount: story.guestCount + 18 } },
-      sent_at: offsetIso(today, Math.max(1, wDays + 90), 11 * 60),
-      viewed_at: offsetIso(today, Math.max(0, wDays + 88), 20 * 60),
-      signed_at: null,
+      kind: 'uploaded',
+      status: 'extracted',
       created_at: offsetIso(today, Math.max(1, wDays + 90), 11 * 60),
     })
   }

@@ -16,8 +16,8 @@ import {
  *
  * "`/api/public/demo-snapshot` with an allowed origin returns the fixed
  * demo venue and refuses another origin; the wedding website with a site
- * password via POST; the vendor portal token; `/join/contract` token
- * expiry after 30 days (clock-shifted fixture)." Proves W58, S1 and S5.
+ * password via POST; the vendor portal token." Proves W58, S1 and S5.
+ * The `/join/contract` expiry test went with W57 on 2026-09-17.
  *
  * What it needs from the branch:
  *
@@ -44,18 +44,11 @@ import {
  *      a bug for a link emailed to a florist. It is asserted as the
  *      current behaviour, loudly, so it cannot change unnoticed; the page
  *      itself is then checked with a session.
- *   4. The expired-link case: `signTokenExpired` takes an injectable
- *      `now`, but the HTTP path always uses the real clock. So the clock
- *      shift is in the fixture, not in the test: `scripts/e2e-seed.ts`
- *      writes a contract with `sent_at` 31 days back.
  */
 
 const SECTION = '32_public_surfaces'
 const HAVE_COORD = haveCreds(SEEDED.coordinator)
 const NO_COORD = missingCredsReason('COORDINATOR')
-
-const EXPIRED_CONTRACT_TOKEN =
-  process.env.E2E_CONTRACT_EXPIRED_TOKEN ?? 'aaaaaaaabbbbbbbbccccccccdddddddd'
 
 /** The first origin in PUBLIC_DEMO_ALLOWED_ORIGINS, if the branch has one. */
 const ALLOWED_ORIGIN = (process.env.PUBLIC_DEMO_ALLOWED_ORIGINS ?? '')
@@ -289,53 +282,4 @@ test.describe('§32 Public surfaces', () => {
     await j.end()
   })
 
-  // -------------------------------------------------------------------------
-  // The 30-day contract link
-  // -------------------------------------------------------------------------
-
-  test('a contract link past 30 days is refused', async ({ page }) => {
-    const j = publicSurfaces(page)
-    // The 404 is the assertion, so it must not also be an issue.
-    j.allowRequest(/\/api\/contracts\/sign\//)
-
-    await j.step('the seeded 31-day link no longer opens', async () => {
-      // SIGN_TOKEN_TTL_DAYS is 30 and the check is strictly greater, so
-      // the fixture is 31 days old rather than exactly 30. The expiry
-      // runs before the projection is built, so nothing of the contract
-      // leaks with the refusal.
-      const res = await page.request.get(`/api/contracts/sign/${EXPIRED_CONTRACT_TOKEN}`, {
-        failOnStatusCode: false,
-      })
-      expect(res.status(), `an expired link answered ${res.status()}`).toBe(404)
-      const body = (await res.json()) as { error?: string }
-      expect(body.error).toBe('This link has expired. Ask the venue to send it again.')
-      expect(JSON.stringify(body), 'the refusal carried contract content').not.toContain('snapshot')
-    })
-
-    await j.step('the page says so rather than showing a blank', async () => {
-      await page.goto(`/join/contract/${EXPIRED_CONTRACT_TOKEN}`)
-      await expect(page.getByRole('heading', { name: 'We could not open that' })).toBeVisible({
-        timeout: 30_000,
-      })
-      await expect(
-        page.getByText('This link has expired. Ask the venue to send it again.')
-      ).toBeVisible()
-      await expect(page.locator('#signed-name')).toHaveCount(0)
-    })
-
-    await j.step('signing an expired link is refused too', async () => {
-      // The read path only applies expiry to a live link; the sign path
-      // applies it unconditionally. Both doors, not just the one the
-      // page happens to use.
-      const res = await page.request.post(`/api/contracts/sign/${EXPIRED_CONTRACT_TOKEN}`, {
-        data: { name: 'Wren Ashby' },
-        failOnStatusCode: false,
-      })
-      expect(res.status()).toBe(409)
-      const body = (await res.json()) as { error?: string }
-      expect(body.error).toBe('This link has expired. Ask the venue to send it again.')
-    })
-
-    await j.end()
-  })
 })

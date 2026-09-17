@@ -29,7 +29,6 @@ import {
   type ContractCapabilities,
   type CoupleSurfaceRole,
 } from './surface-role'
-import { asContractStatus, statusLabel } from '@/lib/services/contracts/status'
 import { mintSignedUrl } from '@/lib/storage/signed-url'
 import {
   FileText,
@@ -75,9 +74,9 @@ export interface Contract {
   status: string | null
   created_at: string
   updated_at: string | null
-  /** W57, migration 409. 'uploaded' for everything that came from a file
-   *  picker, 'generated' for a contract the venue built and sent. Optional
-   *  so a row selected before the column existed still types. */
+  /** Migration 409. 'uploaded' for everything from a file picker. The
+   *  'generated' rows W57 wrote are filtered out on load: W57 was removed
+   *  on 2026-09-17 in favour of ContractHouse. */
   kind?: string | null
   sent_at?: string | null
   viewed_at?: string | null
@@ -222,10 +221,6 @@ export function ContractCard({
   const config = fileTypeConfig(contract.file_type)
   const TypeIcon = config.icon
   const isAnalyzed = !!contract.analyzed_at
-  // W57. Additive: a row with no `kind` is an upload, which is every row
-  // that existed before migration 409.
-  const isGenerated = contract.kind === 'generated'
-  const generatedStatus = isGenerated ? asContractStatus(contract.status) : null
 
   async function handleAsk() {
     const trimmed = question.trim()
@@ -319,31 +314,7 @@ export function ContractCard({
                 </span>
               )}
               <span>{timeAgo(contract.created_at)}{/* created-at-ok: contract created_at is when it was generated, the real event */}</span>
-              {/* W57. A contract the venue generated carries its own
-                  lifecycle in the same status column, so it gets the
-                  signing pill instead of the analysis pill. There is
-                  nothing to analyse in a document we wrote ourselves,
-                  and "Pending" against it read as a warning. Uploads are
-                  untouched. */}
-              {isGenerated ? (
-                <span
-                  className={cn(
-                    'inline-flex items-center gap-0.5 font-medium',
-                    generatedStatus === 'signed'
-                      ? 'text-emerald-600'
-                      : generatedStatus === 'void'
-                        ? 'text-gray-400'
-                        : 'text-amber-600',
-                  )}
-                >
-                  {generatedStatus === 'signed' ? (
-                    <CheckCircle className="w-3 h-3" />
-                  ) : (
-                    <FileSignature className="w-3 h-3" />
-                  )}
-                  {statusLabel(generatedStatus)}
-                </span>
-              ) : isAnalyzed ? (
+              {isAnalyzed ? (
                 <span className="inline-flex items-center gap-0.5 text-emerald-600 font-medium">
                   <CheckCircle className="w-3 h-3" />
                   Analyzed
@@ -650,6 +621,9 @@ export function ContractLibrary({
       .from('contracts')
       .select('*')
       .eq('wedding_id', weddingId)
+      // Rows Bloom's own contract generation (W57, removed 2026-09-17) left
+      // behind. Contracts the venue sends come from ContractHouse now.
+      .neq('kind', 'generated')
       .order('created_at', { ascending: false })
 
     if (fetchErr) {
