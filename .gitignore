@@ -23,7 +23,8 @@ npm-debug.log*
 next-env.d.ts
 
 .vercel
-.claude/
+.claude/*
+!.claude/settings.json
 
 # Phase 2 operator-data exports (PII; never commit)
 phase2-exports/

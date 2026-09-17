@@ -10,13 +10,20 @@ Unified wedding venue intelligence platform. Three product areas (Agent, Intelli
 - **Plan of record:** `CONSOLIDATION-PLAN-PHASED.md` v2.1 (architecture authority) + `NOVEMBER-PLAN.md` (current execution plan, deadline ~2026-11-08). Current state: `HANDOFF-STATE-OF-BLOOM-HOUSE.md`. New daily landing `/today` surfaces once W8 lands.
 - **Full blueprint:** `BLUEPRINT.md` — original architecture, schema, AI system, build order (doctrine, not the live plan)
 
+## Who owns what (decided 2026-09-17)
+Two people work on this repo. Check whose area a change falls in before making it.
+- **Phil:** the Agent and Intel.
+- **Isadora:** admin panel; ContractHouse (getting it ready to merge in); road testing the client portal; a page-by-page UIX pass as a venue would see it; later, possibly the vendor network.
+
+If work in one person's area needs a change in the other's, stop and say so. Don't make it quietly. Phil works on his own branch through PRs, Isadora mostly on `consolidation`.
+
 ## Work diary (every session, both Isadora and Phil)
 `diary/` holds a daily written record of what got done. Format and reasoning in `diary/README.md`.
 - File is `diary/YYYY-MM-DD-<name>.md`, where `<name>` is the lowercased first word of `git config user.name`. Never write into the other person's file.
 - Add to today's file whenever something worth remembering lands: a commit, a fix, a finding, a decision, or when the user says they're stopping for the day. Create the file if it doesn't exist; otherwise append under the existing headings rather than starting a new entry.
 - Highlights only, in plain sentences. Why it mattered, not a list of every file touched.
 - Stage the diary file with the work it describes (explicit path, never `git add -A`) so it travels on the same branch and PR.
-- Before starting work, read the last few days of both people's files to pick up where things were left.
+- A SessionStart hook (`.claude/settings.json` → `scripts/diary-context.mjs`) loads the last three days of entries into every session. Use them to pick up where things were left.
 
 ## Key Principles
 1. **Intelligence loop is the USP** — trends, weather, reviews feed back into Agent and Portal behavior
