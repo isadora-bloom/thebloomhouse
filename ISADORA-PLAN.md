@@ -37,12 +37,12 @@ From week 2 to week 4 there are three agent builds running at once (admin panel,
 ### Week 1 · 17 to 23 Sep: clear the ground and read
 
 - [ ] **Delete W57.** First check prod for any generated contract rows. If there are none, remove `src/lib/services/contracts/**`, `src/app/api/portal/contracts/**`, `src/app/api/contracts/sign/**`, `src/app/join/contract/**`, `src/app/(platform)/settings/contract-template/**`, the fifth collapsed section on the wedding page and the pill on the couple library. Migration 409's columns stay for now and a later migration drops them. E2E section 32's `/join/contract` test goes too.
-- [ ] **Read the Rixey portal.** Two outputs:
+- [ ] **Read the Rixey portal.** Two outputs (the vendor list and a first portal comparison are done, see `audits/2026-09-17-vendor-network-side-by-side.md` and `audits/2026-09-17-rixey-portal-vs-bloom-portal.md`; the table-by-table data map is still to do):
   - *Data map:* where couples, guests, timelines, messages, Sage chats and planning notes live, and where each lands in Bloom.
   - *Vendor steal-list:* records, booked history, contracts, aliases, recommend toggle, directory, merge questions. Take as is, take the idea, or leave it.
 - [ ] **Vendor design.** Put the January schema next to the steal-list and write one design. The January schema was drawn before the Rixey records existed, so it needs updating. It also needs `venue_id` and `wedding_id` keys that line up with Bloom's, so the merge in week 7 is joining tables, not translating them.
 - [ ] **ContractHouse audit.** List what's broken and what's left from v1 (late payment reminders, certificate of completion PDF, co-signer) before fixing anything. It's live for Rixey, so nothing is tested against its production database.
-- [ ] **Admin panel spec.** Registrations (venues, users, couples, when), billing (plan, Stripe status, trial, failed payments), usage (AI spend from `api_costs`, emails processed, active users). Staff roles, since it's for everyone at Bloom. Start from what `/super-admin` shows.
+- [x] **Admin panel spec.** Written: `ADMIN-PANEL-PLAN.md`, with seven decisions waiting. Registrations (venues, users, couples, when), billing (plan, Stripe status, trial, failed payments), usage (AI spend from `api_costs`, emails processed, active users). Staff roles, since it's for everyone at Bloom. Start from what `/super-admin` shows.
 
 ### Week 2 · 24 to 30 Sep: start the three builds, load the venue
 
