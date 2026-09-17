@@ -23,6 +23,11 @@ Two people work on this repo. Check whose area a change falls in before making i
 
 If work in one person's area needs a change in the other's, stop and say so. Don't make it quietly. Phil works on his own branch through PRs, Isadora mostly on `consolidation`.
 
+## Pull requests
+When a change reaches into the other person's area, Claude puts it on its own branch and opens a pull request into `consolidation` rather than committing it straight there. The PR is how the other person finds out.
+- A SessionStart hook (`scripts/open-prs-context.mjs`) lists every open PR at the start of each session, for both Isadora and Phil. Claude raises them at the top of its first reply: what each changes, who opened it, and whether it is waiting on you. Needs the GitHub CLI signed in (`gh auth login`); without it Claude says it couldn't check.
+- All open PRs: https://github.com/isadora-bloom/thebloomhouse/pulls
+
 ## Work diary (every session, both Isadora and Phil)
 `diary/` holds a daily written record of what got done. Format and reasoning in `diary/README.md`.
 - File is `diary/YYYY-MM-DD-<name>.md`, where `<name>` is the lowercased first word of `git config user.name`. Never write into the other person's file.
