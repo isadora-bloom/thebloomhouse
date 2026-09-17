@@ -19,6 +19,7 @@ Two people work on this repo. Check whose area a change falls in before making i
   - Road testing the client portal on historic Rixey portal data with identifying details changed, walked through as both the venue and the couple.
   - A page-by-page UIX pass as a venue would see it, worked from a spreadsheet of every page.
   - Vendor network: start by seeing what can be taken from the Rixey portal. Like ContractHouse, it merges into Bloom once solid.
+  - Order and progress for all of these: `ISADORA-PLAN.md`.
 
 If work in one person's area needs a change in the other's, stop and say so. Don't make it quietly. Phil works on his own branch through PRs, Isadora mostly on `consolidation`.
 
