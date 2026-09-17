@@ -149,7 +149,13 @@ For engineering and the founder only:
 - Per-venue features that are off by default (cross-venue benchmarks).
 - A banner message shown to all venues (planned maintenance, an outage).
 
-### 10. Staff and audit log
+### 10. Opt-ins and suggestions
+
+- **The list of opt-ins:** each with a plain description, who it affects, whether it's live, and how many venues have switched it on.
+- **Per venue:** what they've switched on, when and by whom.
+- **Suggestions from venues:** what they asked for, how many venues asked for the same thing, and a status (thinking about it, planned, built, not doing) that the venue can see.
+
+### 11. Staff and audit log
 
 - Bloom staff: add, remove, change role. Founder only.
 - The audit log: every staff action, filterable by person, account and action. Nobody can edit or delete it.
@@ -166,6 +172,8 @@ For engineering and the founder only:
 | `integration_health` | Latest state per venue per integration, written by the jobs that already sync them |
 | `platform_flags` | The switches in screen 9, read at runtime rather than from environment variables |
 | `view_as_sessions` | Who looked at which venue, why, from when to when |
+| `opt_ins`, `venue_opt_ins` | The registry of opt-in settings, and each venue's choice with who and when |
+| `venue_suggestions` | Ideas venues send in, with votes and a status they can see |
 
 **The nightly job has to fit the cron budget.** Bloom's ratchet holds scheduled jobs at 49 of 49, so the usage roll-up runs inside an existing nightly slot, the way waves 6 and 7 did.
 
@@ -189,9 +197,10 @@ Fits weeks 1 to 4 of `ISADORA-PLAN.md`.
 Answered by Isadora, 2026-09-17:
 
 1. **Trials stay.** The 14-day trial in the code is right. The pricing page on thebloomhouse.ai, which says there's no free trial, is the thing out of step.
-2. **Staff roles:** these are Bloom's own staff, not roles inside a customer's organisation. Customers already have theirs (org admin, venue manager, coordinator, read-only, couple). Isadora asked what the six are; confirm once she's read the table above.
-3. **Billing is Stripe.** Still open: one subscription per organisation, or one per venue, for groups.
-4. **Enterprise invoicing:** not decided yet.
+2. **Staff roles:** Bloom's own staff, not roles inside a customer's organisation. Isadora and Phil start as Founder.
+3. **Billing is Stripe, one subscription per organisation,** with its venues counted on it.
+4. **Enterprise is billed through Stripe too** (Stripe invoices), so all money sits in one place.
 5. **Alerts are built into Bloom.** No Slack or other outside tools. Today's items show in the panel, and a staff notification bell and a daily email digest from Bloom itself carry the urgent ones.
 6. **View as venue: a notice is enough.** The venue sees an entry in its activity. It doesn't have to agree first.
-7. **What makes a venue red:** to be worked out together. The suggestion (integration failing over 24 hours, a failed payment, activity down by half over two weeks) stands until then.
+7. **A venue is red when** an integration has been failing for over 24 hours, a payment has failed, or activity is down by half over two weeks.
+8. **Opt-ins get their own home.** There will be many settings a venue has to choose to switch on (cross-venue benchmarks, sharing vendor ratings, being shown to other venues). They need one registry of opt-ins, a place in each venue's settings to see and change them, a record of who switched what and when, and a place for venues to suggest new ones, which Bloom staff read in this panel. See screen 10.

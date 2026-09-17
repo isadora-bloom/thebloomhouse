@@ -8,8 +8,11 @@
 - **Everything is merged into Bloom by 8 November.** ContractHouse and the vendor network both.
 - **The vendor network is built standalone first**, like ContractHouse. It already has a start: the private GitHub repo `isadora-bloom/vendor_bloom` holds one file, `vendor-network-schema.sql` (January 2026, 16 tables: vendors, categories, styles, personality traits, specialties, languages, bookings, day preferences, seasonal blocks, availability cache, venue relationships, venue history). No app yet. The Rixey portal's vendor records from August are the other half.
 - **The admin panel is for everyone at Bloom**, not just Isadora. So it needs staff roles from the start. The 14-day trial stays, billing is Stripe, alerts are built into Bloom (no Slack), a notice is enough when staff view a venue.
-- **The test venue gets 3 or 4 anonymised Rixey couples.**
-- **Real Rixey clients move onto Bloom from 2027 weddings onwards.** Assumption until confirmed: 2026 weddings finish on the Rixey portal and ContractHouse as they are, so the ContractHouse merge only has to carry 2027-and-later contracts and payments across.
+- **The test venue gets the 3 or 4 most complete Rixey couples.** No anonymising beyond changing their email addresses (and phone numbers), so nobody gets a notification by accident. It's internal only.
+- **Real Rixey clients move onto Bloom from 2027 weddings onwards.** 2026 weddings finish on the Rixey portal. Rixey isn't sending contracts through ContractHouse today, so there are no live contracts to carry across.
+- **The Rixey portal is done with new features.** Fixes only from here.
+- **Rixey portal features Bloom lacks get built into Bloom:** walkthrough notes with photos and voice, family and contacts, meeting recording, planning document import. The Google Sheet sync is dropped.
+- **Venue staff can edit a couple's sections for them**, marked as done by the venue.
 
 ## The short version
 
@@ -49,7 +52,7 @@ From week 2 to week 4 there are three agent builds running at once (admin panel,
 - [ ] **Vendor network app.** Stand up `vendor_bloom` with the same stack as ContractHouse (Next 16, Supabase, Tailwind, shadcn), so both merges look alike. It needs its own Supabase project, which you create.
 - [ ] **Admin panel** build starts.
 - [ ] **ContractHouse fixes** start, against a test copy of its database.
-- [ ] **Export and anonymise 3 or 4 Rixey couples.** Pick ones with plenty on their portals. The raw export stays local and never goes into git. Consistent fake names, emails, phones and addresses. Free text rewritten properly. No photos or uploaded files.
+- [ ] **Export the 3 or 4 most complete Rixey couples.** The raw export stays local and never goes into git. Every email address and phone number (couples, guests, family, vendors) swapped for a safe test one, so nothing can notify a real person. Everything else as it is.
 - [ ] **Load them into the test Supabase project** as their own venue, with a coordinator login and a couple login. After the next E2E run, check the venue survived.
 - [ ] **Page spreadsheet**, generated from the route list (`scripts/gen-sitemap.mjs`): page, who sees it, nav location or orphan, blank columns for verdict and notes.
 
@@ -57,6 +60,7 @@ From week 2 to week 4 there are three agent builds running at once (admin panel,
 
 - [ ] **Couple side:** log in as each anonymised couple and use the portal the way they would.
 - [ ] **Venue side:** work down the spreadsheet as the coordinator, on the same weddings.
+- [ ] **Build the missing Rixey features into Bloom:** walkthrough notes (photos, voice, transcription), family and contacts, meeting recording, planning document import, and staff editing couple sections.
 - [ ] **Fix as you go** in your areas. Agent or Intel problems go to Phil through the diary.
 - [ ] **Admin panel** finished and checked against real numbers.
 - [ ] **ContractHouse** declared solid: every v1 flow works end to end on the test copy.
@@ -64,7 +68,7 @@ From week 2 to week 4 there are three agent builds running at once (admin panel,
 
 ### Weeks 5 and 6 · 15 to 28 Oct: merge ContractHouse, finish vendors
 
-- [ ] **ContractHouse into Bloom.** Tables into Bloom's database, joined through the `wedding_id` and `couple_id` it already carries. Pages under the platform and couple portal. Rixey's 2027-onwards contracts and payments moved over, planned before it's done, because it's real money and signed documents.
+- [ ] **ContractHouse into Bloom.** Tables into Bloom's database, joined through the `wedding_id` and `couple_id` it already carries. Pages under the platform and couple portal. No live Rixey contracts to move: Rixey isn't using ContractHouse today.
 - [ ] **Re-walk the contract pages** on the test venue.
 - [ ] **Vendor network** declared solid.
 
@@ -79,7 +83,7 @@ Nothing planned. Something will need it.
 
 ## Still to confirm
 
-- Do 2026 weddings stay on the Rixey portal and ContractHouse to the end, with only 2027 onwards moving? The plan assumes yes.
+- Nothing on the plan itself. Open items live in `ADMIN-PANEL-PLAN.md` and `vendor_bloom/DESIGN.md`.
 
 ## Where findings go
 
