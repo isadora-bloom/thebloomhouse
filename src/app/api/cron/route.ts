@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service'
+import { withoutFrozenVenues } from '@/lib/services/billing/venue-freeze'
 import { writeOrLog } from '@/lib/db/write-or-log'
 import { asCents, centsToDollars } from '@/lib/types/monetary'
 import { NextRequest, NextResponse } from 'next/server'
@@ -2489,7 +2490,8 @@ async function pollZoomAllVenues(): Promise<
     { fetched: number; newlyProcessed: number; matched: number; errors: number; reconnectNeeded?: boolean }
   > = {}
 
-  for (const venueId of venueIds) {
+  // Frozen venues (trial ended, migration 417) aren't polled.
+  for (const venueId of await withoutFrozenVenues(venueIds)) {
     try {
       const result = await syncZoomMeetings(venueId, { sinceDays: 30 })
       out[venueId] = {
@@ -2693,7 +2695,11 @@ async function pollEmailsAllVenues(): Promise<Record<string, number>> {
 
   if (venueIds.size === 0) return {}
 
-  const ids = Array.from(venueIds)
+  // Frozen venues (trial ended, migration 417) aren't polled, and their
+  // pending auto-sends aren't flushed. Gmail's history id lapses after
+  // about a week; on subscribing, fetchMessageIdsByHistory's 404 path
+  // falls back to listing, so the inbox catches up.
+  const ids = await withoutFrozenVenues(venueIds)
   const results: Record<string, number> = {}
 
   // Process venues in parallel chunks so a 30-venue run takes roughly

@@ -48,6 +48,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
+import { withoutFrozenVenues } from '@/lib/services/billing/venue-freeze'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 // Type-only: erased at compile time, so this doesn't create the runtime
 // import cycle the dynamic `await import('@/lib/services/identity/mint-wedding')`
@@ -1653,8 +1654,11 @@ export async function syncAllVenues(): Promise<Record<string, SyncResult | { err
     .eq('is_active', true)
 
   const out: Record<string, SyncResult | { error: string }> = {}
+  // Frozen venues (trial ended, migration 417) aren't synced at all.
+  const live = new Set(await withoutFrozenVenues((connections ?? []).map((c) => c.venue_id as string)))
   for (const c of connections ?? []) {
     const venueId = c.venue_id as string
+    if (!live.has(venueId)) continue
     try {
       // Don't pass sinceHours — let syncMessages resolve the window from
       // last_synced_at (incremental sync) OR FIRST_SYNC_DAYS for a fresh

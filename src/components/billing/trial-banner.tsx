@@ -28,7 +28,7 @@ export function useTrialExpired(isDemo: boolean): boolean {
     fetch('/api/billing/trial-status')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!cancelled && data?.trialExpired) setExpired(true)
+        if (!cancelled && (data?.frozen ?? data?.trialExpired)) setExpired(true)
       })
       .catch(() => {
         // Never block page render on a failed banner check.
@@ -44,14 +44,13 @@ export function useTrialExpired(isDemo: boolean): boolean {
 /**
  * Fixed banner at the very top of the page. Same fixed/h-10/z-60 shape as
  * DemoBanner so PlatformShell can treat the two as mutually exclusive top
- * banners and reuse the same layout-offset classes — a venue is never
+ * banners and reuse the same layout-offset classes. A venue is never
  * both demo and a real expired trial at once, so there's no stacking case
  * to handle.
  *
- * Deliberately informational only. Nothing else on the platform is
- * blocked by trial expiry (see billing-state.ts) except auto-send, which
- * is enforced separately in the dispatch path (autonomous-sender.ts) —
- * this banner does not itself gate anything.
+ * The banner only explains. The freeze itself is enforced by the database
+ * (migration 417) and refused early in the middleware, the AI client and
+ * the email senders (src/lib/services/billing/venue-freeze.ts).
  */
 export function TrialExpiredBanner() {
   const aiName = useAiName()
@@ -61,14 +60,14 @@ export function TrialExpiredBanner() {
         <AlertTriangle className="w-4 h-4 shrink-0" />
         <span className="font-medium">Your trial has ended</span>
         <span className="hidden sm:inline text-amber-600">
-          {aiName} still runs, but auto-send is paused. Subscribe to turn it back on.
+          You can look at everything, but nothing will change or update, and {aiName} is paused, until you choose a plan.
         </span>
       </div>
       <Link
         href="/settings/billing"
         className="inline-flex items-center px-3 py-1 bg-amber-600 text-white rounded-md text-xs font-medium hover:bg-amber-700 transition-colors"
       >
-        View billing
+        Choose a plan
       </Link>
     </div>
   )

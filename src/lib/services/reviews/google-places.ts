@@ -23,6 +23,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { withoutFrozenVenues } from '@/lib/services/billing/venue-freeze'
 import { replayReviewRows, type ReviewRow } from '@/lib/services/identity/replay/reviews'
 import { scheduleReviewScoring } from '@/lib/services/reviews/score'
 
@@ -278,8 +279,11 @@ export async function pollGooglePlacesForAllVenues(): Promise<
   }
 
   const results: Record<string, GooglePlacesPollResult> = {}
+  // Frozen venues (trial ended, migration 417) aren't polled.
+  const live = new Set(await withoutFrozenVenues(venues.map((v) => (v as { id: string }).id)))
   for (const v of venues) {
     const id = (v as { id: string }).id
+    if (!live.has(id)) continue
     try {
       results[id] = await pollGooglePlacesForVenue(id)
     } catch (err) {

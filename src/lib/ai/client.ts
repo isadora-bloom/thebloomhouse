@@ -4,6 +4,7 @@ import OpenAI from 'openai'
 import { createServiceClient } from '@/lib/supabase/service'
 import { calculateCost as calculateModelCost } from '@/lib/ai/cost-tracker'
 import { redactError } from '@/lib/observability/redact'
+import { assertVenueNotFrozen } from '@/lib/services/billing/venue-freeze'
 import {
   recordCall,
   shouldSkip,
@@ -449,6 +450,7 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
  * unavailable. Cost per turn still lands in api_costs, same as callAI.
  */
 export async function callAnthropicTurn(options: CallAIOptions): Promise<CallAIResult> {
+  await assertVenueNotFrozen(options.venueId)
   return callAnthropic(options)
 }
 
@@ -525,6 +527,11 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   const taskType = options.taskType ?? 'general'
   const started = Date.now()
   const requestedModel = modelForTier(options.tier)
+
+  // A venue whose trial ended with no subscription is frozen (migration
+  // 417): no model calls on its behalf, from any path. Throws
+  // VenueFrozenError, which callers already treat as a failed call.
+  await assertVenueNotFrozen(options.venueId)
 
   // E2E fixture mode. Answers from e2e/fixtures/ai/<promptVersion>.json,
   // still logs the cost row, never reaches a provider, and cannot turn on
@@ -881,6 +888,9 @@ async function callOpenAIVisionFallback(options: CallAIVisionOptions): Promise<C
 export async function callAIVision(options: CallAIVisionOptions): Promise<CallAIResult> {
   const taskType = options.taskType ?? 'vision'
   const started = Date.now()
+
+  // Frozen venue: no model calls (see callAI).
+  await assertVenueNotFrozen(options.venueId)
 
   // E2E fixture mode — same contract as callAI. The image is not read.
   if (isStubActive()) {

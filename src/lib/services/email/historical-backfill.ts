@@ -23,6 +23,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchNewEmails } from './gmail'
 import { processIncomingEmail } from './pipeline'
+import { withoutFrozenVenues } from '@/lib/services/billing/venue-freeze'
 
 const GENERAL_WEEKS = 52
 const LOOKBACK_DAYS_BOOKED = 1095 // 3 years
@@ -195,9 +196,14 @@ export async function drainGmailBackfill(supabase: SupabaseClient): Promise<unkn
     .select('id, gmail_backfill_status, gmail_backfill_phase, gmail_backfill_cursor, gmail_backfill_emails, gmail_backfill_updated_at')
     .in('gmail_backfill_status', ['pending', 'running'])
     .order('gmail_backfill_updated_at', { ascending: true })
-    .limit(10)
+    // 50, not 10: frozen venues are skipped below and must not fill the window.
+    .limit(50)
 
-  const venue = (candidates ?? []).find((v) => {
+  // A frozen venue (trial ended, migration 417) can't be written to, so
+  // it would fail to lock and be picked first again every tick, starving
+  // every other venue's backfill. Leave it pending until it subscribes.
+  const live = new Set(await withoutFrozenVenues((candidates ?? []).map((v) => v.id as string), supabase))
+  const venue = (candidates ?? []).filter((v) => live.has(v.id as string)).find((v) => {
     if (v.gmail_backfill_status === 'pending') return true
     return (v.gmail_backfill_updated_at ?? '') < staleCutoff // reclaim dead 'running'
   })

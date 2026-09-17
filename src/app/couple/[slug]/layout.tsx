@@ -1,6 +1,8 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
+import { PortalReadOnlyNotice } from '@/components/couple/portal-read-only-notice'
+import { isVenueFrozen } from '@/lib/services/billing/venue-freeze'
 import { FloatingSage } from '@/components/couple/floating-sage'
 import { CoupleAiNameProvider } from '@/lib/hooks/use-couple-context'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -126,6 +128,7 @@ export default async function CoupleSlugLayout({
   // The middleware handles cookie setting. The slug comes from URL params.
 
   const branding = await getVenueBranding(slug)
+  const frozen = await isVenueFrozen(branding.venueId)
   const fontUrl = getFontUrl(branding.fontPairKey)
   const fontVars = getFontVars(branding.fontPairKey)
 
@@ -158,11 +161,12 @@ export default async function CoupleSlugLayout({
             clientCode={branding.clientCode}
             weddingDate={branding.weddingDate}
           >
+            {frozen && <PortalReadOnlyNotice venueName={branding.venueName} />}
             {children}
           </CoupleShell>
 
           {/* Floating assistant button on every page */}
-          <FloatingSage venueSlug={slug} />
+          {!frozen && <FloatingSage venueSlug={slug} />}
         </CoupleAiNameProvider>
       </div>
     </>

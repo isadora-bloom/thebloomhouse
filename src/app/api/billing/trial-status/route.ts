@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { resolveBillingState } from '@/lib/services/billing/billing-state'
+import { isVenueFrozen } from '@/lib/services/billing/venue-freeze'
 
 // ---------------------------------------------------------------------------
 // GET /api/billing/trial-status
@@ -28,17 +29,24 @@ export async function GET(): Promise<NextResponse> {
       trialEndsAt: null,
       trialExpired: false,
       daysRemaining: null,
+      frozen: false,
       tier: 'enterprise',
     })
   }
 
-  const state = await resolveBillingState(auth.venueId)
+  const [state, frozen] = await Promise.all([
+    resolveBillingState(auth.venueId),
+    isVenueFrozen(auth.venueId),
+  ])
 
   return NextResponse.json({
     isTrial: state.isTrial,
     trialEndsAt: state.trialEndsAt,
     trialExpired: state.trialExpired,
     daysRemaining: state.daysRemaining,
+    // The account is read-only (migration 417). Asked of the database's
+    // own rule rather than inferred from trialExpired.
+    frozen,
     tier: state.storedTier,
   })
 }

@@ -270,19 +270,20 @@ function BillingPageInner() {
                 <>
                   <div className="font-medium">Your trial ended {formatDate(trial.trialEndsAt)}.</div>
                   <div className="mt-0.5">
-                    {aiName} keeps drafting and every lead is still captured. Only auto-send is paused until
-                    you subscribe. Pick a plan below to turn it back on.
+                    Your account is read-only for now. Everything is still here to look at, but new emails
+                    aren&apos;t being fetched, {aiName} isn&apos;t drafting or sending, and nothing can be edited.
+                    Pick a plan below and it all starts again where it stopped.
                   </div>
                 </>
               ) : (
                 <>
                   <div className="font-medium">
                     You&apos;re on a free trial
-                    {trial.daysRemaining != null ? ` — ${trial.daysRemaining} day${trial.daysRemaining === 1 ? '' : 's'} left` : ''}.
+                    {trial.daysRemaining != null ? `, ${trial.daysRemaining} day${trial.daysRemaining === 1 ? '' : 's'} left` : ''}.
                   </div>
                   <div className="mt-0.5">
-                    Trial ends {formatDate(trial.trialEndsAt)}. Subscribe any time before then to keep
-                    auto-send running without interruption.
+                    Trial ends {formatDate(trial.trialEndsAt)}. If you haven&apos;t chosen a plan by then, the
+                    account goes read-only: you can still look at everything, but nothing updates.
                   </div>
                 </>
               )}
