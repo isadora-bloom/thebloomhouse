@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Globe,
@@ -37,6 +36,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { describeSection, summariseSections } from '@/lib/website-sections'
+import { coupleSave } from '@/lib/api/couple-client'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -208,6 +208,7 @@ export default function WeddingWebsitePage() {
   const [expandedSection, setExpandedSection] = useState<string | null>('our_story')
   const [saving, setSaving] = useState(false)
   const [copiedSlug, setCopiedSlug] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // Undefined until loaded. See the effect below: not-yet-known must not read
   // as none.
@@ -336,18 +337,28 @@ export default function WeddingWebsitePage() {
   async function saveSettings(updated?: Partial<WebsiteSettings>) {
     setSaving(true)
     // Map the builder's `url_slug` onto the real `slug` column and drop any
-    // transient/id fields, so the upsert only carries columns that exist.
+    // transient/id fields, so the save only carries columns that exist.
     const { url_slug, id: _id, created_at: _c, updated_at: _u, ...rest } =
       { ...settings, ...updated } as WebsiteSettings & { id?: string; created_at?: string; updated_at?: string }
     const payload = {
       ...rest,
       slug: url_slug?.trim() ? url_slug.trim() : null,
-      wedding_id: weddingId,
-      venue_id: venueId,
     }
-    // T5-Rixey-XX: matched by uq_wedding_website_settings_wedding_id (mig 188).
-    await writeOrLog(supabase.from('wedding_website_settings').upsert(payload, { onConflict: 'wedding_id' }), { op: 'wedding_website_settings.upsert', venueId })
-    if (updated) setSettings(prev => ({ ...prev, ...updated }))
+
+    // Through the server rather than straight from the browser, so the save
+    // lands in activity_log. Saving the website used to write nothing anywhere,
+    // which is why a Rixey couple's missing wedding party could not be traced:
+    // her toggle had changed and there was no record of it changing.
+    //
+    // The wedding and venue are no longer in the payload. The route takes both
+    // from the session and refuses a body that names its own.
+    const { error } = await coupleSave('website', payload)
+    if (error) {
+      setSaveError(error.message)
+    } else {
+      setSaveError(null)
+      if (updated) setSettings(prev => ({ ...prev, ...updated }))
+    }
     setSaving(false)
   }
 
@@ -480,6 +491,14 @@ export default function WeddingWebsitePage() {
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
+          {/* A failed save used to be invisible here: the write was wrapped in
+              writeOrLog, which put a line in the server log and let the button
+              go back to "Save Changes" as though it had worked. */}
+          {saveError && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
+              Not saved: {saveError}
+            </span>
+          )}
           {settings.is_published && (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
               <CheckCircle2 className="w-3 h-3" />

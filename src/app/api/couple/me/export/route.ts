@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
 import { exportCouple } from '@/lib/services/compliance/portability'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { logActivity } from '@/lib/services/activity-logger'
 
 /**
  * POST /api/couple/me/export — CCPA / GDPR data-portability download
@@ -68,6 +69,19 @@ export async function POST() {
       .from('consumer_requests')
       .update({ status: 'completed', processed_at: new Date().toISOString() })
       .eq('id', requestRow.id as string)
+
+    // Logged after the export is built, so the feed records what actually
+    // left rather than what was asked for. A download of everything a couple
+    // has is worth a line whether or not anything goes wrong afterwards.
+    logActivity({
+      venueId: auth.venueId,
+      weddingId: auth.weddingId,
+      userId: auth.userId,
+      activityType: 'data_exported',
+      entityType: 'consumer_requests',
+      entityId: requestRow.id as string,
+      details: { summary: 'downloaded a copy of their data', scope: 'wedding' },
+    })
 
     const filename = `bloom-data-export-${new Date().toISOString().slice(0, 10)}.json`
     return new NextResponse(JSON.stringify(payload, null, 2), {

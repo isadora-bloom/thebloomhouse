@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { logActivity } from '@/lib/services/activity-logger'
 
 /**
  * POST /api/couple/me/erase — CCPA / GDPR right-to-erasure request
@@ -70,6 +71,20 @@ export async function POST() {
     .single()
 
   if (error || !row) return serverError(error)
+
+  // An erasure request is the one thing on the portal with a legal clock on it.
+  // consumer_requests is the record of the request; this is the record of it
+  // being made, in the same feed as everything else the couple did, so nobody
+  // has to join two tables to reconstruct the day.
+  logActivity({
+    venueId: auth.venueId,
+    weddingId: auth.weddingId,
+    userId: auth.userId,
+    activityType: 'erasure_requested',
+    entityType: 'consumer_requests',
+    entityId: row.id,
+    details: { summary: 'asked for their data to be erased', scope: 'wedding' },
+  })
 
   return NextResponse.json(
     {

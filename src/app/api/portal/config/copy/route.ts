@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, assertCanAccessVenue, forbidden } from '@/lib/api/auth-helpers'
+import { logActivity } from '@/lib/services/activity-logger'
 
 /**
  * POST /api/portal/config/copy (Tier-B #69C)
@@ -105,7 +106,26 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  const copied = count ?? rowsToInsert.length
+
+  // Bulk config arriving from a sister venue is exactly the sort of thing that
+  // is hard to account for afterwards: it is additive, it is not obviously
+  // different from having been typed in, and the marketing channels it brings
+  // feed the correlation engine. Say where it came from and how much.
+  logActivity({
+    venueId: auth.venueId,
+    userId: auth.userId,
+    activityType: 'config_copied',
+    entityType: body.table,
+    details: {
+      summary: `copied ${copied} ${copied === 1 ? 'row' : 'rows'} of ${body.table} from another venue`,
+      table: body.table,
+      sourceVenueId: body.sourceVenueId,
+      copied,
+    },
+  })
+
   return NextResponse.json({
-    data: { copied: count ?? rowsToInsert.length },
+    data: { copied },
   })
 }
