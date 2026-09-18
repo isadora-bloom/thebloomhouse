@@ -2399,10 +2399,17 @@ async function scanBacktraceAllVenues(): Promise<
 
   // Only scan venues that actually have a live Gmail connection — no
   // inbox = no findBacktraceCandidates work worth doing.
+  // "not false", not "is true". sync_enabled is nullable with DEFAULT true, and
+  // every reader that shows it to a person treats null as on: the integrations
+  // status card counts a connection when `sync_enabled !== false`
+  // (lib/services/integrations/gmail.ts), and so does the pipeline-health page.
+  // An eq(true) here quietly skipped any connection whose flag was null, so a
+  // venue could be told it was connected and syncing while this never looked at
+  // its inbox. Nothing is null today; the column is one blank write from it.
   const { data: connectedRows } = await supabase
     .from('gmail_connections')
     .select('venue_id')
-    .eq('sync_enabled', true)
+    .not('sync_enabled', 'is', false)
     .eq('status', 'active')
   const venueIds = new Set<string>()
   for (const row of connectedRows ?? []) {
@@ -2473,10 +2480,13 @@ async function pollZoomAllVenues(): Promise<
 > {
   const supabase = createServiceClient()
 
+  // Same disagreement as gmail_connections.sync_enabled above: is_active is
+  // nullable, and lib/services/integrations/zoom.ts calls a connection
+  // connected when `is_active !== false`.
   const { data: rows } = await supabase
     .from('zoom_connections')
     .select('venue_id')
-    .eq('is_active', true)
+    .not('is_active', 'is', false)
 
   const venueIds = new Set<string>()
   for (const row of rows ?? []) {
