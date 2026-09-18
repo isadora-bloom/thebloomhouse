@@ -22,6 +22,13 @@ import {
 } from 'lucide-react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { safeHref } from '@/lib/utils/safe-url'
+import {
+  sectionHasContent,
+  type SectionType,
+  type RegistryLinkish,
+  type FaqItemish,
+  type NamedItem,
+} from '@/lib/website-sections'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -587,6 +594,27 @@ function SectionRenderer({
     }
   })()
 
+  // `content` is a JSX element, so it is always truthy: this only ever caught
+  // the `default` branch above. Ten of the eleven section components return
+  // null when they have nothing to render, and for those the wrapper still
+  // came out — an empty band of padding on the published page, between two
+  // real sections, with nothing in it.
+  //
+  // So ask the shared rules the same question the component is about to ask
+  // itself. `null` means the rules could not tell, and an unknown section is
+  // rendered rather than hidden: the component decides, and at worst we are
+  // back to the blank band for that one case instead of dropping something
+  // real.
+  const hasContent = sectionHasContent(section.type as SectionType, section.data, {
+    our_story: website.our_story,
+    dress_code: website.dress_code,
+    registry_links: website.registry_links as RegistryLinkish[] | null,
+    faq: website.faq as FaqItemish[] | null,
+    things_to_do: website.things_to_do as NamedItem[] | null,
+    timelineCount: timeline.length,
+    accommodationsCount: accommodations.length,
+  })
+  if (hasContent === false) return null
   if (!content) return null
 
   return (

@@ -36,6 +36,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { describeSection, summariseSections } from '@/lib/website-sections'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +77,15 @@ interface WebsiteSettings {
   is_published: boolean
   site_password: string
   sections: WebsiteSection[]
+  // Columns the row carries and the public site falls back on when a section
+  // has nothing of its own. fetchSettings spreads the whole row in, so these
+  // were always here at runtime; they were simply never declared, which is why
+  // nothing in this file could ask whether a section had content.
+  our_story?: string | null
+  dress_code?: string | null
+  registry_links?: RegistryLink[] | null
+  faq?: FAQItem[] | null
+  things_to_do?: ThingsToDoItem[] | null
 }
 
 interface FAQItem {
@@ -199,6 +209,11 @@ export default function WeddingWebsitePage() {
   const [saving, setSaving] = useState(false)
   const [copiedSlug, setCopiedSlug] = useState(false)
 
+  // Undefined until loaded. See the effect below: not-yet-known must not read
+  // as none.
+  const [timelineCount, setTimelineCount] = useState<number | undefined>(undefined)
+  const [accommodationsCount, setAccommodationsCount] = useState<number | undefined>(undefined)
+
   // Photo gallery upload state
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
   const [galleryUploading, setGalleryUploading] = useState(false)
@@ -294,6 +309,29 @@ export default function WeddingWebsitePage() {
     fetchSettings()
   }, [weddingId, fetchSettings])
 
+  // The Day falls back to the wedding's timeline, and Nearby Stays to the
+  // venue's own accommodations list, so without these two counts the panel
+  // cannot tell whether either section has anything in it. Undefined is passed
+  // through as "cannot tell" rather than zero: saying a couple's schedule is
+  // empty because we did not look would be the same class of lie this is
+  // fixing. Each read stands alone, so one failing does not blank the other.
+  useEffect(() => {
+    if (!weddingId) return
+    let cancelled = false
+    ;(async () => {
+      const [t, a] = await Promise.all([
+        supabase.from('timeline').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+        venueId
+          ? supabase.from('accommodations').select('id', { count: 'exact', head: true }).eq('venue_id', venueId)
+          : Promise.resolve({ count: null, error: null } as { count: number | null; error: unknown }),
+      ])
+      if (cancelled) return
+      if (!t.error && typeof t.count === 'number') setTimelineCount(t.count)
+      if (!a.error && typeof a.count === 'number') setAccommodationsCount(a.count)
+    })()
+    return () => { cancelled = true }
+  }, [weddingId, venueId, supabase])
+
   // ---- Save ----
   async function saveSettings(updated?: Partial<WebsiteSettings>) {
     setSaving(true)
@@ -383,6 +421,39 @@ export default function WeddingWebsitePage() {
   )
 
   const enabledSections = sortedSections.filter(s => s.enabled)
+
+  // What a guest would actually see, worked out from the same rules the public
+  // site renders on. The switch being on is one of three conditions and it was
+  // the only one this page knew about.
+  const sectionContext = useMemo(() => ({
+    our_story: settings.our_story,
+    dress_code: settings.dress_code,
+    registry_links: settings.registry_links ?? null,
+    faq: settings.faq ?? null,
+    things_to_do: settings.things_to_do ?? null,
+    timelineCount,
+    accommodationsCount,
+  }), [settings.our_story, settings.dress_code, settings.registry_links, settings.faq,
+       settings.things_to_do, timelineCount, accommodationsCount])
+
+  const described = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof describeSection>>()
+    for (const s of sortedSections) {
+      map.set(s.type, describeSection(s.type, {
+        enabled: s.enabled,
+        published: !!settings.is_published,
+        data: s.data,
+        ctx: sectionContext,
+      }))
+    }
+    return map
+  }, [sortedSections, settings.is_published, sectionContext])
+
+  const sectionSummary = summariseSections([...described.values()], !!settings.is_published)
+
+  // Sections a guest would see right now. The preview shows these and nothing
+  // else, so it stops promising a section the live site will drop.
+  const visibleSections = sortedSections.filter(s => described.get(s.type)?.visible)
 
   // ---- Theme config ----
   const currentTheme = THEMES.find(t => t.key === settings.theme) || THEMES[0]
@@ -586,9 +657,13 @@ export default function WeddingWebsitePage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-5 border-b border-gray-50">
               <h2 className="text-base font-semibold" style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}>
-                Sections ({enabledSections.length} active)
+                Sections
               </h2>
-              <p className="text-xs text-gray-400 mt-0.5">Toggle sections on/off, reorder, and configure content</p>
+              {/* The answer first. "N active" counted switches and called that
+                  active, which is not the question a couple is asking. */}
+              <p className={cn('text-xs mt-0.5', settings.is_published ? 'text-gray-500' : 'text-amber-600')}>
+                {sectionSummary}
+              </p>
             </div>
 
             <div className="divide-y divide-gray-50">
@@ -596,6 +671,7 @@ export default function WeddingWebsitePage() {
                 const meta = SECTION_META[section.type]
                 const SectionIcon = meta.icon
                 const isExpanded = expandedSection === section.type
+                const status = described.get(section.type)
 
                 return (
                   <div key={section.type} className={cn(!section.enabled && 'opacity-50')}>
@@ -631,7 +707,30 @@ export default function WeddingWebsitePage() {
                         className="flex-1 text-left"
                       >
                         <p className="text-sm font-medium text-gray-700">{meta.label}</p>
-                        <p className="text-[10px] text-gray-400">{meta.description}</p>
+                        {/* The state, not the sales pitch. A section that is on
+                            with nothing in it says so, and says what to add,
+                            rather than describing what it would be for. */}
+                        {status ? (
+                          <p className={cn(
+                            'text-[10px] flex items-center gap-1',
+                            status.state === 'live' ? 'text-green-600'
+                              : status.state === 'off' ? 'text-gray-400'
+                              : status.state === 'unknown' ? 'text-gray-500'
+                              : 'text-amber-600',
+                          )}>
+                            <span className={cn(
+                              'w-1 h-1 rounded-full shrink-0',
+                              status.state === 'live' ? 'bg-green-500'
+                                : status.state === 'off' ? 'bg-gray-300'
+                                : status.state === 'unknown' ? 'bg-gray-400'
+                                : 'bg-amber-500',
+                            )} />
+                            {status.headline}
+                            {status.detail ? <span className="text-gray-400">· {status.detail}</span> : null}
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-gray-400">{meta.description}</p>
+                        )}
                       </button>
 
                       {section.enabled && (
@@ -1028,7 +1127,17 @@ export default function WeddingWebsitePage() {
                 </div>
 
                 {/* Enabled sections */}
-                {enabledSections.map(section => {
+                {/* What a guest would actually see. This used to map every
+                    enabled section and fill the empty ones with encouragement
+                    ("Your love story will appear here..."), for sections the
+                    live site drops entirely. A preview that shows more than
+                    the site does is worse than no preview. */}
+                {visibleSections.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-6">
+                    Nothing to show yet. Switch a section on and put something in it, and it appears here exactly as your guests will see it.
+                  </p>
+                )}
+                {visibleSections.map(section => {
                   const meta = SECTION_META[section.type]
                   return (
                     <div key={section.type} className="border-t pt-4" style={{ borderColor: settings.accent_color + '20' }}>
@@ -1036,13 +1145,13 @@ export default function WeddingWebsitePage() {
 
                       {section.type === 'our_story' && (
                         <p className="text-sm text-gray-600 leading-relaxed text-center max-w-sm mx-auto whitespace-pre-wrap">
-                          {(section.data.text as string) || 'Your love story will appear here...'}
+                          {(section.data.text as string) || settings.our_story}
                         </p>
                       )}
 
                       {section.type === 'dress_code' && (
                         <p className="text-sm text-gray-600 text-center">
-                          {(section.data.custom_text as string) || DRESS_CODE_PRESETS.find(p => p.value === (section.data.preset as string))?.description || 'Dress code details here'}
+                          {(section.data.custom_text as string) || DRESS_CODE_PRESETS.find(p => p.value === (section.data.preset as string))?.description || settings.dress_code}
                         </p>
                       )}
 
