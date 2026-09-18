@@ -142,3 +142,68 @@ describe('isTrialExpiredNoSub', () => {
     await expect(isTrialExpiredNoSub('venue-broken', client)).resolves.toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// billing_exempt — a venue Bloom has decided not to charge (migration 423)
+//
+// Rixey Manor is free forever. Before the exemption existed it read as a trial
+// that expired on 2026-05-04, because `isTrial` came straight off
+// `stripe_subscription_id IS NULL`. The consequences were not cosmetic: the
+// trial banner on every platform page, inquiry capacity capped to the
+// pre_opening tier while plan_tier said enterprise, and autonomous sending
+// switched off via isTrialExpiredNoSub.
+// ---------------------------------------------------------------------------
+
+describe('billing_exempt', () => {
+  const rixeyLike = {
+    plan_tier: 'enterprise',
+    subscription_status: null,
+    stripe_subscription_id: null,
+    // Four and a half months in the past, as production had it.
+    trial_ends_at: new Date(Date.now() - 135 * DAY_MS).toISOString(),
+  }
+
+  it('without the exemption, a long-expired trial caps an enterprise venue to pre_opening', async () => {
+    const state = await resolveBillingState('rixey', fakeClient({ ...rixeyLike, billing_exempt: false }))
+    expect(state.isTrial).toBe(true)
+    expect(state.trialExpired).toBe(true)
+    expect(state.storedTier).toBe('enterprise')
+    expect(state.effectiveCapacity).toEqual(CAPACITY_LIMITS.pre_opening)
+  })
+
+  it('with the exemption, the same venue is not on trial and keeps its own tier', async () => {
+    const state = await resolveBillingState('rixey', fakeClient({ ...rixeyLike, billing_exempt: true }))
+    expect(state.billingExempt).toBe(true)
+    expect(state.isTrial).toBe(false)
+    expect(state.trialExpired).toBe(false)
+    expect(state.daysRemaining).toBe(null)
+    expect(state.effectiveCapacity).toEqual(CAPACITY_LIMITS.enterprise)
+  })
+
+  it('an exempt venue keeps trial_ends_at for the record, it just stops mattering', async () => {
+    const state = await resolveBillingState('rixey', fakeClient({ ...rixeyLike, billing_exempt: true }))
+    expect(state.trialEndsAt).toBe(rixeyLike.trial_ends_at)
+    expect(state.trialExpired).toBe(false)
+  })
+
+  it('stops autonomous sending being refused for an exempt venue', async () => {
+    expect(await isTrialExpiredNoSub('rixey', fakeClient({ ...rixeyLike, billing_exempt: false }))).toBe(true)
+    expect(await isTrialExpiredNoSub('rixey', fakeClient({ ...rixeyLike, billing_exempt: true }))).toBe(false)
+  })
+
+  it('a null or missing flag reads as not exempt, so nothing changes by accident', async () => {
+    for (const value of [null, undefined]) {
+      const state = await resolveBillingState('v', fakeClient({ ...rixeyLike, billing_exempt: value }))
+      expect(state.billingExempt).toBe(false)
+      expect(state.isTrial).toBe(true)
+    }
+  })
+
+  it('the exemption does not invent a tier: a solo exempt venue stays solo', async () => {
+    const state = await resolveBillingState(
+      'v',
+      fakeClient({ ...rixeyLike, plan_tier: 'solo', billing_exempt: true }),
+    )
+    expect(state.effectiveCapacity).toEqual(CAPACITY_LIMITS.solo)
+  })
+})

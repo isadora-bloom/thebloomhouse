@@ -45,7 +45,12 @@ export interface BillingState {
   venueId: string
   /** The committed plan_tier column value (defaults 'solo' — see header). */
   storedTier: PlanTier
-  /** True when the venue has never had a Stripe subscription. */
+  /** Free forever: a venue Bloom has decided not to charge. Never on trial,
+   *  never expired, and it keeps the capacity of its stored tier. Set with the
+   *  service key only; see migration 423. */
+  billingExempt: boolean
+  /** True when the venue has never had a Stripe subscription AND is not
+   *  billing-exempt. */
   isTrial: boolean
   trialEndsAt: string | null
   /** True only when isTrial AND trialEndsAt has passed. A subscribed
@@ -65,6 +70,7 @@ interface VenueBillingRow {
   subscription_status: string | null
   stripe_subscription_id: string | null
   trial_ends_at: string | null
+  billing_exempt: boolean | null
 }
 
 const KNOWN_TIERS = new Set<PlanTier>(['pre_opening', 'solo', 'growth', 'multi', 'enterprise'])
@@ -90,6 +96,7 @@ export async function resolveBillingState(
   const empty: BillingState = {
     venueId,
     storedTier: 'solo',
+    billingExempt: false,
     isTrial: false,
     trialEndsAt: null,
     trialExpired: false,
@@ -111,7 +118,7 @@ export async function resolveBillingState(
   try {
     const result = await client
       .from('venues')
-      .select('plan_tier, subscription_status, stripe_subscription_id, trial_ends_at')
+      .select('plan_tier, subscription_status, stripe_subscription_id, trial_ends_at, billing_exempt')
       .eq('id', venueId)
       .limit(1)
     data = result.data
@@ -124,7 +131,12 @@ export async function resolveBillingState(
   if (!row) return empty
 
   const storedTier = coerceTier(row.plan_tier)
-  const isTrial = !row.stripe_subscription_id
+  // A venue we have decided not to charge is not on a trial, so there is no
+  // trial to have expired and nothing to cap. Without this, Rixey Manor read as
+  // a trial that ran out on 2026-05-04: the banner on every platform page and
+  // pre_opening capacity, while plan_tier said enterprise.
+  const billingExempt = row.billing_exempt === true
+  const isTrial = !billingExempt && !row.stripe_subscription_id
   const trialEndsAt = row.trial_ends_at ?? null
 
   let trialExpired = false
@@ -141,6 +153,7 @@ export async function resolveBillingState(
   return {
     venueId,
     storedTier,
+    billingExempt,
     isTrial,
     trialEndsAt,
     trialExpired,
@@ -150,6 +163,8 @@ export async function resolveBillingState(
     // cheapest tier's caps (pre_opening — "for venues not yet open" is
     // the closest fit for "hasn't committed to a plan yet"), not the
     // 'solo' default the DB column happens to carry.
+    // isTrial already accounts for the exemption, so an exempt venue gets the
+    // capacity of the tier it is on rather than the never-paid baseline.
     effectiveCapacity: isTrial ? CAPACITY_LIMITS.pre_opening : CAPACITY_LIMITS[storedTier],
   }
 }
