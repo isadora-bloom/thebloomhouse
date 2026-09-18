@@ -5,10 +5,10 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { Plus, Trash2, Save, Check } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { coupleSave } from '@/lib/api/couple-client'
 
 interface ChairRow {
   left: number
@@ -53,10 +53,9 @@ export default function CeremonyChairsPage() {
     setSaved(false)
     setSaving(true)
     const plan: ChairPlan = { rows: newRows ?? rows }
-    await writeOrLog(supabase.from('ceremony_chair_plans').upsert(
-      { wedding_id: weddingId!, plan, updated_at: new Date().toISOString() },
-      { onConflict: 'wedding_id' }
-    ), { op: 'ceremony_chair_plans.upsert', venueId: null })
+    // Through the server, so the save reaches the activity feed and the wedding
+    // comes from the session rather than from this page.
+    await coupleSave('ceremony-chairs', { plan })
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)

@@ -16,6 +16,7 @@ import {
   ChevronUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { coupleReplaceAll } from '@/lib/api/couple-client'
 
 // ---------------------------------------------------------------------------
 // Section definitions
@@ -368,15 +369,11 @@ export default function GuestCareNotesPage() {
         note: formData[s.key]?.notes || '',
       }))
 
-      // Delete existing rows for this wedding and re-insert
-      await supabase
-        .from('guest_care_notes')
-        .delete()
-        .eq('wedding_id', weddingId)
-
-      await supabase
-        .from('guest_care_notes')
-        .insert(rows)
+      // One request rather than a clear and an insert from the browser. If the
+      // insert failed before, the couple was left with none of their notes and
+      // nothing said so.
+      const { error } = await coupleReplaceAll('guest-care', rows)
+      if (error) throw new Error(error.message)
 
       setSavedAt(new Date().toISOString())
       setDirty(false)

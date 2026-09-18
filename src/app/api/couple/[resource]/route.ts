@@ -48,6 +48,17 @@ import {
  * only one.
  */
 
+/**
+ * The scope columns to write and to filter on. Almost every table carries both;
+ * ceremony_chair_plans carries only wedding_id, and writing a column it does
+ * not have fails the insert.
+ */
+function scopeOf(resource: CoupleResource, auth: { venueId: string; weddingId: string }) {
+  return resource.scope === 'wedding'
+    ? { wedding_id: auth.weddingId }
+    : { venue_id: auth.venueId, wedding_id: auth.weddingId }
+}
+
 function resolveResource(name: string): CoupleResource | null {
   return Object.prototype.hasOwnProperty.call(COUPLE_RESOURCES, name)
     ? COUPLE_RESOURCES[name]
@@ -103,14 +114,16 @@ export async function POST(
     if (!Object.keys(fields).length) return badRequest('Nothing to save')
 
     const supabase = createServiceClient()
-    const scope = { venue_id: auth.venueId, wedding_id: auth.weddingId }
+    const scope = scopeOf(resource, auth)
 
     if (resource.singleton) {
-      // One row per wedding. onConflict is the wedding, so a couple cannot
-      // create a second row for themselves by saving twice.
+      // One row per wedding, so a couple cannot make a second one for
+      // themselves by saving twice. The conflict target has to match the table's
+      // own unique index: several of these are on (venue_id, wedding_id), and
+      // upserting against the wrong one inserts instead of updating.
       const { data, error } = await supabase
         .from(resource.table)
-        .upsert({ ...scope, ...fields }, { onConflict: 'wedding_id' })
+        .upsert({ ...scope, ...fields }, { onConflict: resource.conflictTarget ?? 'wedding_id' })
         .select()
         .single()
       if (error) throw error
@@ -118,14 +131,76 @@ export async function POST(
       return NextResponse.json({ data })
     }
 
+    // Authorship comes from the session. The pages were sending it themselves,
+    // which made "whoever saved it can remove it" only as true as the client.
+    const owner = resource.ownerColumn ? { [resource.ownerColumn]: auth.userId } : {}
+
     const { data, error } = await supabase
       .from(resource.table)
-      .insert({ ...scope, ...fields })
+      .insert({ ...scope, ...owner, ...fields })
       .select()
       .single()
     if (error) throw error
     record(resource, 'added', data, auth)
     return NextResponse.json({ data }, { status: 201 })
+  } catch (error) {
+    return serverError(error)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PUT — replace the whole list
+// ---------------------------------------------------------------------------
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ resource: string }> },
+) {
+  const auth = await getCoupleAuth()
+  if (!auth) return unauthorized()
+
+  const { resource: name } = await params
+  const resource = resolveResource(name)
+  if (!resource) return notFound('Resource')
+  if (!resource.replaceAll) return badRequest(`${name} is not saved as a whole list`)
+
+  try {
+    const body = (await request.json().catch(() => ({}))) as { rows?: unknown }
+    if (!Array.isArray(body.rows)) return badRequest('rows must be an array')
+
+    const scope = scopeOf(resource, auth)
+    const owner = resource.ownerColumn ? { [resource.ownerColumn]: auth.userId } : {}
+    const rows = body.rows.map((row) => {
+      const { fields } = pickFields(resource, (row ?? {}) as Record<string, unknown>)
+      return { ...scope, ...owner, ...fields }
+    })
+
+    const supabase = createServiceClient()
+
+    // Clear then insert, the same as the page did, but in one request. The
+    // clear is scoped, so it can only ever empty this wedding's rows.
+    const { error: clearErr } = await supabase.from(resource.table).delete().match(scope)
+    if (clearErr) throw clearErr
+
+    if (rows.length) {
+      const { error: insertErr } = await supabase.from(resource.table).insert(rows)
+      if (insertErr) throw insertErr
+    }
+
+    // One entry for the save, not one per row.
+    logActivity({
+      venueId: auth.venueId,
+      weddingId: auth.weddingId,
+      userId: auth.userId,
+      activityType: `${resource.stem}s_saved`,
+      entityType: resource.table,
+      details: {
+        summary: `saved their ${resource.noun.replace(/^an? /, '')} list`,
+        rows: rows.length,
+      },
+    })
+
+    return NextResponse.json({ data: { rows: rows.length } })
   } catch (error) {
     return serverError(error)
   }
@@ -162,8 +237,7 @@ export async function PATCH(
       .from(resource.table)
       .update(fields)
       .eq('id', id)
-      .eq('venue_id', auth.venueId)
-      .eq('wedding_id', auth.weddingId)
+      .match(scopeOf(resource, auth))
       .select()
       .maybeSingle()
     if (error) throw error
@@ -200,12 +274,32 @@ export async function DELETE(
     const supabase = createServiceClient()
     // Returned so the feed entry can name what went, which is the one thing
     // you cannot recover afterwards.
+    // Whatever depends on this row has to go first, and it has to be the
+    // server doing it. The pages ran these as a second statement from the
+    // browser, so a failure between the two left payments pointing at a budget
+    // line that no longer existed, or tag assignments pointing at a dead tag.
+    //
+    // Checked before the cascade, so nothing is cleared for a row that turns
+    // out not to be theirs.
+    const { data: owned, error: ownErr } = await supabase
+      .from(resource.table)
+      .select('id')
+      .eq('id', id)
+      .match(scopeOf(resource, auth))
+      .maybeSingle()
+    if (ownErr) throw ownErr
+    if (!owned) return notFound('That is not on your list any more')
+
+    for (const c of resource.cascades ?? []) {
+      const { error: cascadeErr } = await supabase.from(c.table).delete().eq(c.column, id)
+      if (cascadeErr) throw cascadeErr
+    }
+
     const { data, error } = await supabase
       .from(resource.table)
       .delete()
       .eq('id', id)
-      .eq('venue_id', auth.venueId)
-      .eq('wedding_id', auth.weddingId)
+      .match(scopeOf(resource, auth))
       .select()
       .maybeSingle()
     if (error) throw error

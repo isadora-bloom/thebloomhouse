@@ -18,7 +18,8 @@ import {
   ListChecks,
   GripVertical,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { coupleSave } from '@/lib/api/couple-client'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -297,9 +298,7 @@ export default function RsvpSettingsPage() {
       updated_at: new Date().toISOString(),
     }
 
-    const { error } = await supabase
-      .from('rsvp_config')
-      .upsert(payload, { onConflict: 'venue_id,wedding_id' })
+    const { error } = await coupleSave('rsvp-config', payload)
 
     setSaving(false)
 

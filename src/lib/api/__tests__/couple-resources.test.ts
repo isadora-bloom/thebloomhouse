@@ -43,11 +43,48 @@ describe('every configured resource matches the schema', () => {
     }
   })
 
-  it('every table is scoped to a venue and a wedding', () => {
+  it('every table is scoped, and says so when it lacks a venue_id', () => {
     for (const [key, r] of Object.entries(COUPLE_RESOURCES)) {
       const cols = columnsOf(r.table)!
+      // wedding_id is not optional. Without it there is nothing tying the row
+      // to the caller, and an id on its own is not proof of ownership.
       expect(cols, `${key} → ${r.table} has no wedding_id`).toContain('wedding_id')
-      expect(cols, `${key} → ${r.table} has no venue_id`).toContain('venue_id')
+      if (r.scope === 'wedding') {
+        expect(cols, `${key} is marked wedding-only but ${r.table} does have a venue_id`).not.toContain('venue_id')
+      } else {
+        expect(cols, `${key} → ${r.table} has no venue_id, so it needs scope: 'wedding'`).toContain('venue_id')
+      }
+    }
+  })
+
+  it('every cascade names a real table and a real column on it', () => {
+    for (const [key, r] of Object.entries(COUPLE_RESOURCES)) {
+      for (const c of r.cascades ?? []) {
+        const cols = columnsOf(c.table)
+        expect(cols, `${key} cascades to ${c.table}, which is not a table`).not.toBeNull()
+        expect(cols!, `${key} cascades on ${c.table}.${c.column}, which does not exist`).toContain(c.column)
+      }
+    }
+  })
+
+  it('a singleton names the unique index it upserts against', () => {
+    // Upserting against the wrong target inserts a second row instead of
+    // updating the first, and the page then reads whichever comes back first.
+    for (const [key, r] of Object.entries(COUPLE_RESOURCES)) {
+      if (!r.singleton) continue
+      const target = r.conflictTarget ?? 'wedding_id'
+      const cols = columnsOf(r.table)!
+      for (const part of target.split(',')) {
+        expect(cols, `${key} upserts on ${part}, which is not a column of ${r.table}`).toContain(part.trim())
+      }
+    }
+  })
+
+  it('only a singleton carries a conflict target', () => {
+    for (const [key, r] of Object.entries(COUPLE_RESOURCES)) {
+      if (r.conflictTarget) {
+        expect(r.singleton, `${key} sets conflictTarget but is not a singleton, so nothing reads it`).toBe(true)
+      }
     }
   })
 

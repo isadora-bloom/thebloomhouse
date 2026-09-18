@@ -76,3 +76,20 @@ export function coupleUpdate<T = Record<string, unknown>>(
 export function coupleRemove(resource: string, id: string) {
   return call(resource, { method: 'DELETE' }, `?id=${encodeURIComponent(id)}`)
 }
+
+/**
+ * Set which tags are on a guest.
+ *
+ * Its own call rather than part of the generic ones, because
+ * guest_tag_assignments has no scope columns and is reached through the guest.
+ */
+export async function coupleSetGuestTags(guestId: string, tagIds: string[]) {
+  return call(`guest-tag-assignments`, { method: 'PUT', body: JSON.stringify({ tagIds }) }, `?guestId=${encodeURIComponent(guestId)}`)
+}
+
+/**
+ * Replace a whole list in one request, for a resource the page owns entirely.
+ */
+export function coupleReplaceAll(resource: string, rows: Record<string, unknown>[]) {
+  return call(resource, { method: 'PUT', body: JSON.stringify({ rows }) })
+}

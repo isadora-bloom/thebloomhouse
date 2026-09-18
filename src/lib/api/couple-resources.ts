@@ -43,11 +43,57 @@ export interface CoupleResource {
    */
   singleton?: true
   /**
+   * What the singleton's unique index is on. Not every one is `wedding_id`:
+   * wedding_config, rsvp_config and wedding_worksheets are unique on
+   * (venue_id, wedding_id), and upserting with the wrong target inserts a
+   * second row instead of updating the first.
+   */
+  conflictTarget?: string
+  /**
+   * Rows in other tables that have to go before this one can.
+   *
+   * The pages did these by hand, in two statements from the browser, so a
+   * failure between them left an orphan nobody would notice: deleting a budget
+   * item cleared its payments first, and deleting a guest tag cleared its
+   * assignments. On the server it is one request that either happens or does
+   * not.
+   */
+  cascades?: readonly { table: string; column: string }[]
+  /**
+   * Which scope columns the table actually has.
+   *
+   * Almost everything carries both. `ceremony_chair_plans` carries only
+   * `wedding_id`, and writing a venue_id it does not have fails the insert, so
+   * the route has to be told rather than assume.
+   *
+   * A table with neither cannot go through this route at all: there would be
+   * nothing to filter on, and the id alone is not proof it belongs to the
+   * caller. guest_tag_assignments is that case, and has its own endpoint.
+   */
+  scope?: 'venue+wedding' | 'wedding'
+  /**
    * High-volume tables. The feed takes constant wording for these, with no name
    * and no count, so an evening of edits collapses into one entry rather than
    * two hundred. See coupleActivity below.
    */
   burst?: true
+  /**
+   * The page owns the whole list and sends it entire.
+   *
+   * guest_care_notes works this way: the form is a list, and saving it cleared
+   * every row for the wedding and re-inserted the lot. Two statements from the
+   * browser, so a failure on the second left the couple with none of their
+   * notes and nothing saying so. PUT does it in one request.
+   */
+  replaceAll?: true
+  /**
+   * A column recording who added the row, filled from the session.
+   *
+   * inspo_gallery and photo_library both have one, and the pages were sending
+   * it themselves, which means it was only ever as trustworthy as the client.
+   * Authorship decides who may delete a pin, so it is set here instead.
+   */
+  ownerColumn?: string
 }
 
 export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
@@ -86,6 +132,10 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     stem: 'budget_item',
     nameColumn: 'item_name',
     noun: 'a budget line',
+    // The page cleared the payments itself, in a separate statement, before
+    // deleting the line. A failure between the two left payments pointing at
+    // nothing.
+    cascades: [{ table: 'budget_payments', column: 'budget_item_id' }],
   },
   'ceremony-order': {
     table: 'ceremony_order',
@@ -114,6 +164,7 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     stem: 'guest_care_note',
     nameColumn: 'guest_name',
     noun: 'a note',
+    replaceAll: true,
   },
   'guest-tags': {
     table: 'guest_tags',
@@ -121,6 +172,10 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     stem: 'guest_tag',
     nameColumn: 'tag_name',
     noun: 'a guest tag',
+    // Same two-step the page did by hand. guest_tag_assignments carries no
+    // scope columns of its own, so it can only be reached this way or through
+    // the assignments endpoint.
+    cascades: [{ table: 'guest_tag_assignments', column: 'tag_id' }],
   },
   'meal-options': {
     table: 'guest_meal_options',
@@ -163,6 +218,7 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     stem: 'inspo',
     nameColumn: 'caption',
     noun: 'an inspiration photo',
+    ownerColumn: 'uploaded_by',
   },
   photos: {
     table: 'photo_library',
@@ -170,6 +226,7 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     stem: 'photo',
     nameColumn: 'caption',
     noun: 'a photo',
+    ownerColumn: 'uploaded_by',
   },
 
   // ---- High volume: one entry per burst, not per row ----
@@ -189,6 +246,40 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     nameColumn: 'first_name',
     noun: 'a guest',
     burst: true,
+  },
+
+  vendors: {
+    table: 'booked_vendors',
+    fields: [
+      'vendor_name', 'vendor_type', 'is_booked', 'contact_name', 'contact_email',
+      'contact_phone', 'vendor_contact', 'website', 'instagram', 'notes',
+      'arrival_time', 'departure_time', 'worked_here_before',
+      'contract_uploaded', 'contract_url', 'contract_date', 'contract_storage_path',
+    ],
+    stem: 'vendor',
+    nameColumn: 'vendor_name',
+    noun: 'a vendor',
+  },
+  'borrow-selections': {
+    table: 'borrow_selections',
+    fields: ['catalog_item_id', 'quantity', 'notes'],
+    stem: 'borrow_selection',
+    nameColumn: null,
+    noun: 'an item to borrow',
+  },
+  'budget-payments': {
+    table: 'budget_payments',
+    fields: ['budget_item_id', 'amount', 'payment_date', 'payment_method', 'notes'],
+    stem: 'budget_payment',
+    nameColumn: null,
+    noun: 'a payment',
+  },
+  finalisations: {
+    table: 'section_finalisations',
+    fields: ['section_name', 'couple_signed_off', 'couple_signed_off_at', 'couple_signed_off_by'],
+    stem: 'section_finalisation',
+    nameColumn: 'section_name',
+    noun: 'a section',
   },
 
   // ---- One row per wedding: whole-form saves ----
@@ -241,6 +332,56 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     stem: 'worksheet',
     nameColumn: 'section',
     noun: 'a worksheet',
+    singleton: true,
+    conflictTarget: 'venue_id,wedding_id',
+  },
+  config: {
+    table: 'wedding_config',
+    fields: ['total_budget', 'budget_shared', 'custom_categories', 'plated_meal'],
+    stem: 'wedding_config',
+    nameColumn: null,
+    noun: 'their settings',
+    singleton: true,
+    conflictTarget: 'venue_id,wedding_id',
+  },
+  'rsvp-config': {
+    table: 'rsvp_config',
+    fields: [
+      'rsvp_deadline', 'allow_maybe', 'attending_message', 'declined_message',
+      'custom_questions',
+      'ask_email', 'ask_phone', 'ask_address', 'ask_meal_choice', 'ask_dietary',
+      'ask_allergies', 'ask_accessibility', 'ask_hotel', 'ask_shuttle',
+      'ask_song_request', 'ask_message',
+    ],
+    stem: 'rsvp_config',
+    nameColumn: null,
+    noun: 'their RSVP questions',
+    singleton: true,
+    conflictTarget: 'venue_id,wedding_id',
+  },
+  'ceremony-chairs': {
+    table: 'ceremony_chair_plans',
+    fields: ['plan'],
+    stem: 'ceremony_chair_plan',
+    nameColumn: null,
+    noun: 'their ceremony seating',
+    singleton: true,
+    // This table never got a venue_id. Writing one fails the insert.
+    scope: 'wedding',
+  },
+  onboarding: {
+    table: 'onboarding_progress',
+    fields: [
+      'step', 'completed', 'completed_at',
+      'couple_photo_uploaded', 'couple_photo_uploaded_at',
+      'first_message_sent', 'first_message_sent_at',
+      'inspo_uploaded', 'inspo_uploaded_at',
+      'vendor_added', 'vendor_added_at',
+      'checklist_item_completed', 'checklist_item_completed_at',
+    ],
+    stem: 'onboarding',
+    nameColumn: null,
+    noun: 'their getting-started progress',
     singleton: true,
   },
 }
