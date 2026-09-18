@@ -29,6 +29,7 @@ import {
   EMPTY_STAFFING_CONFIG,
   type VenueStaffingConfig,
 } from '@/lib/services/couple-portal-config'
+import { coupleCreate, coupleUpdate } from '@/lib/api/couple-client'
 
 // ---------------------------------------------------------------------------
 // Per-person per-day rate. Source of truth is
@@ -388,14 +389,9 @@ export default function StaffingCalculatorPage() {
         .maybeSingle()
 
       if (existing) {
-        await supabase
-          .from('staffing_assignments')
-          .update(payload)
-          .eq('id', existing.id)
+        await coupleUpdate('staffing', existing.id, payload)
       } else {
-        await supabase
-          .from('staffing_assignments')
-          .insert(payload)
+        await coupleCreate('staffing', payload)
       }
 
       setSaved(true)

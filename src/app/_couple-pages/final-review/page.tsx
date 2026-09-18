@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { useNow } from '@/lib/hooks/use-now'
 import {
@@ -14,6 +13,7 @@ import {
   Lock,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { coupleCreate, coupleUpdate } from '@/lib/api/couple-client'
 
 // ---------------------------------------------------------------------------
 // Types & Constants
@@ -135,21 +135,16 @@ export default function FinalReviewPage() {
 
     if (existing) {
       const newValue = !existing.couple_signed_off
-      await supabase
-        .from('section_finalisations')
-        .update({
-          couple_signed_off: newValue,
-          couple_signed_off_at: newValue ? new Date().toISOString() : null,
-        })
-        .eq('id', existing.id)
+      await coupleUpdate('finalisations', existing.id, {
+        couple_signed_off: newValue,
+        couple_signed_off_at: newValue ? new Date().toISOString() : null,
+      })
     } else {
-      await writeOrLog(supabase.from('section_finalisations').insert({
-        venue_id: venueId,
-        wedding_id: weddingId,
+      await coupleCreate('finalisations', {
         section_name: sectionKey,
         couple_signed_off: true,
         couple_signed_off_at: new Date().toISOString(),
-      }), { op: 'section_finalisations.insert', venueId })
+      })
     }
 
     fetchData()

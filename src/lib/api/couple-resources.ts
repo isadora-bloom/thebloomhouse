@@ -308,9 +308,14 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
       'tip_amount', 'total_cost', 'total_staff', 'notes',
     ],
     stem: 'staffing',
-    nameColumn: null,
-    noun: 'their staffing plan',
-    singleton: true,
+    nameColumn: 'person_name',
+    noun: 'a staffing entry',
+    // NOT a singleton, though the calculator keeps one row per wedding. Its
+    // unique index is partial — (wedding_id) WHERE role = '_calculator',
+    // migration 098 — and Postgres will not take a partial index as an upsert
+    // conflict target: it answers 42P10 and the save fails. The table also holds
+    // real per-person assignments alongside that row, so row-per-thing is the
+    // honest shape. The page finds its calculator row and updates it by id.
   },
   website: {
     table: 'wedding_website_settings',
@@ -332,8 +337,9 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
     stem: 'worksheet',
     nameColumn: 'section',
     noun: 'a worksheet',
-    singleton: true,
-    conflictTarget: 'venue_id,wedding_id',
+    // One row per section, not per wedding: production has three for one
+    // wedding. Marked a singleton at first, which would have upserted every
+    // section over the same row.
   },
   config: {
     table: 'wedding_config',
@@ -380,9 +386,11 @@ export const COUPLE_RESOURCES: Record<string, CoupleResource> = {
       'checklist_item_completed', 'checklist_item_completed_at',
     ],
     stem: 'onboarding',
-    nameColumn: null,
+    nameColumn: 'step',
     noun: 'their getting-started progress',
-    singleton: true,
+    // One row per step. Its unique index is partial — (wedding_id) WHERE step
+    // IS NULL — so it is not a valid upsert conflict target either: Postgres
+    // answers 42P10. Production has five rows for one wedding.
   },
 }
 

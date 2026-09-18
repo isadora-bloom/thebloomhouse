@@ -23,6 +23,7 @@ import {
   ThumbsUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { coupleCreate, coupleUpdate, coupleSave } from '@/lib/api/couple-client'
 
 // ---------------------------------------------------------------------------
 // Types & Constants
@@ -301,30 +302,18 @@ export default function WorksheetsPage() {
 
     const existing = records[section]
 
+    // One row per section, addressed by its id. The route takes the wedding
+    // and venue from the session.
     if (existing) {
-      await supabase
-        .from('wedding_worksheets')
-        .update({ content, updated_at: new Date().toISOString() })
-        .eq('id', existing.id)
+      await coupleUpdate('worksheets', existing.id, { content })
     } else {
-      await writeOrLog(supabase.from('wedding_worksheets').insert({
-        venue_id: venueId,
-        wedding_id: weddingId,
-        section,
-        content,
-      }), { op: 'wedding_worksheets.insert', venueId })
+      await coupleCreate('worksheets', { section, content })
     }
 
     // Budget Starting Point auto-populates the budget tracker's overall total
     // (wedding_config.total_budget), matching Rixey's behaviour.
     if (section === 'budget' && budgetTotal > 0) {
-      await writeOrLog(
-        supabase.from('wedding_config').upsert(
-          { venue_id: venueId, wedding_id: weddingId, total_budget: budgetTotal },
-          { onConflict: 'venue_id,wedding_id' },
-        ),
-        { op: 'wedding_config.upsert_total', venueId },
-      )
+      await coupleSave('config', { total_budget: budgetTotal })
     }
 
     setSavingSection(null)

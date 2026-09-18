@@ -5,7 +5,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { writeOrLog } from '@/lib/db/write-or-log'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Sparkles,
@@ -18,6 +17,7 @@ import {
   Users,
   Info,
 } from 'lucide-react'
+import { coupleCreate, coupleUpdate, coupleRemove } from '@/lib/api/couple-client'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -230,9 +230,8 @@ export default function BeautySchedulePage() {
   async function handleSave() {
     if (!form.person_name.trim()) return
 
+    // No venue_id or wedding_id: the route takes both from the session.
     const payload = {
-      venue_id: venueId,
-      wedding_id: weddingId,
       person_name: form.person_name.trim(),
       role: form.role,
       hair_time: form.hair_time || null,
@@ -243,12 +242,9 @@ export default function BeautySchedulePage() {
     }
 
     if (editingId) {
-      await supabase.from('makeup_schedule').update(payload).eq('id', editingId)
+      await coupleUpdate('makeup', editingId, payload)
     } else {
-      await writeOrLog(supabase.from('makeup_schedule').insert({
-        ...payload,
-        sort_order: appointments.length,
-      }), { op: 'makeup_schedule.insert', venueId })
+      await coupleCreate('makeup', { ...payload, sort_order: appointments.length })
     }
 
     setShowModal(false)
@@ -258,7 +254,7 @@ export default function BeautySchedulePage() {
 
   async function handleDelete(id: string) {
     if (!confirm('Remove this person from the beauty schedule?')) return
-    await supabase.from('makeup_schedule').delete().eq('id', id)
+    await coupleRemove('makeup', id)
     fetchAppointments()
   }
 

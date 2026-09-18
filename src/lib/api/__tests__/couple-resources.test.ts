@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   COUPLE_RESOURCES,
@@ -214,5 +214,96 @@ describe('pickFields', () => {
   it('an empty or missing body is not a crash', () => {
     expect(pickFields(COUPLE_RESOURCES.decor, {}).fields).toEqual({})
     expect(pickFields(COUPLE_RESOURCES.decor, undefined as never).fields).toEqual({})
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Upsert targets
+//
+// Postgres will not accept a PARTIAL unique index as an ON CONFLICT target: it
+// answers 42P10 and the save fails. Two resources were configured as singletons
+// before this test existed, and both would have failed every save.
+// staffing_assignments is unique on (wedding_id) only WHERE role =
+// '_calculator', and onboarding_progress only WHERE step IS NULL. Production had
+// five onboarding rows for one wedding and three worksheet rows for another,
+// which is what gave it away.
+//
+// Checked with plain string work over each statement rather than one large
+// regex, because three of this session's wrong answers came from a regex that
+// looked right and matched nothing.
+// ---------------------------------------------------------------------------
+
+/** Every statement in the migrations, semicolon-separated, whitespace squashed. */
+function statements(): string[] {
+  const dir = resolve(process.cwd(), 'supabase/migrations')
+  const sql = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .map((f) => readFileSync(resolve(dir, f), 'utf8'))
+    .join('\n')
+  return sql
+    .split(';')
+    // `UNIQUE(a, b)` and `UNIQUE (a, b)` are the same thing and both appear in
+    // the migrations, so the space and the comma spacing are normalised once
+    // here rather than at each check.
+    .map((st) =>
+      st
+        .replace(/--[^\n]*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/unique\s*\(/gi, 'unique (')
+        .replace(/\s*,\s*/g, ', ')
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean)
+}
+
+describe('a singleton upserts against a constraint that actually exists', () => {
+  const sts = statements()
+
+  it('has a matching unique constraint, and it is not partial', () => {
+    for (const [key, r] of Object.entries(COUPLE_RESOURCES)) {
+      if (!r.singleton) continue
+      const target = (r.conflictTarget ?? 'wedding_id').split(',').map((c) => c.trim())
+      const cols = '(' + target.join(', ') + ')'
+      const table = r.table.toLowerCase()
+
+      const unique = sts.filter(
+        (st) =>
+          st.includes('create unique index') &&
+          (st.includes(' on ' + table + ' ') || st.includes(' on public.' + table + ' ')) &&
+          st.replace(/\s*,\s*/g, ', ').includes(cols),
+      )
+      // The statement has to be the one that creates THIS table. Merely
+      // mentioning it is not enough: `UNIQUE (venue_id, wedding_id)` appears in
+      // a dozen other CREATE TABLEs, so a looser check passes everything.
+      const createsThis = (st: string) =>
+        st.includes('create table ' + table + ' (') ||
+        st.includes('create table if not exists ' + table + ' (') ||
+        st.includes('create table public.' + table + ' (') ||
+        st.includes('create table if not exists public.' + table + ' (')
+
+      const inline = sts.some((st) => createsThis(st) && st.includes('unique ' + cols))
+      // `wedding_id uuid NOT NULL UNIQUE REFERENCES ...` — a UNIQUE on the
+      // column itself rather than a table constraint.
+      const singleColumnUnique =
+        target.length === 1 &&
+        sts.some(
+          (st) =>
+            createsThis(st) &&
+            new RegExp(target[0] + '\\s+\\w+[^,]*unique').test(st),
+        )
+
+      expect(
+        unique.length > 0 || inline || singleColumnUnique,
+        key + ' upserts on ' + cols + ' but nothing in the migrations makes that unique on ' + r.table + '. Postgres answers 42P10.',
+      ).toBe(true)
+
+      for (const st of unique) {
+        expect(
+          st.includes(' where '),
+          key + ': the unique index on ' + r.table + ' ' + cols + ' is partial, so it cannot be an upsert target.',
+        ).toBe(false)
+      }
+    }
   })
 })
