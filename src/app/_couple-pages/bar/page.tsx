@@ -90,11 +90,14 @@ interface RecipeIngredient {
 
 interface Recipe {
   id: string
-  name: string
+  // The schema's names. This interface used to say name / servings_per_batch /
+  // notes / sort_order, none of which are columns, so adding a recipe failed
+  // and reading one came back undefined for every field but the ingredients.
+  // The print view, the CSV importer and the seeded rows all use these.
+  cocktail_name: string
   ingredients: RecipeIngredient[]
-  servings_per_batch: number
-  notes: string | null
-  sort_order: number
+  servings: number | null
+  instructions: string | null
 }
 
 interface ShoppingItem {
@@ -889,11 +892,13 @@ export default function BarPlannerPage() {
         .insert({
           venue_id: venueId,
           wedding_id: weddingId,
-          name: recipeName.trim(),
-          ingredients: JSON.stringify(ingredients),
-          servings_per_batch: parseInt(recipeServings) || 25,
-          notes: recipeNotes.trim() || null,
-          sort_order: recipes.length,
+          cocktail_name: recipeName.trim(),
+          // The column is jsonb. Stringifying it stored a string that every
+          // reader then had to JSON.parse back, which is why the render below
+          // still tests for both shapes.
+          ingredients,
+          servings: parseInt(recipeServings) || 25,
+          instructions: recipeNotes.trim() || null,
         })
         .select()
         .single()
@@ -1003,7 +1008,7 @@ export default function BarPlannerPage() {
           unit: scaled.unit,
           category: ing.category || 'other',
           purchased: false,
-          notes: `For ${recipe.name}${scaled.note ? ` (${scaled.note})` : ` (scaled to ${guests} guests)`}`,
+          notes: `For ${recipe.cocktail_name}${scaled.note ? ` (${scaled.note})` : ` (scaled to ${guests} guests)`}`,
         })
         .select()
         .single()
@@ -1835,9 +1840,9 @@ export default function BarPlannerPage() {
               <div key={recipe.id} className="bg-white border border-gray-200 rounded-xl p-5">
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div>
-                    <p className="font-semibold text-gray-700">{recipe.name}</p>
-                    {recipe.notes && <p className="text-xs text-gray-400 mt-0.5">{recipe.notes}</p>}
-                    <p className="text-xs text-gray-400 mt-0.5">Serves {recipe.servings_per_batch} per batch</p>
+                    <p className="font-semibold text-gray-700">{recipe.cocktail_name}</p>
+                    {recipe.instructions && <p className="text-xs text-gray-400 mt-0.5">{recipe.instructions}</p>}
+                    <p className="text-xs text-gray-400 mt-0.5">Serves {recipe.servings ?? '—'} per batch</p>
                   </div>
                   <button onClick={() => deleteRecipe(recipe.id)} className="text-red-300 hover:text-red-500 flex-shrink-0 p-1">
                     <Trash2 className="w-4 h-4" />

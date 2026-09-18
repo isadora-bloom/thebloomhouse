@@ -75,8 +75,11 @@ export interface BarRecipeRow extends ExtractedRecipe {
   id: string
   venue_id: string
   wedding_id: string
-  servings_per_batch: number
-  sort_order: number
+  // What the table actually stores. the name and notes fields come from
+  // ExtractedRecipe and are mapped to cocktail_name and instructions on the way
+  // in and back out, so callers keep the vocabulary of a recipe rather than of
+  // a column.
+  servings: number | null
   created_at: string
 }
 
@@ -268,10 +271,10 @@ function normaliseExtraction(raw: unknown, fallbackName: string): Omit<Extracted
 }
 
 // ---------------------------------------------------------------------------
-// Persistence — writes to bar_recipes using the column names the existing
-// Bar Planner page already reads (name, ingredients, servings_per_batch,
-// notes, sort_order). Service-role client so this works for both demo
-// (anon) and authenticated couples without touching RLS.
+// Persistence — writes to bar_recipes using the table's own column names
+// (cocktail_name, ingredients, instructions, servings). Service-role client so
+// this works for both demo (anon) and authenticated couples without touching
+// RLS.
 // ---------------------------------------------------------------------------
 
 async function persistRecipe(
@@ -281,25 +284,23 @@ async function persistRecipe(
 ): Promise<BarRecipeRow> {
   const supabase = createServiceClient()
 
-  // Compute the next sort_order so the new recipe appears at the bottom.
-  const { data: existing } = await supabase
-    .from('bar_recipes')
-    .select('id')
-    .eq('wedding_id', weddingId)
-  const sortOrder = existing?.length ?? 0
-
+  // The schema's names. This wrote name / servings_per_batch / notes /
+  // sort_order, on the stated grounds that the Bar Planner page read those —
+  // and the page was wrong too. None of the four is a column, so every
+  // extraction failed at the insert. The column list is cocktail_name,
+  // ingredients, instructions, servings, scaling_factor; the print view and the
+  // CSV importer have been using it all along. There is no sort_order to
+  // compute, and the page orders by created_at anyway.
   const { data, error } = await supabase
     .from('bar_recipes')
     .insert({
       venue_id: venueId,
       wedding_id: weddingId,
-      name: recipe.name,
-      // Bar planner page reads ingredients as either jsonb or a JSON-encoded
-      // string — passing the array directly is the canonical form.
+      cocktail_name: recipe.name,
+      // jsonb, so the array goes in as an array.
       ingredients: recipe.ingredients,
-      servings_per_batch: 1, // ingredients are per-serving; UI scales up to guest count
-      notes: recipe.notes ?? null,
-      sort_order: sortOrder,
+      servings: 1, // ingredients are per-serving; the UI scales up to guest count
+      instructions: recipe.notes ?? null,
     })
     .select()
     .single()
@@ -315,14 +316,13 @@ async function persistRecipe(
     id: inserted.id as string,
     venue_id: inserted.venue_id as string,
     wedding_id: inserted.wedding_id as string,
-    name: inserted.name as string,
+    name: inserted.cocktail_name as string,
     source_type: recipe.source_type,
     source_url: recipe.source_url ?? null,
     servings_basis: recipe.servings_basis,
     ingredients: ingredientsBack,
-    notes: (inserted.notes as string | null) ?? null,
-    servings_per_batch: (inserted.servings_per_batch as number | null) ?? 1,
-    sort_order: (inserted.sort_order as number | null) ?? sortOrder,
+    notes: (inserted.instructions as string | null) ?? null,
+    servings: (inserted.servings as number | null) ?? 1,
     created_at: inserted.created_at as string,
   }
 }

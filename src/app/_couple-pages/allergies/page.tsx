@@ -32,7 +32,7 @@ type Severity = 'mild' | 'moderate' | 'severe'
 interface AllergyRecord {
   id: string
   guest_name: string
-  allergy: string
+  allergy_type: string
   severity: Severity
   caterer_alerted: boolean
   staying_overnight: boolean
@@ -43,7 +43,7 @@ interface AllergyRecord {
 
 interface AllergyFormData {
   guest_name: string
-  allergy: string
+  allergy_type: string
   severity: Severity
   caterer_alerted: boolean
   staying_overnight: boolean
@@ -52,7 +52,7 @@ interface AllergyFormData {
 
 const EMPTY_FORM: AllergyFormData = {
   guest_name: '',
-  allergy: '',
+  allergy_type: '',
   severity: 'mild',
   caterer_alerted: false,
   staying_overnight: false,
@@ -183,7 +183,7 @@ export default function AllergyRegistryPage() {
   function openEdit(record: AllergyRecord) {
     setForm({
       guest_name: record.guest_name,
-      allergy: record.allergy,
+      allergy_type: record.allergy_type,
       severity: record.severity,
       caterer_alerted: record.caterer_alerted,
       staying_overnight: record.staying_overnight,
@@ -200,14 +200,14 @@ export default function AllergyRegistryPage() {
   }
 
   async function handleSave() {
-    if (!form.guest_name.trim() || !form.allergy.trim()) return
+    if (!form.guest_name.trim() || !form.allergy_type.trim()) return
     if (!venueId || !weddingId) return
 
     const payload = {
       venue_id: venueId,
       wedding_id: weddingId,
       guest_name: form.guest_name.trim(),
-      allergy: form.allergy.trim(),
+      allergy_type: form.allergy_type.trim(),
       severity: form.severity,
       caterer_alerted: form.caterer_alerted,
       staying_overnight: form.staying_overnight,
@@ -277,7 +277,7 @@ export default function AllergyRegistryPage() {
           venue_id: venueId,
           wedding_id: weddingId,
           guest_name: guestName,
-          allergy: guest.dietary_restrictions,
+          allergy_type: guest.dietary_restrictions,
           severity: 'moderate',
           guest_id: guest.id,
         })
@@ -477,7 +477,7 @@ export default function AllergyRegistryPage() {
                     </div>
 
                     {/* Allergy */}
-                    <p className="text-sm text-gray-700 mb-1">{record.allergy}</p>
+                    <p className="text-sm text-gray-700 mb-1">{record.allergy_type}</p>
 
                     {/* Status indicators */}
                     <div className="flex items-center gap-3 flex-wrap text-xs">
@@ -583,8 +583,8 @@ export default function AllergyRegistryPage() {
               <label className="block text-xs font-medium text-gray-600 mb-1">Allergy *</label>
               <input
                 type="text"
-                value={form.allergy}
-                onChange={(e) => setForm({ ...form, allergy: e.target.value })}
+                value={form.allergy_type}
+                onChange={(e) => setForm({ ...form, allergy_type: e.target.value })}
                 placeholder="e.g. Peanuts, Shellfish, Gluten"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                 style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
@@ -661,7 +661,7 @@ export default function AllergyRegistryPage() {
             </button>
             <button
               onClick={handleSave}
-              disabled={!form.guest_name.trim() || !form.allergy.trim()}
+              disabled={!form.guest_name.trim() || !form.allergy_type.trim()}
               className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
               style={{ backgroundColor: 'var(--couple-primary)' }}
             >
