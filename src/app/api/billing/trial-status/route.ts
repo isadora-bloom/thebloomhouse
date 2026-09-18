@@ -44,7 +44,7 @@ export async function GET(): Promise<NextResponse> {
     trialEndsAt: state.trialEndsAt,
     trialExpired: state.trialExpired,
     daysRemaining: state.daysRemaining,
-    // The account is read-only (migration 417). Asked of the database's
+    // The account is read-only (migration 420). Asked of the database's
     // own rule rather than inferred from trialExpired.
     frozen,
     tier: state.storedTier,

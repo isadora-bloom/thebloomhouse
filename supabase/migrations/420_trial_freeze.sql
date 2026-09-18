@@ -1,4 +1,4 @@
--- 417_trial_freeze
+-- 420_trial_freeze
 --
 -- When a venue's 14-day trial ends with no Stripe subscription, the whole
 -- account freezes. People can still sign in and look at everything, but
@@ -70,7 +70,7 @@ REVOKE ALL ON FUNCTION public.venue_is_frozen(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.venue_is_frozen(uuid) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.venue_is_frozen(uuid) IS
-  'True when the venue''s trial has ended with no Stripe subscription (and it is neither a demo venue nor billing_exempt). The single definition of a frozen account; see migration 417.';
+  'True when the venue''s trial has ended with no Stripe subscription (and it is neither a demo venue nor billing_exempt). The single definition of a frozen account; see migration 420.';
 
 -- SQLSTATE PT402 makes PostgREST answer HTTP 402, so a browser write from
 -- a frozen venue fails as "payment required", not as a generic 400. The
@@ -278,4 +278,4 @@ END
 $do$;
 
 COMMENT ON COLUMN public.venues.trial_ends_at IS
-  'Deadline for the venue''s no-subscription platform trial (DB default: 14 days from creation). Past it with no stripe_subscription_id, and not a demo venue, the account is frozen: readable, but every write for the venue is refused by trg_venue_freeze (migration 417, public.venue_is_frozen).';
+  'Deadline for the venue''s no-subscription platform trial (DB default: 14 days from creation). Past it with no stripe_subscription_id, and not a demo venue, the account is frozen: readable, but every write for the venue is refused by trg_venue_freeze (migration 420, public.venue_is_frozen).';

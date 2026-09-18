@@ -309,7 +309,7 @@ export async function checkAutoSendEligible(
 
   // Check 0a-bis: Trial expiry (W18, Nov-plan wave 2). A venue that has
   // never subscribed and is past trial_ends_at gets no autonomous sending.
-  // Since migration 417 such a venue is frozen outright (no drafts, no
+  // Since migration 420 such a venue is frozen outright (no drafts, no
   // sends, no writes; see billing/venue-freeze.ts), so this check is now
   // belt and braces, and it states the reason plainly in the eligibility
   // result.

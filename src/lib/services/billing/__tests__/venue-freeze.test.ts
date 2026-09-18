@@ -1,6 +1,6 @@
 /**
  * venue-freeze.ts asks the database's own rule (venue_is_frozen, migration
- * 417) and must fail open: the trigger still refuses the write, and a DB
+ * 420) and must fail open: the trigger still refuses the write, and a DB
  * hiccup must never stop a paying venue.
  */
 

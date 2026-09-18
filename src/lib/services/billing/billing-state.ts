@@ -31,7 +31,7 @@
  *     CAPACITY_LIMITS row applies to a never-subscribed venue
  *
  * Since 2026-09-17 an expired trial also FREEZES the account (migration
- * 417). That is not decided here: public.venue_is_frozen() in the
+ * 420). That is not decided here: public.venue_is_frozen() in the
  * database is the rule, and src/lib/services/billing/venue-freeze.ts is
  * how the app asks it.
  */
@@ -84,7 +84,7 @@ function coerceTier(value: string | null): PlanTier {
  * throws — a lookup failure resolves to "not on trial, not expired" so a
  * DB hiccup never blocks the platform (the failure IS logged by the
  * caller's own error handling where relevant). The hard block on an
- * expired trial is the freeze (venue-freeze.ts, migration 417), which
+ * expired trial is the freeze (venue-freeze.ts, migration 420), which
  * doesn't read this.
  */
 export async function resolveBillingState(

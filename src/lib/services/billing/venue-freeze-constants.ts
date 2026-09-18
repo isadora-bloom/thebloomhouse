@@ -1,7 +1,7 @@
 // Shared by venue-freeze.ts and the middleware. Kept apart so the
 // middleware doesn't pull the service-role client into its bundle.
 
-/** Message prefix raised by trg_venue_freeze (migration 417). */
+/** Message prefix raised by trg_venue_freeze (migration 420). */
 export const VENUE_FROZEN_CODE = 'venue_frozen'
 
 /** SQLSTATE the trigger raises. PostgREST turns PTxxx into HTTP xxx. */

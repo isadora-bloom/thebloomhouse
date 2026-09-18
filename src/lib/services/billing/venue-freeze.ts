@@ -1,5 +1,5 @@
 /**
- * venue-freeze: the app's side of the trial freeze (migration 417).
+ * venue-freeze: the app's side of the trial freeze (migration 420).
  *
  * When a venue's trial ends with no Stripe subscription the account is
  * frozen. People can sign in and read everything; nothing is written for

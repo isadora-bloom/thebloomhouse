@@ -199,7 +199,7 @@ export async function drainGmailBackfill(supabase: SupabaseClient): Promise<unkn
     // 50, not 10: frozen venues are skipped below and must not fill the window.
     .limit(50)
 
-  // A frozen venue (trial ended, migration 417) can't be written to, so
+  // A frozen venue (trial ended, migration 420) can't be written to, so
   // it would fail to lock and be picked first again every tick, starving
   // every other venue's backfill. Leave it pending until it subscribes.
   const live = new Set(await withoutFrozenVenues((candidates ?? []).map((v) => v.id as string), supabase))

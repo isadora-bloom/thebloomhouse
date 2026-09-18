@@ -178,7 +178,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     return { ok: false, error }
   }
 
-  // Frozen venue (trial ended, no subscription, migration 417): no mail
+  // Frozen venue (trial ended, no subscription, migration 420): no mail
   // on its behalf. venueId null is platform mail and always goes.
   if (venueId && (await isVenueFrozen(venueId))) {
     console.warn(`[email] Refusing to send for frozen venue ${venueId}`)

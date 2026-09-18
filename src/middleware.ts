@@ -349,7 +349,7 @@ export async function middleware(request: NextRequest) {
   // happens for a write with a session, so reads pay nothing.
   // -----------------------------------------------------------------------
   // The same spot refuses writes for a frozen venue (trial ended, no
-  // subscription, migration 417). The database refuses them anyway; this
+  // subscription, migration 420). The database refuses them anyway; this
   // turns a trigger error halfway through a route, possibly after a model
   // call, into a clear 402 before the route runs. Billing, sign-in and
   // webhooks stay open so a frozen venue can pay and be unfrozen. Bloom

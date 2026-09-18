@@ -1336,7 +1336,7 @@ export async function sendEmail(
     return null
   }
 
-  // Frozen venue (trial ended, no subscription, migration 417): nothing
+  // Frozen venue (trial ended, no subscription, migration 420): nothing
   // goes out. Refused before the send, not after it: the trigger would
   // refuse the "sent" marker, and an unmarked send goes again next tick.
   if (await isVenueFrozen(venueId)) {

@@ -529,7 +529,7 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   const requestedModel = modelForTier(options.tier)
 
   // A venue whose trial ended with no subscription is frozen (migration
-  // 417): no model calls on its behalf, from any path. Throws
+  // 420): no model calls on its behalf, from any path. Throws
   // VenueFrozenError, which callers already treat as a failed call.
   await assertVenueNotFrozen(options.venueId)
 

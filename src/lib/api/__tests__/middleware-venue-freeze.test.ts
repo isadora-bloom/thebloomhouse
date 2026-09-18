@@ -1,6 +1,6 @@
 /**
  * The middleware refuses API writes for a frozen venue (trial ended, no
- * subscription, migration 417) with a 402 before the route runs. Reads,
+ * subscription, migration 420) with a 402 before the route runs. Reads,
  * billing, super admins and live venues pass. The database refuses the
  * write anyway; this is about failing early and clearly.
  */

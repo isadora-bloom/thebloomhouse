@@ -1,24 +1,24 @@
 #!/usr/bin/env node
 /**
- * Guard: a table that gains venue_id after migration 417 also gets the
+ * Guard: a table that gains venue_id after migration 420 also gets the
  * trial-freeze trigger.
  *
- * Migration 417 put trg_venue_freeze on every table that had venue_id at
+ * Migration 420 put trg_venue_freeze on every table that had venue_id at
  * the time. A frozen venue (trial ended, no subscription) is refused every
  * write by that trigger. A table created later without it is a place a
  * frozen venue can still write, and nothing would show it.
  *
- * Rule: in any migration numbered above 417, a CREATE TABLE with a
+ * Rule: in any migration numbered above 420, a CREATE TABLE with a
  * venue_id column, or an ALTER TABLE ... ADD ... venue_id, must be
  * followed in the same file by
  *   CREATE TRIGGER trg_venue_freeze ... ON public.<table> ...
  *     EXECUTE FUNCTION public.enforce_venue_freeze()
  * or the table must be listed in EXEMPT below with a reason (logs and
- * account plumbing only, as in 417).
+ * account plumbing only, as in 420).
  *
  * Child tables that reach a venue through a parent (no venue_id of their
  * own) can't be found by a scan. Those use enforce_venue_freeze_via_parent;
- * see the list at the bottom of 417.
+ * see the list at the bottom of 420.
  *
  * Usage: node scripts/check-venue-freeze-coverage.mjs
  */
@@ -28,7 +28,7 @@ import { join } from 'node:path'
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]):\//, '$1:/')
 const MIG_DIR = join(REPO_ROOT, 'supabase', 'migrations')
-const BASE = 417
+const BASE = 420
 
 const EXEMPT = new Map([
   // ['some_log_table', 'why it must stay writable for a frozen venue'],

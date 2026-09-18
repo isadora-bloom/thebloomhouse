@@ -49,7 +49,7 @@ export function useTrialExpired(isDemo: boolean): boolean {
  * to handle.
  *
  * The banner only explains. The freeze itself is enforced by the database
- * (migration 417) and refused early in the middleware, the AI client and
+ * (migration 420) and refused early in the middleware, the AI client and
  * the email senders (src/lib/services/billing/venue-freeze.ts).
  */
 export function TrialExpiredBanner() {
