@@ -61,6 +61,7 @@ import {
   Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { exportToCsv } from '@/lib/utils/csv-export'
 
 // ---------------------------------------------------------------------------
@@ -78,6 +79,8 @@ interface TimelineEvent {
   included: boolean
   time: string
   manualTime: boolean
+  /** A surprise: only the partner whose user id this is can see it. The venue sees everything. */
+  surpriseBy?: string | null
   isTimeMarker?: boolean
   isAnchor?: boolean
   alwaysIncluded?: boolean
@@ -122,6 +125,8 @@ interface CustomEvent {
   notes: string
   phase: string
   icon: string
+  /** A surprise: only the partner whose user id this is can see it. The venue sees everything. */
+  surpriseBy?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,6 +1414,14 @@ export function TimelineBuilder({
   contextLoading = false,
   onSaved,
 }: TimelineBuilderProps) {
+  // Who is looking. A couple partner may hide an item from the other
+  // partner; the venue (any other role) always sees the whole timeline.
+  const { userId: viewerId } = useCoupleContext()
+  const isCouple = role === 'couple'
+  const canSee = useCallback(
+    (x: { surpriseBy?: string | null }) => !(isCouple && x.surpriseBy && x.surpriseBy !== viewerId),
+    [isCouple, viewerId],
+  )
   const caps = timelineCapabilities(role)
   const [editedBy, setEditedBy] = useState<TimelineEditedBy | null>(null)
   // ---- Config state ----
@@ -1582,6 +1595,22 @@ export function TimelineBuilder({
   // ---- Event handlers ----
   function updateConfig<K extends keyof TimelineConfig>(key: K, value: TimelineConfig[K]) {
     setConfig(prev => ({ ...prev, [key]: value }))
+    setDirty(true)
+  }
+
+  // A surprise stays a surprise: the partner who marks an item hides it
+  // from the other partner. The blob keeps every item; only the couple's
+  // own view drops the ones hidden from them (see eventsByPhase). The
+  // venue and the other partner's own surprises are unaffected.
+  function toggleSurprise(eventId: string) {
+    if (!isCouple || !viewerId) return
+    setEvents(prev => prev.map(e => (e.id === eventId ? { ...e, surpriseBy: e.surpriseBy ? null : viewerId } : e)))
+    setDirty(true)
+  }
+
+  function toggleCustomSurprise(id: string) {
+    if (!isCouple || !viewerId) return
+    setCustomEvents(prev => prev.map(e => (e.id === id ? { ...e, surpriseBy: e.surpriseBy ? null : viewerId } : e)))
     setDirty(true)
   }
 
@@ -1803,10 +1832,10 @@ export function TimelineBuilder({
   const eventsByPhase = useMemo(() => {
     const grouped: Record<string, TimelineEvent[]> = {}
     for (const phase of PHASE_ORDER) {
-      grouped[phase] = events.filter(e => e.phase === phase)
+      grouped[phase] = events.filter(e => e.phase === phase && canSee(e))
     }
     return grouped
-  }, [events])
+  }, [events, canSee])
 
   // ---- Computed: summary stats ----
   const stats = useMemo(() => {
@@ -2155,7 +2184,7 @@ export function TimelineBuilder({
                 </div>
               ))}
             {/* Custom events in summary */}
-            {customEvents.map(ce => (
+            {customEvents.filter(canSee).map(ce => (
               <div key={ce.id} className="px-5 py-2.5 flex items-center gap-3">
                 <span className="text-xs font-mono text-gray-400 w-16 shrink-0">
                   {ce.time ? formatTime12(ce.time) : 'TBD'}
@@ -2164,6 +2193,16 @@ export function TimelineBuilder({
                 <span className="text-sm text-gray-700 flex-1">{ce.name}</span>
                 {ce.duration > 0 && (
                   <span className="text-xs text-gray-400">{formatDuration(ce.duration)}</span>
+                )}
+                {isCouple && viewerId && (
+                  <button
+                    type="button"
+                    onClick={() => toggleCustomSurprise(ce.id)}
+                    className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', ce.surpriseBy ? 'bg-rose-50 text-rose-600' : 'text-gray-400 hover:bg-gray-100')}
+                    title={ce.surpriseBy ? 'Only you can see this. Click to show your partner.' : 'Keep this a surprise from your partner'}
+                  >
+                    {ce.surpriseBy ? '🎁 surprise' : '🎁'}
+                  </button>
                 )}
                 <span className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded">custom</span>
               </div>
@@ -2178,7 +2217,7 @@ export function TimelineBuilder({
       <div className="space-y-4">
         {activePhases.map(phase => {
           const phaseEvents = eventsByPhase[phase] || []
-          const phaseCustom = customEvents.filter(ce => ce.phase === phase)
+          const phaseCustom = customEvents.filter(ce => ce.phase === phase && canSee(ce))
           const isExpanded = expandedPhases.has(phase)
           const includedCount = phaseEvents.filter(e => e.included).length
           const totalCount = phaseEvents.length
@@ -2296,6 +2335,16 @@ export function TimelineBuilder({
                                   title="Click to reset to auto-calculated time"
                                 >
                                   manual
+                                </button>
+                              )}
+                              {isCouple && viewerId && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleSurprise(event.id)}
+                                  className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', event.surpriseBy ? 'bg-rose-50 text-rose-600' : 'text-gray-400 hover:bg-gray-100')}
+                                  title={event.surpriseBy ? 'Only you can see this. Click to show your partner.' : 'Keep this a surprise from your partner'}
+                                >
+                                  {event.surpriseBy ? '🎁 surprise' : '🎁'}
                                 </button>
                               )}
                               {/* Chain indicator */}

@@ -251,6 +251,21 @@ async function handleWebsiteRead(request: NextRequest, providedPw: string) {
           group_name: g.group_name,
           rsvp_status: g.rsvp_status,
           plus_one: g.has_plus_one || g.plus_one,
+          // The rest of their party (same group_name), so one person can
+          // answer for the household in one go. Joy does this; couples
+          // get fewer half-answered families.
+          household: g.group_name
+            ? (guests ?? [])
+                .filter((h) => h.id !== g.id && h.group_name === g.group_name)
+                .map((h) => {
+                  const hp = h.person as unknown as { first_name?: string; last_name?: string } | null
+                  return {
+                    guest_id: h.id,
+                    name: `${h.first_name || hp?.first_name || ''} ${h.last_name || hp?.last_name || ''}`.trim(),
+                    rsvp_status: h.rsvp_status,
+                  }
+                })
+            : [],
         }
       })
 
@@ -470,6 +485,7 @@ export async function POST(request: NextRequest) {
       message_to_couple,
       allergies,
       custom_answers,
+      household,
     } = body
 
     if (!guest_id) return err('guest_id is required')
@@ -534,6 +550,29 @@ export async function POST(request: NextRequest) {
       .eq('id', guest_id)
 
     if (updateErr) throw updateErr
+
+    // Household answers: same group_name, one row each, only status and
+    // meal. Anything else (allergies, songs) is per person and they can
+    // come back for it under their own name.
+    if (Array.isArray(household) && household.length > 0) {
+      const { data: members } = await supabase
+        .from('guest_list')
+        .select('id, group_name')
+        .eq('wedding_id', website.wedding_id)
+        .in('id', household.map((h: { guest_id?: string }) => h?.guest_id).filter(Boolean))
+      const { data: me } = await supabase.from('guest_list').select('group_name').eq('id', guest_id).maybeSingle()
+      const allowed = new Set((members ?? []).filter((m) => m.group_name && m.group_name === me?.group_name).map((m) => m.id))
+      for (const h of household as Array<{ guest_id?: string; rsvp_status?: string; meal_choice?: string | null }>) {
+        if (!h?.guest_id || !allowed.has(h.guest_id)) continue
+        if (!h.rsvp_status || !['attending', 'declined', 'maybe'].includes(h.rsvp_status)) continue
+        const row: Record<string, unknown> = { rsvp_status: h.rsvp_status, rsvp_responded_at: new Date().toISOString() }
+        if (h.meal_choice !== undefined && h.meal_choice !== null) {
+          row.meal_choice = h.meal_choice
+          row.meal_preference = h.meal_choice
+        }
+        await supabase.from('guest_list').update(row).eq('id', h.guest_id)
+      }
+    }
 
     // Insert into rsvp_responses if any extended fields are present
     const hasExtendedFields =

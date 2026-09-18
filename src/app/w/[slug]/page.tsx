@@ -111,6 +111,8 @@ interface GuestSearchResult {
   group_name: string | null
   rsvp_status: string
   plus_one: boolean
+  /** Others in the same party, so one reply can cover the household. */
+  household?: { guest_id: string; name: string; rsvp_status: string }[]
 }
 
 interface RsvpCustomQuestion {
@@ -833,6 +835,8 @@ function RSVPSection({ data, slug, shareToken, mealOptions, theme, accent, rsvpC
   const [mealChoice, setMealChoice] = useState('')
   const [dietary, setDietary] = useState('')
   const [plusOneRsvp, setPlusOneRsvp] = useState<'attending' | 'declined'>('attending')
+  // Household answers keyed by guest_id; a member left as 'skip' is not sent.
+  const [householdAnswers, setHouseholdAnswers] = useState<Record<string, { status: 'attending' | 'declined' | 'skip'; meal: string }>>({})
   const [plusOneName, setPlusOneName] = useState('')
   const [plusOneMeal, setPlusOneMeal] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -978,6 +982,10 @@ function RSVPSection({ data, slug, shareToken, mealOptions, theme, accent, rsvpC
         if (plusOneName) body.plus_one_name = plusOneName
         if (plusOneRsvp === 'attending' && plusOneMeal) body.plus_one_meal = plusOneMeal
       }
+      const householdRows = Object.entries(householdAnswers)
+        .filter(([, a]) => a.status !== 'skip')
+        .map(([guest_id, a]) => ({ guest_id, rsvp_status: a.status, meal_choice: a.status === 'attending' && a.meal ? a.meal : null }))
+      if (householdRows.length > 0) body.household = householdRows
 
       // Extended fields
       if (cfg.ask_phone && phone) body.phone = phone
@@ -1425,6 +1433,66 @@ function RSVPSection({ data, slug, shareToken, mealOptions, theme, accent, rsvpC
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* The rest of the party, answered here if they like */}
+              {(selectedGuest.household?.length ?? 0) > 0 && (
+                <div className="space-y-4 pt-4" style={{ borderTop: `1px solid ${theme.borderColor}` }}>
+                  <p className="text-xs font-medium uppercase tracking-wider" style={{ color: accent }}>
+                    Also answering for
+                  </p>
+                  <p className="text-xs" style={{ color: theme.mutedColor }}>
+                    Reply for anyone in your party, or leave them to answer themselves.
+                  </p>
+                  {selectedGuest.household!.map((m) => {
+                    const a = householdAnswers[m.guest_id] ?? { status: 'skip' as const, meal: '' }
+                    const set = (patch: Partial<{ status: 'attending' | 'declined' | 'skip'; meal: string }>) =>
+                      setHouseholdAnswers((prev) => ({ ...prev, [m.guest_id]: { ...a, ...patch } }))
+                    return (
+                      <div key={m.guest_id} className="space-y-2">
+                        <p className="text-sm" style={{ color: theme.textColor }}>
+                          {m.name}
+                          {m.rsvp_status && m.rsvp_status !== 'pending' && (
+                            <span className="text-[10px] ml-2" style={{ color: theme.mutedColor }}>already replied: {m.rsvp_status}</span>
+                          )}
+                        </p>
+                        <div className="grid grid-cols-3 gap-2">
+                          {([['attending', 'Yes'], ['declined', 'No'], ['skip', 'Leave it']] as const).map(([status, label]) => (
+                            <button
+                              key={status}
+                              onClick={() => set({ status })}
+                              className="px-3 py-2 rounded-lg border-2 text-sm transition-all"
+                              style={{
+                                borderColor: a.status === status ? accent : theme.borderColor,
+                                backgroundColor: a.status === status ? accent + '10' : 'transparent',
+                                color: a.status === status ? accent : theme.mutedColor,
+                              }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        {a.status === 'attending' && cfg.ask_meal_choice && mealOptions.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {mealOptions.map((opt) => (
+                              <button
+                                key={opt.id}
+                                onClick={() => set({ meal: opt.option_name })}
+                                className="px-3 py-1.5 rounded-lg border text-xs transition-all"
+                                style={{
+                                  borderColor: a.meal === opt.option_name ? accent : theme.borderColor,
+                                  color: a.meal === opt.option_name ? accent : theme.textColor,
+                                }}
+                              >
+                                {opt.option_name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
 

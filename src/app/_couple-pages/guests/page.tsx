@@ -311,6 +311,22 @@ export default function GuestListPage() {
   const [csvHeaders, setCsvHeaders] = useState<string[]>([])
   const [csvMapping, setCsvMapping] = useState<Record<string, string>>({})
   const [importing, setImporting] = useState(false)
+  // "Remind guests who haven't replied": two clicks (ask, then confirm),
+  // then the result in a sentence. Nothing automatic.
+  const [remindStep, setRemindStep] = useState<'idle' | 'confirm' | 'sending' | 'done'>('idle')
+  const [remindResult, setRemindResult] = useState<string | null>(null)
+  async function sendReminders() {
+    setRemindStep('sending')
+    try {
+      const res = await fetch('/api/couple/rsvp-remind', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const j = (await res.json()) as { sent?: number; failed?: number; skipped?: number; error?: string }
+      if (!res.ok) setRemindResult(j.error ?? 'That did not send.')
+      else setRemindResult(`Sent to ${j.sent ?? 0}${(j.skipped ?? 0) > 0 ? `; ${j.skipped} have no email address` : ''}${(j.failed ?? 0) > 0 ? `; ${j.failed} failed` : ''}.`)
+    } catch {
+      setRemindResult('That did not send.')
+    }
+    setRemindStep('done')
+  }
   const [importSummary, setImportSummary] = useState<{
     added: number
     updated: number
@@ -1084,6 +1100,32 @@ export default function GuestListPage() {
           >
             <Settings className="w-4 h-4" />
           </button>
+          {guests.some((g) => g.rsvp_status === 'pending') && (
+            <span className="inline-flex items-center gap-2">
+              {remindStep === 'idle' && (
+                <button
+                  onClick={() => setRemindStep('confirm')}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
+                >
+                  Remind those who haven&apos;t replied
+                </button>
+              )}
+              {remindStep === 'confirm' && (
+                <>
+                  <span className="text-xs text-gray-600">Email everyone still to reply, with your RSVP link?</span>
+                  <button onClick={sendReminders} className="px-3 py-2 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: 'var(--couple-primary)' }}>Send</button>
+                  <button onClick={() => setRemindStep('idle')} className="px-3 py-2 rounded-lg text-sm border border-gray-200 text-gray-600">Not now</button>
+                </>
+              )}
+              {remindStep === 'sending' && <span className="text-xs text-gray-600">Sending…</span>}
+              {remindStep === 'done' && (
+                <>
+                  <span className="text-xs text-gray-600">{remindResult}</span>
+                  <button onClick={() => setRemindStep('idle')} className="text-xs underline text-gray-600">ok</button>
+                </>
+              )}
+            </span>
+          )}
           {showPrintButtons && (
             <>
               <button
